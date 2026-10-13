@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import {
+   asModelVersion,
    createRpcProxy,
    defineMessage,
    describeErrorWithStack,
@@ -43,6 +44,7 @@ import {
    type Tracer,
    type TransferDiagnostic,
    TransferDocument,
+   type TransferCreatedDocument,
    type TransferSavedDocument,
    type TransferWatchedDocument,
    type TransferElement,
@@ -659,10 +661,11 @@ export class DataServer<
       }
    }
 
-   async createModelDocument(args: CreateModelDocumentArgs): Promise<TransferDocument<TTransfer, TDiagnostic>> {
+   async createModelDocument(args: CreateModelDocumentArgs): Promise<TransferCreatedDocument<TTransfer, TDiagnostic>> {
       const session = this.requireSession(args.clientId);
-      await session.create(args.uri, args.text);
-      return this.openedSnapshot(args.uri, () => session.close(args.uri));
+      const version = await session.create(args.uri, args.text);
+      const snapshot = await this.openedSnapshot(args.uri, () => session.close(args.uri));
+      return { ...snapshot, created: { version: asModelVersion(version) } };
    }
 
    async updateModelDocuments(args: TransferUpdateDocumentsArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>[]> {
@@ -821,9 +824,13 @@ export class DataServer<
       }
       // As for a read, only a missing document counts as none. A file briefly
       // unreadable leaves the builder's placeholder, and is there all the same.
-      // Whether it exists and the position of the last event sent are read
-      // in one synchronous run, so an event sent after is past the position.
-      const answer = (exists: boolean): TransferWatchedDocument => ({ uri, exists, sequence: this.eventSequence });
+      // Whether it exists, the text held and the position of the last event
+      // sent are read in one synchronous run, so an event sent after is past
+      // the position and moves the text past the state answered.
+      const answer = (exists: boolean): TransferWatchedDocument => {
+         const text = exists ? this.serverTextState(args.uri) : undefined;
+         return { uri, exists, sequence: this.eventSequence, ...(text ? { text } : {}) };
+      };
       return this.modelService.ensureDocumentState(args.uri).then(
          () => answer(this.modelService.getDocument(args.uri) !== undefined),
          (error: unknown) => answer(!this.isMissingDocument(error, args.uri))
@@ -1198,7 +1205,7 @@ export class DataServer<
       encoded: EncodedTransferDocument<TransferElement, TDiagnostic>,
       hash: string
    ): TransferDocument<TTransfer, TDiagnostic> {
-      const text = this.services.workspace.TextDocuments.textState(encoded.uri) ?? this.builtTextState(encoded.uri);
+      const text = this.serverTextState(encoded.uri);
       if (text && text.version > encoded.model.version) {
          this.tracer.withUri(encoded.uri).debug(`Send a model behind its text: model v${encoded.model.version} / text v${text.version}`);
       }
@@ -1209,6 +1216,15 @@ export class DataServer<
          model: { ...encoded.model, hash } as TransferModelSnapshot<TTransfer, TDiagnostic>,
          ...(text ? { text } : {})
       };
+   }
+
+   /**
+    * The text the server holds for `uri`, as every envelope and a watch's
+    * answer carry it: the store's while it holds the document, the build's
+    * otherwise, and none for a document it has neither of.
+    */
+   protected serverTextState(uri: string): TextState | undefined {
+      return this.services.workspace.TextDocuments.textState(uri) ?? this.builtTextState(uri);
    }
 
    /**

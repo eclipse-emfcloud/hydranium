@@ -192,6 +192,10 @@ interface ServerBehaviour {
    answerWithoutModel?: boolean;
    /** URIs whose open fails. */
    failOpens?: Set<string>;
+   /** URIs another client writes between a create and its answer, which then holds a version past the one the create made. */
+   writtenBeforeCreateAnswers?: Set<string>;
+   /** A create and a watch answer without text, as a server that holds none does. */
+   answersWithoutText?: boolean;
    /**
     * The URI an answer names for the URI a call named, as a server keys its
     * documents; absent, the one the call named.
@@ -283,7 +287,14 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
       },
       createModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
          record('create', args);
-         return document(answered(args.uri));
+         const created = versionOf(args.uri);
+         if (behaviour.writtenBeforeCreateAnswers?.has(args.uri)) {
+            moveOn(args.uri);
+         }
+         const answer = behaviour.answersWithoutText
+            ? document(answered(args.uri))
+            : document(answered(args.uri), versionOf(args.uri), true);
+         return { ...(answer as object), created: { version: created } };
       },
       watchModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
          record('watch', args);
@@ -296,7 +307,21 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
          // position of the last event sent; an event sent while the answer
          // waits to go out counts past it.
          const sent = (behaviour.sent ??= { sequence: 0 });
-         const answer = { uri: answered(args.uri), exists: !behaviour.gone?.has(args.uri), sequence: sent.sequence };
+         const exists = !behaviour.gone?.has(args.uri);
+         const answer = {
+            uri: answered(args.uri),
+            exists,
+            sequence: sent.sequence,
+            ...(exists && !behaviour.answersWithoutText
+               ? {
+                    text: {
+                       version: versionOf(args.uri),
+                       hash: behaviour.texts?.get(args.uri) ?? '',
+                       dirty: behaviour.dirty?.get(args.uri) ?? false
+                    }
+                 }
+               : {})
+         };
          await behaviour.answerGate;
          return answer;
       },
@@ -5186,6 +5211,81 @@ describe('DataSession when a document is deleted', () => {
 
          expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: URI_A }]);
          expect(of(calls.slice(before), 'open')).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports nothing for a document it created when a write landed before the create answered, since the text is no longer its own', async () => {
+      const target = harness({ writtenBeforeCreateAnswers: new Set([URI_A]) }, 10_000);
+      const { connection, port, notifyDeleted, dispose } = target;
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.createDocument({ uri: URI_A, text: 'created' });
+
+         await notifyDeleted(URI_A);
+         await waitFor(() => serverUrisOf(panel).size === 0, { message: 'the session kept the document' });
+
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports nothing for a document it created when a write landed before the watch answered, since the text is no longer its own', async () => {
+      const behaviour: ServerBehaviour = {};
+      const target = harness(behaviour, 10_000);
+      const { connection, port, notifyDeleted, dispose } = target;
+      try {
+         // The create answered the version it made; the watch finds the text moved on.
+         behaviour.beforeWatch = () => {
+            behaviour.versions = new Map([[URI_A, 2]]);
+         };
+         const panel = connection.createSession('panel', 'panel');
+         await panel.createDocument({ uri: URI_A, text: 'created' });
+
+         await notifyDeleted(URI_A);
+         await waitFor(() => serverUrisOf(panel).size === 0, { message: 'the session kept the document' });
+
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports nothing for a document it created whose text another client wrote while the connection was down', async () => {
+      const behaviour: ServerBehaviour = {};
+      const target = harness(behaviour, 10_000);
+      const { connection, port, dropTransport, notifyDeleted, dispose } = target;
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.createDocument({ uri: URI_A, text: 'created' });
+         // The re-open answers the other client's text, still unsaved.
+         behaviour.texts = new Map([[URI_A, 'other']]);
+         behaviour.dirty = new Map([[URI_A, true]]);
+         dropTransport();
+         await panel.connected();
+
+         await notifyDeleted(URI_A);
+         await waitFor(() => serverUrisOf(panel).size === 0, { message: 'the session kept the document' });
+
+         expect(port.reported).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports a document it created and never saved as its own when the server answers no text to compare', async () => {
+      const target = harness({ answersWithoutText: true }, 10_000);
+      const { connection, port, notifyDeleted, dispose } = target;
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.createDocument({ uri: URI_A, text: 'created' });
+
+         await notifyDeleted(URI_A);
+         await waitFor(() => serverUrisOf(panel).size === 0, { message: 'the session kept the document' });
+
+         expect(port.reported.map(entry => entry.message.params)).toEqual([{ uris: URI_A }]);
       } finally {
          dispose();
       }

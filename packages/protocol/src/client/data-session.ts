@@ -25,7 +25,7 @@ import { NoopLogger } from '../noop-logger';
 import { randomUuid } from '../random-uuid';
 import type { MaybePromise } from '../util';
 import type { RpcProxy } from '../rpc';
-import type { TextState, TransferDocument, TransferSavedDocument } from '../transfer-document';
+import type { TextState, TransferCreatedDocument, TransferDocument, TransferSavedDocument } from '../transfer-document';
 import type { TransferElement } from '../transfer-element';
 
 /**
@@ -376,7 +376,7 @@ export class DataSession<
    /**
     * URIs this session created whose whole text is still its own and unsaved,
     * even with no write recorded: no save, clean flip, other client's write or
-    * reported loss has come since the create answered; see
+    * reported loss has come since the create, its answer included; see
     * {@link forgetGoneDocument}.
     */
    protected readonly createdUris = new Set<string>();
@@ -487,18 +487,31 @@ export class DataSession<
     */
    openDocument(args: DataSessionOpenArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
       return this.trackOpen(args.uri, args.options, opening =>
-         this.openAndWatch(args.uri, opening, false, server => server.openModelDocument({ ...args, clientId: this.clientId }))
+         this.openAndWatch(
+            args.uri,
+            opening,
+            () => undefined,
+            server => server.openModelDocument({ ...args, clientId: this.clientId })
+         )
       );
    }
 
    /**
     * Create a document that exists nowhere yet, open and watched for this
     * session; it reaches disk with the first {@link saveDocument}. The server
-    * refuses a URI that exists on disk or that any client has open.
+    * refuses a URI that exists on disk or that any client has open. The answer
+    * names the version the create made in `created`, which a write of what
+    * this session created is based on: the answered model can already be
+    * another client's write or an integrity repair.
     */
-   createDocument(args: DataSessionCreateArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
+   createDocument(args: DataSessionCreateArgs<TTransfer, TServer>): Promise<TransferCreatedDocument<TTransfer, DiagnosticOf<TServer>>> {
       return this.trackOpen(args.uri, undefined, opening =>
-         this.openAndWatch(args.uri, opening, true, server => server.createModelDocument({ ...args, clientId: this.clientId }))
+         this.openAndWatch(
+            args.uri,
+            opening,
+            document => document.created.version,
+            server => server.createModelDocument({ ...args, clientId: this.clientId })
+         )
       );
    }
 
@@ -506,21 +519,21 @@ export class DataSession<
     * Send `open` and watch what it answered, again for as long as a deletion
     * heard while the watch is under way closes that open: sent after the
     * deletion, the open fails as an open of a gone file does, or opens the
-    * file that is back. `created` marks the document in {@link createdUris}
-    * once the open answers, before the watch, so an event that clears the mark
-    * meanwhile clears it for good.
+    * file that is back. `created` reads the version the create made off the
+    * answered document, or none for an open; see {@link watchOpened} for the
+    * mark it puts in {@link createdUris}.
     *
     * An `opening` a close marked answers with the document, recording nothing
     * and sending nothing again; one it marked before the open answered is
     * undone, since the server may have taken the close first. A failed watch
     * is undone too: the caller sees a failed open, and so would never close it.
     */
-   protected async openAndWatch(
+   protected async openAndWatch<TDocument extends DataSessionDocument<TTransfer, TServer>>(
       uri: string,
       opening: DataSessionOpening<TTransfer, TServer>,
-      created: boolean,
-      open: (server: RpcProxy<TServer>) => Promise<DataSessionDocument<TTransfer, TServer>>
-   ): Promise<DataSessionDocument<TTransfer, TServer>> {
+      created: (document: TDocument) => ModelVersion | undefined,
+      open: (server: RpcProxy<TServer>) => Promise<TDocument>
+   ): Promise<TDocument> {
       for (;;) {
          const server = await this.connected();
          const document = await open(server);
@@ -528,12 +541,9 @@ export class DataSession<
             await this.undoOpen(server, uri, opening);
             return document;
          }
-         if (created) {
-            this.createdUris.add(uri);
-         }
-         let watched: DataSessionDocument<TTransfer, TServer> | undefined;
+         let watched: TDocument | undefined;
          try {
-            watched = await this.watchOpened(server, uri, document);
+            watched = await this.watchOpened(server, uri, document, created(document));
          } catch (error: unknown) {
             await this.undoOpen(server, uri, opening);
             throw error;
@@ -550,12 +560,23 @@ export class DataSession<
     * watch is under way has ended the open already, and the document,
     * recording nothing, when a close has. A failed watch rejects with the open
     * still recorded, for its caller to undo, see {@link undoOpen}.
+    *
+    * A document created at `createdVersion` is marked in {@link createdUris}
+    * while its text is still at that version: a version past it is another's,
+    * a write or a repair, as a changed event would have said. Marked before the
+    * watch, so an event heard while it is under way clears the mark for good,
+    * and checked again against the text the watch answered, which an event
+    * sent before the watch was in place moved on unheard. The restore's
+    * re-open is the one other point the session learns of the text without
+    * hearing the events between, and checks the mark the same way. An answer
+    * without text leaves the mark as it is, at every one of the three.
     */
-   protected async watchOpened(
+   protected async watchOpened<TDocument extends DataSessionDocument<TTransfer, TServer>>(
       server: RpcProxy<TServer>,
       uri: string,
-      document: DataSessionDocument<TTransfer, TServer>
-   ): Promise<DataSessionDocument<TTransfer, TServer> | undefined> {
+      document: TDocument,
+      createdVersion?: ModelVersion
+   ): Promise<TDocument | undefined> {
       // Recorded before the watch, so a deletion heard while it is under way
       // finds this open, which the server made before the deletion.
       // Under the options of the earliest open still under way, which the
@@ -567,7 +588,13 @@ export class DataSession<
          options: [...(this.openings.get(uri) ?? [])].find(opening => !opening.closed)?.options
       };
       this.opens.set(uri, open);
-      await server.watchModelDocument({ uri, clientId: this.clientId });
+      if (createdVersion !== undefined && (document.text === undefined || document.text.version === createdVersion)) {
+         this.createdUris.add(uri);
+      }
+      const watched = await server.watchModelDocument({ uri, clientId: this.clientId });
+      if (createdVersion !== undefined && watched.text !== undefined && watched.text.version !== createdVersion) {
+         this.createdUris.delete(uri);
+      }
       if (this.opens.get(uri) !== open) {
          // Sent again, it ends as an open sent after the deletion would; a
          // close is the caller's later call, and stands.
@@ -1114,6 +1141,12 @@ export class DataSession<
                return;
             }
             if (this.openUris.has(uri)) {
+               // Text other than this session last saw was written while the
+               // connection was down, by an event it never heard.
+               const known = this.lastAnswers.get(uri);
+               if (this.createdUris.has(uri) && document.text !== undefined && known !== undefined && document.text.hash !== known.hash) {
+                  this.createdUris.delete(uri);
+               }
                this.recordText(uri, document);
             }
             reopened.set(uri, document);

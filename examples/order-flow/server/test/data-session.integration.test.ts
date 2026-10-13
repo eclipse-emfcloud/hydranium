@@ -20,6 +20,7 @@ import {
    DATA_SESSION_UNSAVED_LOST,
    DataConnectionWithEvents,
    DataSession,
+   isConflictError,
    isDocumentNotOpenError,
    isDuplicateClientIdError,
    isSessionClosedError,
@@ -78,6 +79,7 @@ const THEIRS = `entity Solo {
 }
 `;
 const SESSION = 'form#wire-1';
+const OTHER_SESSION = 'form#wire-2';
 const GRACE_MS = 300;
 
 type Harness = DataServerHarness<DataServer<DomainModel>, DomainModel>;
@@ -134,6 +136,22 @@ class SnapshotFailingServer extends DataServer<DomainModel> {
          throw new Error('snapshot refused');
       }
       return super.getModelDocument(args);
+   }
+}
+
+/** Lets another session open and write a document between its create and the create's answer. */
+class WriteBeforeAnswerServer extends DataServer<DomainModel> {
+   writeBeforeAnswer?: { uri: string; clientId: string; model: string };
+
+   protected override async openedSnapshot(uri: string, rollback?: () => Promise<void>): Promise<TransferDocument<DomainModel>> {
+      const write = this.writeBeforeAnswer;
+      if (write?.uri === uri) {
+         // Cleared first: the other session's open answers through here too.
+         this.writeBeforeAnswer = undefined;
+         await this.openModelDocument({ uri, clientId: write.clientId });
+         await this.updateModelDocument({ uri, clientId: write.clientId, model: write.model, baseVersion: 'any' });
+      }
+      return super.openedSnapshot(uri, rollback);
    }
 }
 
@@ -372,6 +390,42 @@ describe('data head sessions', () => {
 
       await proxy.saveModelDocument({ uri: newUri, clientId: SESSION, model: EDITED, baseVersion: created.model!.version });
       expect(readFileSync(path(NEW_FILE), 'utf8')).toBe(EDITED);
+   });
+
+   it("createModelDocument answers the version the create made beside the state another session's write left", async () => {
+      const { services, newUri, path } = await boot();
+      const head = makeDataServerHarness<WriteBeforeAnswerServer, DomainModel>({
+         server: channel => new WriteBeforeAnswerServer(channel, services.shared)
+      });
+      heads.push(head);
+      await head.proxy.createSession({ clientId: SESSION });
+      await head.proxy.createSession({ clientId: OTHER_SESSION });
+      head.server.writeBeforeAnswer = { uri: newUri, clientId: OTHER_SESSION, model: EDITED };
+
+      const created = await head.proxy.createModelDocument({ uri: newUri, clientId: SESSION, text: CLEAN });
+      expect(services.shared.workspace.TextDocuments.get(newUri)?.getText()).toBe(EDITED);
+      // The answer holds the other session's write; the created version is behind it.
+      expect(TransferDocument.assertLoaded(created).model.version).toBeGreaterThan(created.created.version);
+      const persist = await rejectionOf(
+         head.proxy.persistModelDocument({ uri: newUri, clientId: SESSION, baseVersion: created.created.version })
+      );
+      expect(isConflictError(persist)).toBe(true);
+      expect(existsSync(path(NEW_FILE))).toBe(false);
+   });
+
+   it('watchModelDocument answers the text state it was taken at, and none for a document that does not exist', async () => {
+      const { uri, newUri, connect } = await boot();
+      const { proxy } = connect();
+      await proxy.createSession({ clientId: SESSION });
+      const opened = await proxy.openModelDocument({ uri, clientId: SESSION });
+      const written = await proxy.updateModelDocument({ uri, clientId: SESSION, model: EDITED, baseVersion: opened.model!.version });
+
+      const watched = await proxy.watchModelDocument({ uri, clientId: SESSION });
+      const absent = await proxy.watchModelDocument({ uri: newUri, clientId: SESSION });
+
+      expect(watched.text).toEqual(written.text);
+      expect(written.text?.dirty).toBe(true);
+      expect(absent.text).toBeUndefined();
    });
 
    it('hands a session only the fields of a write, whatever else the wire request carries', async () => {

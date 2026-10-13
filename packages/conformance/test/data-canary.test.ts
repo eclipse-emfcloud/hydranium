@@ -43,6 +43,7 @@ const RESERVED_IDS = 'createSession refuses every id the framework reserves';
 const SESSION_WRITE = 'a session writes only a document it has open';
 const CLOSE_SESSION = 'closeSession closes every document the session had open';
 const CREATE = 'createModelDocument creates a document open for the session';
+const CREATED_VERSION = "a create's answer names the version it made";
 const SET = 'updateModelDocuments writes a set all or none';
 const SESSION_SAVE = 'a session saves only a document it has open';
 const CONNECTION_END = 'ending a connection ends its sessions';
@@ -51,7 +52,7 @@ const WRITE_ANSWER = 'a write of the invalid model answers with its diagnostics'
 const DIRTY = 'a document is dirty while its text differs from its file, and clean once saved';
 const PERSIST = 'persisting writes the text a document holds as it is, and refuses a stale base version';
 const TEXT_HASH = "a document's text hash is equal for equal text and differs for different text";
-const WATCH_ANSWER = 'a watch answers whether a document exists, under the key a read names it by';
+const WATCH_ANSWER = 'a watch answers whether a document exists and the text it holds, under the key a read names it by';
 const LAST_CLOSE = "the last close drops a document's unsaved text and keeps what its save wrote";
 const UNSAVED_CREATE = 'a created document never saved leaves with its last close';
 const DELETE = 'deleting a saved document removes it';
@@ -135,12 +136,12 @@ describe('the /data battery discriminates', () => {
       }
    });
 
-   it('plans exactly the thirty-two checks the must-fail cases below name', () => {
+   it('plans exactly the thirty-four checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(33);
+      expect(titles).toHaveLength(34);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -159,6 +160,7 @@ describe('the /data battery discriminates', () => {
          SESSION_WRITE,
          CLOSE_SESSION,
          CREATE,
+         CREATED_VERSION,
          SET,
          SESSION_SAVE,
          CONNECTION_END,
@@ -176,7 +178,7 @@ describe('the /data battery discriminates', () => {
          DELETE_OTHERS,
          DELETE_UNSAVED
       ];
-      expect(matching(titles, covered)).toHaveLength(33);
+      expect(matching(titles, covered)).toHaveLength(34);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -190,10 +192,11 @@ describe('the /data battery discriminates', () => {
       { label: 'a transfer root with a blank $type', defects: { blankRootType: true }, expected: [VALID_ENVELOPE] },
       {
          // Also every check writing on a version the envelope reported, so a
-         // head that cannot report a whole one cannot be based on it either.
+         // head that cannot report a whole one cannot be based on it either;
+         // not the checks based on the created version, which is whole here.
          label: 'a non-integer envelope version',
          defects: { fractionalVersion: true },
-         expected: [VALID_ENVELOPE, CONFLICT_GATE, CREATE, SET, PERSIST, DELETE]
+         expected: [VALID_ENVELOPE, CONFLICT_GATE, SET, PERSIST, DELETE]
       },
       { label: 'a diagnostic on a valid model', defects: { diagnosticsOnValid: true }, expected: [VALID_ENVELOPE] },
       {
@@ -279,7 +282,33 @@ describe('the /data battery discriminates', () => {
          // Also every check that goes on to write, save, close or delete what it created.
          label: 'a create that leaves the document closed',
          defects: { createLeavesClosed: true },
-         expected: [CREATE, DIRTY, PERSIST, TEXT_HASH, LAST_CLOSE, UNSAVED_CREATE, DELETE, DELETE_GATE, DELETE_OTHERS, DELETE_UNSAVED]
+         expected: [
+            CREATE,
+            CREATED_VERSION,
+            DIRTY,
+            PERSIST,
+            TEXT_HASH,
+            LAST_CLOSE,
+            UNSAVED_CREATE,
+            DELETE,
+            DELETE_GATE,
+            DELETE_OTHERS,
+            DELETE_UNSAVED
+         ]
+      },
+      {
+         // Also every check that writes, persists or deletes on the created version.
+         label: 'a create answering without the version it made',
+         defects: { createdVersionOmitted: true },
+         expected: [CREATE, CREATED_VERSION, PERSIST, DELETE_GATE]
+      },
+      {
+         // Also the create check, whose write on it conflicts, and the persist
+         // and delete-gate checks: the later write takes the version named, so
+         // the base meant to be stale is current.
+         label: 'a create naming the version a later write would take',
+         defects: { createNamesLaterVersion: true },
+         expected: [CREATE, CREATED_VERSION, PERSIST, DELETE_GATE]
       },
       { label: 'a set applied one document at a time', defects: { partialSets: true }, expected: [SET] },
       { label: 'a session save opening its document implicitly', defects: { saveOpensImplicitly: true }, expected: [SESSION_SAVE] },
@@ -288,7 +317,7 @@ describe('the /data battery discriminates', () => {
       {
          label: 'a save or persist answering without the version it wrote',
          defects: { persistedVersionOmitted: true },
-         expected: [DIRTY, PERSIST]
+         expected: [CREATED_VERSION, DIRTY, PERSIST]
       },
       { label: 'sessions outliving their connection', defects: { sessionsOutliveConnection: true }, expected: [CONNECTION_END] },
       { label: 'a write answered before its document is validated', defects: { writeAnswersUnvalidated: true }, expected: [WRITE_ANSWER] },
@@ -301,6 +330,7 @@ describe('the /data battery discriminates', () => {
          expected: [TEXT_HASH, PERSIST]
       },
       { label: 'a watch claiming a document where there is none', defects: { watchClaimsDocument: true }, expected: [WATCH_ANSWER] },
+      { label: 'a watch answering without the text it was taken at', defects: { watchTextOmitted: true }, expected: [WATCH_ANSWER] },
       {
          label: 'a watch answering a position no event sent later passes',
          defects: { watchAnswersPastEvents: true },

@@ -390,7 +390,12 @@ describe('order-flow data head', () => {
 
       const answer = await head.harness.proxy.watchModelDocument({ uri, clientId: OTHER_ID });
 
-      expect(answer).toEqual({ uri, exists: true, sequence: expect.any(Number) });
+      expect(answer).toEqual({
+         uri,
+         exists: true,
+         sequence: expect.any(Number),
+         text: { version: expect.any(Number), hash: expect.any(String), dirty: false }
+      });
    });
 
    it('answers that a document exists for a watch of a file whose load fails for another reason than its absence', async () => {
@@ -407,7 +412,13 @@ describe('order-flow data head', () => {
       const answer = await head.harness.proxy.watchModelDocument({ uri, clientId: OTHER_ID });
 
       expect(head.services.shared.model.ModelService.getDocument(uri)).toBeDefined();
-      expect(answer).toEqual({ uri, exists: true, sequence: expect.any(Number) });
+      // The placeholder's text, as a read of the document answers it.
+      expect(answer).toEqual({
+         uri,
+         exists: true,
+         sequence: expect.any(Number),
+         text: { version: expect.any(Number), hash: expect.any(String), dirty: false }
+      });
    });
 
    it('answers a watch made through a symlink with the key its deletion is named by', async () => {
@@ -419,7 +430,12 @@ describe('order-flow data head', () => {
       const answer = await proxy.watchModelDocument({ uri: link, clientId: OTHER_ID });
       await proxy.deleteModelDocument({ uri: link, clientId: CLIENT_ID, baseVersion: 'any' });
 
-      expect(answer).toEqual({ uri: target, exists: true, sequence: expect.any(Number) });
+      expect(answer).toEqual({
+         uri: target,
+         exists: true,
+         sequence: expect.any(Number),
+         text: { version: 0, hash: expect.any(String), dirty: false }
+      });
       expect(harness!.deletions.map(deletion => deletion.uri)).toEqual([target]);
       // The link now points at nothing, and still keys by its target.
       expect(await proxy.watchModelDocument({ uri: link, clientId: 'later' })).toEqual({

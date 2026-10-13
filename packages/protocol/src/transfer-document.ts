@@ -98,6 +98,22 @@ export type TransferSavedDocument<TTransfer extends TransferElement, TDiagnostic
    persisted: { version: TextVersion };
 };
 
+/**
+ * What a create answers: the document as a read after the create finds it,
+ * and in `created` the version the create's text took. Another client's write
+ * or an integrity repair can land between the create and that read, so
+ * `model.version` can be past it, and a write based on it would carry that
+ * text as the creator's; a write based on `created.version` conflicts instead.
+ * A model version, not a text version, because the creator holds the text at
+ * that version: it sent it.
+ */
+export type TransferCreatedDocument<TTransfer extends TransferElement, TDiagnostic = TransferDiagnostic> = TransferDocument<
+   TTransfer,
+   TDiagnostic
+> & {
+   created: { version: ModelVersion };
+};
+
 /** What a watch answers, once it is in place. */
 export interface TransferWatchedDocument {
    /** The key the watch's events name the document by, which a symlinked URI does not spell. */
@@ -106,6 +122,8 @@ export interface TransferWatchedDocument {
    readonly exists: boolean;
    /** The position of the last update or deletion event sent before `exists` was taken; an event past it was sent after. */
    readonly sequence: number;
+   /** The text the server held when `exists` was taken, as a read answers it; absent when it held none. */
+   readonly text?: TextState;
 }
 
 export namespace TransferDocument {

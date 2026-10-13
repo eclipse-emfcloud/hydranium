@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { TransferDocument, textHash } from '@hydranium/protocol';
+import { asModelVersion, TransferDocument } from '@hydranium/protocol';
 import type { DataServerProtocol, TransferSaveDocumentArgs, TransferUpdateDocumentArgs } from '@hydranium/protocol/data';
 import { runQuery } from '../src/commands/query.js';
 import { runCreate } from '../src/commands/create.js';
@@ -37,7 +37,7 @@ function makeStubProxy(
       failDelete?: boolean;
       failEnd?: boolean;
       fileExists?: boolean;
-      foreignWrite?: boolean;
+      writeBeforeAnswer?: boolean;
       failOpen?: string;
    } = {}
 ): DataServerProtocol<FakeRoot> {
@@ -102,13 +102,14 @@ function makeStubProxy(
          if (options.fileExists) {
             throw new Error(`Cannot create ${args.uri}: the file exists`);
          }
-         // Another client's write before the answer shows as text the create did not send.
-         const text = options.foreignWrite ? `${args.text} edited` : args.text;
-         return TransferDocument.create<FakeRoot>(args.uri, 3, { $type: 'FakeRoot', name: 'created' }, 'hash', undefined, {
-            version: 3,
-            hash: textHash(text),
+         // Another client's write before the answer moves the state past the version the create made.
+         const version = options.writeBeforeAnswer ? 4 : 3;
+         const document = TransferDocument.create<FakeRoot>(args.uri, version, { $type: 'FakeRoot', name: 'created' }, 'hash', undefined, {
+            version,
+            hash: 'hash',
             dirty: true
          });
+         return { ...document, created: { version: asModelVersion(3) } };
       },
       closeModelDocument: () => Promise.reject(new Error('not exercised')),
       updateModelDocuments: () => Promise.reject(new Error('not exercised')),
@@ -271,7 +272,7 @@ describe('runCreate', () => {
          })
       ).rejects.toThrow('disk refused');
 
-      // Persisted as created: gated on the version the create answered.
+      // Persisted as created: gated on the version the create made.
       const expected = [
          'session hydranium-cli',
          'create hydranium-cli file:///workspace/New.fake name:literal',
@@ -302,20 +303,19 @@ describe('runCreate', () => {
       ]);
    });
 
-   it('persists nothing when the create answers with text another client wrote, and ends the session', async () => {
+   it('gates the persist on the version the create made, not the version the answer holds', async () => {
       const calls = emptyCalls();
-      await expect(
-         runCreate({
-            serverCommand: 'unused',
-            uri: 'file:///workspace/New.fake',
-            content: 'name:literal',
-            write: () => undefined,
-            __proxyForTest: makeStubProxy(calls, { foreignWrite: true })
-         })
-      ).rejects.toThrow('another client wrote to it');
+      await runCreate({
+         serverCommand: 'unused',
+         uri: 'file:///workspace/New.fake',
+         content: 'name:literal',
+         write: () => undefined,
+         __proxyForTest: makeStubProxy(calls, { writeBeforeAnswer: true })
+      });
       expect(calls.sequence).toEqual([
          'session hydranium-cli',
          'create hydranium-cli file:///workspace/New.fake name:literal',
+         'persist hydranium-cli file:///workspace/New.fake 3',
          'end hydranium-cli'
       ]);
    });
