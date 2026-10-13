@@ -17,13 +17,14 @@ and its own key.
 ### The `./node` boundary
 
 **`.` is strictly neutral, `./node` is server-only, and `./browser` exists only
-where code needs a DOM or worker global.** The oxlint `no-restricted-imports`
-rule bans `node:*` and a sibling's `/node` or `/browser` subpath in neutral
-`src/` (`src/node/`, `src/browser/` and `src/testing/` exempt from their own
-tier's ban); the oxlint `no-restricted-globals` rule bans raw `process` /
-`Buffer`, which go through the accessors in `core/src/util/environment.ts`;
-`check:neutral` (`scripts/check-neutral-bundles.mts`) bundles each gated entry
-for the browser to catch a transitive `node:` import; DOM globals are banned by
+where code needs a DOM or worker global or an upstream's browser entry.** The
+oxlint `no-restricted-imports` rule bans `node:*` and a sibling's `/node` or
+`/browser` subpath in neutral `src/` (`src/node/`, `src/browser/` and
+`src/testing/` exempt from their own tier's ban); the oxlint
+`no-restricted-globals` rule bans raw `process` / `Buffer`, which go through
+the accessors in `core/src/util/environment.ts`; `check:neutral`
+(`scripts/check-neutral-bundles.mts`) bundles each gated entry for the browser
+to catch a transitive `node:` import; DOM globals are banned by
 `lib: ["ES2022"]` only in packages that inherit it. A `./browser` tier that
 needs a browser global compiles as a second project with its own `lib`, so the
 ban holds for the rest of the package.

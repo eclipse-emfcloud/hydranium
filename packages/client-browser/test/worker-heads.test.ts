@@ -19,6 +19,7 @@ import {
    NoopLogger,
    WORKER_BOOTSTRAP_PHASE,
    WORKER_ERROR_MESSAGE_TYPE,
+   WORKER_READY_MESSAGE_TYPE,
    type TransferredMessagePort,
    type WorkerBootstrapMessage,
    type WorkerErrorMessage
@@ -216,6 +217,33 @@ describe('connectWorkerHeads', () => {
 
       expect(ended).toBe(0);
       await expect(data.sendRequest('head/echo', 'still up')).resolves.toEqual({ echoed: 'still up' });
+   });
+
+   it('reports an error event after the ready message, and ends nothing, since the heads are up', async () => {
+      const worker = new RecordingWorker();
+      const heads = connect(worker);
+      heads.lsp.listen();
+      const reported: WorkerErrorMessage[] = [];
+      heads.onWorkerError(report => reported.push(report));
+      let ended = 0;
+      heads.onDispose(() => ended++);
+      const pending = sendUnanswered(heads.lsp);
+
+      worker.fire('message', { data: { type: WORKER_READY_MESSAGE_TYPE } });
+      worker.fire('error', { message: 'a handler threw' });
+
+      expect(reported.map(report => report.message)).toEqual(['a handler threw']);
+      expect(ended).toBe(0);
+      await tick();
+      expect(
+         await Promise.race([
+            pending.then(
+               () => 'settled',
+               () => 'settled'
+            ),
+            Promise.resolve('pending')
+         ])
+      ).toBe('pending');
    });
 
    it('rejects pending requests on a failed bootstrap report', async () => {

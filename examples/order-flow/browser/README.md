@@ -63,12 +63,12 @@ the call-stack view. The bundles are not minified unless you pass `--minify` to
 
 | Concern | Files |
 | --- | --- |
-| The worker: all three heads, the IndexedDB-backed filesystem, the validating build, latency | [src/worker/order-flow-worker.ts](src/worker/order-flow-worker.ts) |
+| The worker: the three heads on `hostHeadsInWorker` from `@hydranium/core/browser`, the IndexedDB-backed filesystem, latency, the reset | [src/worker/order-flow-worker.ts](src/worker/order-flow-worker.ts) |
 | This host's own messages on the worker global, beside the framework's bootstrap: the workspace the heads came up on, and the reset | [src/head-channels.ts](src/head-channels.ts) |
 | The bare `'path'` alias for the browser bundle | [src/workspace/posix-path-shim.ts](src/workspace/posix-path-shim.ts), [esbuild.mjs](esbuild.mjs) |
 | The workspace seed | [scripts/generate-workspace-seed.mts](scripts/generate-workspace-seed.mts), [src/generated/workspace-seed.ts](src/generated/workspace-seed.ts) |
 | The static server | [scripts/serve.mts](scripts/serve.mts) |
-| Page entry: Monaco's locale, loaded before Monaco | [src/page/order-flow-page.ts](src/page/order-flow-page.ts), [monaco-editor-core-nls.d.ts](src/page/monaco-editor-core-nls.d.ts) |
+| Page entry: Monaco's locale, loaded before Monaco, and the dialog a failed start opens | [src/page/order-flow-page.ts](src/page/order-flow-page.ts), [monaco-editor-core-nls.d.ts](src/page/monaco-editor-core-nls.d.ts) |
 | Page wiring: the heads from `@hydranium/client-browser`, save, dialogs, theme switch | [src/page/workbench.ts](src/page/workbench.ts) |
 | DOM lookups and the element builder | [src/page/dom.ts](src/page/dom.ts) |
 | Monaco's LSP client and editor themes | [src/page/monaco-lsp-adapter.ts](src/page/monaco-lsp-adapter.ts) |

@@ -44,8 +44,9 @@
 import 'reflect-metadata';
 import { ServerModule } from '@eclipse-glsp/server/browser.js';
 import { PersistentFileSystemProvider, persistentFileSystem } from '@hydranium/core';
-import { IndexedDbFileSystemStore } from '@hydranium/core/browser';
+import { hostHeadsInWorker, IndexedDbFileSystemStore, reportWorkerError, startLanguageServerInWorker } from '@hydranium/core/browser';
 import { DataServer } from '@hydranium/data-server';
+import { startDataServerInWorker } from '@hydranium/data-server/browser';
 import { createOrderFlowServices, type OrderFlowSharedServices } from '@hydranium/example-order-flow-server';
 import { OrderFlowProcessDiagramModule } from '@hydranium/example-order-flow-server/lib/glsp/order-flow-process-diagram-module';
 import { GlspClientLogger, HydraniumGlspAppModule } from '@hydranium/glsp-server';
@@ -55,25 +56,8 @@ import type {
    LayoutModel,
    ProcessModel
 } from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
-// The framework's entry point, NOT Langium's `@hydranium/langium/lsp` one: it
-// runs `assertLspHeadComposed` first, so a shared module that skipped
-// `createLspServerSharedModule` fails here instead of booting on Langium's
-// default handler. Browser-neutral, so the worker takes the same composition
-// check every other host does.
-import { lspLatencyOptions, startLanguageServer, withHydraniumLspFeatures } from '@hydranium/core/lsp';
 import { URI } from '@hydranium/langium';
-import {
-   createMessagePortTransport,
-   describeErrorWithStack,
-   isWorkerBootstrapMessage,
-   LatencyCollector,
-   WORKER_BOOTSTRAP_PHASE,
-   WORKER_ERROR_MESSAGE_TYPE,
-   type TransferredMessagePort,
-   type WorkerBootstrapMessage
-} from '@hydranium/protocol';
-import { createMessageConnection } from 'vscode-jsonrpc/browser';
-import { createConnection, ProposedFeatures } from 'vscode-languageserver/browser';
+import { LatencyCollector } from '@hydranium/protocol';
 import { ORDER_FLOW_WORKSPACE_SEED } from '../generated/workspace-seed.js';
 import {
    isResetWorkspaceMessage,
@@ -83,136 +67,8 @@ import {
    type WorkspaceFiles
 } from '../head-channels.js';
 
-/**
- * Report a failure to the page on the global channel — the one no head is
- * allowed to bind, which is what keeps it available for this. A bootstrap
- * failure ends the page's heads; any other phase is shown and the heads stay.
- */
-function reportError(phase: string, error: unknown): void {
-   postMessage({ type: WORKER_ERROR_MESSAGE_TYPE, phase, message: describeErrorWithStack(error) });
-}
-
-// Rejections only: an uncaught throw reaches the page as the `Worker`'s own
-// `error` event, which the page wiring reports, and a listener here would
-// report it a second time. An LSP notification handler that rejects — which is
-// how the workspace walk runs — produces an unhandled rejection and nothing
-// else: no reply to reject, no request to fail, and a page that waits forever
-// on diagnostics that were never going to arrive.
-addEventListener('unhandledrejection', event => reportError('unhandled rejection', event.reason));
-
-/**
- * Compose the language on the LSP port and return the shared tier the other
- * heads attach to.
- *
- * The services are built around the LSP connection, exactly as the Node entry
- * builds them around a stdio one — which is why this function, and not the
- * bootstrap handler, owns their creation.
- *
- * The page's end of the port closing ends the editor's connection, but not the
- * worker, which the other heads share. The language client holds no session,
- * so its documents are closed here, each reverting as its last close does.
- */
-function startLspHead(port: TransferredMessagePort, fileSystem: WorkspaceFileSystem, latency: LatencyCollector): OrderFlowSharedServices {
-   // Both ends use `createMessagePortTransport`; see it for why.
-   //
-   // **The filesystem is handed in ALREADY RESTORED, and that ordering is not
-   // stylistic.** The transport starts its port as it is built but drops every
-   // message until `startLanguageServer` calls `listen`, so an `await` between
-   // these statements loses the `initialize` the page has already sent — no
-   // error, no reply, a page that waits forever. Everything asynchronous
-   // therefore happens before this function is called.
-   const transport = createMessagePortTransport(port);
-   const connection = createConnection(
-      withHydraniumLspFeatures(ProposedFeatures.all),
-      transport.reader,
-      transport.writer,
-      lspLatencyOptions(latency)
-   );
-   const { shared } = createOrderFlowServices(
-      { connection, ...fileSystem },
-      // The options this host sets, for the reason in the module doc: no
-      // client-side grammar means the server is the only source of colour.
-      { highlightKeywords: true, highlightComments: true }
-   );
-   startLanguageServer(shared);
-   transport.reader.onClose(() => void shared.workspace.TextDocuments.closeLanguageClientDocuments());
-   return shared;
-}
-
-/**
- * Attach the data head to the SAME shared tier, on its own port.
- *
- * One store, two heads — the property the whole arrangement exists to
- * demonstrate, and the reason both heads must live in one worker rather than
- * one worker each.
- *
- * `listen()` comes after the server is constructed, matching the order the
- * socket launcher uses on Node: the `DataServer` binds its request handlers in
- * its constructor, and a connection that is already listening can deliver a
- * message before they exist.
- */
-function startDataHead(port: TransferredMessagePort, shared: OrderFlowSharedServices, latency: LatencyCollector): void {
-   // Both ends use `createMessagePortTransport`; see it for why.
-   const transport = createMessagePortTransport(port);
-   const connection = createMessageConnection(transport.reader, transport.writer, shared.Logger.with('ModelServer'));
-   new DataServer<OrderFlowTransferRoot>(connection, shared, { latency });
-   connection.listen();
-}
-
-/**
- * Attach the GLSP head to the same shared tier, on the third port.
- *
- * The composition is `order-flow-server`'s, unmodified: the same
- * {@link OrderFlowProcessDiagramModule} the Node entry configures, the same
- * unsubclassed {@link HydraniumGlspAppModule}. Only the bringup differs —
- * `startGlspServerInWorker` in place of `startGlspServer` — which is the claim
- * this head is here to make.
- *
- * The logger goes through the LSP connection like the Node entry's, for a
- * different reason: there is no stdout to corrupt here, but a worker's console
- * is a place nobody is looking, and the LSP channel already reaches the page.
- */
-function startGlspHead(port: TransferredMessagePort, shared: OrderFlowSharedServices): void {
-   startGlspServerInWorker({
-      context: port,
-      // No `logLevel`: the logger tracks the framework threshold, which in a
-      // browser has no `HYDRANIUM_LOG_LEVEL` to read and so sits at its `'info'`
-      // default until something calls `Logger.setLevel`.
-      createLogger: caller => new GlspClientLogger(shared, { component: caller }),
-      serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
-      appModules: [new HydraniumGlspAppModule({ shared })]
-   });
-}
-
-/**
- * Build every registered document to `Validated`, once workspace startup has
- * settled.
- *
- * **The initial workspace build does not validate**, by Langium's design:
- * `initializeWorkspace` builds with `initialBuildOptions`, whose `validation` is
- * unset, so every document stops at `IndexedReferences` with no diagnostics
- * computed and none published. A client that only opens a socket and waits
- * therefore sees a server that started correctly, indexed the workspace, and
- * says nothing — indistinguishable from an empty workspace.
- *
- * Asking for the validating build is the host's job, and it is the same trailing
- * `build(..., { validation: true })` that `buildWorkspaceProgrammatically` runs
- * for the headless tools. Diagnostics follow from the `Validated` document phase
- * that Langium's own LSP wiring publishes on.
- *
- * `workspaceInitialized` is the documented gate for "startup has settled";
- * building before it would race the walk and validate a partial document set.
- */
-async function validateWholeWorkspace(shared: OrderFlowSharedServices): Promise<void> {
-   await shared.workspace.WorkspaceManager.workspaceInitialized;
-   await shared.workspace.DocumentBuilder.build(shared.workspace.LangiumDocuments.all.toArray(), { validation: true });
-}
-
 /** The union of transfer roots this workspace's three grammars produce. */
 type OrderFlowTransferRoot = DomainModel | LayoutModel | ProcessModel;
-
-/** The DI fragment {@link persistentFileSystem} binds, named so the head takes it as one thing. */
-type WorkspaceFileSystem = Awaited<ReturnType<typeof persistentFileSystem>>;
 
 /**
  * The store every head persists through, and the one a page reset clears.
@@ -264,35 +120,68 @@ function restoredPaths(shared: OrderFlowSharedServices): string[] {
    return host instanceof PersistentFileSystemProvider ? [...host.restoredPaths] : [];
 }
 
-async function onBootstrap(message: WorkerBootstrapMessage): Promise<void> {
-   // The one asynchronous step, and it is FIRST: the stored workspace has to be
-   // in the filesystem before a head is built around it, because every read
-   // below this line is synchronous and the transport cannot be made to wait.
-   const fileSystem = await persistentFileSystem({
-      store: workspaceStore,
-      seed: ORDER_FLOW_WORKSPACE_SEED,
-      rootUri: WORKSPACE_ROOT_URI
-   });
-   // ONE collector for both heads: a second would split the report, `getLatency`
-   // serving only what the data head was given. Ring-buffer rather than the
-   // `keep-all` default, which is sized for a window that gets read and reset —
-   // a page is left open, so retention has to be bounded, and 200 keeps the
-   // nearest-rank p99 describing a tail rather than standing in for the maximum.
-   // No env gate, unlike the Node entry: a browser has none to read.
-   const latency = new LatencyCollector(undefined, { kind: 'ring-buffer', maxSamplesPerMethod: 200 });
-   const shared = startLspHead(message.ports.lsp, fileSystem, latency);
-   startDataHead(message.ports.data, shared, latency);
-   startGlspHead(message.ports.glsp, shared);
-   // After the heads, so a page never receives content for a composition that
-   // failed to come up — it would open editors against a server that cannot
-   // answer and report the silence as an empty workspace.
-   postMessage({
-      type: WORKSPACE_READY_MESSAGE_TYPE,
-      files: readWorkspaceFiles(shared),
-      restored: restoredPaths(shared)
-   });
-   validateWholeWorkspace(shared).catch((error: unknown) => reportError('workspace validation', error));
-}
+// The stored workspace is restored before any head is built around it, which
+// `hostHeadsInWorker` guarantees by awaiting this before `start`; the load
+// begins now rather than on the bootstrap, so the page's first message finds
+// as little of it left as possible.
+hostHeadsInWorker(
+   persistentFileSystem({ store: workspaceStore, seed: ORDER_FLOW_WORKSPACE_SEED, rootUri: WORKSPACE_ROOT_URI }),
+   (ports, fileSystem) => {
+      // ONE collector for both heads: a second would split the report,
+      // `getLatency` serving only what the data head was given. Ring-buffer
+      // rather than the `keep-all` default, which is sized for a window that
+      // gets read and reset — a page is left open, so retention has to be
+      // bounded, and 200 keeps the nearest-rank p99 describing a tail rather
+      // than standing in for the maximum. No env gate, unlike the Node entry:
+      // a browser has none to read.
+      const latency = new LatencyCollector(undefined, { kind: 'ring-buffer', maxSamplesPerMethod: 200 });
+      // The services are built around the LSP connection, exactly as the Node
+      // entry builds them around a stdio one.
+      const shared = startLanguageServerInWorker(
+         ports.lsp,
+         connection =>
+            createOrderFlowServices(
+               { connection, ...fileSystem },
+               // The options this host sets, for the reason in the module doc:
+               // no client-side grammar means the server is the only source of
+               // colour.
+               { highlightKeywords: true, highlightComments: true }
+            ).shared,
+         { latency }
+      );
+      // The SAME shared tier, on its own port. One store, two heads — the
+      // property the whole arrangement exists to demonstrate, and the reason
+      // both heads must live in one worker rather than one worker each.
+      startDataServerInWorker(ports.data, shared, connection => new DataServer<OrderFlowTransferRoot>(connection, shared, { latency }));
+      // The composition is `order-flow-server`'s, unmodified: the same
+      // `OrderFlowProcessDiagramModule` the Node entry configures, the same
+      // unsubclassed `HydraniumGlspAppModule`. Only the bringup
+      // differs — `startGlspServerInWorker` in place of `startGlspServer` —
+      // which is the claim this head is here to make. The logger goes through
+      // the LSP connection like the Node entry's, for a different reason: there
+      // is no stdout to corrupt here, but a worker's console is a place nobody
+      // is looking, and the LSP channel already reaches the page.
+      const glsp = startGlspServerInWorker({
+         context: ports.glsp,
+         // No `logLevel`: the logger tracks the framework threshold, which in
+         // a browser has no `HYDRANIUM_LOG_LEVEL` to read and so sits at its
+         // `'info'` default until something calls `Logger.setLevel`.
+         createLogger: caller => new GlspClientLogger(shared, { component: caller }),
+         serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      // Only once the GLSP head is up, so a page never receives content for a
+      // composition that failed to come up — it would open editors against a
+      // server that cannot answer and report the silence as an empty
+      // workspace. The GLSP head reports a failed launch through `started`
+      // rather than by throwing, so the announcement chains on it; handed
+      // back, the ready message waits for both.
+      const announced = glsp.started.then(() => {
+         postMessage({ type: WORKSPACE_READY_MESSAGE_TYPE, files: readWorkspaceFiles(shared), restored: restoredPaths(shared) });
+      });
+      return { shared, started: [announced] };
+   }
+);
 
 /**
  * Forget every stored edit and tell the page, which reloads.
@@ -306,30 +195,13 @@ function onResetWorkspace(): void {
    workspaceStore
       .clear()
       .then(() => postMessage({ type: WORKSPACE_RESET_MESSAGE_TYPE }))
-      .catch((error: unknown) => reportError('workspace reset', error));
+      .catch((error: unknown) => reportWorkerError('workspace reset', error));
 }
 
-// One bootstrap per worker: the heads are composed against a single shared
-// Langium tree, so a second bootstrap would build a second tree over the same
-// seed and hand out sessions that silently disagree about the workspace.
-let bootstrapped = false;
-
-// The bare global rather than `self.addEventListener`: only the former is typed
-// against `DedicatedWorkerGlobalScopeEventMap`, so only the former narrows the
-// handler's argument to `MessageEvent`. `self` is declared as the wider
-// `WorkerGlobalScope`, where `message` is not in the event map at all.
+// This host's own message beside the framework's bootstrap, which
+// `hostHeadsInWorker` answers and leaves everything else to the host.
 addEventListener('message', event => {
    if (isResetWorkspaceMessage(event.data)) {
       onResetWorkspace();
-      return;
    }
-   if (bootstrapped || !isWorkerBootstrapMessage(event.data)) {
-      return;
-   }
-   bootstrapped = true;
-   // `.catch` rather than try/catch: the bootstrap is asynchronous now, so a
-   // synchronous throw and a rejected filesystem load arrive by the same route
-   // and both have to reach the page — a failing store otherwise leaves a worker
-   // that started and a page that waits.
-   onBootstrap(event.data).catch((error: unknown) => reportError(WORKER_BOOTSTRAP_PHASE, error));
 });

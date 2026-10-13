@@ -41,6 +41,8 @@ with `@hydranium/core`.
    `startStdioServer` for a data head alone.
 2. In its connection callback, create `new DataServer(connection, shared)`. It
    cleans up when the connection closes.
+3. In a web worker, start it with `startDataServerInWorker` from `./browser`
+   on the port the page transferred for it; its callback creates the server.
 
 See *Add a data-server method* and *Connect a data client* in
 [Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
@@ -51,6 +53,7 @@ See *Add a data-server method* and *Connect a data client* in
 | ------------ | ---------------------------------------------------------- | --------------- |
 | `.`          | `DataServer`, its options, and the diagnostics seam        | browser-neutral |
 | `./node`     | The Node implementation of the diagnostics seam            | Node-only       |
+| `./browser`  | Starting the head in a web worker                          | browser-only    |
 | `./messages` | The codes of the messages this package raises              | browser-neutral |
 | `./testing`  | A harness that drives a real data head in-process          | Node-only       |
 

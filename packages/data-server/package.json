@@ -44,6 +44,10 @@
       "types": "./lib/node/index.d.ts",
       "default": "./lib/node/index.js"
     },
+    "./browser": {
+      "types": "./lib/browser/index.d.ts",
+      "default": "./lib/browser/index.js"
+    },
     "./messages": {
       "types": "./lib/messages/index.d.ts",
       "default": "./lib/messages/index.js"

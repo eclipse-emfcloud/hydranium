@@ -11,8 +11,10 @@ import { describe, expect, it } from 'vitest';
 import {
    isWorkerBootstrapMessage,
    isWorkerErrorMessage,
+   isWorkerReadyMessage,
    WORKER_BOOTSTRAP_MESSAGE_TYPE,
    WORKER_ERROR_MESSAGE_TYPE,
+   WORKER_READY_MESSAGE_TYPE,
    type TransferredMessagePort
 } from '../../src/client';
 
@@ -51,5 +53,19 @@ describe('isWorkerErrorMessage', () => {
       ['no phase', { type: WORKER_ERROR_MESSAGE_TYPE, message: 'x' }]
    ])('rejects %s', (_shape, value) => {
       expect(isWorkerErrorMessage(value)).toBe(false);
+   });
+});
+
+describe('isWorkerReadyMessage', () => {
+   it('accepts the ready message', () => {
+      expect(isWorkerReadyMessage({ type: WORKER_READY_MESSAGE_TYPE })).toBe(true);
+   });
+
+   it.each([
+      ['a string', 'hydranium/ready'],
+      ['null', null],
+      ['another type', { type: WORKER_ERROR_MESSAGE_TYPE }]
+   ])('rejects %s', (_shape, value) => {
+      expect(isWorkerReadyMessage(value)).toBe(false);
    });
 });

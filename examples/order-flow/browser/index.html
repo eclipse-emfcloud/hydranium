@@ -2243,6 +2243,25 @@
          </form>
       </dialog>
 
+      <!--
+         A page that failed to start. English only: the failure can come before
+         the translations are applied, and a dialog that waited for them could
+         wait forever. The detail is the described error, so a driver or a
+         screenshot carries the cause rather than a blank workbench.
+      -->
+      <dialog id="start-failure-dialog" class="dialog" aria-labelledby="start-failure-dialog-title">
+         <form method="dialog">
+            <h2 id="start-failure-dialog-title">The page failed to start</h2>
+            <p>
+               <span>Nothing below works until the cause is fixed and the page is reloaded.</span>
+               <span id="start-failure-detail" class="dialog-detail"></span>
+            </p>
+            <div class="dialog-actions">
+               <button type="submit" value="close" class="action">Close</button>
+            </div>
+         </form>
+      </dialog>
+
       <div class="status-area">
          <!--
             Where a category that has more to say than fits puts it. One at a
