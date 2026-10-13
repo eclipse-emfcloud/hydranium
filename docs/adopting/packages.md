@@ -32,7 +32,10 @@ copied from it.
   server head runs anywhere, a browser included.
 - **`./node`** is server-only and may use Node's APIs.
 - **`./testing`** is test support; never import it from production code.
-- **`@hydranium/core/lsp`** is the LSP head, and
-  **`@hydranium/glsp-server/browser`** starts the GLSP head in a web worker.
+- **`@hydranium/core/lsp`** is the LSP head.
+- **The two heads' `./browser`** is for a web worker:
+  **`@hydranium/core/browser`** holds the IndexedDB store a worker keeps its
+  workspace in, and **`@hydranium/glsp-server/browser`** starts the GLSP head
+  there. A Theia client package's `./browser` is its frontend tier.
 
 A package's `exports` field lists all of its subpaths.

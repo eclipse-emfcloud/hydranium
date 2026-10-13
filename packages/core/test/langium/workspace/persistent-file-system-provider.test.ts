@@ -329,6 +329,31 @@ describe('PersistentFileSystemProvider writes', () => {
    });
 });
 
+describe('PersistentFileSystemProvider restoredPaths', () => {
+   it('lists the entries restored as content, in store-key space', async () => {
+      const files = await restored(new RecordingStore({ 'alpha/one.a': 'edited one', 'gamma/three.c': 'created three' }));
+      expect(files.restoredPaths).toEqual(['alpha/one.a', 'gamma/three.c']);
+   });
+
+   it('is empty on a first visit', async () => {
+      const files = await restored(new RecordingStore());
+      expect(files.restoredPaths).toEqual([]);
+   });
+
+   it('does not list a deleted SEEDED file, whose stored entry is a marker', async () => {
+      // The store holds a key for it, so a count of stored keys would call a
+      // deletion a restored file; only the provider can tell the two apart.
+      const store = new RecordingStore({ 'alpha/one.a': 'edited one' });
+      const first = await restored(store);
+      await first.deleteFile(URI.parse(`${ROOT}/alpha/one.a`));
+      await flush();
+
+      const second = await restored(store);
+      expect(store.contents.has('alpha/one.a')).toBe(true);
+      expect(second.restoredPaths).toEqual([]);
+   });
+});
+
 describe('persistentFileSystem', () => {
    it('binds a provider carrying writeFile, which is what the slot requires', async () => {
       // Without `writeFile` the context slot silently swaps in the empty

@@ -61,6 +61,17 @@ const RESTRICT_GLSP_BROWSER_BUILD = {
       'Neutral GLSP code imports the bare @eclipse-glsp/server (the `browser` field swaps the build); the worker launcher lives under src/browser/.'
 };
 
+// A sibling's `/browser` subpath, the mirror of the `/node` ban below: it
+// names a browser global such as `indexedDB`, which a `.` entry loaded in Node
+// lacks, and `check:neutral` externalises the bare specifier without looking
+// inside. A browser tier may reach a sibling's browser tier, so src/browser/
+// is exempt from this one ban alone.
+const RESTRICT_HYDRANIUM_BROWSER = {
+   group: withSubpaths(['@hydranium/*/browser', '@hydranium/*/browser.js']),
+   message:
+      "Neutral (`.`-entry) code must not import a sibling package's /browser subpath — it names browser globals a Node consumer lacks. Move the use under src/browser/."
+};
+
 const RESTRICT_NEUTRAL_PATTERNS = [
    {
       group: withSubpaths(['node:*']),
@@ -83,7 +94,8 @@ const RESTRICT_NEUTRAL_PATTERNS = [
       group: withSubpaths(['@hydranium/*/node', '@hydranium/*/node.js']),
       message:
          "Neutral (`.`-entry) code must not import a sibling package's /node subpath — it pulls that package's node:* imports into every browser bundle. Move the use under src/node/."
-   }
+   },
+   RESTRICT_HYDRANIUM_BROWSER
 ];
 
 // Merge the neutral patterns into an existing langium restriction (the
@@ -281,7 +293,19 @@ const policyOverrides = [
    {
       files: ['packages/glsp-server/src/browser/**/*.ts'],
       rules: {
-         'no-restricted-imports': ['warn', withHost(withNeutralExcept(RESTRICT_HEAD_NEUTRAL, RESTRICT_GLSP_BROWSER_BUILD))]
+         'no-restricted-imports': [
+            'warn',
+            withHost(withNeutralExcept(RESTRICT_HEAD_NEUTRAL, RESTRICT_GLSP_BROWSER_BUILD, RESTRICT_HYDRANIUM_BROWSER))
+         ]
+      }
+   },
+
+   // Core's browser-only subtree (the `./browser` subpath, holding the IndexedDB
+   // store), exempt from the sibling-browser ban alone for the reason above.
+   {
+      files: ['packages/core/src/browser/**/*.ts'],
+      rules: {
+         'no-restricted-imports': ['warn', withHost(withNeutralExcept(RESTRICT_HEAD_NEUTRAL, RESTRICT_HYDRANIUM_BROWSER))]
       }
    },
 

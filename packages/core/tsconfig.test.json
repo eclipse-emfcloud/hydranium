@@ -8,5 +8,6 @@
     "checkJs": true,
     "types": ["node"]
   },
-  "include": ["src", "test"]
+  "include": ["src", "test"],
+  "exclude": ["src/browser", "test/browser"]
 }

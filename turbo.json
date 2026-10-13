@@ -24,6 +24,8 @@
         "package.json",
         "tsconfig.json",
         "tsconfig.test.json",
+        "tsconfig.browser.json",
+        "tsconfig.browser.test.json",
         "langium-config.json",
         "esbuild.mjs",
         "vitest.config.ts",
@@ -50,12 +52,20 @@
         "test/**/*",
         "vitest.config.ts",
         "jest.config.cjs",
-        "tsconfig.test.json"
+        "tsconfig.test.json",
+        "tsconfig.browser.test.json"
       ]
     },
     "typecheck:test": {
       "dependsOn": ["build"],
-      "inputs": ["src/**/*", "test/**/*", "tsconfig.json", "tsconfig.test.json"]
+      "inputs": [
+        "src/**/*",
+        "test/**/*",
+        "tsconfig.json",
+        "tsconfig.test.json",
+        "tsconfig.browser.json",
+        "tsconfig.browser.test.json"
+      ]
     },
     "lint": {
       "dependsOn": ["build"],

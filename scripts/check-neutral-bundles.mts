@@ -96,6 +96,11 @@ const TARGETS = [
       resolvePackages: ['@eclipse-glsp/server']
    },
 
+   // The worker-side store. Browser-ONLY like the launcher above: it reaches
+   // `indexedDB`, which exists in a worker and a page and nowhere in Node, so
+   // "no node:*" is the entry's whole contract rather than a portability claim.
+   { name: '@hydranium/core (./browser)', entry: 'packages/core/lib/browser/index.js', resolvePackages: [] },
+
    // The host-neutral client tier. Covered transitively by the `.` entry above
    // (the root barrel re-exports `./client`), but named separately so a
    // regression reports against the client tier rather than against the whole

@@ -43,7 +43,8 @@
 // rather than the missing polyfill.
 import 'reflect-metadata';
 import { ServerModule } from '@eclipse-glsp/server/browser.js';
-import { persistentFileSystem } from '@hydranium/core';
+import { PersistentFileSystemProvider, persistentFileSystem } from '@hydranium/core';
+import { IndexedDbFileSystemStore } from '@hydranium/core/browser';
 import { DataServer } from '@hydranium/data-server';
 import { createOrderFlowServices, type OrderFlowSharedServices } from '@hydranium/example-order-flow-server';
 import { OrderFlowProcessDiagramModule } from '@hydranium/example-order-flow-server/lib/glsp/order-flow-process-diagram-module';
@@ -81,7 +82,6 @@ import {
    WORKSPACE_ROOT_URI,
    type WorkspaceFiles
 } from '../head-channels.js';
-import { IndexedDbFileSystemStore } from '../workspace/indexeddb-file-system-store.js';
 
 /**
  * Report a failure to the page on the global channel — the one no head is
@@ -221,7 +221,7 @@ type WorkspaceFileSystem = Awaited<ReturnType<typeof persistentFileSystem>>;
  * after the heads exist, and a store held inside the bootstrap closure would be
  * unreachable from the message handler.
  */
-const workspaceStore = new IndexedDbFileSystemStore();
+const workspaceStore = new IndexedDbFileSystemStore('order-flow-browser-workspace');
 
 /**
  * Every file the heads came up on, read out of the FILESYSTEM rather than out of
@@ -253,6 +253,17 @@ function readWorkspaceFiles(shared: OrderFlowSharedServices): WorkspaceFiles {
    return files;
 }
 
+/**
+ * What the provider restored as content. The store cannot answer this: a
+ * deleted seeded file is a stored entry too, and only the provider knows the
+ * marker from a file. The bound slot is the scheme registry, so the host's
+ * provider is read through it.
+ */
+function restoredPaths(shared: OrderFlowSharedServices): string[] {
+   const host = shared.workspace.FileSystemProvider.host;
+   return host instanceof PersistentFileSystemProvider ? [...host.restoredPaths] : [];
+}
+
 async function onBootstrap(message: WorkerBootstrapMessage): Promise<void> {
    // The one asynchronous step, and it is FIRST: the stored workspace has to be
    // in the filesystem before a head is built around it, because every read
@@ -278,7 +289,7 @@ async function onBootstrap(message: WorkerBootstrapMessage): Promise<void> {
    postMessage({
       type: WORKSPACE_READY_MESSAGE_TYPE,
       files: readWorkspaceFiles(shared),
-      restored: [...workspaceStore.restoredPaths]
+      restored: restoredPaths(shared)
    });
    validateWholeWorkspace(shared).catch((error: unknown) => reportError('workspace validation', error));
 }

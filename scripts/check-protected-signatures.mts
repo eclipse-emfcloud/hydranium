@@ -272,21 +272,22 @@ function signatureSlotsOf(member: ts.ClassElement, source: ts.SourceFile): Signa
 
 /** Declarations an adopter can name, keyed by source file and name. */
 function reachableDeclarations(
-   programs: Map<string, ts.Program>,
+   programs: Map<string, ts.Program[]>,
    packages: PublishedPackage[],
    keyOf: (declaration: ts.NamedDeclaration) => string
 ): { reachable: Set<string>; missing: string[] } {
    const reachable = new Set<string>();
    const missing: string[] = [];
    for (const pkg of packages) {
-      const program = programs.get(pkg.directory)!;
-      const checker = program.getTypeChecker();
       for (const entry of pkg.entries) {
-         const source = program.getSourceFile(entry);
-         if (!source) {
+         // The project that lists the entry: a tier's barrel is in exactly one.
+         const program = programs.get(pkg.directory)!.find(candidate => candidate.getSourceFile(entry) !== undefined);
+         const source = program?.getSourceFile(entry);
+         if (!program || !source) {
             missing.push(`${pkg.name} declares an entry point with no source: ${relative(REPO_ROOT, entry)}`);
             continue;
          }
+         const checker = program.getTypeChecker();
          const moduleSymbol = checker.getSymbolAtLocation(source);
          if (!moduleSymbol) {
             continue;
@@ -303,7 +304,10 @@ function reachableDeclarations(
 }
 
 /** Findings for one workspace: a subclass-visible member naming a type no entry point exports. */
-function findUnnameableTypes(programs: Map<string, ts.Program>, packages: PublishedPackage[]): { findings: Finding[]; missing: string[] } {
+function findUnnameableTypes(
+   programs: Map<string, ts.Program[]>,
+   packages: PublishedPackage[]
+): { findings: Finding[]; missing: string[] } {
    const { owningPackage, keyOf } = locator(packages);
    const { reachable, missing } = reachableDeclarations(programs, packages, keyOf);
    const findings: Finding[] = [];
@@ -339,79 +343,92 @@ function findUnnameableTypes(programs: Map<string, ts.Program>, packages: Publis
    };
 
    for (const pkg of packages) {
-      const program = programs.get(pkg.directory)!;
-      const checker = program.getTypeChecker();
       const sourceRoot = join(pkg.directory, 'src') + sep;
-      for (const source of program.getSourceFiles()) {
-         if (source.isDeclarationFile || !source.fileName.startsWith(sourceRoot)) {
-            continue;
-         }
-         const visitClass = (declaration: ts.ClassDeclaration): void => {
-            if (!reachable.has(keyOf(declaration))) {
-               return;
+      for (const program of programs.get(pkg.directory)!) {
+         const checker = program.getTypeChecker();
+         for (const source of program.getSourceFiles()) {
+            if (source.isDeclarationFile || !source.fileName.startsWith(sourceRoot)) {
+               continue;
             }
-            const className = declaration.name?.text ?? '(anonymous)';
-            for (const member of declaration.members) {
-               if (!isSubclassVisible(member)) {
-                  continue;
+            const visitClass = (declaration: ts.ClassDeclaration): void => {
+               if (!reachable.has(keyOf(declaration))) {
+                  return;
                }
-               const memberName = member.name ? member.name.getText(source) : '(unnamed)';
-               for (const [slot, typeNode] of signatureSlotsOf(member, source)) {
-                  if (typeNode) {
-                     for (const reference of typeReferencesIn(typeNode)) {
-                        const symbol = checker.getSymbolAtLocation(reference);
-                        if (!symbol) {
-                           continue;
+               const className = declaration.name?.text ?? '(anonymous)';
+               for (const member of declaration.members) {
+                  if (!isSubclassVisible(member)) {
+                     continue;
+                  }
+                  const memberName = member.name ? member.name.getText(source) : '(unnamed)';
+                  for (const [slot, typeNode] of signatureSlotsOf(member, source)) {
+                     if (typeNode) {
+                        for (const reference of typeReferencesIn(typeNode)) {
+                           const symbol = checker.getSymbolAtLocation(reference);
+                           if (!symbol) {
+                              continue;
+                           }
+                           const target = symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+                           for (const named of (target.getDeclarations() ?? []).filter(isNamedTypeDeclaration)) {
+                              record(pkg, source, className, memberName, slot, reference.getText(source), named, reference);
+                           }
                         }
-                        const target = symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
-                        for (const named of (target.getDeclarations() ?? []).filter(isNamedTypeDeclaration)) {
-                           record(pkg, source, className, memberName, slot, reference.getText(source), named, reference);
-                        }
+                        continue;
                      }
-                     continue;
-                  }
-                  const symbol = member.name && checker.getSymbolAtLocation(member.name);
-                  if (!symbol) {
-                     continue;
-                  }
-                  const memberType = checker.getTypeOfSymbolAtLocation(symbol, member);
-                  const signature = memberType.getCallSignatures?.()[0];
-                  const inferred = ts.isMethodDeclaration(member) ? signature && checker.getReturnTypeOfSignature(signature) : memberType;
-                  for (const named of namedDeclarationsOfType(inferred, checker)) {
-                     const label = `${slot} (inferred)`;
-                     record(pkg, source, className, memberName, label, named.name?.getText() ?? '(anonymous)', named, member.name!);
+                     const symbol = member.name && checker.getSymbolAtLocation(member.name);
+                     if (!symbol) {
+                        continue;
+                     }
+                     const memberType = checker.getTypeOfSymbolAtLocation(symbol, member);
+                     const signature = memberType.getCallSignatures?.()[0];
+                     const inferred = ts.isMethodDeclaration(member)
+                        ? signature && checker.getReturnTypeOfSignature(signature)
+                        : memberType;
+                     for (const named of namedDeclarationsOfType(inferred, checker)) {
+                        const label = `${slot} (inferred)`;
+                        record(pkg, source, className, memberName, label, named.name?.getText() ?? '(anonymous)', named, member.name!);
+                     }
                   }
                }
-            }
-         };
-         const visit = (node: ts.Node): void => {
-            if (ts.isClassDeclaration(node)) {
-               visitClass(node);
-            }
-            ts.forEachChild(node, visit);
-         };
-         visit(source);
+            };
+            const visit = (node: ts.Node): void => {
+               if (ts.isClassDeclaration(node)) {
+                  visitClass(node);
+               }
+               ts.forEachChild(node, visit);
+            };
+            visit(source);
+         }
       }
    }
    return { findings, missing };
 }
 
-/** One program per package, over the sources its own tsconfig names. */
-function programsFor(packages: PublishedPackage[]): Map<string, ts.Program> {
-   const programs = new Map<string, ts.Program>();
+/**
+ * The build projects of a package: `tsconfig.json`, plus a `tsconfig.browser.json`
+ * where a tier compiles against a browser `lib` of its own. One program each,
+ * since a tier's globals resolve only under its own `lib`.
+ */
+function projectsOf(packageDir: string): string[] {
+   return ['tsconfig.json', 'tsconfig.browser.json'].map(name => join(packageDir, name)).filter(path => existsSync(path));
+}
+
+/** One program per build project, over the sources its own tsconfig names, grouped by package. */
+function programsFor(packages: PublishedPackage[]): Map<string, ts.Program[]> {
+   const programs = new Map<string, ts.Program[]>();
    for (const pkg of packages) {
-      const configPath = join(pkg.directory, 'tsconfig.json');
-      const raw = ts.readConfigFile(configPath, ts.sys.readFile);
-      const parsed = ts.parseJsonConfigFileContent(raw.config, ts.sys, pkg.directory);
       programs.set(
          pkg.directory,
-         ts.createProgram(parsed.fileNames, {
-            ...parsed.options,
-            noEmit: true,
-            composite: false,
-            incremental: false,
-            declaration: false,
-            declarationMap: false
+         projectsOf(pkg.directory).map(configPath => {
+            const raw = ts.readConfigFile(configPath, ts.sys.readFile);
+            const parsed = ts.parseJsonConfigFileContent(raw.config, ts.sys, pkg.directory);
+            return ts.createProgram(parsed.fileNames, {
+               ...parsed.options,
+               noEmit: true,
+               composite: false,
+               incremental: false,
+               declaration: false,
+               declarationMap: false
+            });
          })
       );
    }
@@ -462,7 +479,7 @@ function selfTest() {
       };
       const program = ts.createProgram([...sources.keys()], options, host);
       const pkg = { name: 'probe', directory: '/probe', entries: ['/probe/src/index.ts'] };
-      return findUnnameableTypes(new Map([['/probe', program]]), [pkg]).findings;
+      return findUnnameableTypes(new Map([['/probe', [program]]]), [pkg]).findings;
    };
 
    const hidden = run(false);

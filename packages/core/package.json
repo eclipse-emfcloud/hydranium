@@ -44,6 +44,10 @@
       "types": "./lib/lsp/index.d.ts",
       "default": "./lib/lsp/index.js"
     },
+    "./browser": {
+      "types": "./lib/browser/index.d.ts",
+      "default": "./lib/browser/index.js"
+    },
     "./node": {
       "types": "./lib/node/index.d.ts",
       "default": "./lib/node/index.js"
@@ -71,13 +75,13 @@
   "scripts": {
     "audit:mutation": "stryker run",
     "audit:mutation:quick": "stryker run --mutate src/langium/model-service/model-service.ts",
-    "build": "tsc -b",
-    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "build": "tsc -b tsconfig.browser.json",
+    "clean": "rimraf lib tsconfig.tsbuildinfo tsconfig.browser.tsbuildinfo",
     "lint": "oxlint --format stylish --config ../../oxlint.config.cjs src test --max-warnings 0",
     "prepack": "node -e \"const m=require('./package.json'),fs=require('node:fs');const missing=[m.main,...Object.values(m.bin||{})].filter(entry=>entry&&!fs.existsSync(entry));if(missing.length){console.error('prepack '+m.name+': not built ('+missing.join(', ')+' missing). Run the build before packing: a files entry that matches nothing is skipped silently, so the tarball would ship src only.');process.exit(1);}\"",
     "test": "npm run typecheck:test && vitest run",
-    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
-    "watch": "tsc -b -w --preserveWatchOutput"
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p tsconfig.browser.test.json",
+    "watch": "tsc -b tsconfig.browser.json -w --preserveWatchOutput"
   },
   "dependencies": {
     "diff": "^5.2.0"
@@ -87,6 +91,7 @@
     "@hydranium/protocol": "1.0.0-next",
     "@playwright/test": "^1.40.0",
     "@types/diff": "^5.2.0",
+    "fake-indexeddb": "^6.2.5",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",
     "vscode-jsonrpc": "9.0.0",
