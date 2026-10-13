@@ -139,6 +139,16 @@ describe('LspLogger file-tee', () => {
          expect(contents).toContain('before-resolve');
       });
 
+      it('expands {pid} from the start and still waits for {workspace}', () => {
+         setLogFilePath(join(tmpDir, '{workspace}.{pid}.log'));
+         const logger = new LspLogger(makeServicesStub());
+
+         logger.info('line');
+         resolveLogFilePlaceholder('workspace', 'ws');
+
+         expect(readFileSync(join(tmpDir, `ws.${process.pid}.log`), 'utf-8')).toContain('line');
+      });
+
       it('preserves emission order across the resolve boundary (buffered then direct)', () => {
          setLogFilePath(join(tmpDir, '{workspace}.log'));
          const logger = new LspLogger(makeServicesStub());

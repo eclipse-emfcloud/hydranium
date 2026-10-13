@@ -84,6 +84,13 @@ Server logs land under `test-results/server-logs/`, renamed per spec once every
 server process has exited. A failed multi-process handshake shows as a promise
 that never settles, so read the log to find which hop stalled.
 
+Set `HYDRANIUM_SERVER_CPU_PROFILE=1` to also profile each language server from
+its startup. A server writes its profile to `test-results/server-logs/` when
+it ends, in this suite at the run's teardown, and the run renames it to
+`<spec>.<pid>.cpuprofile` beside the spec's log. Open the file there: a
+profile written after its spec ended is not attached to the spec's report,
+and one written after the run's rename stays under its workspace token.
+
 ## Changing this example
 
 There is no `test` script, so `npm run check` needs no browser binary. The specs

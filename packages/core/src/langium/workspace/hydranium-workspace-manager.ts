@@ -285,9 +285,9 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
    }
 
    protected override async performStartup(folders: WorkspaceFolder[]): Promise<LangiumDocument[]> {
-      // Resolve the `{workspace}` file-tee placeholder (if configured) as early
-      // as possible — before any build logging — so per-workspace log capture
-      // names its file correctly and the buffered startup lines flush.
+      // Supply the `{workspace}` placeholder as early as possible — before any
+      // build logging — so per-workspace log capture names its file correctly
+      // and the buffered startup lines flush; the CPU profile reads it too.
       this.resolveWorkspaceLogTarget(folders);
       // Snapshot the document set around discovery so the descriptor documents
       // it creates can be identified afterwards. Plain iteration rather than
@@ -512,9 +512,10 @@ export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
    }
 
    /**
-    * Resolve the `{workspace}` file-tee placeholder from the first workspace
-    * folder. No-op when no folder is known or no `{workspace}`-templated log
-    * target is configured. See {@link toLogFileWorkspaceToken} for the token
+    * Supply the `{workspace}` placeholder from the first workspace folder, which
+    * the log file-tee and the CPU profile's file name both read, whether or not
+    * a log target is configured. No-op when no folder is known. See
+    * {@link toLogFileWorkspaceToken} for the token
     * derivation — a log-capturing test harness uses the same function so the
     * server's file name and the harness's correlation key agree.
     */
