@@ -15,9 +15,10 @@
  * raising the level adds no message log.
  */
 
+import type { LanguageClientConfiguration } from '@hydranium/client-browser';
 import { isLogThreshold, type LogThreshold } from '@hydranium/protocol';
 import { type MessageConnection, Trace, type Tracer } from 'vscode-jsonrpc/browser';
-import { ConfigurationRequest, DidChangeConfigurationNotification, MessageType } from 'vscode-languageserver-protocol';
+import { DidChangeConfigurationNotification, MessageType } from 'vscode-languageserver-protocol';
 import { requireSelect } from './dom.js';
 import type { LogPanel } from './log-panel.js';
 
@@ -66,13 +67,11 @@ const TRACE_VALUES: Readonly<Record<string, Trace>> = {
 };
 
 /**
- * Wire the level picker as a configuration client.
- *
- * Call before `initialize`: the server reads its section while the workspace
- * comes up, and a handler registered after that leaves the request unanswered,
- * which the server cannot tell from a client that has no settings.
+ * Wire the level picker as a configuration client, and return the section it
+ * answers for, which the LSP handshake serves: the server reads it while the
+ * workspace comes up, so a level picked later travels as a push instead.
  */
-export function wireLogLevelControl(connection: MessageConnection): void {
+export function wireLogLevelControl(connection: MessageConnection): LanguageClientConfiguration {
    const control = requireSelect('log-level');
    let level: LogThreshold = initialLevel();
 
@@ -86,12 +85,6 @@ export function wireLogLevelControl(connection: MessageConnection): void {
       })
    );
 
-   // One answer per item: a request carries several sections and the response is
-   // positional, so dropping the unknown ones mis-aligns every later answer.
-   connection.onRequest(ConfigurationRequest.type, params =>
-      params.items.map(item => (item.section === CONFIGURATION_SECTION ? { log: { level } } : null))
-   );
-
    control.addEventListener('change', () => {
       if (!isLogThreshold(control.value)) {
          return;
@@ -103,6 +96,7 @@ export function wireLogLevelControl(connection: MessageConnection): void {
          settings: { [CONFIGURATION_SECTION]: { log: { level } } }
       });
    });
+   return { section: CONFIGURATION_SECTION, settings: () => ({ log: { level } }) };
 }
 
 /**

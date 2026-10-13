@@ -21,14 +21,14 @@
  *
  * A Theia or VS Code integration contributes a `GLSPClient` and a widget. Here
  * `STANDALONE_MODULE_CONFIG` supplies GLSP's own plain-webapp modules and the
- * client is built by hand over the transferred port — three lines, because
- * `BaseJsonrpcGLSPClient` takes any `ConnectionProvider` and a `MessageConnection`
- * over a `MessagePort`, wrapped with `sendByMethodName`, is one.
+ * client is built by hand over the head's connection — one line, because
+ * `BaseJsonrpcGLSPClient` takes any `ConnectionProvider` and the connection
+ * `@hydranium/client-browser` hands out over the GLSP port is one, wrapped
+ * with `sendByMethodName`.
  *
  * Upstream's `GLSPWebWorkerProvider` looks like the piece for this and is not:
  * it constructs the worker itself, which would be a second worker with a second
- * Langium store, and reads the worker object rather than a port. See
- * `head-channels.ts`.
+ * Langium store, and reads the worker object rather than a port.
  */
 
 import {
@@ -49,8 +49,8 @@ import { BaseJsonrpcGLSPClient } from '@eclipse-glsp/protocol';
 import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
 import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-types';
 import { Container, ContainerModule } from 'inversify';
-import { createMessagePortTransport, type Logger, sendByMethodName, SystemClock } from '@hydranium/protocol';
-import { createMessageConnection } from 'vscode-jsonrpc/browser';
+import { sendByMethodName, SystemClock } from '@hydranium/protocol';
+import type { MessageConnection } from 'vscode-jsonrpc/browser';
 import { enableTouchDragging } from './touch-input.js';
 // LAST, so esbuild emits these rules after `@eclipse-glsp/client`'s and they win
 // on equal specificity — the same ordering the VS Code diagram bundle depends
@@ -106,21 +106,15 @@ const noContextMenuModule = new ContainerModule(bind => {
  * store rather than as three unrelated widgets.
  */
 export async function mountProcessDiagram(
-   glspPort: MessagePort,
+   connection: MessageConnection,
    sourceUri: string,
-   onReport: (report: string) => void,
-   logger: Logger
+   onReport: (report: string) => void
 ): Promise<string> {
    // No `connection.listen()` here: `BaseJsonrpcGLSPClient.start` calls it, and
-   // a second call throws. Both ends use `createMessagePortTransport`; see it
-   // for why.
-   const transport = createMessagePortTransport(glspPort);
-   // GLSP's client sends message types built by its own copy of `vscode-jsonrpc`,
-   // which this connection's copy rejects unless they go by method name.
-   const glspClient = new BaseJsonrpcGLSPClient({
-      id: PROCESS_DIAGRAM_ELEMENT_ID,
-      connectionProvider: sendByMethodName(createMessageConnection(transport.reader, transport.writer, logger))
-   });
+   // a second call throws. GLSP's client sends message types built by its own
+   // copy of `vscode-jsonrpc`, which this connection's copy rejects unless they
+   // go by method name.
+   const glspClient = new BaseJsonrpcGLSPClient({ id: PROCESS_DIAGRAM_ELEMENT_ID, connectionProvider: sendByMethodName(connection) });
 
    const diagramOptions: IDiagramOptions = {
       clientId: PROCESS_DIAGRAM_ELEMENT_ID,

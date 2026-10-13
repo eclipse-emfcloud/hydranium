@@ -43,7 +43,9 @@ browser tier, and declare nothing (`export {}`) where the upstream has no root
 surface. A module belongs on `common/` only when its whole dependency closure,
 type-only imports included, is neutral or Theia's common tier; create the tier
 when a module needs it. A root re-exporting a browser tier loads only in a
-frontend build, so its declaration comment must not call it neutral.
+frontend build, so its declaration comment must not call it neutral. **A
+`packages/*-browser` package is a page's by name**, so its root is DOM code
+and it has no `./browser` tier to separate from one.
 
 ### Package naming
 

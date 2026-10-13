@@ -150,6 +150,10 @@ const TARGETS = [
       resolvePackages: []
    },
 
+   // The browser page's wiring. A page IS a browser, so `node:*` here breaks the
+   // form; DOM is granted by its tsconfig and reported as such.
+   { name: '@hydranium/client-browser', entry: 'packages/client-browser/lib/index.js', resolvePackages: [] },
+
    // The portable half of the test-support surface, so a browser-hosted test
    // tier can load the doubles. Worth saying why these are listed at all:
    // before this block they were neutral by luck rather than by design — some

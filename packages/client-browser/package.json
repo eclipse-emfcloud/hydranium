@@ -1,0 +1,70 @@
+{
+  "name": "@hydranium/client-browser",
+  "version": "1.0.0-next",
+  "description": "The page side of a hydranium host that runs its heads in a web worker: the worker bootstrap that hands each head its own MessagePort, the page's LSP handshake, the data head's port, and the rejection of what is pending when the worker dies.",
+  "keywords": [
+    "browser",
+    "hydranium",
+    "langium",
+    "language-server",
+    "lsp",
+    "web-worker"
+  ],
+  "homepage": "https://github.com/eclipse-emfcloud/hydranium/tree/main/packages/client-browser",
+  "bugs": {
+    "url": "https://github.com/eclipse-emfcloud/hydranium/issues"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Hydranium Team"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eclipse-emfcloud/hydranium.git",
+    "directory": "packages/client-browser"
+  },
+  "files": [
+    "lib",
+    "src",
+    "!lib/**/*.tsbuildinfo"
+  ],
+  "sideEffects": false,
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "lint": "oxlint --format stylish --config ../../oxlint.config.cjs src test --max-warnings 0",
+    "prepack": "node -e \"const m=require('./package.json'),fs=require('node:fs');const missing=[m.main,...Object.values(m.bin||{})].filter(entry=>entry&&!fs.existsSync(entry));if(missing.length){console.error('prepack '+m.name+': not built ('+missing.join(', ')+' missing). Run the build before packing: a files entry that matches nothing is skipped silently, so the tarball would ship src only.');process.exit(1);}\"",
+    "test": "npm run typecheck:test && vitest run",
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
+    "watch": "tsc -b -w --preserveWatchOutput"
+  },
+  "devDependencies": {
+    "@hydranium/protocol": "1.0.0-next",
+    "@types/node": "^22.0.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2",
+    "vscode-jsonrpc": "9.0.0",
+    "vscode-languageserver-protocol": "3.18.1"
+  },
+  "peerDependencies": {
+    "@hydranium/protocol": "^1.0.0-next",
+    "vscode-jsonrpc": "^9.0.0",
+    "vscode-languageserver-protocol": "~3.18.1"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "//peerDependencies": "`vscode-jsonrpc` takes a caret, so the framework shares the transport the LSP connection resolves, which an `init` scaffold pins: each `vscode-languageserver-protocol` release pins its transport exactly, so an exact peer would name a copy a fresh install rarely holds. The caret excludes 8.x, so a tree whose top holds GLSP's copy fails the peer with a named ERESOLVE warning, an error under `--strict-peer-deps`, rather than resolving silently. No peer reaches a NESTED copy, such as GLSP's or one the LSP packages nest. The wire compares message types and `ResponseError`s by copy identity, so the framework sends typed messages by method name and recognises errors with `isResponseError` rather than `instanceof`.",
+  "//prepack": "The publish guard, a `prepack` rather than a `prepare`: `prepack` runs only when a tarball is made (`npm pack`, `npm publish`) and never on install, so it cannot break the install it has no business touching. What it defends against: `files` lists `lib`, `lib` is gitignored, and a `files` entry matching nothing is skipped SILENTLY — so `npm publish` from an unbuilt tree emits a tarball of `src` and nothing else, with no error."
+}

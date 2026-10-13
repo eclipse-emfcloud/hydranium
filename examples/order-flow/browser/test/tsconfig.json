@@ -1,7 +1,7 @@
-// The test tree's project, which an editor and vitest's transform both find by
-// name. It extends `../tsconfig.e2e.json` rather than a `tsconfig.test.json`,
-// because these tests run in Node, under Playwright or vitest, and need the
-// `node` types the worker and page projects deliberately drop. Without this
+// The test tree's project, which an editor finds by name. It extends
+// `../tsconfig.e2e.json` rather than a `tsconfig.test.json`, because these
+// tests run in Node, under Playwright, and need the `node` types the worker
+// and page projects deliberately drop. Without this
 // file the TS server infers a project that loads every `@types` package and
 // reports `TS2403` clashes between `@types/mocha` and `@types/jest`.
 //

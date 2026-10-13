@@ -8,40 +8,16 @@
  ********************************************************************************/
 
 /**
- * The handshake that hands each head its own channel into the worker, shared by
- * both ends so neither can drift from the other.
+ * This host's own messages on the worker global, shared by both ends so
+ * neither can drift from the other.
  *
- * # Why the heads get dedicated ports and never `self`
- *
- * All heads must see ONE Langium store, so they share ONE worker — and that is
- * what makes the worker's global message channel contended. A head bound to
- * `self` receives every message any other head's client sends, because
- * `BrowserMessageReader` filters nothing. Two heads on `self` is not a race that
- * shows up under load; it is every message delivered twice to the wrong reader.
- *
- * `self` is unusable even for a single head, because GLSP's `WorkerServerLauncher`
- * posts its startup handshake through the GLOBAL `postMessage` regardless of the
- * connection it was configured with — so a plain string arrives on `self` that no
- * JSON-RPC reader can parse. Leaving `self` to carry this file's own messages and
- * that stray string is what keeps every head's stream clean.
- *
- * The global therefore carries the HOST protocol: bootstrap out, the workspace
- * the heads came up on back, a workspace reset, and failure reports. None of it
- * is any head's protocol, which is the line to keep — a message that belongs to
- * a head belongs on that head's port.
- *
- * This is also why upstream's own `GLSPWebWorkerProvider` is not the page-side
- * piece here: it constructs the worker itself and reads the worker object
- * directly, which is one worker per head and the global on both ends. The page
- * builds a `MessageConnection` over its port instead and hands that to
- * `BaseJsonrpcGLSPClient`, which takes any `ConnectionProvider`.
- *
- * The cost of designing this in now is nothing; the cost of retrofitting it when
- * the second head arrives is every call site.
+ * The handshake itself, the bootstrap that hands each head its own port and
+ * the worker's failure reports, is the framework's, in `@hydranium/protocol`,
+ * and the page's end of it is `@hydranium/client-browser`'s. What is here is
+ * what this host adds beside it: the workspace the heads came up on, and a
+ * reset. None of it is any head's protocol, which is the line to keep: a
+ * message that belongs to a head belongs on that head's port.
  */
-
-/** Discriminator of the bootstrap message. The worker answers nothing else. */
-export const BOOTSTRAP_MESSAGE_TYPE = 'order-flow/bootstrap';
 
 /**
  * Workspace root the seeded filesystem is keyed under, and the folder the page
@@ -51,26 +27,6 @@ export const BOOTSTRAP_MESSAGE_TYPE = 'order-flow/bootstrap';
  * that has several.
  */
 export const WORKSPACE_ROOT_URI = 'file:///order-flow';
-
-/** One transferred port per head. Heads are added here as slices land. */
-export interface HeadPorts {
-   readonly lsp: MessagePort;
-   readonly data: MessagePort;
-   readonly glsp: MessagePort;
-}
-
-export interface BootstrapMessage {
-   readonly type: typeof BOOTSTRAP_MESSAGE_TYPE;
-   readonly ports: HeadPorts;
-}
-
-export function isBootstrapMessage(value: unknown): value is BootstrapMessage {
-   if (typeof value !== 'object' || value === null) {
-      return false;
-   }
-   const candidate = value as Partial<BootstrapMessage>;
-   return candidate.type === BOOTSTRAP_MESSAGE_TYPE && typeof candidate.ports === 'object' && candidate.ports !== null;
-}
 
 /** Workspace content keyed by path relative to {@link WORKSPACE_ROOT_URI}. */
 export type WorkspaceFiles = Readonly<Record<string, string>>;
@@ -90,8 +46,8 @@ export type WorkspaceFiles = Readonly<Record<string, string>>;
  *
  * So the worker's filesystem is the single source of truth for content and the
  * page derives its editor text from this message. Sending the whole workspace is
- * affordable because this one is eight small files; a host with a real workspace
- * wants a per-document read instead.
+ * affordable because this one is a handful of small files; a host with a real
+ * workspace wants a per-document read instead.
  */
 export const WORKSPACE_READY_MESSAGE_TYPE = 'order-flow/workspace-ready';
 
@@ -138,7 +94,7 @@ export function isResetWorkspaceMessage(value: unknown): value is ResetWorkspace
  * place would leave the language server holding documents whose content it never
  * re-read.
  *
- * A failed clear sends {@link WorkerErrorMessage} instead, so the page shows the
+ * A failed clear reports a `WorkerErrorMessage` instead, so the page shows the
  * reason and stays on the workspace it has.
  */
 export const WORKSPACE_RESET_MESSAGE_TYPE = 'order-flow/workspace-reset';
@@ -149,29 +105,4 @@ export interface WorkspaceResetMessage {
 
 export function isWorkspaceResetMessage(value: unknown): value is WorkspaceResetMessage {
    return typeof value === 'object' && value !== null && (value as Partial<WorkspaceResetMessage>).type === WORKSPACE_RESET_MESSAGE_TYPE;
-}
-
-/**
- * Discriminator of a failure report the worker sends back on the global channel.
- *
- * A worker has no console anyone is looking at, and the failures that matter
- * most here are the ones that reach nobody by default: an LSP *notification*
- * handler that rejects has no reply to reject, so a workspace walk that throws
- * looks exactly like a workspace with no documents in it — the page waits, the
- * server is idle, and nothing anywhere records why.
- */
-export const WORKER_ERROR_MESSAGE_TYPE = 'order-flow/worker-error';
-
-export interface WorkerErrorMessage {
-   readonly type: typeof WORKER_ERROR_MESSAGE_TYPE;
-   readonly phase: string;
-   readonly message: string;
-}
-
-export function isWorkerErrorMessage(value: unknown): value is WorkerErrorMessage {
-   if (typeof value !== 'object' || value === null) {
-      return false;
-   }
-   const candidate = value as Partial<WorkerErrorMessage>;
-   return candidate.type === WORKER_ERROR_MESSAGE_TYPE && typeof candidate.message === 'string';
 }

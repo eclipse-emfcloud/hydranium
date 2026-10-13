@@ -61,15 +61,21 @@ import type {
 // check every other host does.
 import { lspLatencyOptions, startLanguageServer, withHydraniumLspFeatures } from '@hydranium/core/lsp';
 import { URI } from '@hydranium/langium';
-import { createMessagePortTransport, describeErrorWithStack, LatencyCollector } from '@hydranium/protocol';
+import {
+   createMessagePortTransport,
+   describeErrorWithStack,
+   isWorkerBootstrapMessage,
+   LatencyCollector,
+   WORKER_BOOTSTRAP_PHASE,
+   WORKER_ERROR_MESSAGE_TYPE,
+   type TransferredMessagePort,
+   type WorkerBootstrapMessage
+} from '@hydranium/protocol';
 import { createMessageConnection } from 'vscode-jsonrpc/browser';
 import { createConnection, ProposedFeatures } from 'vscode-languageserver/browser';
 import { ORDER_FLOW_WORKSPACE_SEED } from '../generated/workspace-seed.js';
 import {
-   type BootstrapMessage,
-   isBootstrapMessage,
    isResetWorkspaceMessage,
-   WORKER_ERROR_MESSAGE_TYPE,
    WORKSPACE_READY_MESSAGE_TYPE,
    WORKSPACE_RESET_MESSAGE_TYPE,
    WORKSPACE_ROOT_URI,
@@ -79,18 +85,19 @@ import { IndexedDbFileSystemStore } from '../workspace/indexeddb-file-system-sto
 
 /**
  * Report a failure to the page on the global channel — the one no head is
- * allowed to bind, which is what keeps it available for this.
+ * allowed to bind, which is what keeps it available for this. A bootstrap
+ * failure ends the page's heads; any other phase is shown and the heads stay.
  */
 function reportError(phase: string, error: unknown): void {
    postMessage({ type: WORKER_ERROR_MESSAGE_TYPE, phase, message: describeErrorWithStack(error) });
 }
 
-// Both handlers exist because the interesting failures here are asynchronous and
-// unowned. An LSP notification handler that rejects — which is how the workspace
-// walk runs — produces an unhandled rejection and nothing else: no reply to
-// reject, no request to fail, and a page that waits forever on diagnostics that
-// were never going to arrive.
-addEventListener('error', event => reportError('worker', event.message));
+// Rejections only: an uncaught throw reaches the page as the `Worker`'s own
+// `error` event, which the page wiring reports, and a listener here would
+// report it a second time. An LSP notification handler that rejects — which is
+// how the workspace walk runs — produces an unhandled rejection and nothing
+// else: no reply to reject, no request to fail, and a page that waits forever
+// on diagnostics that were never going to arrive.
 addEventListener('unhandledrejection', event => reportError('unhandled rejection', event.reason));
 
 /**
@@ -105,7 +112,7 @@ addEventListener('unhandledrejection', event => reportError('unhandled rejection
  * worker, which the other heads share. The language client holds no session,
  * so its documents are closed here, each reverting as its last close does.
  */
-function startLspHead(port: MessagePort, fileSystem: WorkspaceFileSystem, latency: LatencyCollector): OrderFlowSharedServices {
+function startLspHead(port: TransferredMessagePort, fileSystem: WorkspaceFileSystem, latency: LatencyCollector): OrderFlowSharedServices {
    // Both ends use `createMessagePortTransport`; see it for why.
    //
    // **The filesystem is handed in ALREADY RESTORED, and that ordering is not
@@ -144,7 +151,7 @@ function startLspHead(port: MessagePort, fileSystem: WorkspaceFileSystem, latenc
  * its constructor, and a connection that is already listening can deliver a
  * message before they exist.
  */
-function startDataHead(port: MessagePort, shared: OrderFlowSharedServices, latency: LatencyCollector): void {
+function startDataHead(port: TransferredMessagePort, shared: OrderFlowSharedServices, latency: LatencyCollector): void {
    // Both ends use `createMessagePortTransport`; see it for why.
    const transport = createMessagePortTransport(port);
    const connection = createMessageConnection(transport.reader, transport.writer, shared.Logger.with('ModelServer'));
@@ -165,7 +172,7 @@ function startDataHead(port: MessagePort, shared: OrderFlowSharedServices, laten
  * different reason: there is no stdout to corrupt here, but a worker's console
  * is a place nobody is looking, and the LSP channel already reaches the page.
  */
-function startGlspHead(port: MessagePort, shared: OrderFlowSharedServices): void {
+function startGlspHead(port: TransferredMessagePort, shared: OrderFlowSharedServices): void {
    startGlspServerInWorker({
       context: port,
       // No `logLevel`: the logger tracks the framework threshold, which in a
@@ -246,7 +253,7 @@ function readWorkspaceFiles(shared: OrderFlowSharedServices): WorkspaceFiles {
    return files;
 }
 
-async function onBootstrap(message: BootstrapMessage): Promise<void> {
+async function onBootstrap(message: WorkerBootstrapMessage): Promise<void> {
    // The one asynchronous step, and it is FIRST: the stored workspace has to be
    // in the filesystem before a head is built around it, because every read
    // below this line is synchronous and the transport cannot be made to wait.
@@ -305,7 +312,7 @@ addEventListener('message', event => {
       onResetWorkspace();
       return;
    }
-   if (bootstrapped || !isBootstrapMessage(event.data)) {
+   if (bootstrapped || !isWorkerBootstrapMessage(event.data)) {
       return;
    }
    bootstrapped = true;
@@ -313,5 +320,5 @@ addEventListener('message', event => {
    // synchronous throw and a rejected filesystem load arrive by the same route
    // and both have to reach the page — a failing store otherwise leaves a worker
    // that started and a page that waits.
-   onBootstrap(event.data).catch((error: unknown) => reportError('bootstrap', error));
+   onBootstrap(event.data).catch((error: unknown) => reportError(WORKER_BOOTSTRAP_PHASE, error));
 });
