@@ -132,9 +132,9 @@ export async function mountProcessDiagram(
    // The framework's classes replace tokens GLSP's default modules bind, so
    // this module goes after `STANDALONE_MODULE_CONFIG`. The diagram definition
    // is appended LAST by `initializeOrderFlowProcessDiagramContainer`, after
-   // the host's modules — sprotty's model and view registries throw on a
-   // duplicate key, so whichever module registers an element type first wins
-   // by making the second throw.
+   // the host's modules — GLSP's model and view registries give an element
+   // type to whichever module registered it last, so the definition's
+   // registrations are the ones that hold.
    const hydraniumModule = new ContainerModule((bind, unbind, isBound, rebind) => {
       createGlspClientModule({ bind, unbind, isBound, rebind }, { logger });
    });
@@ -306,22 +306,15 @@ const FIT_PADDING = 24;
  * there is nothing further to wait for — a fit dispatched before that pass has
  * nothing to measure and silently leaves the viewport where it was.
  *
- * **The root's children are named EXPLICITLY, and the obvious
- * `FitToScreenAction.create([])` does not work here.** An empty id list is
- * sprotty's own spelling for "fit everything" — it is what `Ctrl+Shift+F` sends —
- * but it selects the elements by falling back to every bounds-aware element in
- * the index, labels and edges and the graph root included, and combining that set
- * over this model yields a degenerate box: measured, the viewport lands at
- * `scale(20) translate(NaN,NaN)`, which culls every shape and leaves a blank
- * canvas that no console message explains. Naming the top-level elements skips
- * the fallback entirely. The keybinding remains broken, since it does not go
- * through here.
+ * An empty id list is sprotty's spelling for "fit everything", the same fit
+ * `Ctrl+Shift+F` sends: it combines the bounds of every element in the index,
+ * edge labels included, so it relies on the diagram module registering its
+ * edges with the framework's edge. GLSP's own gives such a label `NaN` bounds,
+ * and the viewport lands at `translate(NaN,NaN)`, which culls every shape.
  */
 async function frameDiagram(container: Container): Promise<void> {
-   const root = container.get(EditorContextService).modelRoot;
-   const ids = root.children.map(child => child.id);
    const dispatcher = container.get<GLSPActionDispatcher>(TYPES.IActionDispatcher);
-   await dispatcher.dispatch(FitToScreenAction.create(ids, { padding: FIT_PADDING, maxZoom: 1, animate: false }));
+   await dispatcher.dispatch(FitToScreenAction.create([], { padding: FIT_PADDING, maxZoom: 1, animate: false }));
 }
 
 /**

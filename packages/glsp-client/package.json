@@ -1,7 +1,7 @@
 {
   "name": "@hydranium/glsp-client",
   "version": "1.0.0-next",
-  "description": "Host-neutral client classes for GLSP heads built on @hydranium/glsp-server: the instrumented action dispatcher, the failure-reporting diagram loader, the route-repairing hidden-bounds updater and one binder that mounts them in a Theia frontend, a VS Code webview or a plain browser page.",
+  "description": "Host-neutral client classes for GLSP heads built on @hydranium/glsp-server, the binder that mounts them in a Theia frontend, a VS Code webview or a plain browser page, and the edge whose labels keep finite bounds without bendpoints.",
   "keywords": [
     "diagram",
     "glsp",

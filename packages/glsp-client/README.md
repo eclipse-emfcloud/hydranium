@@ -16,6 +16,8 @@ VS Code webview, or a plain browser page. It builds on `@eclipse-glsp/client`.
   measured the obstacles yet.
 - sprotty's own errors, such as an element type with no view, in your log
   rather than dropped.
+- An edge whose labels keep finite bounds without bendpoints, so fit to
+  screen frames the diagram instead of blanking it.
 - One binder that mounts all of it in a diagram container.
 
 ## Install
@@ -58,6 +60,13 @@ failure in the user's language, subclass `HydraniumDiagramLoader`, override
 `loadFailureLabel` and rebind `DiagramLoader` after the call. In Theia, call
 `createGlspClientTheiaModule` from `@hydranium/glsp-client-theia` instead,
 which does all of this with the Output channel.
+
+In your diagram module, call `configureHydraniumModelElements` in place of
+GLSP's `configureDefaultModelElements`, and register your own edge types with
+`HydraniumGEdge` in place of `GEdge`: GLSP's edge gives a label on an edge
+without bendpoints `NaN` bounds, and a fit to screen over such a label blanks
+the canvas. The class is fixed per registered type, so a type registered with
+`GEdge` keeps the defect.
 
 For a browser page, see *Host in a browser* in
 [Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).

@@ -15,6 +15,7 @@
 export * from './action-dispatcher';
 export * from './diagram-load-failed';
 export * from './diagram-loader';
+export * from './edge';
 export * from './glsp-client';
 export * from './glsp-client-module';
 export * from './hidden-bounds-updater';
