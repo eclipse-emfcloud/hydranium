@@ -19,8 +19,8 @@ import { type WidgetOpenerOptions } from '@theia/core/lib/browser';
 import { type Disposable, DisposableCollection } from '@theia/core';
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { textHash } from '@hydranium/protocol';
+import { HydraniumDiagramLoader } from '@hydranium/glsp-client';
 import { HydraniumGlspClientContribution } from './client-contribution';
-import { HydraniumDiagramLoader } from './diagram-loader';
 import { HydraniumGlspDiagramWidget } from './diagram-widget';
 import { WindowSessionService } from './window-session';
 

@@ -20,11 +20,12 @@
  * # What replaces the shell
  *
  * A Theia or VS Code integration contributes a `GLSPClient` and a widget. Here
- * `STANDALONE_MODULE_CONFIG` supplies GLSP's own plain-webapp modules and the
- * client is built by hand over the head's connection — one line, because
- * `BaseJsonrpcGLSPClient` takes any `ConnectionProvider` and the connection
- * `@hydranium/client-browser` hands out over the GLSP port is one, wrapped
- * with `sendByMethodName`.
+ * `STANDALONE_MODULE_CONFIG` supplies GLSP's own plain-webapp modules, the
+ * framework's `createGlspClientModule` binds its classes over the page's
+ * logger, and the client is built by hand over the head's connection — one
+ * line, because `HydraniumGlspClient` takes any `ConnectionProvider` and the
+ * connection `@hydranium/client-browser` hands out over the GLSP port is one,
+ * wrapped with `sendByMethodName`.
  *
  * Upstream's `GLSPWebWorkerProvider` looks like the piece for this and is not:
  * it constructs the worker itself, which would be a second worker with a second
@@ -45,11 +46,11 @@ import {
    TYPES,
    createDiagramOptionsModule
 } from '@eclipse-glsp/client';
-import { BaseJsonrpcGLSPClient } from '@eclipse-glsp/protocol';
+import { createGlspClientModule, HydraniumGlspClient } from '@hydranium/glsp-client';
 import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
 import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-types';
 import { Container, ContainerModule } from 'inversify';
-import { sendByMethodName, SystemClock } from '@hydranium/protocol';
+import { type Logger, sendByMethodName, SystemClock } from '@hydranium/protocol';
 import type { MessageConnection } from 'vscode-jsonrpc/browser';
 import { enableTouchDragging } from './touch-input.js';
 // LAST, so esbuild emits these rules after `@eclipse-glsp/client`'s and they win
@@ -104,17 +105,22 @@ const noContextMenuModule = new ContainerModule(bind => {
  * Resolves with a one-line report of what ended up on the page — the same shape
  * as the data head's line, so the three heads read as three answers about one
  * store rather than as three unrelated widgets.
+ *
+ * The logger carries the framework's client classes under a tag of the page's
+ * own, so a load failure the page itself reports does not read as a line the
+ * worker sent.
  */
 export async function mountProcessDiagram(
    connection: MessageConnection,
    sourceUri: string,
-   onReport: (report: string) => void
+   onReport: (report: string) => void,
+   logger: Logger
 ): Promise<string> {
    // No `connection.listen()` here: `BaseJsonrpcGLSPClient.start` calls it, and
    // a second call throws. GLSP's client sends message types built by its own
    // copy of `vscode-jsonrpc`, which this connection's copy rejects unless they
    // go by method name.
-   const glspClient = new BaseJsonrpcGLSPClient({ id: PROCESS_DIAGRAM_ELEMENT_ID, connectionProvider: sendByMethodName(connection) });
+   const glspClient = new HydraniumGlspClient({ id: PROCESS_DIAGRAM_ELEMENT_ID, connectionProvider: sendByMethodName(connection) });
 
    const diagramOptions: IDiagramOptions = {
       clientId: PROCESS_DIAGRAM_ELEMENT_ID,
@@ -123,15 +129,21 @@ export async function mountProcessDiagram(
       sourceUri
    };
 
-   // The diagram definition is appended LAST by
-   // `initializeOrderFlowProcessDiagramContainer`, after the host's modules —
-   // sprotty's model and view registries throw on a duplicate key, so whichever
-   // module registers an element type first wins by making the second throw.
+   // The framework's classes replace tokens GLSP's default modules bind, so
+   // this module goes after `STANDALONE_MODULE_CONFIG`. The diagram definition
+   // is appended LAST by `initializeOrderFlowProcessDiagramContainer`, after
+   // the host's modules — sprotty's model and view registries throw on a
+   // duplicate key, so whichever module registers an element type first wins
+   // by making the second throw.
+   const hydraniumModule = new ContainerModule((bind, unbind, isBound, rebind) => {
+      createGlspClientModule({ bind, unbind, isBound, rebind }, { logger });
+   });
    const container = initializeOrderFlowProcessDiagramContainer(
       new Container(),
       createDiagramOptionsModule(diagramOptions),
       STANDALONE_MODULE_CONFIG,
-      noContextMenuModule
+      noContextMenuModule,
+      hydraniumModule
    );
 
    await container.get(DiagramLoader).load();

@@ -75,7 +75,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type Message } from '@theia/core/lib/browser';
 import { RESUME_TOKEN_ARG } from '@hydranium/protocol';
 import { DIAGRAM_LOADING_CLASS, DIAGRAM_LOADING_FAILED_CLASS, HydraniumGlspDiagramWidget } from '../../src/browser/diagram-widget';
-import { type DiagramLoadOutcome, HydraniumDiagramLoader } from '../../src/browser/diagram-loader';
+import { type DiagramLoadOutcome, HydraniumDiagramLoader } from '@hydranium/glsp-client';
 import { HydraniumGlspSaveable } from '../../src/browser/glsp-saveable';
 import { DefaultWindowSessionService, type WindowSessionService } from '../../src/browser/window-session';
 

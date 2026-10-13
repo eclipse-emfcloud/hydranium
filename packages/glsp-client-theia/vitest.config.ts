@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { resolve } from 'node:path';
 import { mergeConfig } from 'vitest/config';
 import { definePackageVitestConfig } from '../../vitest.shared';
 
@@ -49,7 +50,19 @@ import { definePackageVitestConfig } from '../../vitest.shared';
 // here has: the shared base runs every suite under `environment: 'node'`.
 //
 // So a test needing one of this package's exports MOCKS the module.
+//
+// `@hydranium/glsp-client` is aliased to its SOURCES. Its built `lib` is
+// CommonJS, so its `require` of `@eclipse-glsp/client` is Node's and reaches
+// the stylesheet above the prebundle; the TypeScript sources import it as ESM,
+// which the optimizer serves. Its own tsconfig supplies the decorator flags.
+const glspClientSrc = resolve(__dirname, '../glsp-client/src');
 export default mergeConfig(definePackageVitestConfig('glsp-client-theia'), {
+   resolve: {
+      alias: [
+         { find: /^@hydranium\/glsp-client$/, replacement: resolve(glspClientSrc, 'index.ts') },
+         { find: /^@hydranium\/glsp-client\/(messages|testing)$/, replacement: resolve(glspClientSrc, '$1/index.ts') }
+      ]
+   },
    test: {
       deps: {
          optimizer: {

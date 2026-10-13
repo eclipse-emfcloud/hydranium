@@ -9,5 +9,9 @@
     "noUncheckedSideEffectImports": false
   },
   "include": ["src"],
-  "references": [{ "path": "../protocol" }, { "path": "../client-theia" }]
+  "references": [
+    { "path": "../protocol" },
+    { "path": "../glsp-client" },
+    { "path": "../client-theia" }
+  ]
 }

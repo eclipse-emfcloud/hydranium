@@ -36,6 +36,7 @@
     "@hydranium/data-server": "^1.0.0-next",
     "@hydranium/example-order-flow-client": "0.0.0",
     "@hydranium/example-order-flow-server": "0.0.0",
+    "@hydranium/glsp-client": "^1.0.0-next",
     "@hydranium/glsp-server": "^1.0.0-next",
     "@hydranium/langium": "^1.0.0-next",
     "@hydranium/protocol": "^1.0.0-next",

@@ -10,7 +10,7 @@
 import 'reflect-metadata';
 import { StatusAction } from '@eclipse-glsp/client';
 import { describe, expect, it, vi } from 'vitest';
-import { HydraniumStatusOverlay } from '../../src/browser/status-overlay';
+import { HydraniumStatusOverlay } from '../src/status-overlay';
 
 /** An overlay whose element and parent are stand-ins, so no DOM is needed. */
 class TestOverlay extends HydraniumStatusOverlay {

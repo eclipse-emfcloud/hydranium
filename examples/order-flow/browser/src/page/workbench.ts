@@ -1001,7 +1001,7 @@ export async function main(locale: Locale | undefined): Promise<void> {
       // The callback keeps the line current as elements are created and deleted;
       // the resolved value is the first reading. A report written once would go
       // stale on the first palette gesture, beside a layout report that does not.
-      setGlspReport(await mountProcessDiagram(channels.heads.glsp, GLSP_HEAD_DOCUMENT, setGlspReport));
+      setGlspReport(await mountProcessDiagram(channels.heads.glsp, GLSP_HEAD_DOCUMENT, setGlspReport, pageLogger.with('GLSP client')));
       // AFTER the mount, and the ordering is the whole of it: a listener put on
       // this element before the diagram takes it over never fires — measured,
       // the same registration moved above this line stops working.

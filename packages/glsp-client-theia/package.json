@@ -1,7 +1,7 @@
 {
   "name": "@hydranium/glsp-client-theia",
   "version": "1.0.0-next",
-  "description": "Theia-coupled client primitives for GLSP heads built on @hydranium/glsp-server. Provides the action dispatcher, channel logger, and connection-handler bases that Theia-based adopters extend; companion of @hydranium/glsp-server.",
+  "description": "Theia-coupled client primitives for GLSP heads built on @hydranium/glsp-server. Provides the diagram widget, manager, client contribution and connection-handler bases that Theia-based adopters extend, and binds @hydranium/glsp-client's host-neutral classes through the Output channel; companion of @hydranium/glsp-server.",
   "keywords": [
     "diagram",
     "glsp",
@@ -48,10 +48,6 @@
       "types": "./lib/node/index.d.ts",
       "default": "./lib/node/index.js"
     },
-    "./testing": {
-      "types": "./lib/testing/index.d.ts",
-      "default": "./lib/testing/index.js"
-    },
     "./style/diagram-loading.css": "./style/diagram-loading.css"
   },
   "publishConfig": {
@@ -72,6 +68,7 @@
     "@eclipse-glsp/theia-integration": "2.7.0",
     "@hydranium/client-theia": "1.0.0-next",
     "@hydranium/core": "1.0.0-next",
+    "@hydranium/glsp-client": "1.0.0-next",
     "@hydranium/glsp-server": "1.0.0-next",
     "@hydranium/protocol": "1.0.0-next",
     "@theia/core": "^1.70.0",
@@ -89,6 +86,7 @@
     "@eclipse-glsp/client": "^2.6.0",
     "@eclipse-glsp/theia-integration": "^2.6.0",
     "@hydranium/client-theia": "^1.0.0-next",
+    "@hydranium/glsp-client": "^1.0.0-next",
     "@hydranium/protocol": "^1.0.0-next",
     "@theia/core": "^1.70.0",
     "@theia/process": "^1.70.0",

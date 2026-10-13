@@ -40,6 +40,9 @@ on:
       - 'packages/client-theia/**'
       - 'packages/data-client-theia/**'
       - 'packages/glsp-client-theia/**'
+      # Loaded by glsp-client-theia's frontend, so a change here is a change
+      # to what Theia loads.
+      - 'packages/glsp-client/**'
       - '.github/workflows/theia-compat.yml'
       # A README in those packages changes nothing Theia loads.
       - '!**/*.md'

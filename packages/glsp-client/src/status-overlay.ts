@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { type StatusAction, StatusOverlay } from '@eclipse-glsp/client';
-import { injectable } from '@theia/core/shared/inversify';
+import { injectable } from 'inversify';
 
 /**
  * GLSP's status overlay, kept on the page.

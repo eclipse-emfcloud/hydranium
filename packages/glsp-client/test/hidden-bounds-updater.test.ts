@@ -7,14 +7,6 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-// The real `@hydranium/client-theia/browser` module loads `@theia/output` → DOM
-// globals unavailable in the node test env. The updater is constructed directly,
-// never via a container, so token stand-ins do.
-vi.mock('@hydranium/client-theia/browser', () => ({
-   ChannelLogger: class ChannelLogger {},
-   ChannelTracer: Symbol('ChannelTracer')
-}));
-
 import {
    type Action,
    type ElementAndRoutingPoints,
@@ -30,9 +22,9 @@ import {
 } from '@eclipse-glsp/client';
 import { type Clock } from '@hydranium/protocol';
 import { makeFakeClock } from '@hydranium/protocol/testing';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { type VNode } from 'snabbdom';
-import { HydraniumHiddenBoundsUpdater } from '../../src/browser/hidden-bounds-updater';
+import { HydraniumHiddenBoundsUpdater } from '../src/hidden-bounds-updater';
 
 /**
  * A {@link Clock} reporting a caller-controlled duration from `measure`, so the
@@ -66,7 +58,7 @@ class TestableUpdater extends HydraniumHiddenBoundsUpdater {
 
    constructor() {
       super();
-      (this as unknown as { channel: unknown }).channel = {
+      (this as unknown as { hydraniumLogger: unknown }).hydraniumLogger = {
          trace: (message: string) => this.traceLines.push(message)
       };
       (this as unknown as { layouter: unknown }).layouter = { layout: () => undefined };

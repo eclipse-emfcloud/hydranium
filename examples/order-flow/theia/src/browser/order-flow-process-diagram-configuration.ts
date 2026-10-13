@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type ContainerConfiguration, ConsoleLogger, LogLevel, TYPES } from '@eclipse-glsp/client';
+import { type ContainerConfiguration } from '@eclipse-glsp/client';
 import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
 import { AbstractHydraniumGlspDiagramConfiguration, createGlspClientTheiaModule } from '@hydranium/glsp-client-theia/browser';
 import { type Container, ContainerModule } from '@theia/core/shared/inversify';
@@ -55,13 +55,7 @@ export class OrderFlowProcessDiagramConfiguration extends AbstractHydraniumGlspD
  * The log THRESHOLD is not set here — it is a process-global applied once from
  * the frontend module via `logLevelPreference`, whereas this module is
  * instantiated per diagram container.
- *
- * `TYPES.ILogger` is rebound by hand because the framework offers no helper for
- * it; sprotty's default logger is otherwise silent about view-registration
- * failures, which are exactly the errors a diagram integration produces.
  */
 const orderFlowProcessTheiaModule = new ContainerModule((bind, unbind, isBound, rebind) => {
-   rebind(TYPES.ILogger).to(ConsoleLogger).inSingletonScope();
-   rebind(TYPES.LogLevel).toConstantValue(LogLevel.warn);
    createGlspClientTheiaModule({ bind, unbind, isBound, rebind }, { channelLogger: { channelName: ORDER_FLOW_OUTPUT_CHANNEL } });
 });

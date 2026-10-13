@@ -10,12 +10,12 @@
 import { type Args, DiagramLoader, EditorContextService, GLSPActionDispatcher, SetViewportAction } from '@eclipse-glsp/client';
 import { RESUME_TOKEN_ARG } from '@hydranium/protocol';
 import { GLSPDiagramWidget, type GLSPDiagramWidgetOptions } from '@eclipse-glsp/theia-integration';
+import { type DiagramLoadOutcome, HydraniumDiagramLoader } from '@hydranium/glsp-client';
 // Type-only: the `@theia/core/lib/browser` barrel touches DOM globals at module
 // load, which the node-environment unit tests cannot provide.
 import { type Message } from '@theia/core/lib/browser';
 import { Emitter, type Event, nls } from '@theia/core';
 import { type Container, inject, injectable } from '@theia/core/shared/inversify';
-import { type DiagramLoadOutcome, HydraniumDiagramLoader } from './diagram-loader';
 import { HydraniumGlspSaveable } from './glsp-saveable';
 import { WindowSessionService } from './window-session';
 // Shipped by this package rather than left to adopters: an overlay whose

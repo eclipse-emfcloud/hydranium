@@ -39,11 +39,15 @@ fills, never a static `node:` import. Why the split exists:
 ### A host-integration package's root barrel follows its upstream
 
 The neutral-root rule binds the four head-neutral packages. **A
-`packages/*-theia` root barrel matches the root convention of the upstream it
-integrates**, judged by what an adopter importing the bare specifier is
-entitled to get: re-export the browser tier where the upstream's root is its
-browser tier, and declare nothing (`export {}`) where the upstream has no root
-surface. A module belongs on `common/` only when its whole dependency closure,
+`packages/*-theia` root barrel, and `glsp-client`'s, matches the root
+convention of the upstream it integrates**, judged by what an adopter importing
+the bare specifier is entitled to get: re-export the browser tier where the
+upstream's root is its browser tier, and declare nothing (`export {}`) where
+the upstream has no root surface. `glsp-client` carries no platform in its
+name because every GLSP host is a browser, and its root is browser-bound as
+`@eclipse-glsp/client`'s is: it renders and loads stylesheets, so it needs a
+bundler with a CSS loader, and `check:neutral` gates it for Node imports
+only. A module belongs on `common/` only when its whole dependency closure,
 type-only imports included, is neutral or Theia's common tier; create the tier
 when a module needs it. A root re-exporting a browser tier loads only in a
 frontend build, so its declaration comment must not call it neutral. **A
@@ -164,8 +168,9 @@ overload set. An empty interface is legitimate when the whole surface is
 `protected`; its oxlint `no-empty-object-type` disable carries the reason. Type
 parameters go where they are honest: per-URI members, not a cross-grammar slot.
 
-**GLSP DI tokens** live in the `HydraniumTypes` registry, so a token's name
-cannot collide with the type it injects. No language or per-language service
+**GLSP DI tokens** live in a registry, `HydraniumTypes` on the server and
+`HydraniumClientTypes` on the client, so a token's name cannot collide with the
+type it injects. No language or per-language service
 gets a token: a diagram's language is its document's, and
 `modelState.<role>For(node)` keeps nodes from other documents on their own
 grammar.

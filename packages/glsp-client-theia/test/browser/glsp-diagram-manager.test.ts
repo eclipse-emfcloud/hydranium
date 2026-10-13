@@ -10,10 +10,10 @@
 import { DiagramLoader } from '@eclipse-glsp/client';
 import { type GLSPDiagramWidget } from '@eclipse-glsp/theia-integration/lib/browser';
 import { type GLSPDiagramLanguage } from '@eclipse-glsp/theia-integration/lib/common';
+import { HydraniumDiagramLoader } from '@hydranium/glsp-client';
 import { type WidgetOpenerOptions } from '@theia/core/lib/browser';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { HydraniumGlspClientContribution } from '../../src/browser/client-contribution.js';
-import { HydraniumDiagramLoader } from '../../src/browser/diagram-loader.js';
 import { HydraniumGlspDiagramWidget } from '../../src/browser/diagram-widget.js';
 import { AbstractHydraniumGlspDiagramManager } from '../../src/browser/glsp-diagram-manager.js';
 import { DefaultWindowSessionService, type WindowSessionService } from '../../src/browser/window-session.js';

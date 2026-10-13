@@ -64,7 +64,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type interfaces } from '@theia/core/shared/inversify';
 import { HydraniumGlspDiagramWidget } from '../../src/browser/diagram-widget';
 import { AbstractHydraniumGlspTheiaFrontendModule, SkipClientContribution } from '../../src/browser/glsp-theia-frontend-module';
-import { type BindRecorder, makeBindRecorder } from '../../src/testing/bind-recorder';
+import { type BindRecorder, makeBindRecorder } from '@hydranium/glsp-client/testing';
 
 const LANGUAGE: GLSPDiagramLanguage = {
    contributionId: 'lang-one',

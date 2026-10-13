@@ -12,6 +12,7 @@ import { BaseGLSPClientContribution } from '@eclipse-glsp/theia-integration';
 import { createChannelConnection, GLSPContribution } from '@eclipse-glsp/theia-integration/lib/common';
 import { ChannelLogger, ConnectionReporter, type ConnectionTarget } from '@hydranium/client-theia/browser';
 import { Clock } from '@hydranium/client-theia/common';
+import { HydraniumGlspClient } from '@hydranium/glsp-client';
 import { sendByMethodName, describeError, type Stopwatch, SystemClock } from '@hydranium/protocol';
 import { type Channel, Disposable, Emitter, Event, nls } from '@theia/core';
 import { Deferred } from '@theia/core/lib/common/promise-util';
@@ -20,7 +21,6 @@ import { WorkspaceService } from '@theia/workspace/lib/browser';
 // GLSP's channel connection uses the top-level `vscode-jsonrpc`'s root entry, which
 // installs no runtime layer; without the browser entry, no message is received.
 import 'vscode-jsonrpc/browser';
-import { HydraniumGlspClient } from './glsp-client';
 
 export const DEFAULT_GLSP_CLIENT_STARTUP_TIMEOUT_MS = 30_000;
 
