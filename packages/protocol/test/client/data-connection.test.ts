@@ -88,6 +88,8 @@ interface ServerCall {
    readonly uri?: string;
    readonly baseVersion?: unknown;
    readonly model?: unknown;
+   /** For `open`: the open's options. */
+   readonly options?: unknown;
    /** For `updates`: each update's `uri` and `baseVersion`. */
    readonly updates?: readonly { readonly uri: string; readonly baseVersion: unknown }[];
 }
@@ -209,7 +211,14 @@ function textOf(model: unknown): string {
 function recordingServer(connection: MessageConnection, calls: ServerCall[], behaviour: ServerBehaviour): void {
    const record = (
       method: Method,
-      args: { clientId: string; uri?: string; baseVersion?: unknown; model?: unknown; updates?: { uri: string; baseVersion: unknown }[] }
+      args: {
+         clientId: string;
+         uri?: string;
+         baseVersion?: unknown;
+         model?: unknown;
+         options?: unknown;
+         updates?: { uri: string; baseVersion: unknown }[];
+      }
    ): void => {
       const call: ServerCall = { method, clientId: args.clientId };
       calls.push({
@@ -217,6 +226,7 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
          ...(args.uri !== undefined ? { uri: args.uri } : {}),
          ...(args.baseVersion !== undefined ? { baseVersion: args.baseVersion } : {}),
          ...(args.model !== undefined ? { model: args.model } : {}),
+         ...(args.options !== undefined ? { options: args.options } : {}),
          ...(args.updates !== undefined
             ? { updates: args.updates.map(update => ({ uri: update.uri, baseVersion: update.baseVersion })) }
             : {})
@@ -254,7 +264,7 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
       closeSession: async (args: { clientId: string }): Promise<void> => {
          record('closeSession', args);
       },
-      openModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
+      openModelDocument: async (args: { uri: string; clientId: string; options?: unknown }): Promise<unknown> => {
          record('open', args);
          await behaviour.openGate;
          if (behaviour.failOpens?.has(args.uri)) {
@@ -510,6 +520,11 @@ class BoundedSession extends DataSession<ProbeElement> {
    get recordedUris(): ReadonlySet<string> {
       return new Set([...this.unsavedWrites.keys(), ...this.lastAnswers.keys(), ...this.savedVersions.keys()]);
    }
+
+   /** The options the session keeps per URI it has open. */
+   get openOptionsKept(): ReadonlyMap<string, unknown> {
+      return new Map([...this.opens].map(([uri, open]) => [uri, open.options]));
+   }
 }
 
 /** The server's URIs `session`, a {@link BoundedSession}, keeps. */
@@ -526,6 +541,14 @@ function recordsOf(session: DataSession<ProbeElement>): ReadonlySet<string> {
       throw new Error('not a BoundedSession');
    }
    return session.recordedUris;
+}
+
+/** The open options `session`, a {@link BoundedSession}, keeps. */
+function openOptionsOf(session: DataSession<ProbeElement>): ReadonlyMap<string, unknown> {
+   if (!(session instanceof BoundedSession)) {
+      throw new Error('not a BoundedSession');
+   }
+   return session.openOptionsKept;
 }
 
 const of = (calls: readonly ServerCall[], ...methods: Method[]): ServerCall[] => calls.filter(call => methods.includes(call.method));
@@ -2196,6 +2219,218 @@ describe('DataSession after a dropped connection', () => {
          panel.detach();
          expect(serverUrisOf(panel).size).toBe(0);
       } finally {
+         dispose();
+      }
+   });
+
+   it('re-opens each document with the options its first open passed, until it closes or fails to re-open', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, dropTransport, dispose } = harness(behaviour, 10_000);
+      const reopened = (before: number): [string | undefined, unknown][] =>
+         of(calls.slice(before), 'open').map(call => [call.uri, call.options]);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         // A failed open records nothing; the server keeps a repeat open's
+         // first options, and so does the session.
+         behaviour.failOpens = new Set([URI_A]);
+         await expect(panel.openDocument({ uri: URI_A, options: { mode: 'failed' } })).rejects.toThrow('open refused');
+         expect(openOptionsOf(panel).has(URI_A)).toBe(false);
+         behaviour.failOpens = undefined;
+         await panel.openDocument({ uri: URI_A, options: { mode: 'first' } });
+         await panel.openDocument({ uri: URI_A, options: { mode: 'repeat' } });
+         await panel.openDocument({ uri: URI_B, options: { mode: 'b' } });
+         await panel.openDocument({ uri: URI_C, options: { mode: 'c' } });
+
+         let before = calls.length;
+         dropTransport();
+         await panel.connected();
+         expect(reopened(before)).toEqual([
+            [URI_A, { mode: 'first' }],
+            [URI_B, { mode: 'b' }],
+            [URI_C, { mode: 'c' }]
+         ]);
+
+         // A closed document's next open passes its own options; one closed
+         // while the restore runs is left out, its options with it.
+         await panel.closeDocument({ uri: URI_A });
+         expect(openOptionsOf(panel).has(URI_A)).toBe(false);
+         await panel.openDocument({ uri: URI_A, options: { mode: 'reopened' } });
+         before = calls.length;
+         const held = gate();
+         behaviour.openGate = held.promise;
+         dropTransport();
+         const restoring = panel.connected();
+         await waitFor(() => of(calls.slice(before), 'open').length === 1, { message: 'the restore never re-opened' });
+         const closing = panel.closeDocument({ uri: URI_C });
+         await tick();
+         behaviour.openGate = undefined;
+         held.release();
+         await restoring;
+         await closing;
+         expect(reopened(before)).toEqual([
+            [URI_B, { mode: 'b' }],
+            [URI_A, { mode: 'reopened' }]
+         ]);
+         expect(openOptionsOf(panel).has(URI_C)).toBe(false);
+
+         // A failed re-open forgets the document with its options.
+         behaviour.failOpens = new Set([URI_B]);
+         dropTransport();
+         await panel.connected();
+         expect(openOptionsOf(panel).has(URI_B)).toBe(false);
+         behaviour.failOpens = undefined;
+         await panel.openDocument({ uri: URI_B });
+         before = calls.length;
+         dropTransport();
+         await panel.connected();
+         expect(reopened(before)).toEqual([
+            [URI_A, { mode: 'reopened' }],
+            [URI_B, undefined]
+         ]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('re-opens with the options of the open sent first, when a later open of the URI answers first', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, dropTransport, dispose } = harness(behaviour, 10_000);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.connected();
+         // The server keeps the options of the open that arrives first, and a
+         // second open joins it.
+         const held = gate();
+         behaviour.openGate = held.promise;
+         const first = panel.openDocument({ uri: URI_A, options: { mode: 'first' } });
+         await waitFor(() => of(calls, 'open').length === 1, { message: 'the first open was never sent' });
+         behaviour.openGate = undefined;
+         await panel.openDocument({ uri: URI_A, options: { mode: 'second' } });
+         held.release();
+         await first;
+         expect([...openOptionsOf(panel)]).toEqual([[URI_A, { mode: 'first' }]]);
+
+         const before = calls.length;
+         dropTransport();
+         await panel.connected();
+         expect(of(calls.slice(before), 'open').map(call => call.options)).toEqual([{ mode: 'first' }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps the options of the open sent first when a later open of the URI fails on its own', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, dropTransport, dispose } = harness(behaviour, 10_000);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.connected();
+         const held = gate();
+         behaviour.openGate = held.promise;
+         const first = panel.openDocument({ uri: URI_A, options: { mode: 'first' } });
+         await waitFor(() => of(calls, 'open').length === 1, { message: 'the first open was never sent' });
+         behaviour.openGate = undefined;
+         behaviour.failWatch = true;
+         await expect(panel.openDocument({ uri: URI_A, options: { mode: 'second' } })).rejects.toThrow('watch refused');
+         behaviour.failWatch = false;
+         expect([...openOptionsOf(panel)]).toEqual([[URI_A, { mode: 'first' }]]);
+         held.release();
+         await first;
+
+         const before = calls.length;
+         dropTransport();
+         await panel.connected();
+         expect(of(calls.slice(before), 'open').map(call => call.options)).toEqual([{ mode: 'first' }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('keeps the options of a failed first open while a later open of the URI holds it open', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, dropTransport, dispose } = harness(behaviour, 10_000);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.connected();
+         const held = gate();
+         behaviour.openGate = held.promise;
+         const first = panel.openDocument({ uri: URI_A, options: { mode: 'first' } });
+         await waitFor(() => of(calls, 'open').length === 1, { message: 'the first open was never sent' });
+         behaviour.openGate = undefined;
+         await panel.openDocument({ uri: URI_A, options: { mode: 'second' } });
+         behaviour.failWatch = true;
+         held.release();
+         await expect(first).rejects.toThrow('watch refused');
+         behaviour.failWatch = false;
+         expect([...openOptionsOf(panel)]).toEqual([[URI_A, { mode: 'first' }]]);
+
+         const before = calls.length;
+         dropTransport();
+         await panel.connected();
+         expect(of(calls.slice(before), 'open').map(call => call.options)).toEqual([{ mode: 'first' }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('re-opens with the options of a later open of the URI that the server took after the first open failed', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, dropTransport, dispose } = harness(behaviour, 10_000);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.connected();
+         // The first open fails on the server before the second reaches it,
+         // so the server opens the document afresh with the second's options.
+         const first = gate();
+         behaviour.openGate = first.promise;
+         behaviour.failOpens = new Set([URI_A]);
+         const failing = panel.openDocument({ uri: URI_A, options: { mode: 'first' } });
+         await waitFor(() => of(calls, 'open').length === 1, { message: 'the first open was never sent' });
+         const second = gate();
+         behaviour.openGate = second.promise;
+         const opening = panel.openDocument({ uri: URI_A, options: { mode: 'second' } });
+         await waitFor(() => of(calls, 'open').length === 2, { message: 'the second open was never sent' });
+         first.release();
+         await expect(failing).rejects.toThrow('open refused');
+         behaviour.failOpens = undefined;
+         behaviour.openGate = undefined;
+         second.release();
+         await opening;
+
+         const before = calls.length;
+         dropTransport();
+         await panel.connected();
+         expect(of(calls.slice(before), 'open').map(call => call.options)).toEqual([{ mode: 'second' }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('re-opens with the options of an open sent after a close, not of the open from before the close still under way', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, dropTransport, dispose } = harness(behaviour, 50);
+      const held = gate();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.connected();
+         behaviour.openGate = held.promise;
+         const before = panel.openDocument({ uri: URI_A, options: { mode: 'before' } });
+         await waitFor(() => of(calls, 'open').length === 1, { message: 'the first open was never sent' });
+         behaviour.openGate = undefined;
+         // The close outwaits the held open, marks it and goes to the server
+         // first; the open after it is the one the server keeps.
+         await panel.closeDocument({ uri: URI_A });
+         await panel.openDocument({ uri: URI_A, options: { mode: 'after' } });
+         expect([...openOptionsOf(panel)]).toEqual([[URI_A, { mode: 'after' }]]);
+         held.release();
+         await before;
+
+         const sent = calls.length;
+         dropTransport();
+         await panel.connected();
+         expect(of(calls.slice(sent), 'open').map(call => call.options)).toEqual([{ mode: 'after' }]);
+      } finally {
+         held.release();
          dispose();
       }
    });

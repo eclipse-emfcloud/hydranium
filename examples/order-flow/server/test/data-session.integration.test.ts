@@ -529,6 +529,21 @@ describe('DataSession.restore against the real stack', () => {
       expect(reported).toEqual([]);
       expect(textDocuments.get(uri)?.getText()).toBe(EDITED);
    });
+
+   it('re-opens a document with the options its open passed', async () => {
+      const { services, uri, connect } = await boot();
+      let head = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      await session.openDocument({ uri, options: { mode: 'compact' } });
+
+      drop(head);
+      head = connect();
+      await session.connected();
+
+      expect(reported).toEqual([]);
+      expect(services.shared.model.ModelService.getSession('form#restore')?.openOptions(uri)).toEqual({ mode: 'compact' });
+   });
 });
 
 /** Outlast the release grace of a store booted with {@link GRACE_MS}. */

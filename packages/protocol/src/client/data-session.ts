@@ -21,7 +21,6 @@ import { isConflictError, SessionClosedError } from '../errors';
 import type { Logger } from '../logger';
 import { type BaseVersion, isModelVersion, type ModelVersion, type TextVersion, UNRECORDED_VERSION } from '../model-service/base-version';
 import { type ResolvedMessage, defineMessage, describeError, resolve } from '../messages/primitives';
-import type { OpenModelArgs } from '../model-server';
 import { NoopLogger } from '../noop-logger';
 import { randomUuid } from '../random-uuid';
 import type { MaybePromise } from '../util';
@@ -71,15 +70,24 @@ export type DataSessionArgs<TMethod extends (args: never) => unknown> = Omit<Par
 
 /**
  * Open a document through a session; the session supplies `clientId`. Only the
- * URI and the open's options: a session's open reads the file, and the server
- * ignores the `languageId`, `version` and `text` seeds of `OpenModelArgs`, so
- * accepting them here would let a caller believe they took effect.
+ * URI and the open's options, read off the server's signature: the server
+ * ignores the `languageId`, `version` and `text` seeds of `OpenModelArgs`, and
+ * a field an adopter adds never reaches the server session's open, so
+ * accepting either would let a caller believe it took effect.
  */
 export type DataSessionOpenArgs<
    TTransfer extends TransferElement,
-   // oxlint-disable-next-line no-unused-vars -- TServer validates its own diagnostic constraint; Oxlint does not count that use.
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
-> = Pick<OpenModelArgs, 'uri' | 'options'>;
+> = Pick<Parameters<TServer['openModelDocument']>[0], 'uri' | ('options' & keyof Parameters<TServer['openModelDocument']>[0])>;
+
+/**
+ * The options an open through a session passes to `TServer`, `undefined` when
+ * it passed none; only `undefined` for a server whose open takes none.
+ */
+export type DataSessionOpenOptions<
+   TTransfer extends TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> = DataSessionOpenArgs<TTransfer, TServer>['options' & keyof DataSessionOpenArgs<TTransfer, TServer>] | undefined;
 
 /** Create a document through a session; the session supplies `clientId`. */
 export type DataSessionCreateArgs<
@@ -168,9 +176,18 @@ export interface DataSessionUnsavedWrite<
  * that the URI is open accepts an answer from before a close or deletion
  * once the URI is open again.
  */
-export interface DataSessionOpen {
+export interface DataSessionOpen<
+   TTransfer extends TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> {
    /** The URI the open's answer named, which the server keys its notifications by. */
    readonly serverUri: string;
+   /**
+    * The options the server opened under, which a re-open after a reconnect
+    * passes again: those of the earliest open of the URI under way when the
+    * first answered, since the server keeps the open that arrives first.
+    */
+   readonly options: DataSessionOpenOptions<TTransfer, TServer>;
    /** Whether a deletion ended the open, which an open still watching sends again; a close does not. */
    deleted: boolean;
 }
@@ -181,9 +198,14 @@ export interface DataSessionOpen {
  * nothing and is not sent again, so the close stands. Without the mark, a
  * deletion during its watch has it sent again after the close.
  */
-export interface DataSessionOpening {
+export interface DataSessionOpening<
+   TTransfer extends TransferElement,
+   TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
+> {
    /** Whether a close of the URI came while this open was under way. */
    closed: boolean;
+   /** The options the open was sent with; none for a create. */
+   readonly options: DataSessionOpenOptions<TTransfer, TServer>;
 }
 
 /** Where `write` stands in the `updateDocuments` call it was last written by; `0` for a single update. */
@@ -323,13 +345,13 @@ export class DataSession<
     * still under way, the open it is under. A repeat open keeps it, as the
     * server keeps its earlier open.
     */
-   protected readonly opens = new Map<string, DataSessionOpen>();
+   protected readonly opens = new Map<string, DataSessionOpen<TTransfer, TServer>>();
    /**
     * Per URI, the opens of it this session has under way. Such a URI counts
     * as open for {@link withOpenDocument}, which would otherwise close it
     * under the open that is still being made.
     */
-   protected readonly openings = new Map<string, Set<DataSessionOpening>>();
+   protected readonly openings = new Map<string, Set<DataSessionOpening<TTransfer, TServer>>>();
    /**
     * Per URI, the closes and deletes of it this session has under way, which
     * an open or create called meanwhile waits for; see {@link trackEnding}.
@@ -464,7 +486,7 @@ export class DataSession<
     * from `getModelDocument({ includeDiagnostics: true })`.
     */
    openDocument(args: DataSessionOpenArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
-      return this.trackOpen(args.uri, opening =>
+      return this.trackOpen(args.uri, args.options, opening =>
          this.openAndWatch(args.uri, opening, false, server => server.openModelDocument({ ...args, clientId: this.clientId }))
       );
    }
@@ -475,7 +497,7 @@ export class DataSession<
     * refuses a URI that exists on disk or that any client has open.
     */
    createDocument(args: DataSessionCreateArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
-      return this.trackOpen(args.uri, opening =>
+      return this.trackOpen(args.uri, undefined, opening =>
          this.openAndWatch(args.uri, opening, true, server => server.createModelDocument({ ...args, clientId: this.clientId }))
       );
    }
@@ -495,7 +517,7 @@ export class DataSession<
     */
    protected async openAndWatch(
       uri: string,
-      opening: DataSessionOpening,
+      opening: DataSessionOpening<TTransfer, TServer>,
       created: boolean,
       open: (server: RpcProxy<TServer>) => Promise<DataSessionDocument<TTransfer, TServer>>
    ): Promise<DataSessionDocument<TTransfer, TServer>> {
@@ -536,7 +558,14 @@ export class DataSession<
    ): Promise<DataSessionDocument<TTransfer, TServer> | undefined> {
       // Recorded before the watch, so a deletion heard while it is under way
       // finds this open, which the server made before the deletion.
-      const open = this.opens.get(uri) ?? { serverUri: document.uri, deleted: false };
+      // Under the options of the earliest open still under way, which the
+      // server took first; one that failed is gone from `openings` by now,
+      // as the connection handles each answer in a task of its own.
+      const open = this.opens.get(uri) ?? {
+         serverUri: document.uri,
+         deleted: false,
+         options: [...(this.openings.get(uri) ?? [])].find(opening => !opening.closed)?.options
+      };
       this.opens.set(uri, open);
       await server.watchModelDocument({ uri, clientId: this.clientId });
       if (this.opens.get(uri) !== open) {
@@ -582,7 +611,7 @@ export class DataSession<
     * see {@link hasOpen}: the server holds one open per session and URI, so
     * the close would end that one too.
     */
-   protected async undoOpen(server: RpcProxy<TServer>, uri: string, opening: DataSessionOpening): Promise<void> {
+   protected async undoOpen(server: RpcProxy<TServer>, uri: string, opening: DataSessionOpening<TTransfer, TServer>): Promise<void> {
       if (this.hasOpen(uri, opening)) {
          return;
       }
@@ -608,7 +637,7 @@ export class DataSession<
     * no close has marked, other than `except`. A marked open records nothing,
     * so nothing can rely on it.
     */
-   protected hasOpen(uri: string, except?: DataSessionOpening): boolean {
+   protected hasOpen(uri: string, except?: DataSessionOpening<TTransfer, TServer>): boolean {
       return this.openUris.has(uri) || [...(this.openings.get(uri) ?? [])].some(opening => opening !== except && !opening.closed);
    }
 
@@ -1003,9 +1032,10 @@ export class DataSession<
    }
 
    /**
-    * Re-open and re-watch every document the session had open, write again
-    * what it wrote since their last save where the re-open lost it, and tell
-    * the host which of them lost it for good.
+    * Re-open, each under the options its {@link DataSessionOpen} holds, and
+    * re-watch every document the session had open, write again what it wrote
+    * since their last save where the re-open lost it, and tell the host which
+    * of them lost it for good.
     *
     * Decided per document by the re-opened document's `text.hash`,
     * in {@link restoreOutcome}. Versions cannot decide a write: a revert moves
@@ -1059,7 +1089,8 @@ export class DataSession<
             continue;
          }
          try {
-            const document = await server.openModelDocument({ uri, clientId: this.clientId });
+            const options = this.opens.get(uri)?.options;
+            const document = await server.openModelDocument({ uri, clientId: this.clientId, options });
             if (this.disposed) {
                return;
             }
@@ -1072,7 +1103,7 @@ export class DataSession<
             // Recorded before the watch, so a deletion heard while it is under
             // way finds the re-open under the URI it answered with, which a
             // restarted server may key differently.
-            this.opens.set(uri, { serverUri: document.uri, deleted: false });
+            this.opens.set(uri, { serverUri: document.uri, deleted: false, options });
             await server.watchModelDocument({ uri, clientId: this.clientId }).catch(async (error: unknown) => {
                // Closed, or the server holds the re-open until the session
                // ends; no other call relies on it while the restore runs.
@@ -1337,7 +1368,7 @@ export class DataSession<
     */
    protected recordWrite(
       uri: string,
-      open: DataSessionOpen | undefined,
+      open: DataSessionOpen<TTransfer, TServer> | undefined,
       document: DataSessionDocument<TTransfer, TServer>,
       baseHash: string | undefined,
       call: DataSessionUnsavedWrite<TTransfer, TServer>['call']
@@ -1401,9 +1432,13 @@ export class DataSession<
     * and sent once the closes and deletes of `uri` called before it have
     * answered.
     */
-   protected trackOpen<T>(uri: string, call: (opening: DataSessionOpening) => Promise<T>): Promise<T> {
-      const opening: DataSessionOpening = { closed: false };
-      const openings = this.openings.get(uri) ?? new Set<DataSessionOpening>();
+   protected trackOpen<T>(
+      uri: string,
+      options: DataSessionOpenOptions<TTransfer, TServer>,
+      call: (opening: DataSessionOpening<TTransfer, TServer>) => Promise<T>
+   ): Promise<T> {
+      const opening: DataSessionOpening<TTransfer, TServer> = { closed: false, options };
+      const openings = this.openings.get(uri) ?? new Set<DataSessionOpening<TTransfer, TServer>>();
       this.openings.set(uri, openings.add(opening));
       const done = (): void => {
          openings.delete(opening);

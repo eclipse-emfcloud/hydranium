@@ -22,7 +22,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { DataSession } from '../../src/client/data-session';
+import type { DataSession, DataSessionOpenOptions } from '../../src/client/data-session';
 import { asModelVersion } from '../../src/model-service/base-version';
 import type { DataServerProtocol, TransferSaveDocumentArgs } from '../../src/data';
 import type { CloseModelArgs, OpenModelArgs } from '../../src/model-server';
@@ -60,9 +60,26 @@ interface WidenedServer extends DataServerProtocol<Root, RichDiagnostic> {
    saveModelDocument(args: WidenedSaveArgs): Promise<TransferSavedDocument<Root, RichDiagnostic>>;
 }
 
+/** An adopter's open whose options the server types. */
+interface TypedOptionsServer extends DataServerProtocol<Root> {
+   openModelDocument(
+      args: Pick<OpenModelArgs, 'uri' | 'clientId'> & { options?: { display?: 'compact' | 'full' } }
+   ): Promise<TransferDocument<Root>>;
+}
+
+/** A protocol whose open takes no options. */
+interface NoOptionsServer extends DataServerProtocol<Root> {
+   openModelDocument(args: Pick<OpenModelArgs, 'uri' | 'clientId'>): Promise<TransferDocument<Root>>;
+}
+
 const URI_A = 'file:///a.x';
 
-async function typeAssertions(plain: DataSession<Root>, widened: DataSession<Root, WidenedServer>): Promise<void> {
+async function typeAssertions(
+   plain: DataSession<Root>,
+   widened: DataSession<Root, WidenedServer>,
+   typed: DataSession<Root, TypedOptionsServer>,
+   noOptions: DataSession<Root, NoOptionsServer>
+): Promise<void> {
    // Accepted: the adopter's own field reaches the wrapper it was declared for.
    // Not on open, which takes only the URI and the open's options.
    const opened = await widened.openDocument({ uri: URI_A, options: { mode: 'compact' } });
@@ -73,6 +90,16 @@ async function typeAssertions(plain: DataSession<Root>, widened: DataSession<Roo
    // half the self-referential bound on `TServer` buys.
    const ruleId: string | undefined = opened.model?.diagnostics?.[0]?.ruleId;
    void ruleId;
+
+   // Accepted: the options the server types, and an open without them.
+   await typed.openDocument({ uri: URI_A, options: { display: 'compact' } });
+   await noOptions.withOpenDocument({ uri: URI_A }, () => undefined);
+   // Accepted: an open record holds the server's typed options, or none for
+   // a server whose open takes none.
+   const recorded: DataSessionOpenOptions<Root, TypedOptionsServer> = { display: 'compact' };
+   const unrecorded: DataSessionOpenOptions<Root, NoOptionsServer> = undefined;
+   void recorded;
+   void unrecorded;
 
    // Accepted: the default instantiation still takes the framework's own fields.
    await plain.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: asModelVersion(1) });
@@ -85,6 +112,14 @@ async function typeAssertions(plain: DataSession<Root>, widened: DataSession<Roo
    // thing wrong with this call is `extra` — a missing required field would
    // satisfy the directive too, and it cannot report which error it absorbed.
    await plain.saveDocument({ uri: URI_A, model: { $type: 'TypeOne' }, extra: 'save-field', baseVersion: 'any' });
+   // @ts-expect-error a misspelled option, once the server types its options
+   await typed.openDocument({ uri: URI_A, options: { dispaly: 'compact' } });
+   // @ts-expect-error the record's options are the server's typed options too
+   const misspelled: DataSessionOpenOptions<Root, TypedOptionsServer> = { dispaly: 'compact' };
+   void misspelled;
+   // @ts-expect-error a server whose open takes no options records none
+   const some: DataSessionOpenOptions<Root, NoOptionsServer> = {};
+   void some;
    // @ts-expect-error the session owns `clientId`, widened server or not
    await widened.openDocument({ uri: URI_A, clientId: 'someone-else' });
    // @ts-expect-error the default server answers the framework diagnostic

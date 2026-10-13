@@ -194,14 +194,14 @@ document is open again by then: a check that the document is open would take
 an edit made before a deletion as unsaved text of the re-created file.
 
 After a reconnect the connection registers each session again under its id and
-resume token, and the session re-opens, re-watches, and puts back what it wrote
-since each document's last save. It decides by text, not version: a revert
-moves the version on and a restarted server numbers versions afresh, so a
-version never tells whether the server still holds a write. Every document the
-data head sends that it holds carries a `text.hash` of the text alone. For each
-document written since its last save, the session keeps the hash its first
-unsaved write was based on, and its last write with that write's answer. After
-the re-open:
+resume token, and the session re-opens each document under the options the
+server had opened it under, re-watches, and puts back what it wrote since each
+document's last save. It decides by text, not version: a revert moves the
+version on and a restarted server numbers versions afresh, so a version never
+tells whether the server still holds a write. Every document the data head
+sends that it holds carries a `text.hash` of the text alone. For each document
+written since its last save, the session keeps the hash its first unsaved write
+was based on, and its last write with that write's answer. After the re-open:
 
 - A document that holds the last write needs nothing.
 - A document back at the text the first unsaved write was based on, reverted
