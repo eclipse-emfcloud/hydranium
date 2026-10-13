@@ -612,12 +612,40 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const createdUri = siblingOf(model.uri, `conformance-created-${randomUuid()}-`);
 
                const created = await driver.proxy.createModelDocument({ uri: createdUri, clientId, text: model.text });
-               const { model: createdModel } = TransferDocument.assertLoaded(created);
                // Written without an open: only the create can have opened it.
-               await driver.proxy.updateModelDocument({ uri: createdUri, clientId, model: model.text, baseVersion: createdModel.version });
+               await driver.proxy.updateModelDocument({
+                  uri: createdUri,
+                  clientId,
+                  model: model.text,
+                  baseVersion: created.created.version
+               });
 
                const existing = await rejectionOf(driver.proxy.createModelDocument({ uri: model.uri, clientId, text: model.text }));
                assert.ok(existing !== undefined, `createModelDocument accepted ${model.uri}, which already exists`);
+               await driver.proxy.closeSession({ clientId });
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
+         title: `a create's answer names the version it made, which a persist on it writes ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               const uri = siblingOf(model.uri, `conformance-created-version-${randomUuid()}-`);
+               const clientId = await startSession(driver, 'conformance-session');
+               const created = await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
+               assert.strictEqual(typeof created.created?.version, 'number', `the create of ${uri} answered with no created version`);
+               // Nothing wrote since the create, the fixture being held as written, so a persist on the version it made writes that version.
+               const persisted = await driver.proxy.persistModelDocument({ uri, clientId, baseVersion: created.created.version });
+               assert.strictEqual(
+                  persisted.persisted?.version,
+                  created.created.version,
+                  `the persist of ${uri} on the version its create made, v${created.created.version}, wrote v${String(persisted.persisted?.version)}`
+               );
                await driver.proxy.closeSession({ clientId });
             } finally {
                driver.dispose();
@@ -716,9 +744,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const created = await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
                await driver.proxy.updateModelDocument({ uri, clientId, model: `${model.text}\n`, baseVersion: 'any' });
 
-               const stale = await rejectionOf(
-                  driver.proxy.deleteModelDocument({ uri, clientId, baseVersion: TransferDocument.assertLoaded(created).model.version })
-               );
+               const stale = await rejectionOf(driver.proxy.deleteModelDocument({ uri, clientId, baseVersion: created.created.version }));
 
                assert.ok(isConflictError(stale), `deleting ${uri} on a stale base version did not conflict: ${String(stale)}`);
                TransferDocument.assertLoaded(await driver.proxy.getModelDocument({ uri }));
@@ -861,11 +887,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const persister = await openAs(driver, uri, 'conformance-persister');
 
                const stale = await rejectionOf(
-                  driver.proxy.persistModelDocument({
-                     uri,
-                     clientId: persister,
-                     baseVersion: TransferDocument.assertLoaded(created).model.version
-                  })
+                  driver.proxy.persistModelDocument({ uri, clientId: persister, baseVersion: created.created.version })
                );
                assert.ok(isConflictError(stale), `persisting ${uri} on a stale base version did not conflict: ${String(stale)}`);
                const base = TransferDocument.assertLoaded(written).model.version;
@@ -933,7 +955,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
       });
 
       checks.push({
-         title: `a watch answers whether a document exists, under the key a read names it by ${tag}`,
+         title: `a watch answers whether a document exists and the text it holds, under the key a read names it by ${tag}`,
          body: async () => {
             const driver = await connect();
             try {
@@ -948,7 +970,17 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
 
                assert.strictEqual(present.exists, true, `a watch of ${model.uri} answered that no document exists`);
                assert.strictEqual(present.uri, read.uri, `a watch of ${model.uri} named it ${present.uri}, a read ${read.uri}`);
+               assert.deepStrictEqual(
+                  present.text,
+                  read.text,
+                  `a watch of ${model.uri} answered the text as ${JSON.stringify(present.text)}, a read as ${JSON.stringify(read.text)}`
+               );
                assert.strictEqual(absent.exists, false, `a watch of ${missing}, which holds no document, answered that one exists`);
+               assert.strictEqual(
+                  absent.text,
+                  undefined,
+                  `a watch of ${missing}, which holds no document, answered text ${JSON.stringify(absent.text)}`
+               );
             } finally {
                driver.dispose();
             }

@@ -75,7 +75,8 @@ function makeFakeProtocol(): DataServerProtocol<FakeRoot> {
          // Counterpart to createSession — no-op in the fake.
       },
       async createModelDocument(args: CreateModelDocumentArgs) {
-         return makeDocument(args.uri, FakeRoot.make(args.text));
+         const document = makeDocument(args.uri, FakeRoot.make(args.text));
+         return { ...document, created: { version: TransferDocument.assertLoaded(document).model.version } };
       },
       async updateModelDocuments(args: TransferUpdateDocumentsArgs<FakeRoot>) {
          return args.updates.map(update =>

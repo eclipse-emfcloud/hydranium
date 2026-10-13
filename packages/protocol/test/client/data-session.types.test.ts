@@ -104,6 +104,13 @@ async function typeAssertions(
    // Accepted: the default instantiation still takes the framework's own fields.
    await plain.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: asModelVersion(1) });
 
+   // Accepted: a create answers the version it made, which a write names as
+   // its base without a cast, and the adopter's diagnostic survives it too.
+   const created = await widened.createDocument({ uri: URI_A, text: '' });
+   await widened.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: created.created.version });
+   const createdRuleId: string | undefined = created.model?.diagnostics?.[0]?.ruleId;
+   void createdRuleId;
+
    // @ts-expect-error a session's open reads the file, so it takes no seed
    await plain.openDocument({ uri: URI_A, languageId: 'plaintext' });
    // @ts-expect-error nor an adopter's open field, which the server's session path ignores

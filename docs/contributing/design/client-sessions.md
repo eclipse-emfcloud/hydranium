@@ -71,9 +71,15 @@ then persists the shared text, other participants' unsaved edits included; a
 persist writes that text as it is, so their formatting survives. Once the text
 is taken, the write completes even if the session closes the document or ends.
 Writes land between a save's build and its take, so a client that marks a
-version saved takes `persisted.version`, not the answered model's. The data
-head's persist request waits for the build after the write, so it can fail
-with the text already on disk.
+version saved takes `persisted.version`, not the answered model's. Another
+client's write or an integrity repair can land between a create and the read
+its answer carries, so a client that writes what it created bases the write
+on `created.version`, and the write conflicts instead of carrying that text
+as its own. The session counts a created document as its own unsaved text
+only while the create's answer, the watch's answer and a reconnect's re-open
+hold the text it last saw; an answer without text leaves that count as it
+was. The data head's persist request waits for the build after the write, so
+it can fail with the text already on disk.
 
 The data head's save and persist, and a diagram's save, answer only once
 `ModelService.settleLanguageClient` has seen the language client answer the

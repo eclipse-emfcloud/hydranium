@@ -56,6 +56,7 @@ import type {
    ReferenceCandidate,
    ReferenceContext,
    TransferDiagnostic,
+   TransferCreatedDocument,
    TransferElement,
    TransferSavedDocument,
    TransferWatchedDocument
@@ -162,6 +163,8 @@ export interface CanaryDefects {
    readonly watchClaimsDocument?: boolean;
    /** `watchModelDocument` answers a position no event sent later passes. */
    readonly watchAnswersPastEvents?: boolean;
+   /** A watch answers without the text it was taken at. */
+   readonly watchTextOmitted?: boolean;
    /** Updates are fanned out regardless of the subscription table. */
    readonly notifiesBeforeSubscribe?: boolean;
    /** A write's own update event is reported as rebuilt rather than changed. */
@@ -211,6 +214,10 @@ export interface CanaryDefects {
    readonly createOverwrites?: boolean;
    /** `createModelDocument` creates the document without opening it for the session. */
    readonly createLeavesClosed?: boolean;
+   /** `createModelDocument` answers without the version it made. */
+   readonly createdVersionOmitted?: boolean;
+   /** `createModelDocument` names the version a later write would take, as a head reading the version after another client's write does. */
+   readonly createNamesLaterVersion?: boolean;
    /** `updateModelDocuments` checks and applies one document at a time, so a later stale one leaves the earlier applied. */
    readonly partialSets?: boolean;
    /** A session's save of a document it has not opened opens it. */
@@ -431,7 +438,7 @@ export class CanaryDataServer {
       }
    }
 
-   async createModelDocument(args: CreateModelDocumentArgs): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>> {
+   async createModelDocument(args: CreateModelDocumentArgs): Promise<TransferCreatedDocument<CanaryRoot, TransferDiagnostic>> {
       const opens = this.sessions.get(args.clientId);
       if (!opens) {
          throw new Error(`${args.clientId} is not a session`);
@@ -439,11 +446,17 @@ export class CanaryDataServer {
       if (this.documents.has(args.uri) && !this.defects.createOverwrites) {
          throw new Error(`Cannot create ${args.uri}: the file exists`);
       }
-      this.documents.set(args.uri, { text: args.text, version: (this.documents.get(args.uri)?.version ?? 0) + 1 });
+      const version = (this.documents.get(args.uri)?.version ?? 0) + 1;
+      this.documents.set(args.uri, { text: args.text, version });
       if (!this.defects.createLeavesClosed) {
          opens.add(args.uri);
       }
-      return this.envelope(args.uri);
+      const envelope = this.envelope(args.uri);
+      if (this.defects.createdVersionOmitted) {
+         // The defect is the missing field, which the declared type cannot hold.
+         return envelope as TransferCreatedDocument<CanaryRoot, TransferDiagnostic>;
+      }
+      return { ...envelope, created: { version: asModelVersion(this.defects.createNamesLaterVersion ? version + 1 : version) } };
    }
 
    async updateModelDocuments(args: TransferUpdateDocumentsArgs<CanaryRoot>): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>[]> {
@@ -548,10 +561,12 @@ export class CanaryDataServer {
       if (!this.defects.silentSubscriptions) {
          this.watched.add(args.uri);
       }
+      const text = this.defects.watchTextOmitted ? undefined : this.envelope(args.uri).text;
       return {
          uri: args.uri,
          exists: this.defects.watchClaimsDocument === true || this.documents.has(args.uri),
-         sequence: this.defects.watchAnswersPastEvents ? Number.MAX_SAFE_INTEGER : this.sequence
+         sequence: this.defects.watchAnswersPastEvents ? Number.MAX_SAFE_INTEGER : this.sequence,
+         ...(text ? { text } : {})
       };
    }
 

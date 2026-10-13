@@ -158,6 +158,11 @@ export interface ReferenceQuerySpec {
  * action type) — see `./glsp`.
  */
 export interface LanguageFixture {
+   /**
+    * Held by the head as written: a text an integrity rule repairs on open
+    * moves the version past the one its create made, and the checks that
+    * write on that version then conflict.
+    */
    readonly valid: ConformanceModel;
    readonly invalid: ConformanceModel;
    /**

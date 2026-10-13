@@ -12,7 +12,9 @@ declare const snapshotMarker: unique symbol;
 /**
  * The version of the text a model was parsed from: a snapshot of the store's
  * {@link TextVersion}, not a counter of its own. A document envelope carries
- * it, and it cannot move once the envelope exists.
+ * it, and it cannot move once the envelope exists. A create's answer carries
+ * a second snapshot of the same kind, the version the create's text took,
+ * which its creator holds because it sent the text.
  *
  * A plain number at runtime, usable anywhere a number is, and it travels the
  * wire as one. The marker exists only so the compiler can tell it apart from a
@@ -47,8 +49,9 @@ export function isModelVersion(baseVersion: BaseVersion): baseVersion is ModelVe
  * Mark a version as having come from a snapshot read.
  *
  * **For the envelope constructors, not for callers.** Every door that builds a
- * document envelope applies it on the way in, so anything a read returns
- * already carries it and a writer never needs this. A caller reaching for it is
+ * document envelope applies it on the way in, the create's answer included
+ * for the version its text took, so anything a read returns already carries
+ * it and a writer never needs this. A caller reaching for it is
  * asserting a provenance the compiler was about to deny — the read-late defect
  * written out where a reviewer can see it.
  */

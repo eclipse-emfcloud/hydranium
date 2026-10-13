@@ -10,7 +10,7 @@
 import type { TransferDiagnostic } from '../transfer-diagnostic';
 import type { TransferElement } from '../transfer-element';
 import type { Project } from '../project';
-import type { TransferDocument, TransferSavedDocument, TransferWatchedDocument } from '../transfer-document';
+import type { TransferCreatedDocument, TransferDocument, TransferSavedDocument, TransferWatchedDocument } from '../transfer-document';
 import type { CloseModelArgs, FindNextNameArgs, OpenModelArgs, ReferenceContext, ReferenceRequest } from '../model-server';
 import type { ReferenceCandidate, ReferenceTarget } from '../model-service/reference-candidate';
 import type {
@@ -80,12 +80,15 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
 
    /**
     * Create a document with `args.text`, open for the session, and return it
-    * as {@link openModelDocument} does. It reaches disk with the first save.
+    * as {@link openModelDocument} does, with the version the create made in
+    * `created`. The answer is read after the create, so it can already hold
+    * another client's write or an integrity repair; a write based on
+    * `created.version` then conflicts. It reaches disk with the first save.
     * Fails when the file exists or any client has the URI open, and with a
     * `SessionClosedError` code when `args.clientId` is not a session
     * registered on this connection.
     */
-   createModelDocument(args: CreateModelDocumentArgs): Promise<TransferDocument<TTransfer, TDiagnostic>>;
+   createModelDocument(args: CreateModelDocumentArgs): Promise<TransferCreatedDocument<TTransfer, TDiagnostic>>;
 
    /**
     * Write several documents the session has open, all or none: a conflict or
@@ -185,11 +188,11 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
     *
     * Answers with the key the watch's events name the document by, whether
     * a document exists, taken once the watch is in place and the document
-    * is loaded as a read loads it, and the position of the last update or
-    * deletion event sent as of that moment, so an event the client heard
-    * while the watch was in flight tells by its own position whether it is
-    * newer than the answer. No handle: the event channel is the client
-    * interface. Callers fan out a single inbound `onDocumentUpdated` to
+    * is loaded as a read loads it, the text held at that moment, and the
+    * position of the last update or deletion event sent as of it, so an event
+    * the client heard while the watch was in flight tells by its own position
+    * whether it is newer than the answer. No handle: the event channel is the
+    * client interface. Callers fan out a single inbound `onDocumentUpdated` to
     * multiple local listeners with their own `Emitter<T>` (matching Theia's
     * pattern). Pair every `watchModelDocument` with
     * {@link unwatchModelDocument} when no longer needed; the server holds the

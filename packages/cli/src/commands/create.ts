@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { TransferDocument, textHash, type TransferElement } from '@hydranium/protocol';
+import type { TransferElement } from '@hydranium/protocol';
 import type { DataServerProtocol } from '@hydranium/protocol/data';
 import { logEnv, type LogOptions } from '../log-level.js';
 import { withDataServer } from '../spawn-data-server.js';
@@ -65,10 +65,10 @@ export async function runCreate(options: CreateCommandOptions): Promise<void> {
 
 /**
  * Create `uri` with `text` as the session `clientId` and persist it, then end
- * the session. The persist is gated on the version the create answered, so a
- * later write fails it. The answer is the document's state when the server
- * replied, which can already hold another client's write, so text other than
- * `text` fails the command before anything persists.
+ * the session. The persist is gated on the version the create made, so a
+ * write that landed before the create's answer or after it, another client's
+ * or an integrity repair, fails the command with a conflict and nothing
+ * persists.
  */
 function createPersisted(
    server: Pick<DataServerProtocol<TransferElement>, 'createSession' | 'createModelDocument' | 'persistModelDocument' | 'closeSession'>,
@@ -78,9 +78,6 @@ function createPersisted(
 ): Promise<unknown> {
    return withClientSession(server, clientId, async () => {
       const created = await server.createModelDocument({ uri, clientId, text });
-      if (created.text?.hash !== textHash(text)) {
-         throw new Error(`Cannot create ${uri}: another client wrote to it before the create answered`);
-      }
-      return server.persistModelDocument({ uri, clientId, baseVersion: TransferDocument.assertLoaded(created).model.version });
+      return server.persistModelDocument({ uri, clientId, baseVersion: created.created.version });
    });
 }
