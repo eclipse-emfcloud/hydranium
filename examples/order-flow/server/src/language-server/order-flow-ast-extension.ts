@@ -41,7 +41,7 @@ export class OrderFlowComputedPropertiesContribution implements AstExtensionCont
       registry.register({
          id: '_writtenFields',
          nodeFilter: isTask,
-         state: DocumentState.ComputedScopes,
+         phase: DocumentState.ComputedScopes,
          compute: (node: Mutable<Task>) => {
             setHiddenProperty(node, '_writtenFields', collectWrittenFields(node));
          }
@@ -50,7 +50,7 @@ export class OrderFlowComputedPropertiesContribution implements AstExtensionCont
       registry.register({
          id: '_effectSummary',
          nodeFilter: isTask,
-         state: DocumentState.ComputedScopes,
+         phase: DocumentState.ComputedScopes,
          compute: (node: Mutable<Task>) => {
             node._effectSummary = summariseEffects(node);
          }

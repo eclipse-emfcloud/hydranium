@@ -13,7 +13,7 @@ import { type CancellationToken, type Disposable } from 'vscode-languageserver';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerSharedServices } from '../module.js';
 import { Registry } from '../../util/registry.js';
-import { type BuildPhasePass, type BuildPhasePassRegistry } from './build-phase-pass.js';
+import { type BuildPhasePass, type BuildPhasePassRegistry, BuildPassPhase } from './build-phase-pass.js';
 
 /**
  * Public contract for the shared build-phase-pass runner. Extends the
@@ -31,7 +31,7 @@ import { type BuildPhasePass, type BuildPhasePassRegistry } from './build-phase-
  */
 export interface BuildPhasePassService extends BuildPhasePassRegistry {
    /**
-    * Run every pass declaring `phase` as its state, in priority order,
+    * Run every pass declaring `phase`, in priority order,
     * sequentially — each pass is awaited before the next begins. The cancel
     * token is checked before each pass so a preempted build stops cleanly.
     * No-ops when no pass targets the phase. Called by
@@ -52,8 +52,8 @@ export type BuildPhasePassServiceOptions = LogNameOptions;
  * `BuildPipelineIntegration`,
  * which calls {@link runPasses} from its `onBuildPhase` listeners.
  *
- * **Performance:** {@link runPasses} shares the bucket-by-state cache pattern
- * with the AST-extension service — the per-state pass list is rebuilt lazily
+ * **Performance:** {@link runPasses} shares the bucket-by-phase cache pattern
+ * with the AST-extension service — the per-phase pass list is rebuilt lazily
  * only after a register / unregister, so steady-state dispatch allocates
  * nothing and early-outs when no pass targets the phase.
  *
@@ -64,9 +64,9 @@ export type BuildPhasePassServiceOptions = LogNameOptions;
  */
 export class DefaultBuildPhasePassService implements BuildPhasePassService {
    protected readonly passes = new Registry<BuildPhasePass>();
-   /** Per-state bucket of passes targeting each state, rebuilt lazily on the first run after a registry mutation. */
-   protected stateBuckets = new Map<DocumentState, readonly BuildPhasePass[]>();
-   protected stateBucketsFor: readonly BuildPhasePass[] | undefined;
+   /** Per-phase bucket of passes targeting each phase, rebuilt lazily on the first run after a registry mutation. */
+   protected phaseBuckets = new Map<DocumentState, readonly BuildPhasePass[]>();
+   protected phaseBucketsFor: readonly BuildPhasePass[] | undefined;
 
    protected readonly tracer: Tracer;
 
@@ -84,11 +84,21 @@ export class DefaultBuildPhasePassService implements BuildPhasePassService {
    }
 
    register(pass: BuildPhasePass): Disposable {
+      // A phase outside the wired set type-checks only past a cast, and a pass
+      // there is accepted and never fires.
+      if (!BuildPassPhase.all().includes(pass.phase)) {
+         throw new Error(
+            `Build-phase pass '${pass.id}' registered at phase ${DocumentState[pass.phase]} would never fire. ` +
+               `Allowed phases are ${BuildPassPhase.all()
+                  .map(phase => DocumentState[phase])
+                  .join(', ')}.`
+         );
+      }
       return this.passes.register(pass);
    }
 
    async runPasses(documents: readonly LangiumDocument[], phase: DocumentState, cancelToken: CancellationToken): Promise<void> {
-      const bucket = this.getStateBucket(phase);
+      const bucket = this.getPhaseBucket(phase);
       if (bucket.length === 0) {
          return;
       }
@@ -114,28 +124,28 @@ export class DefaultBuildPhasePassService implements BuildPhasePassService {
    }
 
    /**
-    * Bucket-by-state view of {@link passes}, rebuilt lazily when the registry's
+    * Bucket-by-phase view of {@link passes}, rebuilt lazily when the registry's
     * cached `all()` reference changes. Each bucket preserves the registry's
     * priority order (`Registry.all()` is already priority-sorted).
     */
-   protected getStateBucket(phase: DocumentState): readonly BuildPhasePass[] {
+   protected getPhaseBucket(phase: DocumentState): readonly BuildPhasePass[] {
       const current = this.passes.all();
-      if (this.stateBucketsFor !== current) {
+      if (this.phaseBucketsFor !== current) {
          const next = new Map<DocumentState, BuildPhasePass[]>();
          for (const pass of current) {
-            let bucket = next.get(pass.state);
+            let bucket = next.get(pass.phase);
             if (!bucket) {
                bucket = [];
-               next.set(pass.state, bucket);
+               next.set(pass.phase, bucket);
             }
             bucket.push(pass);
          }
-         this.stateBuckets = next;
-         this.stateBucketsFor = current;
+         this.phaseBuckets = next;
+         this.phaseBucketsFor = current;
       }
-      return this.stateBuckets.get(phase) ?? EMPTY_STATE_BUCKET;
+      return this.phaseBuckets.get(phase) ?? EMPTY_PHASE_BUCKET;
    }
 }
 
-/** Shared empty result so `getStateBucket` doesn't allocate per call on the cold path. */
-const EMPTY_STATE_BUCKET: readonly BuildPhasePass[] = Object.freeze([]);
+/** Shared empty result so `getPhaseBucket` doesn't allocate per call on the cold path. */
+const EMPTY_PHASE_BUCKET: readonly BuildPhasePass[] = Object.freeze([]);

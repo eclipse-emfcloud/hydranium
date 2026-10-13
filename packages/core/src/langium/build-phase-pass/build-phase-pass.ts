@@ -7,9 +7,42 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type DocumentState, type LangiumCoreServices, type LangiumDocument, type URI } from '@hydranium/langium';
+import { DocumentState, type LangiumCoreServices, type LangiumDocument, type URI } from '@hydranium/langium';
 import { type CancellationToken, type Disposable } from 'vscode-languageserver';
 import { type RegistryItem } from '../../util/registry.js';
+
+/**
+ * The build phases a {@link BuildPhasePass} may fire at: every phase after
+ * `Changed`, which has no AST yet. `IndexedContent` is one, unlike for an
+ * `AstExtension`: per document it carries nothing `Parsed` does, but per
+ * batch it is the only phase meaning the global index is whole again, which
+ * batch work keyed on a complete index has nowhere else to run.
+ */
+export type BuildPassPhase =
+   | DocumentState.Parsed
+   | DocumentState.IndexedContent
+   | DocumentState.ComputedScopes
+   | DocumentState.Linked
+   | DocumentState.IndexedReferences
+   | DocumentState.Validated;
+
+export namespace BuildPassPhase {
+   /**
+    * Every {@link BuildPassPhase}, in build order. `BuildPipelineIntegration`
+    * wires one `onBuildPhase` listener per entry and `register` refuses a phase
+    * outside it, so the two cannot drift apart. A fresh array each call.
+    */
+   export function all(): readonly BuildPassPhase[] {
+      return [
+         DocumentState.Parsed,
+         DocumentState.IndexedContent,
+         DocumentState.ComputedScopes,
+         DocumentState.Linked,
+         DocumentState.IndexedReferences,
+         DocumentState.Validated
+      ];
+   }
+}
 
 /**
  * A unit of whole-batch work run once per build when the batch reaches a
@@ -46,12 +79,8 @@ import { type RegistryItem } from '../../util/registry.js';
  * rather than running the remaining passes against a doomed build.
  */
 export interface BuildPhasePass extends RegistryItem {
-   /**
-    * The single build phase whose `onBuildPhase` fires this pass. The framework
-    * wires a listener for the same phase set as AST extension; a pass declaring
-    * any other state type-checks but never fires.
-    */
-   state: DocumentState;
+   /** The single build phase whose `onBuildPhase` fires this pass. */
+   phase: BuildPassPhase;
    /**
     * Run this pass against the whole built batch. May mutate and reparse
     * documents — the framework's integrity pass does — or derive cross-document

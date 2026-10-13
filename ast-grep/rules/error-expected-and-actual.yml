@@ -1,0 +1,81 @@
+# vitest reads any thrown object that carries both `expected` and `actual` as an assertion
+# failure, wherever on the prototype chain they sit: it diffs the pair and assigns the
+# prettified values back, which throws on a getter and replaces the real failure with a
+# `TypeError`. A class with both is one `throw` away from that whatever it extends, so the
+# rule reads class bodies, not heritage, and a quoted or computed name counts as the name.
+# A pair split across a hierarchy, a member declared on an interface or a type literal,
+# or one added by assignment outside the class, escapes this rule; a static member never
+# sits on a thrown instance but is flagged all the same.
+id: error-expected-and-actual
+language: typescript
+severity: error
+message: A class must not declare both `expected` and `actual`; a test reporter reads that pair as an assertion failure. Name them for what they hold, as ConflictError's baseVersion and actualVersion do.
+files:
+  - packages/*/src/**/*.ts
+  - packages/*/test/**/*.ts
+  - examples/**/src/**/*.ts
+  - examples/**/test/**/*.ts
+utils:
+  declares-expected:
+    any:
+      - kind: public_field_definition
+        has:
+          field: name
+          regex: '^(["'']?expected["'']?|\[["''`]expected["''`]\])$'
+      - kind: method_definition
+        has:
+          field: name
+          regex: '^(["'']?expected["'']?|\[["''`]expected["''`]\])$'
+      - kind: abstract_method_signature
+        has:
+          field: name
+          regex: '^(["'']?expected["'']?|\[["''`]expected["''`]\])$'
+      - kind: method_definition
+        all:
+          - has: { field: name, regex: ^constructor$ }
+          - has:
+              stopBy: end
+              any:
+                - kind: required_parameter
+                - kind: optional_parameter
+              all:
+                - has: { field: pattern, regex: ^expected$ }
+                - has:
+                    any:
+                      - kind: accessibility_modifier
+                      - kind: override_modifier
+                      - regex: ^readonly$
+  declares-actual:
+    any:
+      - kind: public_field_definition
+        has:
+          field: name
+          regex: '^(["'']?actual["'']?|\[["''`]actual["''`]\])$'
+      - kind: method_definition
+        has:
+          field: name
+          regex: '^(["'']?actual["'']?|\[["''`]actual["''`]\])$'
+      - kind: abstract_method_signature
+        has:
+          field: name
+          regex: '^(["'']?actual["'']?|\[["''`]actual["''`]\])$'
+      - kind: method_definition
+        all:
+          - has: { field: name, regex: ^constructor$ }
+          - has:
+              stopBy: end
+              any:
+                - kind: required_parameter
+                - kind: optional_parameter
+              all:
+                - has: { field: pattern, regex: ^actual$ }
+                - has:
+                    any:
+                      - kind: accessibility_modifier
+                      - kind: override_modifier
+                      - regex: ^readonly$
+rule:
+  kind: class_body
+  all:
+    - has: { matches: declares-expected }
+    - has: { matches: declares-actual }
