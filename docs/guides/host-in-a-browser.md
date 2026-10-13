@@ -33,6 +33,11 @@ its worker launcher. Run all heads in one worker, so they share one workspace.
    LSP port's close, call `TextDocuments.closeLanguageClientDocuments()`, since
    a worker has no process to exit. See `src/head-channels.ts`.
 
+   Import `reflect-metadata` first in the worker's entry, before any module
+   with an Inversify decorator. GLSP's server classes read their metadata when
+   they are defined, so a later import gives a container that resolves
+   nothing, with errors naming an injected parameter rather than the import.
+
    Start the GLSP head on its port:
 
 <!-- snippet-preamble
@@ -144,8 +149,14 @@ const fileSystem = await persistentFileSystem({
    at `0,0`. See `src/page/process-diagram.ts`.
 
 9. **Make the text editor a full client.** In the example, Monaco talks LSP
-   over the LSP port (`src/page/monaco-lsp-adapter.ts`). Three things a shell
-   would otherwise do:
+   over the LSP port (`src/page/monaco-lsp-adapter.ts`). What a shell would
+   otherwise do:
+   - Tell Monaco where its editor worker is. Assign `self.MonacoEnvironment`
+     with a `getWorker` that builds the worker from a path your build gives
+     you, at module scope, before any editor or model exists.
+     `monaco-editor-core` ships no editor-worker entry, so bundle one of your
+     own (`src/page/monaco-editor-worker.ts`). Left out, Monaco asks for a
+     script no bundle emits, and the error appears only on the first edit.
    - Without a TextMate grammar, turn on `highlightKeywords` and
      `highlightComments` in your semantic token provider's options, so the
      server colours those too. A host with a grammar leaves them off.
@@ -174,12 +185,18 @@ const fileSystem = await persistentFileSystem({
 - **A diagram never loads in an automated test.** It renders on animation
   frames, which a hidden tab never gets. Drive tests with Playwright, whose
   headless Chromium counts as visible.
+- **A write never finishes, and every later build waits.** A model-service
+  write or `rebuild` started from an integrity rule, a build-phase pass or a
+  build listener waits for its own build; a Node host rejects it, a browser
+  host cannot. Keep writes out of build callbacks, as
+  [where you wait or write](../concepts/document-layers.md#waiting-for-a-current-model)
+  says.
 - **The data head's diagnostics requests fail.** Server state, heap snapshots
   and profiling need Node, so in a browser they reject; latency still works.
 
-Two limits hold for any browser host: a page or worker that dies ends no
-session, since a port cannot report it, and a closing tab cannot wait for a
-save. See
+Limits that hold for any browser host: a page or worker that dies ends no
+session, and a worker that dies leaves the page's pending requests waiting,
+since a port cannot report either; and a closing tab cannot wait for a save. See
 [Status and limitations](../adopting/status.md#unsaved-edits-are-kept-only-so-far).
 
 ## Going further

@@ -207,7 +207,7 @@ until then:
 Diagnostics come only from the `Validated` state. If you need them, call
 `validated(uri)`.
 
-Two rules for where you wait:
+Rules for where you wait or write:
 
 - **Never await a wait inside a build phase listener or a
   `WorkspaceLock.read`.** It waits for a build that cannot start until your
@@ -216,6 +216,16 @@ Two rules for where you wait:
   alone, since a syncing build cannot start there. `ensureDocumentState` on a
   missing document then rejects with `ReentrantWriteLockError` unless
   `ModelServiceOptions.allowReentrantBuilds` is set.
+- **Never start a write from inside a build or a `WorkspaceLock.read`.** A
+  `ModelService` write, such as a session's `update` or `save`, or a
+  `rebuild`, called from an integrity rule, a build-phase pass or a build
+  listener waits for the build that called it, which waits for the write. A
+  Node host that loads `@hydranium/core/node` detects this and rejects the
+  call with `ReentrantWriteLockError`. A browser host cannot detect it: the
+  call hangs, every later build queues behind it, and only the lock's
+  stalled-write log after `stalledWriteWarnMs` reports it. A write from inside
+  a `WorkspaceLock.read` hangs on every host. An integrity rule that only
+  changes the AST is unaffected, since the framework writes its repair.
 
 ## What a write says it was based on
 
