@@ -18,6 +18,9 @@ VS Code webview, or a plain browser page. It builds on `@eclipse-glsp/client`.
   rather than dropped.
 - An edge whose labels keep finite bounds without bendpoints, so fit to
   screen frames the diagram instead of blanking it.
+- A plain click on an unselected element that replaces a selection still
+  pending, so two quick clicks on different elements leave only the second
+  selected.
 - One binder that mounts all of it in a diagram container.
 
 ## Install

@@ -12,6 +12,7 @@ import {
    DiagramLoader,
    GLSPActionDispatcher,
    GLSPHiddenBoundsUpdater,
+   RankedSelectMouseListener,
    StatusOverlay,
    TYPES
 } from '@eclipse-glsp/client';
@@ -19,6 +20,7 @@ import { type Clock, ConsoleLogger, DefaultTracer, type Logger, SystemClock } fr
 import { HydraniumGlspActionDispatcher } from './action-dispatcher';
 import { HydraniumDiagramLoader } from './diagram-loader';
 import { HydraniumHiddenBoundsUpdater } from './hidden-bounds-updater';
+import { HydraniumSelectMouseListener } from './select-mouse-listener';
 import { SprottyLoggerAdapter } from './sprotty-logger-adapter';
 import { HydraniumStatusOverlay } from './status-overlay';
 import { HydraniumClientTypes } from './types';
@@ -35,7 +37,8 @@ export interface GlspClientModuleOptions {
  * Binds the framework's client classes into a GLSP diagram container, whatever
  * hosts it: the instrumented action dispatcher, the failure-reporting diagram
  * loader, the route-repairing hidden-bounds updater, the status overlay that
- * stays on the page, and a sprotty logger that reports through the host's.
+ * stays on the page, the select listener whose plain click replaces a pending
+ * selection, and a sprotty logger that reports through the host's.
  *
  * Call it from the module a host adds AFTER GLSP's defaults, since every class
  * here replaces a token those defaults bind; `rebind` on an unbound token
@@ -71,5 +74,6 @@ export function createGlspClientModule(context: BindingContext, options: GlspCli
    rebind(DiagramLoader).to(HydraniumDiagramLoader).inSingletonScope();
    rebind(GLSPHiddenBoundsUpdater).to(HydraniumHiddenBoundsUpdater).inSingletonScope();
    rebind(StatusOverlay).to(HydraniumStatusOverlay).inSingletonScope();
+   rebind(RankedSelectMouseListener).to(HydraniumSelectMouseListener).inSingletonScope();
    rebind(TYPES.ILogger).to(SprottyLoggerAdapter).inSingletonScope();
 }
