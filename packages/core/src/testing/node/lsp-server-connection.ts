@@ -281,8 +281,9 @@ export interface LspServerConnection extends Harness {
     *
     * Throwing from the handler surfaces to the server as an RPC failure, which
     * is the other branch (`applyEditToLanguageClient` invalidates and rethrows).
+    * A handler returning a promise holds the answer until it settles.
     */
-   setApplyEditHandler(handler: (params: ApplyWorkspaceEditParams) => ApplyWorkspaceEditResult): void;
+   setApplyEditHandler(handler: (params: ApplyWorkspaceEditParams) => ApplyWorkspaceEditResult | Promise<ApplyWorkspaceEditResult>): void;
 
    /**
     * Release every resource: the diagnostics and applyEdit subscriptions, the

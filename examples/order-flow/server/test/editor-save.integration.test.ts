@@ -20,9 +20,10 @@
  */
 
 import { serverSharedFactory } from '@hydranium/core';
+import { HydraniumDocumentUpdateHandler } from '@hydranium/core/lsp';
+import { DefaultFileSystemProvider } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
 import { type DataServerHarness, makeDataServerHarness } from '@hydranium/data-server/testing';
-import { DefaultFileSystemProvider } from '@hydranium/core/node';
 import {
    type LspHarness,
    makeLspHarness,
@@ -211,6 +212,25 @@ describe('an editor save', () => {
       expect(answer.settled).toBe(true);
    });
 
+   it('waits for the push of a session edit into the editor that is still in flight', async () => {
+      const { harness, uri, services } = await boot({ withForm: false });
+      const editorApplied = new Deferred();
+      harness.setApplyEditHandler(async () => {
+         await editorApplied.promise;
+         return { applied: true };
+      });
+      const session = services.shared.model.ModelService.createSession('form', 'form');
+      await session.open(uri);
+      await session.update({ uri, model: SERVER_TEXT, baseVersion: 'any' });
+      await harness.nextAppliedEdit(uri, { fromIndex: 0 });
+      const answer = track(willSave(harness, uri));
+      // Long enough for an answer that does not wait for the push to arrive.
+      await tick(50);
+      expect(answer.settled).toBe(false);
+      editorApplied.resolve();
+      await waitFor(() => answer.settled, { timeoutMs: 2000 });
+   });
+
    it('holds a server save queued during it until its didSave, and is announced as the language client', async () => {
       const { harness, uri, services } = await boot();
       const savedBy = recordSaves(services, uri);
@@ -341,5 +361,38 @@ describe('a data-head save of a document open in an editor', () => {
       expect(answer.settled).toBe(false);
       editorAnswer.resolve();
       await waitFor(() => answer.settled, { timeoutMs: 2000 });
+   });
+});
+
+describe('an editor save right after a keystroke', () => {
+   it('does not wait out the debounce of that keystroke', async () => {
+      // Neither the debounce nor the cap ends within the test's timeout, so
+      // only the flush lets the save answer.
+      workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-editor-save-' });
+      workspace.write(FILE, CLEAN);
+      const wire = makeLspServerConnection();
+      const services = createOrderFlowServices(
+         { connection: wire.serverConnection, fileSystemProvider: serverSharedFactory(shared => new DefaultFileSystemProvider(shared)) },
+         {
+            extraSharedModules: [
+               {
+                  lsp: {
+                     DocumentUpdateHandler: shared =>
+                        new HydraniumDocumentUpdateHandler(shared, { debounceMs: 60_000, willSaveGateMs: 60_000 })
+                  }
+               }
+            ]
+         }
+      );
+      const harness = makeLspHarness({ connection: wire, services: services.shared });
+      lsp = harness;
+      await harness.initialize({ workspaceFolders: [{ uri: workspace.uri(), name: 'order-flow' }] });
+      const uri = workspace.uri(FILE);
+      harness.openDocument(uri, CLEAN, 'order-flow-domain', 1);
+      await services.shared.model.ModelService.waitForDocumentSettled(uri);
+
+      harness.changeDocument(uri, EDITOR_TEXT, 2);
+
+      await expect(willSave(harness, uri)).resolves.toEqual([]);
    });
 });

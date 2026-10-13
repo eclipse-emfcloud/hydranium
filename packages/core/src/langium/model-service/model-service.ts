@@ -302,6 +302,12 @@ export interface ModelService<
     * wait is logged and resolves.
     */
    settleLanguageClient(uri: string, cancelToken?: CancellationToken): Promise<void>;
+   /**
+    * Whether a push of the document's text into the language client awaits the
+    * client's answer. A push a settle already timed out on does not count: that
+    * settle has warned about it.
+    */
+   isLanguageClientPushPending(uri: string): boolean;
 
    /**
     * Fires as a document reaches the filter's phase, `Validated` by default.
@@ -907,6 +913,11 @@ export class DefaultModelService<
          // Its own line, so the failure is not blamed on the bound.
          reportFailedWait(err, 'before the timeout — returning anyway');
       }
+   }
+
+   isLanguageClientPushPending(uri: string): boolean {
+      const chain = this.syncChains.get(UriUtils.toUri(this.uriPolicy.canonicalUri(uri)).toString());
+      return chain !== undefined && !this.timedOutSyncChains.has(chain);
    }
 
    /**

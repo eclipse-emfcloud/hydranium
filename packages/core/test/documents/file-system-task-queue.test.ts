@@ -44,6 +44,21 @@ describe('DefaultFileSystemTaskQueue', () => {
       expect(order).toEqual(['first', 'second']);
    });
 
+   it('is idle for a file only while no task of it, under any of its URIs, is running or waiting', async () => {
+      const queue = makeQueue();
+      const task = new Deferred();
+      expect(queue.isIdle('file:///ws/link/a.x')).toBe(true);
+
+      const running = queue.enqueue('file:///ws/real/a.x', () => task.promise);
+      expect(queue.isIdle('file:///ws/link/a.x')).toBe(false);
+      expect(queue.isIdle('file:///ws/real/b.x')).toBe(true);
+      task.resolve();
+      await running;
+      await tick(0);
+
+      expect(queue.isIdle('file:///ws/link/a.x')).toBe(true);
+   });
+
    it('runs tasks of different files in parallel, whatever their scheme', async () => {
       const queue = makeQueue();
       const held = new Deferred();
