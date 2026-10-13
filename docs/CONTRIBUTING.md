@@ -49,6 +49,8 @@ The design behind what the adopter pages under
   failures that only happen while building or testing this repo.
 - [**Performance baseline**](contributing/perf-baseline.md) — how to take a
   measurement that is comparable with an earlier one.
+- [**Working with Claude Code**](../CLAUDE.md) — the commands an agent session
+  types, and which page to read before which change.
 
 ## Reporting issues
 
@@ -144,16 +146,18 @@ that is, `✓ GATE PASSED` or `✗ GATE FAILED` with the clause that decided it;
 capture without that line did not finish, and only its exit code knows.
 
 On a pull request, CI first classifies the changed paths with
-`scripts/ci-changed.mts`. A change that is only prose runs `check:rest` on one
-platform and skips the build, the tests and e2e; anything else runs the full
-gate. To mirror it locally, run
+`scripts/ci-changed.mts`. A change that is only prose builds and runs
+`check:rest` on one platform, and skips lint, the tests, e2e and the scaffold
+smoke; anything else runs the full gate. To mirror it locally, run
 
 ```bash
+npm run build:all
 git diff --name-only --no-renames origin/main...HEAD | node scripts/ci-changed.mts
 ```
 
 then `node scripts/run-gate.mts check:rest` on `full=false`, and
-`npm run check` otherwise.
+`npm run check` otherwise. The build comes first because `check:rest`
+type-checks scripts against built `lib`.
 
 ## Testing
 
