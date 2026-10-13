@@ -15,6 +15,7 @@ import {
    asModelVersion,
    type CanonicalUri,
    createRpcProxy,
+   Deferred,
    Disposable,
    isConflictError,
    isSessionClosedError,
@@ -41,6 +42,7 @@ import {
 import { type FakeClock, makeCapturingDataClient, makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
 import { makeDuplexConnectionPair } from '@hydranium/protocol/testing/node';
 import {
+   DefaultModelService,
    IntegrityService,
    DOCUMENT_RELEASE_CLIENT_ID,
    type DocumentUriPolicy,
@@ -153,6 +155,17 @@ class SessionProbeServer extends TestDataServer {
 
    watchersOf(uri: string): string[] {
       return [...(this.uriWatchRecords.get(this.canonicalKey(uri))?.watchers ?? [])];
+   }
+}
+
+/** Holds a push of a document's text into the language client in flight until the test resolves it. */
+class HeldPushModelService extends DefaultModelService<FakeRoot & { $type: string }, FakeAstDiagnostic, FakeRoot> {
+   holdPush(uri: string, push: Promise<void>): void {
+      this.syncChains.set(uri, push);
+   }
+
+   protected override serialize(_uri: string, root: FakeRoot): string {
+      return `name:${root.name}`;
    }
 }
 
@@ -624,6 +637,75 @@ describe('DataServer', () => {
             pair.dispose();
          }
       });
+   });
+
+   describe('a save while a push of the document into the language client is in flight', () => {
+      const saves: Array<[string, (server: TestDataServer) => Promise<unknown>]> = [
+         [
+            'saveModelDocument',
+            server =>
+               server.saveModelDocument({
+                  uri: URI_A,
+                  clientId: 'editor-1',
+                  model: { $type: 'FakeRoot', name: 'saved' },
+                  baseVersion: 'any'
+               })
+         ],
+         ['persistModelDocument', server => server.persistModelDocument({ uri: URI_A, clientId: 'editor-1', baseVersion: 'any' })]
+      ];
+
+      /** A bundle whose model service holds a push of `URI_A`, opened by `editor-1`. */
+      async function withHeldPush(
+         run: (setup: { bundle: Bundle; server: TestDataServer; proxy: TestHarness['proxy']; push: Deferred }) => Promise<void>
+      ): Promise<void> {
+         const built: { modelService?: HeldPushModelService } = {};
+         const bundle = makeTestServices<FakeRoot & { $type: string }, FakeAstDiagnostic, FakeRoot>({
+            modelService: services => (built.modelService = new HeldPushModelService(services))
+         });
+         const { modelService } = built;
+         if (!modelService) {
+            throw new Error('makeTestServices did not build the model service');
+         }
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         const { server, proxy, pair } = makeHarness(bundle.services);
+         try {
+            await openAs(proxy, bundle, 'editor-1');
+            const push = new Deferred();
+            modelService.holdPush(URI_A, push.promise);
+            await run({ bundle, server, proxy, push });
+         } finally {
+            pair.dispose();
+         }
+      }
+
+      it.each(saves)('%s answers only once that push has been answered', (_method, save) =>
+         withHeldPush(async ({ bundle, server, push }) => {
+            let answered = false;
+            const saving = save(server).then(() => (answered = true));
+
+            await waitFor(() => bundle.fileSystem.writes.length === 1);
+            await tick(5);
+            expect(answered).toBe(false);
+            push.resolve();
+            await saving;
+         })
+      );
+
+      it.each(saves)('%s still answers when its session ends during that push', (_method, save) =>
+         // The write is done by then, so a client that stops waiting and
+         // closes loses nothing.
+         withHeldPush(async ({ bundle, server, proxy, push }) => {
+            const saving = save(server);
+            await waitFor(() => bundle.fileSystem.writes.length === 1);
+            await tick(5);
+
+            await proxy.closeModelDocument({ uri: URI_A, clientId: 'editor-1' });
+            await proxy.closeSession({ clientId: 'editor-1' });
+            push.resolve();
+
+            await expect(saving).resolves.toBeDefined();
+         })
+      );
    });
 
    describe('a canonicalKey override', () => {

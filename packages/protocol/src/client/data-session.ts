@@ -292,8 +292,9 @@ export class DataSession<
    /**
     * How long {@link closeDocument}, {@link deleteDocument} and {@link dispose}
     * wait for this session's calls in flight before going on anyway. Long,
-    * because the wait only runs out when a call hangs, and a close sent while
-    * a save is still running fails that save.
+    * because a close sent while a save is still writing fails that save. It
+    * need not outlast the server's language-client settle after the write,
+    * which a close does not fail.
     */
    protected readonly settleBeforeCloseMs: number = 10_000;
    /**

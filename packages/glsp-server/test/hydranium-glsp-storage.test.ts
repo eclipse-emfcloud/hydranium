@@ -52,6 +52,7 @@ import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import {
+   Deferred,
    DuplicateClientIdError,
    RESUME_TOKEN_ARG,
    ReconcilingConflictResolver,
@@ -209,7 +210,7 @@ function makeRecordingModelSession(
  * A `ModelService` double that hands out recording sessions from
  * `createSession`, recording each call as `createSession <label> <id>`, or
  * refuses the id when `refuse` is set. `documents` are the URIs `getDocument`
- * knows.
+ * knows. `settleLanguageClient` resolves at once unless one is given.
  */
 function makeSessionModelService(
    options: {
@@ -219,11 +220,13 @@ function makeSessionModelService(
       documents?: readonly string[];
       openError?: Error;
       persist?: (args: ClientSessionPersistArgs, clientId: string) => Promise<unknown>;
+      settleLanguageClient?: (uri: string) => Promise<void>;
    } = {}
 ): object {
    const calls = options.calls ?? [];
    return {
       snapshot: () => undefined,
+      settleLanguageClient: options.settleLanguageClient ?? (() => Promise.resolve()),
       getSession: () => options.holder,
       getDocument: (uri: string) => (options.documents?.includes(uri) ? { uri, parseResult: { value: { $type: 'Root' } } } : undefined),
       createSession(label: string, clientId: string, sessionOptions?: { resumeToken?: string }): ModelClientSession<AstNode> {
@@ -378,6 +381,7 @@ function createPolicyStorage(options: {
    openUris?: readonly string[];
    openElsewhere?: readonly string[];
    refuseSession?: boolean;
+   settleLanguageClient?: (uri: string) => Promise<void>;
 }): {
    storage: PolicyStorage;
    persistMock: ReturnType<typeof vi.fn>;
@@ -403,7 +407,13 @@ function createPolicyStorage(options: {
                isOpenInClient: (uri: string, clientId: string) => (clientId === 'client-1' ? open : openElsewhere).has(uri)
             }
          },
-         model: { ModelService: makeSessionModelService({ refuse: options.refuseSession, persist: persistMock }) }
+         model: {
+            ModelService: makeSessionModelService({
+               refuse: options.refuseSession,
+               persist: persistMock,
+               settleLanguageClient: options.settleLanguageClient
+            })
+         }
       })
    );
    container.bind(HydraniumTypes.Tracer).toConstantValue(makeNoopTracer());
@@ -1160,6 +1170,30 @@ describe('HydraniumGlspStorage', () => {
          finishLayout();
 
          await expect(saving).rejects.toThrow('refused');
+      });
+
+      it('answers once the language client has settled every saved document, settling them together', async () => {
+         const pushes = new Map<string, Deferred>();
+         const { storage } = createPolicyStorage({
+            persist: () => Promise.resolve(),
+            secondaryUris: ['file:///x.layout'],
+            settleLanguageClient: uri => {
+               const push = new Deferred();
+               pushes.set(uri, push);
+               return push.promise;
+            }
+         });
+         let settled = false;
+         const saving = Promise.resolve(storage.saveSourceModel(saveAction)).finally(() => (settled = true));
+
+         await waitFor(() => pushes.size === 2);
+         pushes.get('file:///x.a')?.resolve();
+         await tick();
+         expect(settled).toBe(false);
+         pushes.get('file:///x.layout')?.resolve();
+
+         await saving;
+         expect([...pushes.keys()]).toEqual(['file:///x.a', 'file:///x.layout']);
       });
 
       it('saves a primary tracked as its own secondary once', async () => {

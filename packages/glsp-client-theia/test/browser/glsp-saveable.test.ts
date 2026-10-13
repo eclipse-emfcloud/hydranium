@@ -172,7 +172,7 @@ describe('HydraniumGlspSaveable', () => {
       const { saveable, requests, edit, answer } = makeSaveable();
       edit();
       const late = track(saveable.save());
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(20_000);
       expect(late.outcome).toBe('Save operation timed out');
 
       const next = track(saveable.save());
@@ -225,6 +225,22 @@ describe('HydraniumGlspSaveable', () => {
       expect(saving.outcome).toBe('saved');
    });
 
+   it('waits past the server-side settle bound that follows the write', async () => {
+      // The server answers up to its 10 s language-client settle bound after
+      // the write.
+      vi.useFakeTimers();
+      const { saveable, requests, edit, answer } = makeSaveable();
+      edit();
+      const saving = track(saveable.save());
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(saving.outcome).toBeUndefined();
+      answer(requests[0]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(saving.outcome).toBe('saved');
+   });
+
    it('still gives up on a server that never answers', async () => {
       vi.useFakeTimers();
       const { saveable, edit } = makeSaveable();
@@ -232,7 +248,7 @@ describe('HydraniumGlspSaveable', () => {
       const saving = saveable.save();
       const rejected = expect(saving).rejects.toThrow('timed out');
 
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(20_000);
 
       await rejected;
       // Not saved, so still dirty: the exit check keeps asking.

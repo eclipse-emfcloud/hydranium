@@ -20,6 +20,8 @@
  */
 
 import { serverSharedFactory } from '@hydranium/core';
+import { DataServer } from '@hydranium/data-server';
+import { type DataServerHarness, makeDataServerHarness } from '@hydranium/data-server/testing';
 import { DefaultFileSystemProvider } from '@hydranium/core/node';
 import {
    type LspHarness,
@@ -32,7 +34,7 @@ import type { URI } from '@hydranium/langium';
 import { Deferred } from '@hydranium/protocol';
 import { tick, waitFor } from '@hydranium/protocol/testing';
 import { readFileSync } from 'node:fs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
    DidChangeWatchedFilesNotification,
    DidSaveTextDocumentNotification,
@@ -42,6 +44,7 @@ import {
    TextDocumentSaveReason,
    WillSaveTextDocumentWaitUntilRequest
 } from 'vscode-languageserver-protocol';
+import type { DomainModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
 import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
 import { WORKSPACE_ROOT } from './order-flow-harness.js';
 
@@ -61,14 +64,19 @@ const EDITOR_TEXT = `entity Solo {
 }
 `;
 
+type OrderFlowTransfer = DomainModel | ProcessModel;
+
 let workspace: ScratchWorkspace | undefined;
 let lsp: LspHarness | undefined;
+let dataHead: DataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer> | undefined;
 
 afterEach(() => {
    // A test that failed before releasing would leave every later write held.
    GatedFileSystemProvider.gate?.resolve();
    GatedFileSystemProvider.gate = undefined;
    GatedFileSystemProvider.failReads = false;
+   dataHead?.dispose();
+   dataHead = undefined;
    lsp?.dispose();
    lsp = undefined;
    workspace?.dispose();
@@ -305,5 +313,33 @@ describe('the disk baseline of an editor-held document', () => {
       await harness.client.sendNotification(DidChangeWatchedFilesNotification.type, { changes: [{ uri, type: FileChangeType.Changed }] });
 
       await waitFor(() => !textDocuments.isDirty(uri), { timeoutMs: 1000 });
+   });
+});
+
+describe('a data-head save of a document open in an editor', () => {
+   it('answers once the editor has answered the push its own build queued', async () => {
+      const { uri, services } = await boot({ withForm: false });
+      const textDocuments = services.shared.workspace.TextDocuments;
+      const editorAnswer = new Deferred();
+      const pushTo = textDocuments.applyEditToLanguageClient.bind(textDocuments);
+      const pushedTexts: string[] = [];
+      vi.spyOn(textDocuments, 'applyEditToLanguageClient').mockImplementation(async (pushUri, text, options) => {
+         pushedTexts.push(text);
+         await editorAnswer.promise;
+         return pushTo(pushUri, text, options);
+      });
+      dataHead = makeDataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer>({
+         server: channel => new DataServer<OrderFlowTransfer>(channel, services.shared)
+      });
+      await dataHead.proxy.createSession({ clientId: 'form' });
+      await dataHead.proxy.openModelDocument({ uri, clientId: 'form' });
+
+      const answer = track(dataHead.proxy.saveModelDocument({ uri, clientId: 'form', model: SERVER_TEXT, baseVersion: 'any' }));
+      await waitFor(() => readFileSync(new URL(uri), 'utf8') === SERVER_TEXT && pushedTexts.length > 0, { timeoutMs: 2000 });
+      await tick(50);
+
+      expect(answer.settled).toBe(false);
+      editorAnswer.resolve();
+      await waitFor(() => answer.settled, { timeoutMs: 2000 });
    });
 });

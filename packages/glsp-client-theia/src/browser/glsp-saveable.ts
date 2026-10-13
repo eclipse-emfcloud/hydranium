@@ -52,11 +52,12 @@ import { GLSPSaveable } from '@eclipse-glsp/theia-integration/lib/browser/diagra
  */
 export class HydraniumGlspSaveable extends GLSPSaveable {
    /**
-    * How long a save waits for the server's response before it rejects.
-    * Long, because the wait only runs out when the server hangs, and a save
-    * that rejects in Theia's Save All lets the window close over it.
+    * How long a save waits for the server's response before it rejects. The
+    * server answers up to its language-client settle bound after the write, so
+    * this exceeds that bound with room for the write itself; a save that
+    * rejects in Theia's Save All lets the window close over it.
     */
-   protected override saveTimeout = 10_000;
+   protected override saveTimeout = 20_000;
    /** The saves sent and not yet settled. */
    protected readonly pendingSaves = new Set<Promise<void>>();
 

@@ -918,7 +918,9 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * document that left the write set since the last save, each only where
     * the diagram's session has it open; then close those that left. Each goes
     * through the session's `persist`, so an override of the session class's
-    * `persistDocument` applies to diagram saves too.
+    * `persistDocument` applies to diagram saves too. Each saved document is
+    * then settled in the language client, so the save does not answer before
+    * that client has answered the push of what it wrote.
     *
     * Deduplicated, because a state that tracks its own primary as a secondary
     * would otherwise save it twice and fire two save notifications for one
@@ -945,7 +947,13 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       // document rather than leaving the rest of the set uncalled. Settled in
       // full before failing, or the save's dirty-state hold ends while the
       // rest are still writing.
-      const results = await Promise.allSettled(targets.map(async target => session.persist({ uri: target, baseVersion: 'any' })));
+      const modelService = this.sharedServices.model.ModelService;
+      const results = await Promise.allSettled(
+         targets.map(async target => {
+            await session.persist({ uri: target, baseVersion: 'any' });
+            await modelService.settleLanguageClient(target);
+         })
+      );
       const failures = results.flatMap((result, i) => (result.status === 'rejected' ? [{ uri: targets[i], reason: result.reason }] : []));
       if (failures.length > 0) {
          // A persist's error need not name its document, so the save's names each one.

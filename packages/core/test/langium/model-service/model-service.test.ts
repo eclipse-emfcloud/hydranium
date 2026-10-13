@@ -12,6 +12,7 @@ import {
    type CanonicalUri,
    asModelVersion,
    ConflictError,
+   Deferred,
    DefaultTracer,
    isConflictError,
    Logger,
@@ -1096,12 +1097,13 @@ describe('ModelService rebuild and save', () => {
    });
 });
 
-/** Exposes the protected `settleSave` and the sync chain it drains. */
-class SettlingModelService extends DefaultModelService<FakeRoot> {
-   settle(uri: string, cancelToken?: CancellationToken): Promise<void> {
-      return this.settleSave(uri, cancelToken);
-   }
+/** A settled-phase document carrying the post-build text. */
+function settledDoc(uri: string, text: string, version = 2): LangiumDocument {
+   return { uri: { toString: () => uri }, textDocument: TextDocument.create(uri, 'fake', version, text) } as unknown as LangiumDocument;
+}
 
+/** Exposes the sync chain `settleLanguageClient` drains. */
+class SettlingModelService extends DefaultModelService<FakeRoot> {
    holdSyncChain(uri: string, chain: Promise<void>): void {
       this.syncChains.set(uri, chain);
    }
@@ -1124,7 +1126,7 @@ function buildSettling(clock?: FakeClock): {
 
 const SETTLE_BOUND_MS = 10_000;
 
-describe('DefaultModelService.settleSave', () => {
+describe('ModelService settleLanguageClient', () => {
    afterEach(() => {
       vi.useRealTimers();
    });
@@ -1136,7 +1138,7 @@ describe('DefaultModelService.settleSave', () => {
       const { service } = buildSettling();
       const before = vi.getTimerCount();
 
-      await service.settle(URI_A);
+      await service.settleLanguageClient(URI_A);
 
       expect(vi.getTimerCount()).toBe(before);
    });
@@ -1146,7 +1148,7 @@ describe('DefaultModelService.settleSave', () => {
       const { bundle, service, lines } = buildSettling(clock);
       const gate = bundle.documentBuilder.gateNextWaitUntil();
       let settled = false;
-      const settling = service.settle(URI_A).then(() => (settled = true));
+      const settling = service.settleLanguageClient(URI_A).then(() => (settled = true));
       await waitFor(() => bundle.documentBuilder.waitUntilCalls.length === 1);
 
       clock.advance(SETTLE_BOUND_MS - 1);
@@ -1165,7 +1167,7 @@ describe('DefaultModelService.settleSave', () => {
       const gate = bundle.documentBuilder.gateNextWaitUntil();
       service.holdSyncChain(UriUtils.toUri(URI_A).toString(), new Promise<void>(() => undefined));
       let settled = false;
-      const settling = service.settle(URI_A).then(() => (settled = true));
+      const settling = service.settleLanguageClient(URI_A).then(() => (settled = true));
       await waitFor(() => bundle.documentBuilder.waitUntilCalls.length === 1);
 
       clock.advance(SETTLE_BOUND_MS / 2);
@@ -1176,6 +1178,95 @@ describe('DefaultModelService.settleSave', () => {
       await settling;
 
       expect(lines.some(line => line.level === 'warn' && line.message.includes(`exceeded ${SETTLE_BOUND_MS}ms`))).toBe(true);
+   });
+
+   it('does not wait again for a push the client left unanswered past the bound', async () => {
+      const clock = makeFakeClock();
+      const { service, lines } = buildSettling(clock);
+      service.holdSyncChain(UriUtils.toUri(URI_A).toString(), new Promise<void>(() => undefined));
+      const first = service.settleLanguageClient(URI_A);
+      await tick();
+      clock.advance(SETTLE_BOUND_MS);
+      await first;
+
+      let settled = false;
+      const second = service.settleLanguageClient(URI_A).then(() => (settled = true));
+      await tick(5);
+
+      expect(settled).toBe(true);
+      await second;
+      expect(lines.filter(line => line.level === 'warn' && line.message.includes('exceeded'))).toHaveLength(1);
+   });
+
+   it('waits for a fresh push once the unanswered one has ended', async () => {
+      const clock = makeFakeClock();
+      const { service } = buildSettling(clock);
+      const key = UriUtils.toUri(URI_A).toString();
+      service.holdSyncChain(key, new Promise<void>(() => undefined));
+      const first = service.settleLanguageClient(URI_A);
+      await tick();
+      clock.advance(SETTLE_BOUND_MS);
+      await first;
+      const push = new Deferred();
+      service.holdSyncChain(key, push.promise);
+
+      let settled = false;
+      const second = service.settleLanguageClient(URI_A).then(() => (settled = true));
+      await tick(5);
+      expect(settled).toBe(false);
+      push.resolve();
+
+      await second;
+   });
+
+   it('waits for a push queued behind an unanswered one once the client answers it', async () => {
+      const clock = makeFakeClock();
+      const { bundle, service } = buildSettling(clock);
+      bundle.textDocuments.seedOpenInLanguageClient(URI_A);
+      const answers = [new Deferred<{ applied: boolean }>(), new Deferred<{ applied: boolean }>()];
+      const pushed: string[] = [];
+      vi.spyOn(bundle.textDocuments, 'applyEditToLanguageClient').mockImplementation((_uri, text) => {
+         pushed.push(text);
+         return answers[pushed.length - 1].promise;
+      });
+      bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:b'));
+      const first = service.settleLanguageClient(URI_A);
+      await tick();
+      clock.advance(SETTLE_BOUND_MS);
+      await first;
+      bundle.documentBuilder.firePhase(IntegrityService.SettledState, settledDoc(URI_A, 'name:c', 3));
+      answers[0].resolve({ applied: true });
+      await waitFor(() => pushed.length === 2);
+
+      let settled = false;
+      const second = service.settleLanguageClient(URI_A).then(() => (settled = true));
+      await tick(5);
+      expect(settled).toBe(false);
+      answers[1].resolve({ applied: true });
+
+      await second;
+      expect(pushed).toEqual(['name:b', 'name:c']);
+   });
+
+   it('still waits for a push in flight after a settle timed out on the build', async () => {
+      const clock = makeFakeClock();
+      const { bundle, service } = buildSettling(clock);
+      const push = new Deferred();
+      service.holdSyncChain(UriUtils.toUri(URI_A).toString(), push.promise);
+      const gate = bundle.documentBuilder.gateNextWaitUntil();
+      const first = service.settleLanguageClient(URI_A);
+      await waitFor(() => bundle.documentBuilder.waitUntilCalls.length === 1);
+      clock.advance(SETTLE_BOUND_MS);
+      await first;
+      gate.resolve();
+
+      let settled = false;
+      const second = service.settleLanguageClient(URI_A).then(() => (settled = true));
+      await tick(5);
+      expect(settled).toBe(false);
+      push.resolve();
+
+      await second;
    });
 
    it('requests a sync build for a model behind its text', async () => {
@@ -1190,7 +1281,7 @@ describe('DefaultModelService.settleSave', () => {
          return Promise.reject(new Error('build failed'));
       };
 
-      const settling = service.settle(URI_A);
+      const settling = service.settleLanguageClient(URI_A);
       // A wait that requests nothing ends only at the bound.
       await tick();
       clock.advance(SETTLE_BOUND_MS);
@@ -1207,7 +1298,7 @@ describe('DefaultModelService.settleSave', () => {
       let giveUp!: (error: Error) => void;
       bundle.services.workspace.VersionSyncService.syncTo = () => new Promise<void>((_resolve, reject) => (giveUp = reject));
 
-      const settling = service.settle(URI_A);
+      const settling = service.settleLanguageClient(URI_A);
       await tick();
       clock.advance(SETTLE_BOUND_MS);
       await settling;
@@ -1226,7 +1317,7 @@ describe('DefaultModelService.settleSave', () => {
       chain.catch(() => undefined);
       service.holdSyncChain(UriUtils.toUri(URI_A).toString(), chain);
 
-      await service.settle(URI_A);
+      await service.settleLanguageClient(URI_A);
 
       const errors = lines.filter(line => line.level === 'error').map(line => line.message);
       expect(errors.some(message => message.includes('failed before the timeout') && message.includes('chain failed'))).toBe(true);
@@ -1238,7 +1329,7 @@ describe('DefaultModelService.settleSave', () => {
       behindItsText(bundle);
       bundle.services.workspace.VersionSyncService.syncTo = () => Promise.reject(new Error('build given up'));
 
-      await service.settle(URI_A);
+      await service.settleLanguageClient(URI_A);
 
       const errors = lines.filter(line => line.level === 'error').map(line => line.message);
       expect(errors).toHaveLength(1);
@@ -1254,7 +1345,7 @@ describe('DefaultModelService.settleSave', () => {
          return Promise.reject(new Error('build given up'));
       };
 
-      await service.settle(URI_A);
+      await service.settleLanguageClient(URI_A);
 
       const logged = lines.filter(line => line.level === 'warn' || line.level === 'error');
       expect(logged.map(line => line.level)).toEqual(['warn']);
@@ -1272,7 +1363,7 @@ describe('DefaultModelService.settleSave', () => {
          const source = new CancellationTokenSource();
          source.cancel();
 
-         await service.settle(URI_A, source.token);
+         await service.settleLanguageClient(URI_A, source.token);
 
          expect(lines.filter(line => line.level === 'warn' || line.level === 'error')).toEqual([]);
          expect(lines.some(line => line.level === 'debug' && line.message.includes('cancelled'))).toBe(true);
@@ -1291,12 +1382,13 @@ describe('DefaultModelService.settleSave', () => {
          bundle.services.workspace.VersionSyncService.syncTo = () => new Promise<void>(() => undefined);
          const source = new CancellationTokenSource();
 
-         const settling = service.settle(URI_A, source.token);
+         const settling = service.settleLanguageClient(URI_A, source.token);
          await tick();
          clock.advance(SETTLE_BOUND_MS);
          await settling;
          source.cancel();
-         const isLate = (line: AttributedLine): boolean => line.message.startsWith('Save settle') && !line.message.includes('exceeded');
+         const isLate = (line: AttributedLine): boolean =>
+            line.message.startsWith('Language client settle') && !line.message.includes('exceeded');
          await waitFor(() => lines.some(isLate));
 
          expect(lines.filter(isLate).map(line => line.level)).toEqual(['debug']);
@@ -1325,11 +1417,6 @@ function behindItsText(bundle: ReturnType<typeof buildSettling>['bundle']): void
  * every time, so it is self-healing.
  */
 describe('ModelService LSP-client sync', () => {
-   /** A settled-phase document carrying the post-build text. */
-   function settledDoc(uri: string, text: string, version = 2): LangiumDocument {
-      return { uri: { toString: () => uri }, textDocument: TextDocument.create(uri, 'fake', version, text) } as unknown as LangiumDocument;
-   }
-
    /** Drain the coalesced applyEdit chain (one microtask-deep per pending entry). */
    async function drainSync(): Promise<void> {
       for (let tick = 0; tick < 10; tick++) {
@@ -1464,7 +1551,7 @@ describe('ModelService LSP-client sync', () => {
       // The doc is built/keyed at its real path R but open in the language client
       // under a symlink path S. The coalescing chain (the URI `drainSyncQueue`
       // hands to `applyEditToLanguageClient`) must be keyed by the CANONICAL R — the same
-      // key `settleSave` looks the chain up under — not S, or a save-settle returns
+      // key `settleLanguageClient` looks the chain up under — not S, or a settle returns
       // before the in-flight applyEdit drains. (Egress still reaches S: the real
       // text store fans out via the recorded language-client URIs.)
       const REAL = 'file:///real/x.fake';
