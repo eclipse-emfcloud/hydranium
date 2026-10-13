@@ -117,6 +117,11 @@ and a test can drive time; a duration is a `stopwatch()`, never two `now()`
 readings, which a wall-clock step skews. Enforced by the ast-grep rule
 `time-through-clock` over framework and example source.
 
+**No class declares both `expected` and `actual`**, because a test reporter
+reads an error carrying that pair as an assertion failure and reports nothing
+of the real one; name the two for what they hold. Enforced by the ast-grep
+rule `error-expected-and-actual` over source and test trees.
+
 **Typeguards and namespaces.** A typeguard the framework defines is a free
 function, `isFoo(x): x is Foo`, matching the generated guards adopters call. A
 namespace merged with a type holds factories, utilities and constants, never a
@@ -314,6 +319,12 @@ message would quote a name the UI owns, such as a command label, offer the
 command as an action instead.
 
 ## Logs and failures
+
+**A connection is built with a logger**, so a malformed message or a failed
+write on it reaches a log instead of vscode-jsonrpc's null logger; GLSP's
+`createSocketConnection` takes none, so that one is built by hand. Enforced by
+the ast-grep rule `connection-without-logger` over framework and example
+source.
 
 **A problem reaches each reader once.** The client hears of it through its
 rejection or notification, and the log through one line, written where the

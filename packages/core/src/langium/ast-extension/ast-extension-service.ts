@@ -16,6 +16,35 @@ import { Registry, type RegistryItem } from '../../util/registry.js';
 import { type AstExtensionRegistry } from './ast-extension-contribution.js';
 
 /**
+ * The document-build phases an {@link AstExtension} may fire at. `Changed` has
+ * no AST yet, and `IndexedContent` carries the same per-document information
+ * as `Parsed`, so neither is one.
+ */
+export type AstExtensionPhase =
+   | DocumentState.Parsed
+   | DocumentState.ComputedScopes
+   | DocumentState.Linked
+   | DocumentState.IndexedReferences
+   | DocumentState.Validated;
+
+export namespace AstExtensionPhase {
+   /**
+    * Every {@link AstExtensionPhase}, in build order. `BuildPipelineIntegration`
+    * wires one `onDocumentPhase` listener per entry and `register` refuses a
+    * phase outside it, so the two cannot drift apart. A fresh array each call.
+    */
+   export function all(): readonly AstExtensionPhase[] {
+      return [
+         DocumentState.Parsed,
+         DocumentState.ComputedScopes,
+         DocumentState.Linked,
+         DocumentState.IndexedReferences,
+         DocumentState.Validated
+      ];
+   }
+}
+
+/**
  * A registration that derives data from an AST node and attaches it to the
  * node at a declared document-build phase.
  *
@@ -29,13 +58,13 @@ import { type AstExtensionRegistry } from './ast-extension-contribution.js';
  * are stored as non-enumerable own properties. Otherwise symbol providers,
  * folding, semantic tokens, and validators will treat them as real children.
  *
- * **Phase semantics:** {@link state} declares the single phase at which
+ * **Phase semantics:** {@link phase} declares the single phase at which
  * {@link compute} fires. The framework wires one `onDocumentPhase` listener per
- * useful state unconditionally, rather than deriving the set from the states
- * registrations declare — so a registration's state must be one of those, and
- * adding one is a framework change, not a registration-time choice.
+ * {@link AstExtensionPhase} unconditionally, rather than deriving the set from
+ * the phases registrations declare — so `register` refuses any other phase,
+ * and adding one is a framework change, not a registration-time choice.
  *
- * **`.ref`-dependent derivations: declare `state: ComputedScopes`, not `Linked`.**
+ * **`.ref`-dependent derivations: declare `phase: ComputedScopes`, not `Linked`.**
  * Lazy reference resolution is available from `ComputedScopes` onward — the
  * global scope is built by `IndexedContent` (which runs before
  * `ComputedScopes`), so reading a reference's `.ref` inside a `ComputedScopes`
@@ -44,8 +73,8 @@ import { type AstExtensionRegistry } from './ast-extension-contribution.js';
  * {@link DocumentBuilderOptions.refreshCrossDocumentComputedScopes} is set, so
  * one that reads another document's node goes stale when that node changes.
  *
- * **DO NOT** stage a `state: ComputedScopes` placeholder hoping to refine it
- * via a separate `state: Linked` registration when a downstream consumer
+ * **DO NOT** stage a `phase: ComputedScopes` placeholder hoping to refine it
+ * via a separate `phase: Linked` registration when a downstream consumer
  * (typically a `ScopeExtension.addDescriptions` firing during link)
  * iterates the derived value to build a scope: `onDocumentPhase(Linked)` fires
  * AFTER Langium's `Linker.link()` has already walked the document, by which
@@ -63,32 +92,26 @@ export interface AstExtension<T extends AstNode = AstNode> extends RegistryItem 
    /**
     * Per-document early-out. When set, the framework only invokes the
     * registration's callback for documents the filter accepts. If every
-    * registration at a given state rejects the document, the framework skips
+    * registration at a given phase rejects the document, the framework skips
     * the `streamAllContents` walk entirely — important for large workspaces
     * where most documents carry none of the AST shapes a given extension
     * targets.
     *
-    * Default: no filter (registration applies to every document at its state).
+    * Default: no filter (registration applies to every document at its phase).
     */
    documentFilter?: (document: LangiumDocument) => boolean;
    /**
-    * The single document-build state at which {@link compute} fires.
+    * The single document-build phase at which {@link compute} fires.
     *
-    * Useful values:
     * - `Parsed` — derivations from AST shape only, no `.ref` reads.
-    * - `ComputedScopes` — lazy `.ref` resolution available; the most common state.
+    * - `ComputedScopes` — lazy `.ref` resolution available; the most common.
     * - `Linked` — derivations needing fully resolved cross-references.
     * - `IndexedReferences` — cross-document reverse-lookup derivations.
     * - `Validated` — derivations depending on diagnostics (rare).
-    *
-    * Any other state type-checks but never fires: the framework wires a
-    * listener only for the states above. `Changed` has no AST yet, and
-    * `IndexedContent` carries the same per-document information as `Parsed`,
-    * so neither is wired.
     */
-   state: DocumentState;
+   phase: AstExtensionPhase;
    /**
-    * Mutate `node` for this registration at {@link state}. The framework hands
+    * Mutate `node` for this registration at {@link phase}. The framework hands
     * `node` typed as {@link Mutable} so computed / synthetic property
     * assignments (`node._foo = ...`) compile without per-callback
     * `asMutable(...)` casts.
@@ -112,18 +135,18 @@ export interface AstExtension<T extends AstNode = AstNode> extends RegistryItem 
  *
  * Adopter overrides go through {@link DefaultAstExtensionService}; the
  * interface keeps the public API stable while internals (the bucket-
- * by-state cache) stay `protected` on the default class.
+ * by-phase cache) stay `protected` on the default class.
  */
 export interface AstExtensionService extends AstExtensionRegistry {
    /**
     * Run a single AST node through every registration declaring
-    * `phase` as its state. Honours `documentFilter` and `nodeFilter`.
+    * `phase`. Honours `documentFilter` and `nodeFilter`.
     * Primarily for tests that need to invoke an extension callback without
     * driving Langium's full document-build pipeline.
     */
    extendNode(node: AstNode, document: LangiumDocument, phase: DocumentState): void;
    /**
-    * Re-run all `compute` callbacks declaring `phase` as their state against
+    * Re-run all `compute` callbacks declaring `phase` against
     * every node in the document. Single-pass. Called by
     * `BuildPipelineIntegration` from an `onDocumentPhase` listener;
     * not for general adopter use.
@@ -148,18 +171,18 @@ export type AstExtensionServiceOptions = LogNameOptions;
  * owns the registry + per-node logic, not the listener lifecycle.
  *
  * **Performance:** `extendDocument` shares a single `streamAllContents` walk
- * per document per wired phase; cost is O(registrations-for-state × nodes),
- * and it early-outs when no registration targets the state or the document.
+ * per document per wired phase; cost is O(registrations-for-phase × nodes),
+ * and it early-outs when no registration targets the phase or the document.
  */
 export class DefaultAstExtensionService implements AstExtensionService {
    protected readonly extensions = new Registry<AstExtension>();
    /**
-    * Per-state bucket of registrations targeting each state. Rebuilt lazily
+    * Per-phase bucket of registrations targeting each phase. Rebuilt lazily
     * on the first refresh after a registry mutation — staleness is detected
     * via reference identity of the registry's cached array (see {@link Registry.all}).
     */
-   protected stateBuckets = new Map<DocumentState, readonly AstExtension[]>();
-   protected stateBucketsFor: readonly AstExtension[] | undefined;
+   protected phaseBuckets = new Map<DocumentState, readonly AstExtension[]>();
+   protected phaseBucketsFor: readonly AstExtension[] | undefined;
 
    protected readonly tracer: Tracer;
 
@@ -189,6 +212,16 @@ export class DefaultAstExtensionService implements AstExtensionService {
     * which calls {@link extendDocument} for the wired phases.
     */
    register<T extends AstNode>(extension: AstExtension<T>): Disposable {
+      // A phase outside the wired set type-checks only past a cast, and a
+      // registration there is accepted and never fires.
+      if (!AstExtensionPhase.all().includes(extension.phase)) {
+         throw new Error(
+            `AST extension '${extension.id}' registered at phase ${DocumentState[extension.phase]} would never fire. ` +
+               `Allowed phases are ${AstExtensionPhase.all()
+                  .map(phase => DocumentState[phase])
+                  .join(', ')}.`
+         );
+      }
       // Cast: TypeScript can't see that `T extends AstNode` makes the extension
       // assignable to the default-parameter form. The runtime contract is the same.
       return this.extensions.register(extension as AstExtension);
@@ -196,10 +229,10 @@ export class DefaultAstExtensionService implements AstExtensionService {
 
    /**
     * Production code goes through {@link extendDocument} via the
-    * `onDocumentPhase(state)` listener wired by `BuildPipelineIntegration`.
+    * `onDocumentPhase(phase)` listener wired by `BuildPipelineIntegration`.
     */
    extendNode(node: AstNode, document: LangiumDocument, phase: DocumentState): void {
-      const bucket = this.getStateBucket(phase);
+      const bucket = this.getPhaseBucket(phase);
       for (const extension of bucket) {
          if (extension.documentFilter && !extension.documentFilter(document)) {
             continue;
@@ -228,7 +261,7 @@ export class DefaultAstExtensionService implements AstExtensionService {
       if (cancelToken?.isCancellationRequested) {
          return;
       }
-      const bucket = this.getStateBucket(phase);
+      const bucket = this.getPhaseBucket(phase);
       if (bucket.length === 0) {
          return;
       }
@@ -261,33 +294,33 @@ export class DefaultAstExtensionService implements AstExtensionService {
    }
 
    /**
-    * Bucket-by-state view of {@link extensions}, rebuilt lazily when the
+    * Bucket-by-phase view of {@link extensions}, rebuilt lazily when the
     * registry's cached `all()` reference changes. Replaces per-call allocation
     * on the per-node hot path — for a workspace with many documents at the
-    * same state, the bucket is computed once and reused until the next
+    * same phase, the bucket is computed once and reused until the next
     * register / unregister.
     */
-   protected getStateBucket(phase: DocumentState): readonly AstExtension[] {
+   protected getPhaseBucket(phase: DocumentState): readonly AstExtension[] {
       const current = this.extensions.all();
-      if (this.stateBucketsFor !== current) {
+      if (this.phaseBucketsFor !== current) {
          const next = new Map<DocumentState, AstExtension[]>();
          for (const extension of current) {
-            let bucket = next.get(extension.state);
+            let bucket = next.get(extension.phase);
             if (!bucket) {
                bucket = [];
-               next.set(extension.state, bucket);
+               next.set(extension.phase, bucket);
             }
             bucket.push(extension);
          }
-         this.stateBuckets = next;
-         this.stateBucketsFor = current;
+         this.phaseBuckets = next;
+         this.phaseBucketsFor = current;
       }
-      return this.stateBuckets.get(phase) ?? EMPTY_STATE_BUCKET;
+      return this.phaseBuckets.get(phase) ?? EMPTY_PHASE_BUCKET;
    }
 }
 
-/** Shared empty result so `getStateBucket` doesn't allocate per call on the cold path. */
-const EMPTY_STATE_BUCKET: readonly AstExtension[] = Object.freeze([]);
+/** Shared empty result so `getPhaseBucket` doesn't allocate per call on the cold path. */
+const EMPTY_PHASE_BUCKET: readonly AstExtension[] = Object.freeze([]);
 
 /**
  * Assign a non-enumerable own property — for synthetic children that must NOT

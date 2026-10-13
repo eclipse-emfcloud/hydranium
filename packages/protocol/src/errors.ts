@@ -133,18 +133,15 @@ export class ConflictError extends ResponseError<ConflictErrorData> {
    }
 
    /**
-    * The base version the caller authored against.
-    *
-    * Must not be renamed to `expected`, nor its sibling to `actual`: a test
-    * reporter reads an error carrying both as an assertion failure, and
-    * vitest's formatter then ASSIGNS to them, which throws on an accessor and
-    * replaces the real failure with a `TypeError`.
+    * The base version the caller authored against. Not `expected`, and its
+    * sibling not `actual`: a test reporter reads that pair as an assertion
+    * failure and reports nothing of the real one.
     */
    get baseVersion(): ModelVersion {
       return this.data!.baseVersion;
    }
 
-   /** The server's version at the time of the throw. Not `actual` — see {@link baseVersion}. */
+   /** The server's version at the time of the throw. Not `actual`, see {@link baseVersion}. */
    get actualVersion(): TextVersion {
       return this.data!.actualVersion;
    }

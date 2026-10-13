@@ -270,7 +270,7 @@ describe('BuildPipelineIntegration foundational pass ordering', () => {
       // it cleans/mutates the AST that derived adopter passes read — so it sits in
       // a negative foundational band rather than tying with the adopter's default 0
       // (a tie would break by registration order, letting the adopter win).
-      passes.register({ id: 'adopter', state: DocumentState.Linked, run: () => void order.push('adopter') });
+      passes.register({ id: 'adopter', phase: DocumentState.Linked, run: () => void order.push('adopter') });
 
       const integrityService = {
          enforceBatch: () => {

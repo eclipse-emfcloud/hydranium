@@ -10,45 +10,10 @@
 import { type LangiumDocument, DocumentState } from '@hydranium/langium';
 import { type CancellationToken } from 'vscode-languageserver';
 import { IntegrityPhase } from '../integrity/integrity-rule.js';
-import { groupDocumentsByLanguage } from '../build-phase-pass/build-phase-pass.js';
+import { AstExtensionPhase } from '../ast-extension/ast-extension-service.js';
+import { BuildPassPhase, groupDocumentsByLanguage } from '../build-phase-pass/build-phase-pass.js';
 import { type ServerSharedServices } from '../module.js';
 import { labelPhaseListener } from './labeled-phase-listener.js';
-
-/**
- * AST extension wiring covers every "useful" `DocumentState` an extension can
- * target. `Changed` has no AST yet; `IndexedContent` carries the same
- * per-document information as `Parsed`. No-op fires for documents with no
- * extension at a given state are negligible (`notifyDocumentPhase` is a plain
- * listener loop), so the framework wires the full set unconditionally rather
- * than collecting declared states from per-language registrations.
- */
-const AST_EXTENSION_PHASES: readonly DocumentState[] = [
-   DocumentState.Parsed,
-   DocumentState.ComputedScopes,
-   DocumentState.Linked,
-   DocumentState.IndexedReferences,
-   DocumentState.Validated
-];
-
-/**
- * Build phases at which the `BuildPhasePassService` is driven. A pass
- * registered at any other state never fires (the listener is not wired), and
- * `runPasses` no-ops at a phase with no registered pass, so wiring the full set
- * unconditionally costs only an empty-bucket check per phase.
- *
- * `IndexedContent` belongs here and NOT in {@link AST_EXTENSION_PHASES}, so the
- * two cannot be collapsed. Per document it carries nothing `Parsed` does; per
- * BATCH it is the only phase meaning the global index is whole again, which
- * batch work keyed on a complete index has nowhere else to run.
- */
-const BUILD_PHASE_PASS_STATES: readonly DocumentState[] = [
-   DocumentState.Parsed,
-   DocumentState.IndexedContent,
-   DocumentState.ComputedScopes,
-   DocumentState.Linked,
-   DocumentState.IndexedReferences,
-   DocumentState.Validated
-];
 
 /**
  * Default priority of the framework integrity passes. Integrity mutates / cleans
@@ -132,17 +97,19 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
       for (const phase of IntegrityPhase.all()) {
          passes.register({
             id: `framework:integrity:${IntegrityPhase.toString(phase).toLowerCase()}`,
-            state: phase,
+            phase,
             priority: integrityPriority,
             run: (documents, cancelToken) => this.callIntegrity(documents, phase, cancelToken)
          });
       }
 
-      // One onBuildPhase listener per pass state, routed through the overridable
+      // One onBuildPhase listener per pass phase, routed through the overridable
       // `runBuildPhase` seam → priority-ordered, sequential, cancel-aware pass
       // dispatch. The returned promise is awaited by the build pipeline, so a
-      // mutating pass (integrity) reparses before the build advances.
-      for (const phase of BUILD_PHASE_PASS_STATES) {
+      // mutating pass (integrity) reparses before the build advances. The full
+      // set is wired unconditionally: `runPasses` no-ops at a phase with no
+      // pass, so an unused listener costs one empty-bucket check.
+      for (const phase of BuildPassPhase.all()) {
          builder.onBuildPhase(
             phase,
             labelPhaseListener(
@@ -164,7 +131,9 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
       // unchanged by the build-phase-pass registry, which is batch-granular. The
       // listener calls the `extendAst` seam directly (the document-phase analog of
       // `runBuildPhase`); there is no per-phase handler tier — one parameterized seam.
-      for (const phase of AST_EXTENSION_PHASES) {
+      // Wired for every phase unconditionally rather than for the phases the
+      // per-language registrations declare: a no-op fire is a plain listener loop.
+      for (const phase of AstExtensionPhase.all()) {
          builder.onDocumentPhase(
             phase,
             labelPhaseListener(

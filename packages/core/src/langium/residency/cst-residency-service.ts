@@ -282,7 +282,7 @@ export class DefaultCstResidencyService implements CstResidencyService {
       this.langiumDocs = services.workspace.LangiumDocuments;
       services.workspace.BuildPhasePassService.register({
          id: 'framework:cst-residency:shed',
-         state: DocumentState.Validated,
+         phase: DocumentState.Validated,
          priority: options.priority ?? CST_RESIDENCY_PASS_PRIORITY,
          run: documents => this.onBuild(documents)
       });

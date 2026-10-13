@@ -121,8 +121,9 @@ TypeScript runs in strict mode (`tsconfig.base.json`). `npm run lint` runs
 Oxlint, native rules only; `oxlint.config.cjs` scopes the architecture rules
 to their packages. Two checks cover what Oxlint has no native rule for:
 `npm run check:phantom-deps` requires every import to be declared in its
-workspace's manifest, and `npm run check:ast-grep` runs the localization and
-test-fixture bans in `ast-grep/rules`, after their tests in `ast-grep/tests`.
+workspace's manifest, and `npm run check:ast-grep` runs the rules in
+`ast-grep/rules`, each a ban conventions names, after their tests in
+`ast-grep/tests`.
 `npm run check:lint-policy` plants violations and permitted exceptions at real
 paths and runs the enforcing tool on each.
 

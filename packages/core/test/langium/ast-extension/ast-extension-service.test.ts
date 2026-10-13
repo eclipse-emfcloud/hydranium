@@ -13,6 +13,7 @@ import { CancellationToken } from 'vscode-languageserver';
 import { Logger } from '@hydranium/protocol';
 import { makeFakeClock } from '@hydranium/protocol/testing';
 import {
+   type AstExtension,
    type AstExtensionService,
    DefaultAstExtensionService,
    setHiddenProperty
@@ -60,13 +61,13 @@ describe('AstExtensionService.extendNode', () => {
       service.register({
          id: 'foo',
          nodeFilter: isType('Foo'),
-         state: DocumentState.ComputedScopes,
+         phase: DocumentState.ComputedScopes,
          compute: node => void fooCalls.push(node)
       });
       service.register({
          id: 'bar',
          nodeFilter: isType('Bar'),
-         state: DocumentState.ComputedScopes,
+         phase: DocumentState.ComputedScopes,
          compute: node => void barCalls.push(node)
       });
 
@@ -85,21 +86,21 @@ describe('AstExtensionService.extendNode', () => {
          id: 'late',
          priority: 10,
          nodeFilter: isType('Foo'),
-         state: DocumentState.ComputedScopes,
+         phase: DocumentState.ComputedScopes,
          compute: () => void calls.push('late')
       });
       service.register({
          id: 'early',
          priority: -1,
          nodeFilter: isType('Foo'),
-         state: DocumentState.ComputedScopes,
+         phase: DocumentState.ComputedScopes,
          compute: () => void calls.push('early')
       });
       service.register({
          id: 'mid',
          priority: 5,
          nodeFilter: isType('Foo'),
-         state: DocumentState.ComputedScopes,
+         phase: DocumentState.ComputedScopes,
          compute: () => void calls.push('mid')
       });
 
@@ -114,13 +115,13 @@ describe('AstExtensionService.extendNode', () => {
       service.register({
          id: 'first',
          nodeFilter: isType('Foo'),
-         state: DocumentState.ComputedScopes,
+         phase: DocumentState.ComputedScopes,
          compute: () => void calls.push('first')
       });
       service.register({
          id: 'second',
          nodeFilter: isType('Foo'),
-         state: DocumentState.ComputedScopes,
+         phase: DocumentState.ComputedScopes,
          compute: () => void calls.push('second')
       });
 
@@ -137,7 +138,7 @@ describe('AstExtensionService.extendDocument', () => {
       service.register({
          id: 'refresh-foo',
          nodeFilter: isType('Foo'),
-         state: DocumentState.Linked,
+         phase: DocumentState.Linked,
          compute: node => void refreshCalls.push((node as FakeNode).id ?? '')
       });
 
@@ -160,7 +161,7 @@ describe('AstExtensionService.extendDocument', () => {
          id: 'filtered',
          nodeFilter: isType('Foo'),
          documentFilter: document => (document as unknown as { tag?: string }).tag === 'apply',
-         state: DocumentState.Linked,
+         phase: DocumentState.Linked,
          compute: () => void calls.push('ran')
       });
 
@@ -184,14 +185,14 @@ describe('AstExtensionService.extendDocument', () => {
          id: 'a',
          nodeFilter: isType('Foo'),
          documentFilter: () => false,
-         state: DocumentState.Linked,
+         phase: DocumentState.Linked,
          compute: () => undefined
       });
       service.register({
          id: 'b',
          nodeFilter: isType('Bar'),
          documentFilter: () => false,
-         state: DocumentState.Linked,
+         phase: DocumentState.Linked,
          compute: () => undefined
       });
 
@@ -222,20 +223,20 @@ describe('AstExtensionService.extendDocument', () => {
          id: 'rejected',
          nodeFilter: isType('Foo'),
          documentFilter: () => false,
-         state: DocumentState.Linked,
+         phase: DocumentState.Linked,
          compute: () => void calls.push('rejected')
       });
       service.register({
          id: 'accepted',
          nodeFilter: isType('Foo'),
          documentFilter: () => true,
-         state: DocumentState.Linked,
+         phase: DocumentState.Linked,
          compute: () => void calls.push('accepted')
       });
       service.register({
          id: 'no-filter',
          nodeFilter: isType('Foo'),
-         state: DocumentState.Linked,
+         phase: DocumentState.Linked,
          compute: () => void calls.push('no-filter')
       });
 
@@ -252,13 +253,13 @@ describe('AstExtensionService.extendDocument', () => {
       const handle = service.register({
          id: 'temp',
          nodeFilter: isType('Foo'),
-         state: DocumentState.Linked,
+         phase: DocumentState.Linked,
          compute: () => void calls.push('temp')
       });
       service.register({
          id: 'permanent',
          nodeFilter: isType('Foo'),
-         state: DocumentState.Linked,
+         phase: DocumentState.Linked,
          compute: () => void calls.push('permanent')
       });
 
@@ -279,7 +280,7 @@ describe('AstExtensionService.extendDocument', () => {
       service.register({
          id: 'linked-only',
          nodeFilter: isType('Foo'),
-         state: DocumentState.Linked,
+         phase: DocumentState.Linked,
          compute: () => void calls++
       });
 
@@ -300,7 +301,7 @@ describe('AstExtensionService.extendDocument cancellation', () => {
       service.register({
          id: 'refresh-foo',
          nodeFilter: isType('Foo'),
-         state: DocumentState.Linked,
+         phase: DocumentState.Linked,
          compute: () => void calls.push('ran')
       });
 
@@ -322,7 +323,7 @@ describe('AstExtensionService disposal', () => {
       const handle = service.register({
          id: 'x',
          nodeFilter: isType('Foo'),
-         state: DocumentState.ComputedScopes,
+         phase: DocumentState.ComputedScopes,
          compute: () => void calls.push('x')
       });
       service.extendNode(makeFakeAstNode<FakeNode>({ $type: 'Foo' }), {} as LangiumDocument, DocumentState.ComputedScopes);
@@ -334,10 +335,22 @@ describe('AstExtensionService disposal', () => {
 
    it('throws on duplicate id', () => {
       const service = makeService();
-      service.register({ id: 'dup', nodeFilter: isType('Foo'), state: DocumentState.ComputedScopes, compute: () => undefined });
+      service.register({ id: 'dup', nodeFilter: isType('Foo'), phase: DocumentState.ComputedScopes, compute: () => undefined });
       expect(() =>
-         service.register({ id: 'dup', nodeFilter: isType('Foo'), state: DocumentState.ComputedScopes, compute: () => undefined })
+         service.register({ id: 'dup', nodeFilter: isType('Foo'), phase: DocumentState.ComputedScopes, compute: () => undefined })
       ).toThrow(/Duplicate registry id: 'dup'/);
+   });
+});
+
+describe('AstExtensionService.register', () => {
+   it.each([
+      ['Changed', DocumentState.Changed],
+      ['IndexedContent', DocumentState.IndexedContent]
+   ])('refuses phase %s, which the pipeline never notifies', (name, phase) => {
+      const service = makeService();
+      // The type rejects the literal, so only a cast or a JavaScript adopter reaches the guard.
+      const extension = { id: 'never', nodeFilter: isType('Foo'), phase, compute: () => undefined } as unknown as AstExtension;
+      expect(() => service.register(extension)).toThrow(new RegExp(`'never' registered at phase ${name} would never fire`));
    });
 });
 
@@ -347,8 +360,8 @@ describe('AstExtensionService.extendDocument profiling', () => {
    it('profiles per-registration self-time and reports it line-based at debug level', () => {
       const { tracer, lines } = makeCapturingTracer(makeFakeClock());
       const service = new DefaultAstExtensionService(makeNoopLanguageServices({ shared: { Tracer: tracer } }));
-      service.register({ id: 'extA', nodeFilter: isType('Foo'), state: DocumentState.Linked, compute: () => undefined });
-      service.register({ id: 'extB', nodeFilter: isType('Foo'), state: DocumentState.Linked, compute: () => undefined });
+      service.register({ id: 'extA', nodeFilter: isType('Foo'), phase: DocumentState.Linked, compute: () => undefined });
+      service.register({ id: 'extB', nodeFilter: isType('Foo'), phase: DocumentState.Linked, compute: () => undefined });
       Logger.setLevel('debug');
 
       const doc = buildDocument(makeFakeAstNode<FakeNode>({ $type: 'Root' }), [
@@ -365,7 +378,7 @@ describe('AstExtensionService.extendDocument profiling', () => {
    it('allocates no session at the default info level', () => {
       const { tracer, lines } = makeCapturingTracer(makeFakeClock());
       const service = new DefaultAstExtensionService(makeNoopLanguageServices({ shared: { Tracer: tracer } }));
-      service.register({ id: 'extA', nodeFilter: isType('Foo'), state: DocumentState.Linked, compute: () => undefined });
+      service.register({ id: 'extA', nodeFilter: isType('Foo'), phase: DocumentState.Linked, compute: () => undefined });
 
       const doc = buildDocument(makeFakeAstNode<FakeNode>({ $type: 'Root' }), [makeFakeAstNode<FakeNode>({ $type: 'Foo', id: 'a' })]);
       service.extendDocument(doc, DocumentState.Linked);
@@ -377,10 +390,10 @@ describe('AstExtensionService.extendDocument profiling', () => {
 describe('AstExtensionService contribution group consumption', () => {
    it('reads `services.ast.extensions` and calls each contribution at construction', () => {
       const calls: string[] = [];
-      const ext = (id: string) => ({
+      const ext = (id: string): AstExtension<FakeNode> => ({
          id,
          nodeFilter: isType('Foo'),
-         state: DocumentState.ComputedScopes,
+         phase: DocumentState.ComputedScopes,
          compute: () => undefined
       });
       const services = makeNoopLanguageServices({
@@ -414,7 +427,7 @@ describe('AstExtensionService contribution group consumption', () => {
       service.register({
          id: 'sink',
          nodeFilter: isType('Foo'),
-         state: DocumentState.ComputedScopes,
+         phase: DocumentState.ComputedScopes,
          compute: () => void sink.push('sink')
       });
       service.extendNode(makeFakeAstNode<FakeNode>({ $type: 'Foo' }), {} as LangiumDocument, DocumentState.ComputedScopes);
