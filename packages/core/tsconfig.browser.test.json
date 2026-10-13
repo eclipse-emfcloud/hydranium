@@ -1,0 +1,12 @@
+{
+  "//": "`references` are not inherited through `extends`, so they are restated: without them an import into the main tier resolves to its source and the composite check rejects a file this project does not list.",
+  "extends": "./tsconfig.browser.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "isolatedModules": true,
+    "types": ["node"]
+  },
+  "include": ["src/browser", "test/browser"],
+  "references": [{ "path": "./tsconfig.json" }, { "path": "../protocol" }, { "path": "../langium" }]
+}

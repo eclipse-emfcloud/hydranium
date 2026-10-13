@@ -150,12 +150,21 @@ export class PersistentFileSystemProvider extends InMemoryFileSystemProvider {
     * of marking it — a deletion that quietly undoes itself on the next load.
     */
    protected readonly seededPaths: ReadonlySet<string>;
+   /**
+    * The store keys restored as CONTENT, in the store's order.
+    *
+    * A deletion marker is not listed: the store holds a key for a deleted seeded
+    * file, so a host counting stored keys would report that deletion as a
+    * restored file, and only this class can tell the two apart.
+    */
+   readonly restoredPaths: readonly string[];
 
    constructor(services: ServerSharedServicesMinimal, options: PersistentFileSystemOptions) {
       super(services, options);
       this.store = options.store;
       this.storeRoot = options.rootUri === undefined ? undefined : `${this.fileKey(options.rootUri)}/`;
       this.seededPaths = new Set(Object.keys(options.seed ?? {}).map(path => this.storeKey(this.storeUri(path))));
+      const restoredPaths: string[] = [];
       for (const [path, content] of Object.entries(options.restored ?? {})) {
          // `super.*`, so restoring does not mirror straight back into the store
          // it just came from — a write-back on every start, and one that would
@@ -170,8 +179,10 @@ export class PersistentFileSystemProvider extends InMemoryFileSystemProvider {
             this.files.delete(this.fileKey(uri));
          } else {
             super.setFile(uri, content);
+            restoredPaths.push(path);
          }
       }
+      this.restoredPaths = restoredPaths;
    }
 
    /**

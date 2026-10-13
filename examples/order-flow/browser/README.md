@@ -63,9 +63,8 @@ the call-stack view. The bundles are not minified unless you pass `--minify` to
 
 | Concern | Files |
 | --- | --- |
-| The worker: all three heads, the filesystem, the validating build, latency | [src/worker/order-flow-worker.ts](src/worker/order-flow-worker.ts) |
+| The worker: all three heads, the IndexedDB-backed filesystem, the validating build, latency | [src/worker/order-flow-worker.ts](src/worker/order-flow-worker.ts) |
 | This host's own messages on the worker global, beside the framework's bootstrap: the workspace the heads came up on, and the reset | [src/head-channels.ts](src/head-channels.ts) |
-| Persistence in IndexedDB | [src/workspace/indexeddb-file-system-store.ts](src/workspace/indexeddb-file-system-store.ts) |
 | The bare `'path'` alias for the browser bundle | [src/workspace/posix-path-shim.ts](src/workspace/posix-path-shim.ts), [esbuild.mjs](esbuild.mjs) |
 | The workspace seed | [scripts/generate-workspace-seed.mts](scripts/generate-workspace-seed.mts), [src/generated/workspace-seed.ts](src/generated/workspace-seed.ts) |
 | The static server | [scripts/serve.mts](scripts/serve.mts) |

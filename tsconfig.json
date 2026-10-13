@@ -4,6 +4,7 @@
     { "path": "packages/protocol" },
     { "path": "packages/langium" },
     { "path": "packages/core" },
+    { "path": "packages/core/tsconfig.browser.json" },
     { "path": "packages/data-server" },
     { "path": "packages/glsp-server" },
     { "path": "packages/client-browser" },

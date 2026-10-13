@@ -91,21 +91,18 @@ const fileSystem = inMemoryFileSystem({
    so an async store such as IndexedDB cannot sit behind it directly.
 
 4. **Keep edits across a reload, if you want to.** `persistentFileSystem` keeps
-   the files in memory and mirrors every write to a store you supply: three
-   async methods over IndexedDB or whatever the page has. Await it before you
-   create the services, since a message that arrives while the worker is still
-   awaiting is lost:
-
-<!-- snippet-preamble
-import type { FileSystemStore } from '@hydranium/core';
-declare const store: FileSystemStore;
--->
+   the files in memory and mirrors every write to a store.
+   `IndexedDbFileSystemStore` from `@hydranium/core/browser` is one; a store of
+   your own is three async methods over whatever the page has. Await it before
+   you create the services, since a message that arrives while the worker is
+   still awaiting is lost:
 
 ```ts
 import { persistentFileSystem } from '@hydranium/core';
+import { IndexedDbFileSystemStore } from '@hydranium/core/browser';
 
 const fileSystem = await persistentFileSystem({
-   store,
+   store: new IndexedDbFileSystemStore('my-app-workspace'),
    rootUri: 'file:///order-flow',
    seed: { 'orders/orders.domain': 'project orders' }
 });
@@ -113,11 +110,12 @@ const fileSystem = await persistentFileSystem({
 
    The seed is the baseline and the store holds the changes, so a returning
    visitor gets their edits over your latest seed. A save fails when the store
-   refuses the write, as it will when the quota is full. The store is shared by
-   every page on the origin, so name it after your app. Once the store can
+   refuses the write, as it will when the quota is full. The database is shared
+   by every page on the origin, so name it after your app. Once the store can
    differ from the seed, open your editors on the text the worker holds, not on
    the seed in your bundle: an editor opened on the seed overwrites the restored
-   document.
+   document. The provider's `restoredPaths` names the files that came out of
+   the store, and the store's `clear()` returns the next load to the seed.
 
 5. **Validate once the workspace is up.** The first build of the workspace does
    not validate, so a page that only waits sees no diagnostics at all. Once

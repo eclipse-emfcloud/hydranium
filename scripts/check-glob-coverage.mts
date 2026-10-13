@@ -235,7 +235,10 @@ function checkRootTsconfigReferences() {
       }
    }
    for (const path of referenced) {
-      if (!existsSync(join(REPO_ROOT, path, 'tsconfig.json'))) {
+      // A reference names a directory holding `tsconfig.json`, or a second
+      // project file of a package by name (`packages/x/tsconfig.browser.json`).
+      const project = path.endsWith('.json') ? join(REPO_ROOT, path) : join(REPO_ROOT, path, 'tsconfig.json');
+      if (!existsSync(project)) {
          problems.push(`${path}: referenced by the root tsconfig.json but has no tsconfig.json.`);
       }
    }

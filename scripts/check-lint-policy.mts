@@ -99,6 +99,17 @@ const cases: Case[] = [
    },
    { name: 'Node tier is exempt', dir: 'packages/core/src/node', source: nsImport('fs', 'node:fs') },
    {
+      name: 'neutral sibling browser import',
+      dir: 'packages/data-server/src',
+      source: nsImport('store', '@hydranium/core/browser'),
+      rule: 'eslint(no-restricted-imports)'
+   },
+   {
+      name: 'browser tier may reach a sibling browser tier',
+      dir: 'packages/glsp-server/src/browser',
+      source: nsImport('store', '@hydranium/core/browser')
+   },
+   {
       name: 'direct Langium import',
       dir: 'packages/core/src',
       source: "import type { AstNode } from 'langium'; export type Node = AstNode;\n",

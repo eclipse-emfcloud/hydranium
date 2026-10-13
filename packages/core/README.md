@@ -59,6 +59,7 @@ See *Compose a server by hand* and *Add a validation check* in
 | ---------------------- | ---------------------------------------------------------------------------- | --------------- |
 | `.`                    | Composing services and extending the language's semantics                    | browser-neutral |
 | `./lsp`                | The LSP head and its modules                                                 | browser-neutral |
+| `./browser`            | The IndexedDB store behind a persistent filesystem in a web worker           | browser-only    |
 | `./node`               | The Node filesystem, the stdio and socket launchers, the headless tools      | Node-only       |
 | `./messages`           | Validation messages with stable codes, and the codes this package raises     | browser-neutral |
 | `./testing`            | Parsing and service doubles for unit tests                                   | browser-neutral |

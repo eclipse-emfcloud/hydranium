@@ -1,0 +1,15 @@
+{
+  "//": "The worker-side tier (`./browser`), a second project so `lib.webworker` reaches the IndexedDB store alone: the rest of core keeps the base `lib: [\"ES2022\"]`, where a DOM or worker global is a compile error. `types: []` drops the repo-wide Node types for the same reason, so a Node global is a compile error here. References the main project, so `tsc -b` on this file builds both.",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib",
+    "tsBuildInfoFile": "tsconfig.browser.tsbuildinfo",
+    "lib": ["ES2022", "WebWorker"],
+    "types": [],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext"
+  },
+  "include": ["src/browser"],
+  "references": [{ "path": "./tsconfig.json" }, { "path": "../protocol" }, { "path": "../langium" }]
+}

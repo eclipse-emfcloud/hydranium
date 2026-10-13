@@ -53,7 +53,7 @@
     "check:turbo": "turbo run build lint typecheck:test test",
     "check:turbo:platform": "turbo run build test",
     "check:webview-csp": "node scripts/check-webview-csp.mts",
-    "clean": "turbo run clean && rimraf packages/*/tsconfig.tsbuildinfo node_modules/.cache/turbo packages/*/node_modules/.vite examples/*/*/node_modules/.vite",
+    "clean": "turbo run clean && rimraf packages/*/tsconfig.tsbuildinfo packages/*/tsconfig.browser.tsbuildinfo node_modules/.cache/turbo packages/*/node_modules/.vite examples/*/*/node_modules/.vite",
     "dev:order-flow": "cross-env FORCE_COLOR=1 concurrently --kill-others --names \"tsc,order-flow\" --prefix-colors \"blue,magenta\" \"npm run watch:all\" \"npm --prefix examples/order-flow/theia-app run watch:all\"",
     "format": "oxfmt --ignore-path .oxfmtignore \"**/*.{ts,mts,js,cjs,mjs,json,yml,yaml}\"",
     "format:check": "oxfmt --check --ignore-path .oxfmtignore \"**/*.{ts,mts,js,cjs,mjs,json,yml,yaml}\"",
