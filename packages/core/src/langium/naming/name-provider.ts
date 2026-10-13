@@ -221,6 +221,11 @@ export interface NameProvider extends LangiumNameProvider {
     * walk traverses through the document root: if the root has its own
     * name, that name IS part of the qualified form. Adopters who want a
     * different boundary override this method.
+    *
+    * May answer as of its first read since the last build: the default
+    * memoises per built node, so a name changed in memory after that read
+    * reads as the old one until its document rebuilds. A node in no document
+    * is named afresh on every call.
     */
    getDocumentQualifiedName(node?: AstNode): string | undefined;
 
@@ -236,6 +241,10 @@ export interface NameProvider extends LangiumNameProvider {
     * string) or no project owns the URI — in those cases project-
     * qualified equals document-qualified, and
     * `HydraniumScopeComputation` skips the multi-tier emit.
+    *
+    * The default memoises it as it does {@link getDocumentQualifiedName}, and
+    * for a node in no document answers the document-qualified name: there is
+    * no project to prefix.
     */
    getProjectQualifiedName(node?: AstNode): string | undefined;
 
@@ -326,6 +335,9 @@ export class DefaultNameProvider implements NameProvider {
     * document's lifetime. Evicted automatically when Langium rebuilds
     * the document.
     *
+    * So a built node renamed in memory reads its old name until the rebuild,
+    * as {@link NameProvider.getDocumentQualifiedName} warns.
+    *
     * Only cached when the computed result is a defined string — `undefined`
     * results re-evaluate on each call (cheap path: `getOwnName` returns
     * undefined for unnamed nodes, no chain walk needed).
@@ -334,7 +346,9 @@ export class DefaultNameProvider implements NameProvider {
    /**
     * Per-document memo for {@link getProjectQualifiedName} results.
     * Sibling of {@link documentQualifiedNameCache}; covers the additional
-    * project-reference-name lookup the project-qualified variant performs.
+    * project-reference-name lookup the project-qualified variant performs,
+    * and goes stale on an in-memory rename the same way, as
+    * {@link NameProvider.getDocumentQualifiedName} warns.
     *
     * **Project-rename caveat.** If `Project.referenceName` mutates without
     * a corresponding document rebuild, cached entries become stale. Adopters

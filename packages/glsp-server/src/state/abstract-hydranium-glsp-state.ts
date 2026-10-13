@@ -349,8 +349,13 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * names off every container up the chain, so anchoring higher drops them.
     * A protocol context cannot express this: an element source resolves only
     * through a `resolveElementByName` override, and through the index only
-    * for the nodes it exports. `undefined` for a node in no document and no
-    * copy, such as one not attached yet.
+    * for the nodes it exports. `undefined` for a node whose `$container` chain
+    * reaches no document and no copy, such as a node built with no
+    * `$container` that is not a document's root.
+    *
+    * A node not created yet is asked about through a stand-in built with
+    * `buildAstNode`: its type, `$container` the container it would join, and
+    * `$containerProperty`, left unattached.
     */
    referenceInfoOf(node: AstNode, property: string): ReferenceInfo | undefined {
       let container = this.builtContextOf(node);

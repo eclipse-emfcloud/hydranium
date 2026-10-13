@@ -9,11 +9,15 @@ A handler mutates `sourceRoot` inside `HydraniumGlspRecordingCommand`; the
 operation writes the copy's projection once when it completes, which persists
 and republishes it to the other heads, and undo and redo apply that one change.
 During an operation `sourceRoot` is a working copy of the built root, so no
-other reader sees the edit before its write lands.
+other reader sees the edit before its write lands. The operation opens before
+the handler's `createCommand` runs, because handlers resolve their targets
+there. A node of the source document that `createCommand` resolves by id or
+from `sourceRoot` is therefore already the copy.
 
 The root of any other document the handler edits is reached through
 `modelState.workingRootOf(uri)`; a root read from the model service is the one
-every reader shares.
+every reader shares. An id added through `indexSemanticElement` for a node of
+that document names the built node until that call makes the copy.
 
 ## Nodes without a document
 
@@ -37,7 +41,9 @@ projects and the target's language.
 built node in-process, and for a node the operation created, from a stand-in
 of its type under the built containers it sits in. A scope reads local names
 off every container up the chain, so a query anchored higher, at the document
-or a named ancestor, misses them.
+or a named ancestor, misses them. The same construction serves a node not
+created yet, inside an operation or outside one: a stand-in the caller builds
+reaches its document through `$container` alone, so it need not be attached.
 
 ## What runs again on undo and redo
 

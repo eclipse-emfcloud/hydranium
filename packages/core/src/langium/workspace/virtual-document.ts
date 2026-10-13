@@ -45,12 +45,12 @@ export const VIRTUAL_SCHEME = 'virtual';
  * `virtual:<contributor>`, which has no extension and so matches no registered
  * language — a trap. Every per-language service is resolved per URI, and a
  * virtual document is never open in `TextDocuments`, so the declared-languageId
- * lookup rung cannot serve it either: the document is indexed but inert,
- * contributing nothing to the scopes it was written to populate, with no error
- * anywhere. Pass the extension as the last segment,
- * `virtualUri(contributor, 'name.<ext>')`. `HydraniumWorkspaceManager` warns
- * when a seeded additional document fails to route, which is where this
- * usually surfaces.
+ * lookup rung cannot serve it either, and the startup build fails. A
+ * `fromString` document throws while parsing; a `fromModel` or
+ * `fromStringInLanguage` document is built, and throws as it is added to the
+ * workspace, after `HydraniumWorkspaceManager` warns that it matches no
+ * language. Pass the extension as the last segment,
+ * `virtualUri(contributor, 'name.<ext>')`.
  *
  * # Relationship to the `$synthetic` node marker
  *

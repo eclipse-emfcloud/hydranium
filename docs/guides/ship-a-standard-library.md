@@ -75,9 +75,10 @@ export const mySharedModule = {
 ```
 
 5. **Check that a model can use it.** Write a model that references a
-   built-in and validate it: the reference resolves. If it does not, look in
-   the server log for a warning that an additional document matches no
-   registered language; it means the URI's extension is wrong.
+   built-in and validate it: the reference resolves. If the server log shows
+   that the initial workspace build failed, naming an extension the service
+   registry has no services for, the URI's extension is wrong: `fromString`
+   finds no grammar to parse the library with.
 
 ## Things to know
 

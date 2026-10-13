@@ -7,7 +7,10 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-/** Readers of a diagram's documents during an operation, the roots it copies, and the copies a handler edits. */
+/**
+ * Readers of a diagram's documents during an operation, the roots it copies,
+ * the copies a handler edits, and a candidate query for a node not created yet.
+ */
 
 import {
    type Action,
@@ -18,6 +21,7 @@ import {
    SourceModelStorage,
    UndoAction
 } from '@eclipse-glsp/server';
+import { buildAstNode } from '@hydranium/core';
 import type { AstNode } from '@hydranium/langium';
 import { waitFor } from '@hydranium/protocol/testing';
 import { readFileSync, unlinkSync } from 'node:fs';
@@ -49,8 +53,21 @@ import {
    spyOnPersist,
    spyOnRefetch,
    textOf,
+   type Diagram,
    undoOrRedo
 } from './uncommitted-edit-harness.js';
+
+/** The values of the `target` candidates `diagram` offers for `node`; `undefined` when it cannot be asked about. */
+function targetsOf(diagram: Diagram, node: AstNode): string[] | undefined {
+   const info = diagram.state.referenceInfoOf(node, 'target');
+   return (
+      info &&
+      diagram.state
+         .candidateProviderFor(node)
+         ?.find(info)
+         .map(candidate => candidate.value)
+   );
+}
 
 describe('a diagram edit before its write commits', () => {
    it('is not visible to other readers while its reconcile waits', async () => {
@@ -322,16 +339,7 @@ describe('the working copies a handler edits', () => {
    it('queries candidates from a copy and from a node created in it as from the built nodes', async () => {
       const opened = await openDiagram();
       const { diagram } = opened;
-      const targets = (node: AstNode): string[] | undefined => {
-         const info = diagram.state.referenceInfoOf(node, 'target');
-         return (
-            info &&
-            diagram.state
-               .candidateProviderFor(node)
-               ?.find(info)
-               .map(candidate => candidate.value)
-         );
-      };
+      const targets = (node: AstNode): string[] | undefined => targetsOf(diagram, node);
       const gatewayOf = (root: ProcessModel): Gateway => root.nodes.find(node => node.name === 'PaymentOk') as Gateway;
       const built = targets(gatewayOf(builtProcessRoot(opened)).branches[0]);
 
@@ -417,5 +425,25 @@ describe('the working copies a handler edits', () => {
       settle.open();
 
       expect(exclusive).toBe('ran');
+   });
+});
+
+describe('a candidate query outside an operation', () => {
+   it('asks about a node not created yet through an unattached stand-in under its built container', async () => {
+      const opened = await openDiagram();
+      const { diagram, services } = opened;
+      const gateway = builtProcessRoot(opened).nodes.find(node => node.name === 'PaymentOk') as Gateway;
+      const standIn = buildAstNode<Branch>(services.shared.AstReflection, Branch.$type, {
+         $container: gateway,
+         $containerProperty: 'branches'
+      });
+
+      // The bare names are the process root's local symbols, read up the
+      // stand-in's `$container` chain; this grammar names nothing below the
+      // root, so the answer equals a built branch's of the same gateway.
+      expect({ standIn: targetsOf(diagram, standIn), built: targetsOf(diagram, gateway.branches[0]) }).toEqual({
+         standIn: expect.arrayContaining(['Pick', 'Cancel']),
+         built: targetsOf(diagram, standIn)
+      });
    });
 });

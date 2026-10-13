@@ -9,7 +9,9 @@
 
 /**
  * Driver for the structured-write transform chain — the rewrite registry plus
- * the serializer — run the way a session's `update` runs it.
+ * the serializer — answering the bare serializer output, without the trivia
+ * and `ModelService` overrides a session's write applies: call
+ * `ModelService.modelToText` with a canonical URI for that text.
  *
  * # Why a driver and not a documented recipe
  *
@@ -91,7 +93,7 @@ export interface UpdatePipelineResult<TTransfer extends TransferElement = Transf
     * surface but it makes the precise assertion unavailable.
     */
    readonly rewritten: TTransfer;
-   /** The serialized text, which is what a session's `update` applies to the store. */
+   /** The serializer's text, without the trivia a session's `update` carries over. */
    readonly text: string;
 }
 

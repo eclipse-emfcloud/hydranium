@@ -403,10 +403,9 @@ describe('HydraniumWorkspaceManager additional documents', () => {
    }
 
    it('warns when a seeded document matches no registered language, naming the registered extensions', async () => {
-      // An extensionless virtual URI is indexed but inert: every per-language
-      // service resolves per URI, and a virtual document is never open in
-      // TextDocuments, so the declared-languageId rung cannot serve it either.
-      // Nothing else reports this — the document exists, it just does nothing.
+      // An extensionless virtual URI routes to no language, so the startup
+      // fails as the document is added, with an error naming an empty
+      // extension; this line names the document and the fix.
       const stubs = makeStubs(new FakeProjectManager());
       const tracer = makeCapturingTracer();
       (stubs.services as unknown as { Tracer: unknown }).Tracer = tracer.tracer;
