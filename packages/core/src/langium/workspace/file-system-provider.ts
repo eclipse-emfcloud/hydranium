@@ -68,6 +68,15 @@ export interface WritableFileSystemProvider extends FileSystemProvider {
     */
    realpath?(uri: URI): URI | undefined;
    /**
+    * The path `uri` names with every link followed, a link to nothing
+    * included, so that `RealpathDocumentUriPolicy.canonicalUri` keys a file
+    * reached through a link the same before it exists and once it does.
+    * Where {@link realpath} resolves, the same answer; otherwise what is
+    * missing joined as spelled under the real path of what exists. Optional,
+    * as `realpath` is: without it an absent path keys by its syntactic form.
+    */
+   resolveLinks?(uri: URI): URI;
+   /**
     * Whether a file is at `uri`, where a miss counts only once it has lasted:
     * on a disk where replacing a file can hide its name for a moment, a single
     * {@link exists} cannot tell that from a deletion. Ask this before acting on
@@ -173,10 +182,11 @@ export interface FileSystemProviderRegistryOptions<
  * A directory is listed by the provider of its own scheme, so a workspace
  * root's tree comes from that provider alone.
  *
- * `realpath`, `mtimeMs` and `existsSettled` are always present and forward to
- * the scheme's provider. Where that provider lacks one, `realpath` returns the
- * URI unchanged, `mtimeMs` returns `undefined` and `existsSettled` answers as
- * `exists`: the answers their callers already give a provider without them.
+ * `realpath`, `resolveLinks`, `mtimeMs` and `existsSettled` are always present
+ * and forward to the scheme's provider. Where that provider lacks one,
+ * `realpath` and `resolveLinks` return the URI unchanged, `mtimeMs` returns
+ * `undefined` and `existsSettled` answers as `exists`: the answers their
+ * callers already give a provider without them.
  */
 export class DefaultFileSystemProviderRegistry<
    THost extends WritableFileSystemProvider = WritableFileSystemProvider
@@ -221,6 +231,15 @@ export class DefaultFileSystemProviderRegistry<
    realpath(uri: URI): URI | undefined {
       const provider = this.providerFor(uri);
       return provider.realpath ? provider.realpath(uri) : uri;
+   }
+
+   resolveLinks(uri: URI): URI {
+      const provider = this.providerFor(uri);
+      if (provider.resolveLinks) {
+         return provider.resolveLinks(uri);
+      }
+      // A provider with `realpath` alone still keys a present path by it.
+      return provider.realpath?.(uri) ?? uri;
    }
 
    async existsSettled(uri: URI): Promise<boolean> {

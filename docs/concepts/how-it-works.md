@@ -87,7 +87,8 @@ text editor behind the LSP head takes part under an id the framework reserves.
 - **A lost connection keeps its unsaved text for a while.** When a client's
   connection drops, its documents keep their shared text for a release grace,
   `releaseGraceMs`. A client that reconnects under the same id within it finds
-  its unsaved edits.
+  its unsaved edits, unless the file was deleted meanwhile; its connection then
+  reports the deletion to you as a live one would.
 
 [Connect a data client](../guides/connect-a-data-client.md) shows a client
 working through a session, and

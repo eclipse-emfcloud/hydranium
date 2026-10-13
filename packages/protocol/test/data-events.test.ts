@@ -83,7 +83,8 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
       events.onDocumentUpdated({
          document: TransferDocument.create('file:///widgets/gauge.widget', 3, WIDGET, 'hash', [auditedDiagnostic()]),
          sourceClientId: 'widget-form',
-         reason: 'changed'
+         reason: 'changed',
+         sequence: 1
       });
 
       // `auditedBy` is the point: a listener typed to the framework diagnostic
@@ -169,7 +170,8 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
       events.onDocumentUpdated({
          document: TransferDocument.create('file:///widgets/gauge.widget', 5, WIDGET, 'hash', []),
          sourceClientId: 'widget-form',
-         reason: 'changed'
+         reason: 'changed',
+         sequence: 1
       });
 
       expect(updates).toBe(0);

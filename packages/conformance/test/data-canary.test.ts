@@ -51,6 +51,7 @@ const WRITE_ANSWER = 'a write of the invalid model answers with its diagnostics'
 const DIRTY = 'a document is dirty while its text differs from its file, and clean once saved';
 const PERSIST = 'persisting writes the text a document holds as it is, and refuses a stale base version';
 const TEXT_HASH = "a document's text hash is equal for equal text and differs for different text";
+const WATCH_ANSWER = 'a watch answers whether a document exists, under the key a read names it by';
 const LAST_CLOSE = "the last close drops a document's unsaved text and keeps what its save wrote";
 const UNSAVED_CREATE = 'a created document never saved leaves with its last close';
 const DELETE = 'deleting a saved document removes it';
@@ -139,7 +140,7 @@ describe('the /data battery discriminates', () => {
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(32);
+      expect(titles).toHaveLength(33);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -166,6 +167,7 @@ describe('the /data battery discriminates', () => {
          DIRTY,
          PERSIST,
          TEXT_HASH,
+         WATCH_ANSWER,
          LAST_CLOSE,
          UNSAVED_CREATE,
          DELETE,
@@ -174,7 +176,7 @@ describe('the /data battery discriminates', () => {
          DELETE_OTHERS,
          DELETE_UNSAVED
       ];
-      expect(matching(titles, covered)).toHaveLength(32);
+      expect(matching(titles, covered)).toHaveLength(33);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -297,6 +299,12 @@ describe('the /data battery discriminates', () => {
          label: 'a text hash that follows the version',
          defects: { textHashByVersion: true },
          expected: [TEXT_HASH, PERSIST]
+      },
+      { label: 'a watch claiming a document where there is none', defects: { watchClaimsDocument: true }, expected: [WATCH_ANSWER] },
+      {
+         label: 'a watch answering a position no event sent later passes',
+         defects: { watchAnswersPastEvents: true },
+         expected: [SUBSCRIPTION]
       },
       { label: 'a last close keeping a saved document’s unsaved text', defects: { releaseKeepsText: true }, expected: [LAST_CLOSE] },
       { label: 'a last close keeping a document with no file', defects: { releaseKeepsUnsaved: true }, expected: [UNSAVED_CREATE] },

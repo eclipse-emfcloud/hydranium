@@ -35,8 +35,8 @@ import { RealpathDocumentUriPolicy, type ServerSharedServices } from '@hydranium
 import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { DocumentState, URI } from '@hydranium/langium';
-import { existsSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DomainModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
 import { isProcessModel, isTask } from '../src/language-server/generated-hydranium/transfer-model.js';
 import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type OrderFlowHarness } from './order-flow-harness.js';
@@ -340,7 +340,7 @@ describe('order-flow data head', () => {
       // by the deletion would have to precede this response.
       await head.harness.proxy.getModelDocument({ uri: head.uri(WORKSPACE_FILES.returnsProcess) });
 
-      expect(head.harness.deletions).toEqual([{ uri, sourceClientId: UNKNOWN_CLIENT_ID }]);
+      expect(head.harness.deletions).toEqual([{ uri, sourceClientId: UNKNOWN_CLIENT_ID, sequence: expect.any(Number) }]);
       // The deletion does NOT travel as an update. That silence is the builder's
       // own invariant rather than framework behaviour — it drops the document
       // before deriving the rebuild set — so no local edit can redden this line;
@@ -362,7 +362,7 @@ describe('order-flow data head', () => {
       await proxy.deleteModelDocument({ uri, clientId: CLIENT_ID, baseVersion: 'any' });
 
       expect(existsSync(URI.parse(uri).fsPath)).toBe(false);
-      expect(head.harness.deletions).toEqual([{ uri, sourceClientId: CLIENT_ID }]);
+      expect(head.harness.deletions).toEqual([{ uri, sourceClientId: CLIENT_ID, sequence: expect.any(Number) }]);
       expect(TransferDocument.isLoaded(await proxy.getModelDocument({ uri }))).toBe(false);
       expect(watchersOf(head, uri)).toEqual([OTHER_ID]);
    });
@@ -379,6 +379,54 @@ describe('order-flow data head', () => {
 
       expect(existsSync(URI.parse(target).fsPath)).toBe(false);
       expect(server.watchersOf(target)).toEqual([]);
+   });
+
+   it('answers that a document exists for a watch of a file no build has loaded yet', async () => {
+      const head = await driveDataHead();
+      // Written behind the server's back, so no build has seen it.
+      writeFileSync(workspace!.resolve('unloaded.domain'), 'entity Late {\n   a : string\n}\n');
+      const uri = head.uri('unloaded.domain');
+      expect(head.services.shared.model.ModelService.getDocument(uri)).toBeUndefined();
+
+      const answer = await head.harness.proxy.watchModelDocument({ uri, clientId: OTHER_ID });
+
+      expect(answer).toEqual({ uri, exists: true, sequence: expect.any(Number) });
+   });
+
+   it('answers that a document exists for a watch of a file whose load fails for another reason than its absence', async () => {
+      const head = await driveDataHead();
+      writeFileSync(workspace!.resolve('unreadable.domain'), 'entity Late {\n   a : string\n}\n');
+      const uri = head.uri('unreadable.domain');
+      const files = head.services.shared.workspace.FileSystemProvider;
+      const readFile = files.readFile.bind(files);
+      // A file briefly unreadable: the build registers its unparsed placeholder.
+      vi.spyOn(files, 'readFile').mockImplementation(target =>
+         target.toString() === uri ? Promise.reject(new Error('EBUSY: resource busy or locked')) : readFile(target)
+      );
+
+      const answer = await head.harness.proxy.watchModelDocument({ uri, clientId: OTHER_ID });
+
+      expect(head.services.shared.model.ModelService.getDocument(uri)).toBeDefined();
+      expect(answer).toEqual({ uri, exists: true, sequence: expect.any(Number) });
+   });
+
+   it('answers a watch made through a symlink with the key its deletion is named by', async () => {
+      const { link, target } = await driveSymlinkedHead();
+      const proxy = harness!.proxy;
+      await proxy.createSession({ clientId: CLIENT_ID });
+      await proxy.openModelDocument({ uri: link, clientId: CLIENT_ID });
+
+      const answer = await proxy.watchModelDocument({ uri: link, clientId: OTHER_ID });
+      await proxy.deleteModelDocument({ uri: link, clientId: CLIENT_ID, baseVersion: 'any' });
+
+      expect(answer).toEqual({ uri: target, exists: true, sequence: expect.any(Number) });
+      expect(harness!.deletions.map(deletion => deletion.uri)).toEqual([target]);
+      // The link now points at nothing, and still keys by its target.
+      expect(await proxy.watchModelDocument({ uri: link, clientId: 'later' })).toEqual({
+         uri: target,
+         exists: false,
+         sequence: expect.any(Number)
+      });
    });
 
    it('releases a watch made through a symlink when it is unwatched or closed through it after the file is deleted', async () => {

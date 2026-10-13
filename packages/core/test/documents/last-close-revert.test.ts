@@ -745,6 +745,21 @@ describe('HydraniumTextDocuments release grace', () => {
       expect(builds).toHaveLength(1);
    });
 
+   it('releases a document waiting out the grace when its file is deleted, so a lost client cannot open its text again', async () => {
+      const { docs, builds } = makeRig(1000);
+      open(docs, 'form');
+      docs.applyContentChange(FILE, EDITED, 'form');
+      close(docs, 'form', 'lost');
+
+      docs.notifyDocumentDeleted(FILE);
+      await settle();
+
+      expect(docs.isReleaseDeferred(FILE)).toBe(false);
+      expect(docs.attachClient(FILE, 'form')).toBe(false);
+      expect(docs.get(FILE)).toBeUndefined();
+      expect(builds).toHaveLength(1);
+   });
+
    it('announces the last close once the document is really released', () => {
       const { docs, clock } = makeRig(1000);
       const released: string[] = [];

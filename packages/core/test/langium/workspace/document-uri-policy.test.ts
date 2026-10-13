@@ -66,6 +66,41 @@ describe('RealpathDocumentUriPolicy', () => {
       expect(makePolicy(realpath).canonicalUri(ABSENT)).toBe(UriUtils.normalize(ABSENT));
    });
 
+   it('canonicalUri asks resolveLinks alone where the provider has it, so a present path costs one resolution', () => {
+      const calls: string[] = [];
+      const policy = new RealpathDocumentUriPolicy(
+         makeNoopSharedServices({
+            workspace: {
+               FileSystemProvider: {
+                  realpath: (uri: URI): URI | undefined => {
+                     calls.push('realpath');
+                     return realpath(uri);
+                  },
+                  resolveLinks: (uri: URI): URI => {
+                     calls.push('resolveLinks');
+                     return realpath(uri) ?? uri;
+                  }
+               }
+            }
+         })
+      );
+      expect(policy.canonicalUri(LINK)).toBe(UriUtils.normalize(REAL));
+      expect(calls).toEqual(['resolveLinks']);
+   });
+
+   it('canonicalUri keys an absent path by the links it follows, where the provider resolves them', () => {
+      const DANGLING = 'file:///link/gone.fake';
+      const TARGET = URI.parse('file:///real/gone.fake');
+      const absent = (uri: URI): URI | undefined => (uri.toString() === DANGLING ? undefined : realpath(uri));
+      const resolveLinks = (uri: URI): URI => (uri.toString() === DANGLING ? TARGET : uri);
+      const policy = new RealpathDocumentUriPolicy(
+         makeNoopSharedServices({ workspace: { FileSystemProvider: { realpath: absent, resolveLinks } } })
+      );
+      expect(policy.canonicalUri(DANGLING)).toBe(UriUtils.normalize(TARGET));
+      // Still absent for a load.
+      expect(policy.loadUri(DANGLING)).toBeUndefined();
+   });
+
    it('loadUri returns the resolved real-path URI', () => {
       expect(makePolicy(realpath).loadUri(LINK)?.toString()).toBe(REAL.toString());
    });

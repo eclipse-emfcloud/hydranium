@@ -95,6 +95,60 @@ describe('DefaultFileSystemProvider.realpath', () => {
       expect(provider.realpath(URI.file(join(realDir, 'absent.fake')))).toBeUndefined();
    });
 
+   describe('resolveLinks', () => {
+      const normalized = (uri: URI): string => UriUtils.normalize(uri);
+
+      it('follows a link to nothing to the path it names', context => {
+         context.skip(!symlinkSupported, 'symlinkSync denied on this platform');
+         symlinkSync(join(realDir, 'gone.fake'), join(root, 'dangling.fake'), 'file');
+         expect(normalized(provider.resolveLinks(URI.file(join(root, 'dangling.fake'))))).toBe(normalized(real('gone.fake')));
+      });
+
+      it('follows a chain of links ending in nothing', context => {
+         context.skip(!symlinkSupported, 'symlinkSync denied on this platform');
+         symlinkSync(join(realDir, 'gone.fake'), join(root, 'dangling-end.fake'), 'file');
+         symlinkSync(join(root, 'dangling-end.fake'), join(root, 'chain.fake'), 'file');
+         expect(normalized(provider.resolveLinks(URI.file(join(root, 'chain.fake'))))).toBe(normalized(real('gone.fake')));
+      });
+
+      it('follows a link whose target is spelled relative to it', context => {
+         context.skip(!symlinkSupported, 'symlinkSync denied on this platform');
+         symlinkSync(join('real', 'gone.fake'), join(root, 'relative.fake'), 'file');
+         expect(normalized(provider.resolveLinks(URI.file(join(root, 'relative.fake'))))).toBe(normalized(real('gone.fake')));
+      });
+
+      it('gives up on a loop of links and names one of them under its real directory', context => {
+         context.skip(!symlinkSupported, 'symlinkSync denied on this platform');
+         symlinkSync(join(root, 'loop-b.fake'), join(root, 'loop-a.fake'), 'file');
+         symlinkSync(join(root, 'loop-a.fake'), join(root, 'loop-b.fake'), 'file');
+         const answered = normalized(provider.resolveLinks(URI.file(join(root, 'loop-a.fake'))));
+         expect([normalized(URI.file(join(root, 'loop-a.fake'))), normalized(URI.file(join(root, 'loop-b.fake')))]).toContain(answered);
+      });
+
+      it('names a missing file under its real directory', context => {
+         context.skip(!symlinkSupported, 'symlinkSync denied on this platform');
+         expect(normalized(provider.resolveLinks(viaLink('absent.fake')))).toBe(normalized(real('absent.fake')));
+      });
+
+      it('names a path through a directory link to nothing as spelled beyond it', context => {
+         context.skip(!symlinkSupported, 'symlinkSync denied on this platform');
+         symlinkSync(join(realDir, 'gone-dir'), join(root, 'dangling-dir'), 'dir');
+         expect(normalized(provider.resolveLinks(URI.file(join(root, 'dangling-dir', 'x.fake'))))).toBe(
+            normalized(URI.file(join(realDir, 'gone-dir', 'x.fake')))
+         );
+      });
+
+      it('answers a present path as realpath does', context => {
+         context.skip(!symlinkSupported, 'symlinkSync denied on this platform');
+         expect(normalized(provider.resolveLinks(viaLink('present.fake')))).toBe(normalized(real('present.fake')));
+      });
+
+      it('passes a non-file URI through unchanged', () => {
+         const builtin = URI.parse('builtin:///Element.fake');
+         expect(provider.resolveLinks(builtin)).toBe(builtin);
+      });
+   });
+
    it('passes a non-file URI through unchanged (cannot stat → treated as present, never undefined)', () => {
       const builtin = URI.parse('builtin:///Element.fake');
       expect(provider.realpath(builtin)).toBe(builtin);

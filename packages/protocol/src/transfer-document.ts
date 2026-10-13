@@ -98,6 +98,16 @@ export type TransferSavedDocument<TTransfer extends TransferElement, TDiagnostic
    persisted: { version: TextVersion };
 };
 
+/** What a watch answers, once it is in place. */
+export interface TransferWatchedDocument {
+   /** The key the watch's events name the document by, which a symlinked URI does not spell. */
+   readonly uri: string;
+   /** Whether a document exists there; one the server fails to load counts, only a missing one does not. */
+   readonly exists: boolean;
+   /** The position of the last update or deletion event sent before `exists` was taken; an event past it was sent after. */
+   readonly sequence: number;
+}
+
 export namespace TransferDocument {
    /**
     * Whether the server had this document. Branch on it where absence is an

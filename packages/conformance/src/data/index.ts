@@ -932,6 +932,29 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
          }
       });
 
+      checks.push({
+         title: `a watch answers whether a document exists, under the key a read names it by ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               await seed(driver, model);
+               const read = await driver.proxy.getModelDocument({ uri: model.uri });
+               const missing = siblingOf(model.uri, `conformance-unwritten-${randomUuid()}-`);
+               const present = await driver.proxy.watchModelDocument({ uri: model.uri, clientId: SUBSCRIBER });
+               const absent = await driver.proxy.watchModelDocument({ uri: missing, clientId: SUBSCRIBER });
+               await driver.proxy.unwatchModelDocument({ uri: model.uri, clientId: SUBSCRIBER });
+               await driver.proxy.unwatchModelDocument({ uri: missing, clientId: SUBSCRIBER });
+
+               assert.strictEqual(present.exists, true, `a watch of ${model.uri} answered that no document exists`);
+               assert.strictEqual(present.uri, read.uri, `a watch of ${model.uri} named it ${present.uri}, a read ${read.uri}`);
+               assert.strictEqual(absent.exists, false, `a watch of ${missing}, which holds no document, answered that one exists`);
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
       // The create-dialog query, and the reason it is its own check: it is the
       // only request a head receives whose URI names no file. Everything else
       // in this battery addresses a document, so a head that routes purely by
@@ -1312,7 +1335,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                     // the post-subscribe write.
                     const seeder = await seed(driver, model);
                     const author = await openAs(driver, model.uri);
-                    await driver.proxy.watchModelDocument({ uri: model.uri, clientId: SUBSCRIBER });
+                    const watched = await driver.proxy.watchModelDocument({ uri: model.uri, clientId: SUBSCRIBER });
                     await driver.proxy.updateModelDocument({
                        uri: model.uri,
                        clientId: author,
@@ -1328,6 +1351,12 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                     // The first delivery of the author's version is a change;
                     // reported as rebuilt, it says the event echoes no write.
                     assert.strictEqual(last.reason, 'changed');
+                    // Sent after the watch took its answer, so past the
+                    // position the answer carries.
+                    assert.ok(
+                       last.sequence > watched.sequence,
+                       `the event after the watch is at ${last.sequence}, the watch's answer at ${watched.sequence}`
+                    );
                     // Nothing from before the subscription. Waiting for the
                     // post-subscribe event first is what makes this provable: the
                     // two notifications share one ordered connection, so a seeding

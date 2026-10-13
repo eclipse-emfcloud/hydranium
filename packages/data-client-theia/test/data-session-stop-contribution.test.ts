@@ -56,7 +56,7 @@ function makeConnection(saveGate?: Promise<void>): {
          closedBeforeTimer.push(!timerFired);
       },
       openModelDocument: async (args: { uri: string }): Promise<unknown> => document(args.uri),
-      watchModelDocument: async (): Promise<void> => undefined,
+      watchModelDocument: async (args: { uri: string }): Promise<unknown> => ({ uri: args.uri, exists: true, sequence: 0 }),
       saveModelDocument: async (args: { uri: string }): Promise<unknown> => {
          await saveGate;
          return { ...(document(args.uri) as object), persisted: { version: 1 } };

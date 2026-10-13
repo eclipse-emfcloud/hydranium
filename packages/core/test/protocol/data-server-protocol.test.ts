@@ -41,7 +41,7 @@ import {
    type TransferDocumentUpdateReason,
    type TransferUpdateDocumentArgs
 } from '@hydranium/protocol/data';
-import { type CloseModelArgs, type OpenModelArgs, type Project, TransferDocument } from '@hydranium/protocol';
+import { type CloseModelArgs, type OpenModelArgs, type Project, TransferDocument, type TransferWatchedDocument } from '@hydranium/protocol';
 import { makeFakeAstNode } from '../../src/testing/index.js';
 
 /** A minimal fake transfer root standing in for a real grammar's generated wire root type. */
@@ -105,8 +105,8 @@ function makeFakeProtocol(): DataServerProtocol<FakeRoot> {
       async deleteModelDocument(_args: TransferDeleteDocumentArgs) {
          // Nothing to return: the deletion reaches clients as an event.
       },
-      async watchModelDocument(_args: WatchModelDocumentArgs) {
-         // Nothing to return: a watch is a dispatch-table entry, not a handle.
+      async watchModelDocument(args: WatchModelDocumentArgs) {
+         return { uri: args.uri, exists: true, sequence: 0 };
       },
       async unwatchModelDocument(_args: WatchModelDocumentArgs) {
          // Pairs with watchModelDocument — idempotent teardown.
@@ -151,22 +151,21 @@ describe('DataServerProtocol type contract', () => {
       expect(fromStruct.model?.root.name).toBe('structured');
    });
 
-   it('watchModelDocument / unwatchModelDocument are void-returning by contract', async () => {
+   it('watchModelDocument answers the watched document and unwatchModelDocument nothing, neither a handle', async () => {
       // The wire-level watch contract is dispatch-table registration — events
       // flow through `DataClientProtocol.onDocumentUpdated` on the paired wire,
       // not through a returned handle. The protocol-level test only verifies the
-      // type plumbing: both methods accept WatchModelDocumentArgs and return Promise<void>.
+      // type plumbing. A runtime check would assert against the method bodies
+      // THIS FILE wrote, not against the declaration; the discriminating
+      // assertions are the compile-time ones below, each of which stops
+      // compiling the moment the declared return changes shape.
       const protocol = makeFakeProtocol();
-      // `expect(await …).toBeUndefined()` would assert against the empty method
-      // bodies THIS FILE wrote, not against the declaration. The discriminating
-      // assertions are the two below: each stops compiling the moment the
-      // declared return widens past `Promise<void>` into a handle a client would
-      // have to dispose.
-      // @ts-expect-error — the watch contract returns no handle.
-      const watchHandle: { dispose(): void } = await protocol.watchModelDocument({ uri: 'fake://doc', clientId: 'test' });
-      // @ts-expect-error — nor does its teardown counterpart.
+      const answer: TransferWatchedDocument = await protocol.watchModelDocument({ uri: 'fake://doc', clientId: 'test' });
+      // @ts-expect-error — the watch's answer is no handle a client would have to dispose.
+      const watchHandle: { dispose(): void } = answer;
+      // @ts-expect-error — nor does its teardown counterpart return one.
       const unwatchHandle: { dispose(): void } = await protocol.unwatchModelDocument({ uri: 'fake://doc', clientId: 'test' });
-      expect(watchHandle).toBeUndefined();
+      expect(watchHandle).toBe(answer);
       expect(unwatchHandle).toBeUndefined();
    });
 

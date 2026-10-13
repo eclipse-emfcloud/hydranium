@@ -205,6 +205,22 @@ describe('DefaultFileSystemProviderRegistry', () => {
       expect(await files.existsSettled(URI.parse('file:///link/a.a'))).toBe(true);
    });
 
+   it("answers resolveLinks from the scheme's provider, from its realpath where it has only that, else as spelled", () => {
+      const resolved = URI.parse('file:///real/a.a');
+      const followed = URI.parse('file:///real/gone.a');
+      const link = URI.parse('file:///link/a.a');
+      const both = Object.assign(new LabelledProvider('disk'), {
+         realpath: (): URI | undefined => resolved,
+         resolveLinks: (): URI => followed
+      });
+      const realpathOnly = Object.assign(new LabelledProvider('disk'), { realpath: (): URI | undefined => resolved });
+      const absent = Object.assign(new LabelledProvider('disk'), { realpath: (): URI | undefined => undefined });
+      expect(registry({}, both).resolveLinks(link)).toBe(followed);
+      expect(registry({}, realpathOnly).resolveLinks(link)).toBe(resolved);
+      expect(registry({}, absent).resolveLinks(link)).toBe(link);
+      expect(registry({}, new LabelledProvider('host')).resolveLinks(link)).toBe(link);
+   });
+
    it("keeps the scheme's provider's absent answer from realpath", () => {
       const absent = Object.assign(new LabelledProvider('disk'), { realpath: (): URI | undefined => undefined });
       expect(registry({}, absent).realpath(URI.parse('file:///gone.a'))).toBeUndefined();

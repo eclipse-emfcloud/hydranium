@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { Disposable, Emitter, type Event } from 'vscode-jsonrpc';
-import { FRAMEWORK_CLIENT_IDS } from '../client-ids';
+import { FRAMEWORK_CLIENT_IDS, UNKNOWN_CLIENT_ID } from '../client-ids';
 import {
    DATA_CLIENT_PROTOCOL_METHODS,
    DATA_SERVER_WIRE_PREFIX,
@@ -20,6 +20,7 @@ import {
    type TransferDocumentDirtyChangedEvent,
    type TransferDocumentUpdatedEvent
 } from '../data';
+import type { TransferWatchedDocument } from '../transfer-document';
 import { DuplicateClientIdError, ReservedClientIdError } from '../errors';
 import type { Logger } from '../logger';
 import { defineMessage, describeError, describeErrorWithStack, resolve } from '../messages/primitives';
@@ -48,6 +49,31 @@ export const DATA_CONNECTION_SESSION_RESTORE_FAILED = defineMessage(
    'hydranium/protocol/data-connection-session-restore-failed',
    'Could not restore a session after reconnecting to the data server: {detail}'
 );
+
+/**
+ * A watch {@link DataConnection.watchDocument} keeps, with what the client last
+ * heard of its document: a reconnect whose watch answers that no document
+ * exists tells the client of a deletion only where it had heard one did.
+ */
+export interface DataConnectionWatch {
+   /** The URI as the caller named it, which the watch is sent under. */
+   readonly uri: string;
+   /** The key a watch of it last answered with, which events name; absent until one answered. */
+   readonly serverUri?: string;
+   /** Whether the client last heard that the document exists. */
+   readonly exists: boolean;
+}
+
+/** What an event heard while a watch was in flight said of its document, and the event's position. */
+export interface DataConnectionHeardEvent {
+   readonly exists: boolean;
+   readonly sequence: number;
+}
+
+/** Whether the document exists, by the newer of a watch's answer and an event heard while the watch was in flight. */
+function existsAfter(heard: DataConnectionHeardEvent | undefined, answer: TransferWatchedDocument): boolean {
+   return heard !== undefined && heard.sequence > answer.sequence ? heard.exists : answer.exists;
+}
 
 /** Options for {@link DataConnection}. */
 export interface DataConnectionOptions<
@@ -143,11 +169,11 @@ export class DataConnection<
    /** Backs each session's {@link DataSessionHost.onDidDeleteDocument}. */
    protected readonly documentDeletedEmitter = new Emitter<TransferDocumentDeletedEvent>();
    /**
-    * Per id {@link watchDocument} watches under, the URI it watches, which
+    * Per id {@link watchDocument} watches under, the watch, which
     * {@link generationReady} sends again to every later generation until the
     * watch's handle is disposed.
     */
-   protected readonly watches = new Map<string, string>();
+   protected readonly watches = new Map<string, DataConnectionWatch>();
    /**
     * Per id, the URI of a watch whose handle was disposed with no ready
     * generation to unwatch on. {@link generationReady} sends the unwatch to the
@@ -155,6 +181,19 @@ export class DataConnection<
     * watches were sent leaves them on a connection the port may hand back.
     */
    protected readonly pendingUnwatches = new Map<string, string>();
+   /**
+    * The keys of the deletions the current generation's reconnect told the
+    * client of, so a URI several sessions and watches follow is told once.
+    */
+   protected readonly toldDeletions = new Set<string>();
+   /**
+    * One map per watch in flight, keyed by document, of what the last event
+    * heard since the watch was sent said of its existence, and the event's
+    * position. The server may take the answer before an event goes out, so
+    * an event heard in flight wins over the answer where its position is
+    * past the one the answer carries.
+    */
+   protected readonly heardInFlight = new Set<Map<string, DataConnectionHeardEvent>>();
    /** The port's logger, or one that logs nothing. */
    protected readonly logger: Logger;
    /** Backs {@link onDidReconnect}. */
@@ -230,6 +269,8 @@ export class DataConnection<
             connected: () => this.connected(),
             reportError: (error, reported) => this.reportError(error, reported),
             restoreDirty: event => this.restoreDirty(event),
+            // Without it the session reports the unsaved text it loses.
+            restoreDeletion: this.hearsDeletions ? event => this.restoreDeletion(event) : undefined,
             forgetDirty: uri => this.dirtyStates.delete(uri),
             onDidChangeDirty: this.dirtyChangedEmitter.event,
             onDidUpdateDocument: this.documentUpdatedEmitter.event,
@@ -255,22 +296,28 @@ export class DataConnection<
     * for as long as the caller follows it. The watch runs under an id of its
     * own, `label` plus `#` plus a random UUID, and needs no session: a session
     * closing the document would also end its own watch of it. Every later
-    * connection that becomes ready gets the watch again. Disposing the handle
-    * unwatches.
+    * connection that becomes ready gets the watch again, and tells the client
+    * of a deletion while it was down. Disposing the handle unwatches.
     */
    async watchDocument(uri: string, label = 'watch'): Promise<Disposable> {
       const clientId = `${label}#${randomUuid()}`;
       const server = await this.connected();
       // Kept only from here: kept during the wait, a generation that became
       // ready meanwhile would send the watch a second time.
-      this.watches.set(clientId, uri);
+      this.watches.set(clientId, { uri, exists: false });
+      const heard = new Map<string, DataConnectionHeardEvent>();
+      this.heardInFlight.add(heard);
+      let answer: TransferWatchedDocument;
       try {
-         await server.watchModelDocument({ uri, clientId });
+         answer = await server.watchModelDocument({ uri, clientId });
       } catch (error: unknown) {
          this.watches.delete(clientId);
          throw error;
+      } finally {
+         this.heardInFlight.delete(heard);
       }
       this.logger.debug(`Watch ${uri} as ${clientId}`);
+      this.watches.set(clientId, { uri, serverUri: answer.uri, exists: existsAfter(heard.get(answer.uri), answer) });
       return Disposable.create(() => {
          if (!this.watches.delete(clientId)) {
             return;
@@ -307,9 +354,9 @@ export class DataConnection<
     */
    protected override localTarget(): TClient {
       const client = this.client as unknown as Record<string, unknown>;
-      const hearsDirty = typeof client.onDocumentDirtyChanged === 'function';
-      const hearsUpdates = typeof client.onDocumentUpdated === 'function';
-      const hearsDeletions = typeof client.onDocumentDeleted === 'function';
+      const hearsDirty = this.bindsClientMethod('onDocumentDirtyChanged');
+      const hearsUpdates = this.bindsClientMethod('onDocumentUpdated');
+      const hearsDeletions = this.hearsDeletions;
       if (!hearsDirty && !hearsUpdates && !hearsDeletions) {
          return this.client;
       }
@@ -329,6 +376,9 @@ export class DataConnection<
       if (hearsUpdates) {
          const forward = target.onDocumentUpdated as (event: TransferDocumentUpdatedEvent<TTransfer, DiagnosticOf<TServer>>) => void;
          target.onDocumentUpdated = (event: TransferDocumentUpdatedEvent<TTransfer, DiagnosticOf<TServer>>): void => {
+            if (event.document.model) {
+               this.markWatches(event.document.uri, true, event.sequence);
+            }
             this.documentUpdatedEmitter.fire(event);
             forward(event);
          };
@@ -336,11 +386,59 @@ export class DataConnection<
       if (hearsDeletions) {
          const forward = target.onDocumentDeleted as (event: TransferDocumentDeletedEvent) => void;
          target.onDocumentDeleted = (event: TransferDocumentDeletedEvent): void => {
+            // Held gone, so a reconnect tells the client of it no second time.
+            // A server sending no position has its deletion count as sent
+            // before any answer.
+            this.markWatches(event.uri, false, event.sequence ?? 0);
             this.documentDeletedEmitter.fire(event);
             forward(event);
          };
       }
       return target as unknown as TClient;
+   }
+
+   /**
+    * Whether the client binds `onDocumentDeleted`. Without it no deletion
+    * reaches the client or the sessions, the server's or one a reconnect
+    * found, and a session's restore reports what a gone document took.
+    */
+   protected get hearsDeletions(): boolean {
+      return this.bindsClientMethod('onDocumentDeleted');
+   }
+
+   /** Whether `name` is among the methods bound for the client, and the client implements it. */
+   protected bindsClientMethod(name: string): boolean {
+      const client = this.client as unknown as Record<string, unknown>;
+      return (this.clientMethods as readonly string[]).includes(name) && typeof client[name] === 'function';
+   }
+
+   /**
+    * Hand the client a deletion a session's restore or a watch sent again
+    * found, which no event brought while the connection was down, unless
+    * {@link toldDeletions} says this generation told it already. The sessions
+    * do not hear it: each finds what it lost in its own restore.
+    */
+   protected restoreDeletion(event: TransferDocumentDeletedEvent): void {
+      if (this.toldDeletions.has(event.uri)) {
+         return;
+      }
+      this.toldDeletions.add(event.uri);
+      const client = this.client as unknown as Pick<DataClientProtocol<TTransfer>, 'onDocumentDeleted'>;
+      client.onDocumentDeleted(event);
+   }
+
+   /**
+    * Record in every watch whose answer named `uri` whether the document
+    * exists, and in {@link heardInFlight} for the watches not answered yet,
+    * with the event's position.
+    */
+   protected markWatches(uri: string, exists: boolean, sequence: number): void {
+      this.watches.forEach((watch, clientId) => {
+         if (watch.serverUri === uri) {
+            this.watches.set(clientId, { ...watch, exists });
+         }
+      });
+      this.heardInFlight.forEach(heard => heard.set(uri, { exists, sequence }));
    }
 
    /**
@@ -357,8 +455,10 @@ export class DataConnection<
    /** Record `event` in {@link dirtyStates} and hand it to the client. */
    protected deliverDirty(event: TransferDocumentDirtyChangedEvent): void {
       this.dirtyStates.set(event.uri, event.text?.dirty ?? false);
-      const client = this.client as unknown as Partial<Pick<DataClientProtocol<TTransfer>, 'onDocumentDirtyChanged'>>;
-      client.onDocumentDirtyChanged?.(event);
+      if (this.bindsClientMethod('onDocumentDirtyChanged')) {
+         const client = this.client as unknown as Pick<DataClientProtocol<TTransfer>, 'onDocumentDirtyChanged'>;
+         client.onDocumentDirtyChanged(event);
+      }
    }
 
    /**
@@ -414,8 +514,9 @@ export class DataConnection<
     */
    protected override generationReady(generation: RpcConnectionGeneration<TServer>): void {
       super.generationReady(generation);
+      this.toldDeletions.clear();
       this.reconnectSessions();
-      this.watches.forEach((uri, clientId) => this.watchAgain(generation, clientId, uri));
+      this.watches.forEach((watch, clientId) => this.watchAgain(generation, clientId, watch.uri));
       this.pendingUnwatches.forEach((uri, clientId) => this.unwatch(generation, clientId, uri));
       this.pendingUnwatches.clear();
       if (this.readyBefore) {
@@ -438,41 +539,58 @@ export class DataConnection<
     * `generation` is still current: otherwise the next generation sends it
     * again.
     *
-    * Once the watch is in place, the document's dirty state is read and goes
-    * through {@link restoreDirty}, as a session's restore does: a flip while
-    * the connection was down reached no one.
+    * A document the client last heard exists that the watch's answer says
+    * is gone goes to the client as a deletion; once the watch is in place,
+    * the document's dirty state is read and goes through
+    * {@link restoreDirty}, as a session's restore does. Neither reached
+    * anyone while the connection was down.
     */
    protected watchAgain(generation: RpcConnectionGeneration<TServer>, clientId: string, uri: string): void {
-      generation.server.watchModelDocument({ uri, clientId }).then(
-         () => {
-            if (!this.watches.has(clientId)) {
-               return;
-            }
-            this.logger.debug(`Watch ${uri} again as ${clientId}`);
-            generation.server.getModelDocument({ uri }).then(
-               current => {
-                  if (current.text && this.watches.has(clientId)) {
-                     try {
-                        this.restoreDirty({ uri: current.uri, text: current.text });
-                     } catch {
-                        // The client's listener failed, not the watch, which stays kept.
-                     }
+      const heard = new Map<string, DataConnectionHeardEvent>();
+      this.heardInFlight.add(heard);
+      generation.server
+         .watchModelDocument({ uri, clientId })
+         .finally(() => this.heardInFlight.delete(heard))
+         .then(
+            answer => {
+               const known = this.watches.get(clientId);
+               if (!known) {
+                  return;
+               }
+               this.logger.debug(`Watch ${uri} again as ${clientId}`);
+               const exists = existsAfter(heard.get(answer.uri), answer);
+               this.watches.set(clientId, { uri, serverUri: answer.uri, exists });
+               if (known.exists && !exists && this.hearsDeletions) {
+                  try {
+                     this.restoreDeletion({ uri: answer.uri, sourceClientId: UNKNOWN_CLIENT_ID });
+                  } catch {
+                     // The client's listener failed, not the watch, which stays kept.
                   }
-               },
-               () => undefined
-            );
-         },
-         (error: unknown) => {
-            if (!this.watches.has(clientId)) {
-               return;
+               }
+               generation.server.getModelDocument({ uri }).then(
+                  current => {
+                     if (current.text && this.watches.has(clientId)) {
+                        try {
+                           this.restoreDirty({ uri: current.uri, text: current.text });
+                        } catch {
+                           // The client's listener failed, not the watch, which stays kept.
+                        }
+                     }
+                  },
+                  () => undefined
+               );
+            },
+            (error: unknown) => {
+               if (!this.watches.has(clientId)) {
+                  return;
+               }
+               if (this.generation !== generation) {
+                  this.logger.debug(`Watch of ${uri} as ${clientId} cut short by a lost connection; the next one sends it again`);
+                  return;
+               }
+               this.reportError(error, resolve(DATA_CONNECTION_WATCH_RESTORE_FAILED, { uri, detail: describeError(error) }));
             }
-            if (this.generation !== generation) {
-               this.logger.debug(`Watch of ${uri} as ${clientId} cut short by a lost connection; the next one sends it again`);
-               return;
-            }
-            this.reportError(error, resolve(DATA_CONNECTION_WATCH_RESTORE_FAILED, { uri, detail: describeError(error) }));
-         }
-      );
+         );
    }
 
    /**

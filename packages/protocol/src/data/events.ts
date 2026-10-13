@@ -62,6 +62,12 @@ export interface TransferDocumentUpdatedEvent<
     */
    sourceClientId: string;
    reason: TransferDocumentUpdateReason;
+   /**
+    * The position of this event among the update and deletion events the
+    * server sent on this connection, which a watch's answer carries as of
+    * the moment it was taken: a greater one was sent later.
+    */
+   sequence: number;
 }
 
 /** Callback shape for `DataClientProtocol.onDocumentUpdated`. */
@@ -158,9 +164,16 @@ export interface TransferDocumentDeletedEvent {
    /**
     * The session whose `deleteModelDocument` removed the file, so it can tell
     * its own deletion from another's; the unknown-client id for a file
-    * removed outside any session, as a file watcher reports one.
+    * removed outside any session, as a file watcher reports one, and for one
+    * a `DataConnection` found gone after a reconnect, which no event named.
     */
    readonly sourceClientId: string;
+   /**
+    * The position of this event among the update and deletion events the
+    * server sent on this connection, as on an update; absent on a deletion a
+    * `DataConnection` found after a reconnect, which the server never sent.
+    */
+   readonly sequence?: number;
 }
 
 /** Callback shape for `DataClientProtocol.onDocumentDeleted`. */
