@@ -159,9 +159,10 @@ of the ways that happen have nothing to do with the test:
   asserting nothing. A file pattern is safe here, since no package passes
   `--passWithNoTests`.
 - **The break landed on a source the run does not load.** A package's own tests
-  import `src` directly, but an example or end-to-end test resolves
-  `@hydranium/*` to built `lib`, so editing `src` without rebuilding changes
-  nothing the run can see.
+  normally import its `src` directly, but reach every `@hydranium/*` package
+  they name through built `lib`, the package's own published subpaths
+  included, as an example's or an e2e test's imports always do; so editing
+  `src` without rebuilding changes nothing the run can see.
 
 Others are the test's own:
 
