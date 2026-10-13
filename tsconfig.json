@@ -6,6 +6,7 @@
     { "path": "packages/core" },
     { "path": "packages/data-server" },
     { "path": "packages/glsp-server" },
+    { "path": "packages/client-browser" },
     { "path": "packages/client-theia" },
     { "path": "packages/glsp-client-theia" },
     { "path": "packages/data-client-theia" },

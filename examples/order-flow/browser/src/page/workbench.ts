@@ -45,20 +45,12 @@
  * are silent.
  */
 
-import { createMessageConnection, type MessageConnection } from 'vscode-jsonrpc/browser';
-import {
-   InitializedNotification,
-   InitializeRequest,
-   LogMessageNotification,
-   type PublishDiagnosticsParams,
-   PublishDiagnosticsNotification,
-   RegistrationRequest,
-   UnregistrationRequest
-} from 'vscode-languageserver-protocol';
+import { connectWorkerHeads, initializeLanguageClient, WORKER_ERROR_EVENT_PHASE, type WorkerHeads } from '@hydranium/client-browser';
+import { type PublishDiagnosticsParams, PublishDiagnosticsNotification } from 'vscode-languageserver-protocol';
 import {
    ConsoleLogger,
-   createMessagePortTransport,
    DataConnectionWithEvents,
+   type DataPort,
    type DataServerDiagnosticsProtocol,
    type DataServerProtocol,
    type DataSession,
@@ -67,6 +59,7 @@ import {
    type Locale,
    type Logger,
    type TransferDocument,
+   type WorkerErrorMessage,
    describeError
 } from '@hydranium/protocol';
 import {
@@ -76,8 +69,6 @@ import {
    type ProcessModel
 } from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
 import {
-   BOOTSTRAP_MESSAGE_TYPE,
-   isWorkerErrorMessage,
    isWorkspaceReadyMessage,
    isWorkspaceResetMessage,
    RESET_WORKSPACE_MESSAGE_TYPE,
@@ -97,7 +88,6 @@ import { publishReport, ReportDetail } from './report-detail.js';
 import { wireResponsiveLayout } from './responsive.js';
 import { wireLayoutReset, wireSplitters } from './splitters.js';
 import { WorkspacePanel } from './workspace-panel.js';
-import { WorkerDataPort } from './worker-data-port.js';
 
 /** The union of transfer roots this workspace's three grammars produce. */
 type OrderFlowTransferRoot = DomainModel | LayoutModel | ProcessModel;
@@ -432,30 +422,38 @@ function wireSchemeSwitch(): void {
    applyScheme(initial);
 }
 
-/** Everything the page holds after bootstrap: one channel per head, plus the host protocol. */
+/** Everything the page holds after bootstrap: the heads, plus this host's own protocol. */
 interface WorkerChannels {
-   readonly lsp: MessageConnection;
-   readonly dataPort: MessagePort;
-   readonly glspPort: MessagePort;
+   readonly heads: WorkerHeads;
    /** The workspace the heads' filesystem came up on, once they are live. */
    readonly workspace: Promise<WorkspaceReadyMessage>;
    /** Ask the worker to forget every stored edit. The page reloads when it answers. */
    readonly resetWorkspace: () => void;
+   /** The report the heads ended on, once they have. */
+   readonly failure: () => WorkerErrorMessage | undefined;
 }
 
 /**
- * Spawn the worker and hand each head its own channel. The worker keeps `port2`
- * of each pair; the page keeps `port1`.
+ * Spawn the worker and hand each head its own channel, which is the package's
+ * job; this host's own messages ride the same global beside the framework's.
  */
 function bootstrapWorker(logger: Logger): WorkerChannels {
    const worker = new Worker(WORKER_URL);
-   // Without this the page's only symptom for a worker that failed to load, or
-   // threw on its first line, is a request that never settles — the same
-   // appearance as a server still working. A worker has no visible console of
-   // its own, so an unreported error here costs a debugging session.
-   worker.addEventListener('error', event => {
-      setStatus(`worker failed to start (${WORKER_URL}): ${event.message || 'no detail — check the script loaded'}`);
+   const heads = connectWorkerHeads(worker, { logger });
+   // Every report goes to the status line; the one the heads ended on is also
+   // kept, because the rejection it causes carries only a generic text and the
+   // page reports a failed start from the rejection.
+   let lastReport: WorkerErrorMessage | undefined;
+   let failure: WorkerErrorMessage | undefined;
+   heads.onWorkerError(report => {
+      lastReport = report;
+      setStatus(
+         report.phase === WORKER_ERROR_EVENT_PHASE
+            ? `worker error: ${report.message}`
+            : `worker error during ${report.phase}: ${report.message}`
+      );
    });
+   heads.onDispose(() => (failure = lastReport));
    // The executor runs synchronously, so `announceWorkspace` is assigned before
    // the listener below can possibly fire.
    let announceWorkspace: (message: WorkspaceReadyMessage) => void = () => undefined;
@@ -464,10 +462,6 @@ function bootstrapWorker(logger: Logger): WorkerChannels {
    });
 
    worker.addEventListener('message', event => {
-      if (isWorkerErrorMessage(event.data)) {
-         setStatus(`worker error during ${event.data.phase}: ${event.data.message}`);
-         return;
-      }
       if (isWorkspaceReadyMessage(event.data)) {
          announceWorkspace(event.data);
          return;
@@ -481,27 +475,7 @@ function bootstrapWorker(logger: Logger): WorkerChannels {
       }
    });
 
-   // One channel per head, transferred in a single message. Neither head is
-   // given the worker global — see `head-channels.ts` for what happens if one
-   // is, and note that the cost of the discipline is exactly this: one extra
-   // `MessageChannel` and one more entry in the transfer list.
-   const lsp = new MessageChannel();
-   const data = new MessageChannel();
-   const glsp = new MessageChannel();
-   worker.postMessage({ type: BOOTSTRAP_MESSAGE_TYPE, ports: { lsp: lsp.port2, data: data.port2, glsp: glsp.port2 } }, [
-      lsp.port2,
-      data.port2,
-      glsp.port2
-   ]);
-   // Both ends use `createMessagePortTransport`; see it for why.
-   const lspTransport = createMessagePortTransport(lsp.port1);
-   return {
-      lsp: createMessageConnection(lspTransport.reader, lspTransport.writer, logger),
-      dataPort: data.port1,
-      glspPort: glsp.port1,
-      workspace,
-      resetWorkspace: () => worker.postMessage({ type: RESET_WORKSPACE_MESSAGE_TYPE })
-   };
+   return { heads, workspace, resetWorkspace: () => worker.postMessage({ type: RESET_WORKSPACE_MESSAGE_TYPE }), failure: () => failure };
 }
 
 /**
@@ -535,8 +509,8 @@ const PAGE_SESSION_LABEL = 'order-flow-browser-page';
  * parties sharing one `clientId` read each other's writes as their own echoes
  * and ignore them.
  */
-function openDataHead(dataPort: MessagePort, logger: Logger): DataHead {
-   const connection = new DataConnectionWithEvents<OrderFlowTransferRoot, OrderFlowDataServer>(new WorkerDataPort(dataPort, logger));
+function openDataHead(port: DataPort): DataHead {
+   const connection = new DataConnectionWithEvents<OrderFlowTransferRoot, OrderFlowDataServer>(port);
    return { connection, session: connection.createSession(PAGE_SESSION_LABEL) };
 }
 
@@ -840,70 +814,13 @@ export async function main(locale: Locale | undefined): Promise<void> {
    // The page's own end of each head's connection logs to the browser console.
    const pageLogger = new ConsoleLogger();
    setStatus('starting worker…');
-   const channels = bootstrapWorker(pageLogger.with('LSP head'));
-   const connection = channels.lsp;
+   const channels = bootstrapWorker(pageLogger);
+   const connection = channels.heads.lsp;
 
    connection.onError(([error]) => setStatus(`connection error: ${error.message}`));
    connection.onClose(() => setStatus('connection closed by the worker'));
 
-   // Registered BEFORE `listen`, and before `initialize` goes out, because this
-   // is the earliest point at which a line can arrive and the lines from the
-   // first workspace build are the ones worth having. A handler attached after
-   // `initialize` resolves would miss the whole of server startup — the part a
-   // reader most wants when the page does not come up.
-   connection.onNotification(LogMessageNotification.type, params => log.append(params.type, params.message));
-
-   // Acknowledge dynamic registrations: declaring `workspace.configuration` makes
-   // the server register for the sections it watches, and an unanswered request
-   // surfaces as a page error. Nothing is kept — the page pushes its own
-   // section's changes whether or not anything registered for them.
-   connection.onRequest(RegistrationRequest.type, () => undefined);
-   connection.onRequest(UnregistrationRequest.type, () => undefined);
-
-   // Before `listen`, and the level control also before `initialize`: the server
-   // reads its configuration section while the workspace comes up, and an
-   // unanswered request there reads as a client with no settings.
-   wireLogLevelControl(connection);
    wireTraceControl(connection, log);
-
-   connection.listen();
-
-   setStatus(locale === undefined ? 'initializing…' : `initializing… (locale '${locale}')`);
-   const initializeResult = await connection.sendRequest(InitializeRequest.type, {
-      processId: null,
-      rootUri: WORKSPACE_ROOT_URI,
-      // The reading user's language, which only the client knows. A worker has
-      // no host to ask — no `vscode.env.language`, no Theia `localeId` — so the
-      // page has to state it, and `initialize` is the same slot every other host
-      // uses. Absent means the framework's English, which is correct rather than
-      // a fallback: a page that declares no language has no user to have one.
-      locale,
-      // `applyEdit` declared because the adapter answers it, and for no stronger
-      // reason than that it is true. **It does not gate the request, measured:**
-      // `applyEditToLanguageClient` checks no client capability, only that the
-      // document is open, and `vscode-languageserver` forwards
-      // `workspace/applyEdit` unconditionally, so a page that omits the
-      // declaration still receives the request on every server-side write to a
-      // document it has open — and answers `MethodNotFound` to it
-      // if it has no handler, which is a silent, total loss of the inbound
-      // direction. The declaration documents the client; the HANDLER is what
-      // makes the sync work.
-      //
-      // Everything else is left off rather than filled in optimistically. An
-      // absent capability makes Langium fall back to a shape every client
-      // understands, whereas claiming one this page does not implement produces
-      // a response it cannot render.
-      // `configuration` DOES gate its request, unlike `applyEdit` above: the
-      // provider reads the declaration at `initialize` and, absent it, asks for
-      // no section ever, so the log-level picker would reach nothing.
-      capabilities: { workspace: { applyEdit: true, configuration: true } },
-      workspaceFolders: [{ uri: WORKSPACE_ROOT_URI, name: 'order-flow' }]
-   });
-
-   // The `initialize` RESULT is what the adapter needs, not the params: the
-   // semantic-token legend is the index space the token stream is encoded in, so
-   // it has to come from the server that encoded it.
-   const adapter = new MonacoLspAdapter(connection, initializeResult.capabilities);
 
    // A HOLDER rather than a plain binding, because the two things that need it
    // cannot be ordered: the diagnostics handler has to be registered before
@@ -917,27 +834,62 @@ export async function main(locale: Locale | undefined): Promise<void> {
    // the panel exists is dropped, and the panel opens on the focused document
    // once it is wired.
    const properties: { panel?: PropertiesPanel } = {};
+   // Built from the `initialize` RESULT, not the params: the semantic-token
+   // legend is the index space the token stream is encoded in, so it has to come
+   // from the server that encoded it. Assigned in the handshake's window
+   // between `initialize` and `initialized`, with the diagnostics handler that
+   // needs it.
+   let adapter!: MonacoLspAdapter;
 
-   // ONE handler for the notification, fanning out to all three consumers. A
-   // second `onNotification` for the same method would silently REPLACE this one
-   // — `MessageConnection` keys its handlers by method and still returns a
-   // disposable — so the adapter and the sidebar take the params from here rather
-   // than subscribing for themselves.
-   //
-   // Registered in the window BETWEEN `initialize` and `initialized`, which is
-   // the only place it can be and still be both complete and after the adapter
-   // exists: the server publishes nothing before `initialized`, so nothing can
-   // be missed, while registering earlier would mean holding the adapter in a
-   // mutable slot the handler reads through.
-   connection.onNotification(PublishDiagnosticsNotification.type, params => {
-      diagnosticsByUri.set(params.uri, params);
-      const total = [...diagnosticsByUri.values()].reduce((sum, entry) => sum + entry.diagnostics.length, 0);
-      setStatus(`${diagnosticsByUri.size} documents validated, ${total} diagnostics`);
-      sidebar.panel?.render(diagnosticsByUri);
-      adapter.applyDiagnostics(params);
-   });
-
-   connection.sendNotification(InitializedNotification.type, {});
+   setStatus(locale === undefined ? 'initializing…' : `initializing… (locale '${locale}')`);
+   try {
+      await initializeLanguageClient(connection, {
+         rootUri: WORKSPACE_ROOT_URI,
+         // The reading user's language, which only the client knows. A worker has
+         // no host to ask — no `vscode.env.language`, no Theia `localeId` — so the
+         // page has to state it, and `initialize` is the same slot every other host
+         // uses. Absent means the framework's English, which is correct rather than
+         // a fallback: a page that declares no language has no user to have one.
+         locale,
+         // The default capabilities, `applyEdit` and `configuration`, are the two
+         // this page answers: the adapter handles `workspace/applyEdit`, and the
+         // level picker below answers the configuration request. Everything else
+         // is left off rather than filled in optimistically. An absent capability
+         // makes Langium fall back to a shape every client understands, whereas
+         // claiming one this page does not implement produces a response it cannot
+         // render.
+         configuration: wireLogLevelControl(connection),
+         // The lines from the first workspace build are the ones worth having: a
+         // handler attached after `initialize` resolves would miss the whole of
+         // server startup, the part a reader most wants when the page does not
+         // come up.
+         onLogMessage: params => log.append(params.type, params.message),
+         beforeInitialized: result => {
+            adapter = new MonacoLspAdapter(connection, result.capabilities);
+            // ONE handler for the notification, fanning out to all three consumers.
+            // A second `onNotification` for the same method would silently REPLACE
+            // this one — `MessageConnection` keys its handlers by method and still
+            // returns a disposable — so the adapter and the sidebar take the params
+            // from here rather than subscribing for themselves.
+            connection.onNotification(PublishDiagnosticsNotification.type, params => {
+               diagnosticsByUri.set(params.uri, params);
+               const total = [...diagnosticsByUri.values()].reduce((sum, entry) => sum + entry.diagnostics.length, 0);
+               setStatus(`${diagnosticsByUri.size} documents validated, ${total} diagnostics`);
+               sidebar.panel?.render(diagnosticsByUri);
+               adapter.applyDiagnostics(params);
+            });
+         }
+      });
+   } catch (error: unknown) {
+      // A worker that failed to load, or threw on its first line, ends the
+      // heads and rejects this handshake with a generic text; the report it
+      // ended on names the phase, and the URL goes with it because the event
+      // for a script that did not load carries no detail of its own.
+      const failure = channels.failure();
+      throw failure === undefined
+         ? error
+         : new Error(`worker ended during ${failure.phase} (${WORKER_URL}): ${failure.message}`, { cause: error });
+   }
 
    // The editors wait for the worker's workspace, which is the only place their
    // text can honestly come from once a stored edit may be laid over the seed.
@@ -1008,7 +960,7 @@ export async function main(locale: Locale | undefined): Promise<void> {
       }
    }, DIAGNOSTICS_DEADLINE_MS);
 
-   const dataHead = openDataHead(channels.dataPort, pageLogger.with('data head'));
+   const dataHead = openDataHead(channels.heads.data);
    await watchThroughDataHead(dataHead);
 
    // Enabled here, after the data head has answered once: the save goes through
@@ -1049,7 +1001,7 @@ export async function main(locale: Locale | undefined): Promise<void> {
       // The callback keeps the line current as elements are created and deleted;
       // the resolved value is the first reading. A report written once would go
       // stale on the first palette gesture, beside a layout report that does not.
-      setGlspReport(await mountProcessDiagram(channels.glspPort, GLSP_HEAD_DOCUMENT, setGlspReport, pageLogger.with('GLSP head')));
+      setGlspReport(await mountProcessDiagram(channels.heads.glsp, GLSP_HEAD_DOCUMENT, setGlspReport));
       // AFTER the mount, and the ordering is the whole of it: a listener put on
       // this element before the diagram takes it over never fires — measured,
       // the same registration moved above this line stops working.

@@ -15,14 +15,13 @@
 import { NoopLogger } from '@hydranium/protocol';
 import { makeMessagePortPair } from '@hydranium/protocol/testing/node';
 import { describe, expect, it } from 'vitest';
-import { WorkerDataPort } from '../src/page/worker-data-port.js';
+import { WorkerDataPort } from '../src';
 
 describe('WorkerDataPort', () => {
    it('refuses a connection once disposed, rather than handing back one that never answers', async () => {
       const ports = makeMessagePortPair();
       try {
-         // A Node port standing in for the browser one the page holds.
-         const dataPort = new WorkerDataPort(ports.port1 as unknown as MessagePort, new NoopLogger());
+         const dataPort = new WorkerDataPort(ports.port1, new NoopLogger());
          dataPort.dispose();
 
          await expect(dataPort.connect()).rejects.toThrow('disposed');
@@ -33,7 +32,7 @@ describe('WorkerDataPort', () => {
 
    it('hands every generation the same connection', async () => {
       const ports = makeMessagePortPair();
-      const dataPort = new WorkerDataPort(ports.port1 as unknown as MessagePort, new NoopLogger());
+      const dataPort = new WorkerDataPort(ports.port1, new NoopLogger());
       try {
          const first = await dataPort.connect();
 
@@ -48,7 +47,7 @@ describe('WorkerDataPort', () => {
 
    it('releases its connection when disposed, though no generation holds it any more', async () => {
       const ports = makeMessagePortPair();
-      const dataPort = new WorkerDataPort(ports.port1 as unknown as MessagePort, new NoopLogger());
+      const dataPort = new WorkerDataPort(ports.port1, new NoopLogger());
       try {
          const connection = await dataPort.connect();
          let released = false;

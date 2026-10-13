@@ -23,15 +23,19 @@ its worker launcher. Run all heads in one worker, so they share one workspace.
    than failing at runtime in a worker with no console. If you mount a diagram,
    add `loader: { '.ttf': 'dataurl' }` for GLSP's font.
 
-2. **Give every head its own `MessagePort`.** The page creates one
-   `MessageChannel` per head and transfers the ports to the worker in a
-   bootstrap message. Never bind a head to the worker's global scope: heads on
-   one global read each other's messages, and GLSP posts a startup string
-   there whatever you configure. Connect each port through
-   `createMessagePortTransport` from `@hydranium/protocol`, at both ends, so
-   that closing a connection on one end closes the head on the other. On the
+2. **Give every head its own `MessagePort`.** In the page, build the `Worker`
+   and hand it to `connectWorkerHeads` from `@hydranium/client-browser`, which
+   creates one `MessageChannel` per head and transfers the ports to the worker
+   in the framework's bootstrap message. In the worker, read that message with
+   `isWorkerBootstrapMessage` from `@hydranium/protocol` and start each head
+   on its port. Never bind a head to the worker's global scope: heads on one
+   global read each other's messages, and GLSP posts a startup string there
+   whatever you configure. In the worker, connect each port through
+   `createMessagePortTransport` from `@hydranium/protocol`; `connectWorkerHeads`
+   does the page's end, so that closing a connection on one end closes the
+   head on the other. On the
    LSP port's close, call `TextDocuments.closeLanguageClientDocuments()`, since
-   a worker has no process to exit. See `src/head-channels.ts`.
+   a worker has no process to exit. See `src/worker/order-flow-worker.ts`.
 
    Import `reflect-metadata` first in the worker's entry, before any module
    with an Inversify decorator. GLSP's server classes read their metadata when
@@ -121,17 +125,19 @@ const fileSystem = await persistentFileSystem({
    `{ validation: true }`. See `src/worker/order-flow-worker.ts`.
 
 6. **Save through the data head.** An editor's `didSave` writes nothing: LSP
-   leaves the write to the client, and a page has no disk. Save with the data
-   head's `saveModelDocument`, which writes in the worker. A diagram edit
-   reaches the editor first, so one save covers both.
+   leaves the write to the client, and a page has no disk. Open a
+   `DataConnection` on the port `connectWorkerHeads` hands you and save with
+   `saveModelDocument`, which writes in the worker. A diagram edit reaches the
+   editor first, so one save covers both.
 
 7. **Show the server's log.** The server logs every head over LSP
-   `window/logMessage`, and a page with no handler loses all of it. Register
-   the handler before the language client starts, so you also see the first
-   build, and keep only the newest lines. See `src/page/log-panel.ts`.
+   `window/logMessage`, and a page with no handler loses all of it. Pass the
+   handler as `onLogMessage` to `initializeLanguageClient`, which registers it
+   before the connection listens, so you also see the first build, and keep
+   only the newest lines. See `src/page/log-panel.ts`.
 
 8. **Mount the diagram.** Connect GLSP's `BaseJsonrpcGLSPClient` over the GLSP
-   port: build a `MessageConnection` on the port's transport and wrap it with
+   head's connection from `connectWorkerHeads`, wrapped with
    `sendByMethodName` from `@hydranium/protocol`. Upstream's
    `GLSPWebWorkerProvider` starts a worker of its own, so it is not the piece
    to use. Then supply what a shell would:
@@ -148,9 +154,15 @@ const fileSystem = await persistentFileSystem({
    the `mousedown`. Without it, a finger drag moves nothing, or drops the node
    at `0,0`. See `src/page/process-diagram.ts`.
 
-9. **Make the text editor a full client.** In the example, Monaco talks LSP
-   over the LSP port (`src/page/monaco-lsp-adapter.ts`). What a shell would
-   otherwise do:
+9. **Make the text editor a full client.** Run the handshake with
+   `initializeLanguageClient` from `@hydranium/client-browser`: it answers the
+   server's capability registrations and its configuration request, which the
+   server sends while the workspace comes up, then sends `initialize` and
+   `initialized`. Register your diagnostics handler in its `beforeInitialized`
+   hook, once the server's answer is known; a second handler for the same
+   notification replaces the first. In the example, Monaco talks LSP over the
+   LSP port (`src/page/monaco-lsp-adapter.ts`). What a shell would otherwise
+   do:
    - Tell Monaco where its editor worker is. Assign `self.MonacoEnvironment`
      with a `getWorker` that builds the worker from a path your build gives
      you, at module scope, before any editor or model exists.
@@ -180,8 +192,11 @@ const fileSystem = await persistentFileSystem({
   resolves against the page, not the module creating it. Derive it from your
   build, and report the URL you tried.
 - **The worker failed, and the console is empty.** Errors thrown in the
-  workspace walk become unhandled rejections in the worker. Add `error` and
-  `unhandledrejection` listeners in the worker that post to the page.
+  workspace walk become unhandled rejections in the worker. Add an
+  `unhandledrejection` listener in the worker that posts a
+  `WorkerErrorMessage` to the page, and show what `onWorkerError` reports.
+  An uncaught throw needs no listener: it reaches the page as the `Worker`'s
+  own `error` event, which `connectWorkerHeads` reports too.
 - **A diagram never loads in an automated test.** It renders on animation
   frames, which a hidden tab never gets. Drive tests with Playwright, whose
   headless Chromium counts as visible.
@@ -195,8 +210,9 @@ const fileSystem = await persistentFileSystem({
   and profiling need Node, so in a browser they reject; latency still works.
 
 Limits that hold for any browser host: a page or worker that dies ends no
-session, and a worker that dies leaves the page's pending requests waiting,
-since a port cannot report either; and a closing tab cannot wait for a save. See
+session; a worker that fails to start has its pending requests rejected, but
+one that dies later leaves them waiting, since a port cannot report either;
+and a closing tab cannot wait for a save. See
 [Status and limitations](../adopting/status.md#unsaved-edits-are-kept-only-so-far).
 
 ## Going further

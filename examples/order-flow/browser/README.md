@@ -6,7 +6,8 @@ backend. A plain page drives them over three `MessagePort`s and gives them a
 GLSP diagram, three Monaco editors, a navigable workspace and a server log.
 
 No shell does a host's work here, so everything a browser host has to supply
-is in this package. For the steps themselves, read the guide
+beyond `@hydranium/client-browser` is in this package. For the steps
+themselves, read the guide
 [Host in a browser](../../../docs/guides/host-in-a-browser.md); this README
 shows you where each piece lives and how to see it work.
 
@@ -63,20 +64,19 @@ the call-stack view. The bundles are not minified unless you pass `--minify` to
 | Concern | Files |
 | --- | --- |
 | The worker: all three heads, the filesystem, the validating build, latency | [src/worker/order-flow-worker.ts](src/worker/order-flow-worker.ts) |
-| The bootstrap that hands each head its own port, shared by both ends | [src/head-channels.ts](src/head-channels.ts) |
+| This host's own messages on the worker global, beside the framework's bootstrap: the workspace the heads came up on, and the reset | [src/head-channels.ts](src/head-channels.ts) |
 | Persistence in IndexedDB | [src/workspace/indexeddb-file-system-store.ts](src/workspace/indexeddb-file-system-store.ts) |
 | The bare `'path'` alias for the browser bundle | [src/workspace/posix-path-shim.ts](src/workspace/posix-path-shim.ts), [esbuild.mjs](esbuild.mjs) |
 | The workspace seed | [scripts/generate-workspace-seed.mts](scripts/generate-workspace-seed.mts), [src/generated/workspace-seed.ts](src/generated/workspace-seed.ts) |
 | The static server | [scripts/serve.mts](scripts/serve.mts) |
 | Page entry: Monaco's locale, loaded before Monaco | [src/page/order-flow-page.ts](src/page/order-flow-page.ts), [monaco-editor-core-nls.d.ts](src/page/monaco-editor-core-nls.d.ts) |
-| Page wiring: the three channels, save, dialogs, theme switch | [src/page/workbench.ts](src/page/workbench.ts) |
+| Page wiring: the heads from `@hydranium/client-browser`, save, dialogs, theme switch | [src/page/workbench.ts](src/page/workbench.ts) |
 | DOM lookups and the element builder | [src/page/dom.ts](src/page/dom.ts) |
 | Monaco's LSP client and editor themes | [src/page/monaco-lsp-adapter.ts](src/page/monaco-lsp-adapter.ts) |
 | Monaco's editor worker | [src/page/monaco-editor-worker.ts](src/page/monaco-editor-worker.ts), [monaco-editor-core-worker.d.ts](src/page/monaco-editor-core-worker.d.ts) |
 | The pinned editor pair and the lookup editor | [src/page/editor-area.ts](src/page/editor-area.ts) |
 | The diagram mount | [src/page/process-diagram.ts](src/page/process-diagram.ts) |
 | Touch drags on the diagram | [src/page/touch-input.ts](src/page/touch-input.ts) |
-| The data-head port | [src/page/worker-data-port.ts](src/page/worker-data-port.ts) |
 | The properties panel | [src/page/properties-panel.ts](src/page/properties-panel.ts) |
 | The workspace list and problems list | [src/page/workspace-panel.ts](src/page/workspace-panel.ts) |
 | The server log, its level and the message trace | [src/page/log-panel.ts](src/page/log-panel.ts), [src/page/log-controls.ts](src/page/log-controls.ts) |

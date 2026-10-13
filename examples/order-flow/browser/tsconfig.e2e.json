@@ -1,8 +1,8 @@
 {
-  // The tsconfig of the Node-side test tiers: passed via `--tsconfig` from the
+  // The tsconfig of the Node-side test tier: passed via `--tsconfig` from the
   // `test:e2e` script, and used by `typecheck:test` for everything under `test`,
   // so the Playwright specs are type-checked in `npm run check` even though that
-  // suite is not run there, and the vitest tests are type-checked beside them.
+  // suite is not run there.
   //
   // Without `--tsconfig` Playwright walks up from `playwright.config.mts`,
   // reaches the repo root `tsconfig.json`, and fails to load it: that file is a

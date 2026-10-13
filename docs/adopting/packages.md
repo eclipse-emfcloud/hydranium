@@ -16,13 +16,15 @@ reads `<head>-<role>-<platform>`, and a name with no head spans all heads.
 | [`@hydranium/client-theia`](../../packages/client-theia/README.md) | your host is Theia | What every head needs in a Theia application: logging, diagnostics and connection handling. |
 | [`@hydranium/data-client-theia`](../../packages/data-client-theia/README.md) | …and you run the data head | The data head's client side in Theia. |
 | [`@hydranium/glsp-client-theia`](../../packages/glsp-client-theia/README.md) | …and you run the GLSP head | The GLSP head's client side in Theia, including the diagram widget. |
+| [`@hydranium/client-browser`](../../packages/client-browser/README.md) | your host is a web page | The page side of a host whose heads run in a web worker: the worker bootstrap, the LSP handshake and the data head's port. |
 | **Tooling** | | |
 | [`@hydranium/cli`](../../packages/cli/README.md) | always, as a development dependency | `hydranium-cli`: scaffold a project, inspect a grammar, validate models headlessly, generate the transfer model, and drive a data server. |
 | [`@hydranium/conformance`](../../packages/conformance/README.md) | you want to check your server against the protocol | A conformance suite you run against your own server, in any test runner. |
 | [`@hydranium/langium`](../../packages/langium/README.md) | you import Langium at all | The one route to Langium, so your install has exactly one copy of it. |
 
-For VS Code or a plain browser page there is no client package; copy the
-client code from the order-flow example.
+For VS Code there is no client package; copy the client code from the
+order-flow example. In a web page, the text editor and the diagram are still
+copied from it.
 
 ## Entry points
 

@@ -1,0 +1,15 @@
+// The test tree's project, which an editor and vitest's transform both find
+// by name; the transform takes its compiler options, legacy decorators
+// included, from here. `typecheck:test` checks the same files through
+// `../tsconfig.test.json`. Without this file the TS server infers a project
+// that loads every `@types` package, and every test shows `TS2403` clashes
+// between `@types/mocha` and `@types/jest`.
+//
+// `include` is declared, not inherited: the transform applies a config only to
+// files its own `include` lists, so a test declaring a decorated class would
+// fail to load. `../src` is listed because the tests import it, and a
+// composite project rejects an import it does not include (TS6307).
+{
+  "extends": "../tsconfig.test.json",
+  "include": ["../src", "."]
+}

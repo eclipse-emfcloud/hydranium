@@ -324,13 +324,14 @@ const policyOverrides = [
          'packages/data-server/src/**/*.ts',
          'packages/glsp-server/src/**/*.ts',
          'packages/protocol/src/**/*.ts',
-         // The five packages below also publish gated browser-neutral entries,
-         // and the esbuild probe that gates them cannot see a global at all —
-         // only an import. So without this rule a `process.env` read on one of
-         // their neutral surfaces passes every gate in the repository and then
-         // throws in a Theia frontend.
+         // The packages below also publish browser-loaded entries, neutral or
+         // DOM, that `check:neutral` gates, and the esbuild probe that gates
+         // them cannot see a global at all — only an import. So without this
+         // rule a `process.env` read on one of those surfaces passes every gate
+         // in the repository and then throws in a Theia frontend or a page.
          'packages/langium/src/**/*.ts',
          'packages/conformance/src/**/*.ts',
+         'packages/client-browser/src/**/*.ts',
          'packages/client-theia/src/**/*.ts',
          'packages/glsp-client-theia/src/**/*.ts',
          'packages/data-client-theia/src/**/*.ts'

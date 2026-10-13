@@ -7,16 +7,23 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { createMessagePortTransport, renderFrameworkMessage, type DataPort, type Logger, type ResolvedMessage } from '@hydranium/protocol';
+import {
+   createMessagePortTransport,
+   renderFrameworkMessage,
+   type DataPort,
+   type Logger,
+   type ResolvedMessage,
+   type TransferredMessagePort
+} from '@hydranium/protocol';
 import { createMessageConnection, Emitter, type MessageConnection } from 'vscode-jsonrpc/browser';
 
 /**
  * The host half of the data head for a page talking to a worker.
  *
- * This is the whole of what a browser host has to write to reach the data head
- * — everything above it (the open/watch order, `baseVersion` conflict handling,
- * echo filtering by `sourceClientId`) is host-invariant and already in
- * `DataConnection` and `DataSession`.
+ * This is the whole of what a browser host has to supply to reach the data
+ * head; everything above it (the open/watch order, `baseVersion` conflict
+ * handling, echo filtering by `sourceClientId`) is host-invariant and already
+ * in `DataConnection` and `DataSession`.
  *
  * `vscode-jsonrpc/browser`, never the package root: version 9's root entry ships
  * no runtime abstraction layer and throws on the first message rather than at
@@ -30,14 +37,15 @@ export class WorkerDataPort implements DataPort {
    protected connection?: MessageConnection;
 
    constructor(
-      protected readonly port: MessagePort,
+      /** The page's end of the data head's port, typed as the handshake types it. */
+      protected readonly port: TransferredMessagePort,
       /** Where the connection logs its protocol faults, and what it does on its own. */
-      readonly logger: Logger
+      readonly logger?: Logger
    ) {}
 
    /**
     * The transport is the port the worker was already handed at bootstrap, so
-    * there is nothing to open — but the connection must be `listen()`ing before
+    * there is nothing to open, but the connection must be `listen()`ing before
     * it is returned, because the RPC proxy queues calls on this promise and
     * never listens itself.
     *
@@ -66,15 +74,16 @@ export class WorkerDataPort implements DataPort {
       return Promise.resolve(this.connection);
    }
 
+   /**
+    * To the console: a page has no notification surface of its own, and an
+    * unreported data-head error presents as an empty model, which reads as a
+    * valid document. A host with a surface overrides this.
+    *
+    * No translation map: omitting the argument takes the English. The raw
+    * error goes alongside rather than into the sentence, because `reported`
+    * already carries the detail and only the throw carries a stack.
+    */
    reportError(error: unknown, reported: ResolvedMessage): void {
-      // The page has one status line and no notification surface, so failures
-      // go to the console rather than being swallowed — an unreported data-head
-      // error presents as an empty model, which reads as a valid document.
-      //
-      // No translation map: this host ships no catalogue, and omitting the
-      // argument is how an adopter without i18n opts out and takes the English.
-      // The raw error goes alongside rather than into the sentence, because
-      // `reported` already carries the detail and only the throw carries a stack.
       console.error(`[data head] ${renderFrameworkMessage(reported)}`, error);
    }
 

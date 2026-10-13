@@ -71,11 +71,13 @@ types. Your host can: turn the setting on and add theme rules named by your
 server's token types, as the browser example does in
 [`monaco-lsp-adapter.ts`](../../examples/order-flow/browser/src/page/monaco-lsp-adapter.ts).
 
-### Client libraries cover Theia only
+### Client libraries cover Theia, and part of a web page
 
-The client packages target Theia. For VS Code or a plain browser page, copy the
-client code from the order-flow example. The protocol packages are
-host-neutral, so a client for another host is supported.
+The client packages target Theia. For a web page,
+`@hydranium/client-browser` covers the worker bootstrap, the LSP handshake and
+the data head; the text editor and the diagram are copied from the order-flow
+example. For VS Code, copy the client code from the order-flow example. The
+protocol packages are host-neutral, so a client for another host is supported.
 
 ### Persistence is text files on disk
 

@@ -7,6 +7,6 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { definePackageVitestConfig } from '../../../vitest.shared';
+import { definePackageVitestConfig } from '../../vitest.shared';
 
-export default definePackageVitestConfig('order-flow-browser');
+export default definePackageVitestConfig('client-browser');
