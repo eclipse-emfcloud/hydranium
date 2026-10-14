@@ -194,8 +194,9 @@ function rehydrateCst(document: LangiumDocument, factory: LangiumDocumentFactory
  * Each build refreshes
  * the idle window of the documents in its batch; when a closed, sheddable
  * document's window elapses, every AST node's `$cstNode` and every reference's
- * `$refNode` are nulled, and the CST root, `Range`s and `Position`s become
- * unreachable and are collected.
+ * `$refNode` are nulled, and the CST becomes unreachable with the `Range`s
+ * and `Position`s only it holds. A description's segments and the reference
+ * index's segments share the CST's `Range` objects, so those stay.
  *
  * **Terminology.** *Residency* is the state axis (is the CST in memory? —
  * `resident` vs `shed`); *shed* is both the act and the policy vocabulary (drop
