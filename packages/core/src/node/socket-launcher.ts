@@ -8,15 +8,29 @@
  ********************************************************************************/
 
 import * as net from 'node:net';
-import { Deferred, describeErrorWithStack, type Disposable, type Logger } from '@hydranium/protocol';
+import { Deferred, describeError, describeErrorWithStack, type Disposable, type Logger } from '@hydranium/protocol';
 import { createMessageConnection, SocketMessageReader, SocketMessageWriter } from 'vscode-jsonrpc/node';
 import type { MessageConnection } from 'vscode-jsonrpc';
 import type { IntegratedServer } from '../launcher/integrated-server.js';
+import type { ServerSharedServicesMinimal } from '../langium/shared-services.js';
+import { initializeWorkspaceWithoutLsp, type WorkspaceFolderInput } from '../langium/workspace/initialize-workspace.js';
 
 /**
  * Construction-time options for {@link startSocketServer}.
  */
 export interface SocketServerOptions {
+   /**
+    * Shared services tree the head serves from. Without an LSP head the
+    * launcher brings its workspace up before listening, so a client never
+    * reaches a workspace that is not up.
+    */
+   readonly shared: ServerSharedServicesMinimal;
+   /**
+    * Workspace root(s) to initialize — a filesystem path or a `URI`. Required
+    * when no LSP head is composed, refused beside one: see
+    * {@link initializeWorkspaceWithoutLsp}.
+    */
+   readonly workspace?: WorkspaceFolderInput | ReadonlyArray<WorkspaceFolderInput>;
    /**
     * Port to bind. Default `0` — OS-assigned ephemeral. Resolve the
     * actual port off {@link StartedSocketServer.port} once `started`
@@ -71,10 +85,12 @@ export type OnClientConnection = (connection: MessageConnection) => Disposable;
 /**
  * Live socket server handle returned by {@link startSocketServer}.
  *
- * - {@link IntegratedServer.started} resolves once `listen` resolves
- *   AND `port` is populated.
+ * - {@link IntegratedServer.started} resolves once the workspace is up,
+ *   where the launcher brings it up, AND `listen` resolves AND `port` is
+ *   populated. It rejects, and nothing listens, when the bring-up fails.
  * - {@link IntegratedServer.stopped} resolves when the underlying
- *   `net.Server` emits `close`.
+ *   `net.Server` emits `close`, or once a failed bring-up has rejected
+ *   `started`.
  * - {@link port} is undefined until `started` resolves.
  * - {@link close} triggers shutdown: disposes all active client
  *   connections and closes the underlying `net.Server`.
@@ -96,6 +112,10 @@ export interface StartedSocketServer extends IntegratedServer {
  * adopter disposable AND the underlying `MessageConnection` on socket
  * close / server shutdown. Adopters keep per-client instance creation
  * (their server objects) but don't re-implement the tracking machinery.
+ *
+ * **Without an LSP head the launcher brings the workspace up, then
+ * listens**, as `startStdioServer` does: a request served before the
+ * bring-up starts keeps its cross-file references unresolved for good.
  *
  * The port is only known once {@link StartedSocketServer.started} has
  * resolved, so announcing it — via {@link publishPortOnLspConnection} —
@@ -144,7 +164,34 @@ export function startSocketServer(options: SocketServerOptions, onClientConnecti
       connection.listen();
    });
 
-   netServer.listen(port, host);
+   // The workspace manager logs a failed initialization itself; a refused
+   // `workspace` throws before `initializing` is set.
+   let initializing = false;
+   let closed = false;
+   const begin = async (): Promise<void> => {
+      const initialization = initializeWorkspaceWithoutLsp(options.shared, options.workspace);
+      initializing = true;
+      await initialization;
+      initializing = false;
+      // A `close` during the bring-up has resolved `stopped` already.
+      if (closed) {
+         started.reject(new Error(`${tag} was closed before it listened`));
+         return;
+      }
+      netServer.listen(port, host);
+   };
+   begin().catch((err: unknown) => {
+      if (initializing) {
+         logger?.debug(`[${tag}] Startup failed: the workspace did not initialize. ${describeError(err)}`);
+      } else {
+         logger?.error(`[${tag}] Startup failed: ${describeErrorWithStack(err)}`);
+      }
+      started.reject(err);
+      stopped.resolve();
+   });
+   // `started` is always observed internally, as `startStdioServer`'s is, so a
+   // caller that closes early and ignores it cannot crash the process.
+   void started.promise.catch(() => undefined);
    netServer.on('listening', () => {
       const addressInfo = netServer.address();
       if (!addressInfo) {
@@ -189,6 +236,7 @@ export function startSocketServer(options: SocketServerOptions, onClientConnecti
       started: started.promise,
       stopped: stopped.promise,
       close(): void {
+         closed = true;
          netServer.close();
       }
    };

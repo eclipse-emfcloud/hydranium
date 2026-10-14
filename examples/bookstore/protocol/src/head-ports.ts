@@ -22,4 +22,4 @@
 export const BOOKSTORE_DATA_SERVER_PORT_COMMAND = 'bookstore/data-server/port';
 
 /** LSP request the host queries to discover the GLSP socket port. */
-export const BOOKSTORE_GLSP_PORT_COMMAND = 'bookstore/glsp/port';
+export const BOOKSTORE_GLSP_SERVER_PORT_COMMAND = 'bookstore/glsp-server/port';

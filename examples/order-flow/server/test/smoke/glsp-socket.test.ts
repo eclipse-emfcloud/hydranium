@@ -19,7 +19,7 @@
  * this subprocess tier.
  *
  * What this asserts, in the order a host integration does it:
- * - `order-flow/glsp/port` answers over the LSP connection, so the port-publish
+ * - `order-flow/glsp-server/port` answers over the LSP connection, so the port-publish
  *   handshake fired.
  * - A TCP connect to that port succeeds, so the socket is listening.
  * - stdout stayed clean enough for the LSP handshake to complete. GLSP's logs
@@ -55,7 +55,11 @@ import { sendByMethodName } from '@hydranium/protocol';
 import * as net from 'node:net';
 import { StreamMessageReader, StreamMessageWriter, createMessageConnection, type MessageConnection } from 'vscode-jsonrpc/node';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ORDER_FLOW_GLSP_PORT_COMMAND, PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
+import {
+   ORDER_FLOW_GLSP_SERVER_PORT_COMMAND,
+   PROCESS_GATEWAY_NODE_TYPE,
+   PROCESS_TASK_NODE_TYPE
+} from '@hydranium/example-order-flow-protocol';
 import { WORKSPACE_FILES, WORKSPACE_ROOT } from '../order-flow-harness.js';
 import { SPAWN_TIMEOUT_MS, type SpawnedOrderFlowServer, startSpawnedOrderFlowServer } from './spawned-order-flow-server.js';
 
@@ -65,7 +69,7 @@ import { SPAWN_TIMEOUT_MS, type SpawnedOrderFlowServer, startSpawnedOrderFlowSer
  * actually publishes — a host that retypes the literal gets no error when it
  * drifts, because the port poll retries indefinitely.
  */
-const PORT_COMMAND = ORDER_FLOW_GLSP_PORT_COMMAND;
+const PORT_COMMAND = ORDER_FLOW_GLSP_SERVER_PORT_COMMAND;
 
 /** The diagram type `OrderFlowProcessDiagramModule` declares. */
 const DIAGRAM_TYPE = 'order-flow-process';

@@ -38,10 +38,12 @@
  * that member where the server resolves it, as the scaffold's workspace would.
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import * as fs from 'node:fs';
 import { findPackageJSON } from 'node:module';
 import * as path from 'node:path';
+import * as readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { generateTransferModel } from '../src/commands/generate-transfer-model.js';
@@ -69,8 +71,34 @@ const CASES: readonly CompileCase[] = [
       label: 'three grammars',
       name: 'Depot',
       grammars: [{ name: 'Domain' }, { name: 'Process' }, { name: 'Layout' }]
-   }
+   },
+   // The only main.ts that brings the workspace up itself and prints its ports.
+   { label: 'no LSP head', name: 'Rack', heads: ['data', 'glsp'] }
 ];
+
+/**
+ * The JSON line `lib/main.js` prints on stdout, beside GLSP's startup line; the
+ * process is stopped and has exited when this settles. Rejects with its stderr
+ * when it exits before printing the line.
+ */
+async function portsLine(server: string, args: readonly string[]): Promise<string> {
+   const child = spawn(process.execPath, ['lib/main.js', ...args], { cwd: server, stdio: ['ignore', 'pipe', 'pipe'] });
+   const stderr: string[] = [];
+   child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk.toString()));
+   const lines = readline.createInterface({ input: child.stdout });
+   const line = new Promise<string>(resolve => lines.on('line', text => text.startsWith('{') && resolve(text)));
+   const exit = once(child, 'exit');
+   const exited = exit.then(([code]) => Promise.reject(new Error(`main.js exited ${String(code)}:\n${stderr.join('')}`)));
+   try {
+      return await Promise.race([line, exited]);
+   } finally {
+      exited.catch(() => undefined);
+      child.kill();
+      // Waited for, since Windows refuses to delete the directory a live
+      // process runs in.
+      await exit;
+   }
+}
 
 /**
  * The file behind `command` in the copy of `packageName` this package resolves.
@@ -110,7 +138,7 @@ function runTool(targetDir: string, packageName: string, command: string, args: 
 describe('the emitted scaffold compiles', () => {
    it.each(CASES.map(entry => [entry.label, entry] as const))(
       'generates and type-checks %s',
-      (_label, { name, heads, grammars }) => {
+      async (_label, { name, heads, grammars }) => {
          const targetDir = path.join(PACKAGE_ROOT, `out/scaffold-compiles-${name.toLowerCase()}`);
          try {
             fs.rmSync(targetDir, { recursive: true, force: true });
@@ -178,6 +206,13 @@ describe('the emitted scaffold compiles', () => {
             expect(diagramTests.length > 0).toBe(heads?.includes('glsp') ?? false);
             for (const diagramTest of diagramTests) {
                expect(() => runTool(server, 'vitest', 'vitest', ['run', `test/${diagramTest}`])).not.toThrow();
+            }
+
+            // Without an LSP head only main.ts names the workspace and reports
+            // the ports, so it is run: every head has to come up and listen.
+            if (heads !== undefined && !heads.includes('lsp')) {
+               const ports = JSON.parse(await portsLine(server, [path.join(targetDir, 'workspace')])) as unknown;
+               expect(ports).toEqual({ dataServer: expect.any(Number), glspServer: expect.any(Number) });
             }
          } finally {
             // In `finally`, so a failing case cannot leave a directory that

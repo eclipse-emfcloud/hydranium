@@ -147,20 +147,20 @@ describe('startStdioServer', () => {
       expect(await harness.ping()).toBe('pong');
    });
 
-   it('skips initialization entirely when no workspace is given', async () => {
+   it('refuses to start without a workspace when no LSP head is composed, and logs the mistake', async () => {
+      const { logger, lines } = makeAttributingLogger();
       let initCalls = 0;
       harness = makeHarness({
          initialized: async () => {
             initCalls += 1;
-         }
+         },
+         logger
       });
 
-      await harness.server.started;
-
-      // The caller said it had already initialized; the launcher only wires the
-      // transport in that case.
+      await expect(harness.server.started).rejects.toThrow(/nothing initialises the workspace/);
+      await expect(harness.server.stopped).resolves.toBeUndefined();
       expect(initCalls).toBe(0);
-      expect(await harness.ping()).toBe('pong');
+      expect(lines.filter(line => line.level === 'error')).toHaveLength(1);
    });
 
    it('rejects started and closes rather than serving an uninitialized workspace', async () => {
@@ -191,7 +191,14 @@ describe('startStdioServer', () => {
       const { logger, lines } = makeAttributingLogger();
       const toServer = new PassThrough();
       const server = startStdioServer(
-         { shared: makeStubShared(async () => undefined), logger, logTag: 'TestServer', input: toServer, output: new PassThrough() },
+         {
+            shared: makeStubShared(async () => undefined),
+            workspace: '/some/workspace',
+            logger,
+            logTag: 'TestServer',
+            input: toServer,
+            output: new PassThrough()
+         },
          () => ({ dispose: () => undefined })
       );
       try {

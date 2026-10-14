@@ -38,7 +38,8 @@ with `@hydranium/core`.
 
 1. Start a launcher from `@hydranium/core/node`: `startSocketServer` beside the
    LSP head, with `publishPortOnLspConnection` to tell the client its port, or
-   `startStdioServer` for a data head alone.
+   `startStdioServer` for a data head alone. Without an LSP head, give it the
+   workspace root as `workspace`.
 2. In its connection callback, create `new DataServer(connection, shared)`. It
    cleans up when the connection closes.
 3. In a web worker, start it with `startDataServerInWorker` from `./browser`

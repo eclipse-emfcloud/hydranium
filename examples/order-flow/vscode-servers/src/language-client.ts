@@ -7,7 +7,11 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { ALL_LANGUAGES, ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from '@hydranium/example-order-flow-protocol';
+import {
+   ALL_LANGUAGES,
+   ORDER_FLOW_DATA_SERVER_PORT_COMMAND,
+   ORDER_FLOW_GLSP_SERVER_PORT_COMMAND
+} from '@hydranium/example-order-flow-protocol';
 import type { ExtensionContext } from 'vscode';
 import { commands, workspace } from 'vscode';
 import { LanguageClient, type LanguageClientOptions, type ServerOptions, TransportKind } from 'vscode-languageclient/node';
@@ -33,7 +37,7 @@ export const ORDER_FLOW_LANGUAGE_CLIENT_NAME = 'Order Flow';
 /** Host command ids the two socket-head ports are reachable under.
  *
  *  These are the ids a HOST executes, as distinct from the LSP request ids the
- *  server answers (`order-flow/glsp/port` and its sibling). A Theia backend
+ *  server answers (`order-flow/glsp-server/port` and its sibling). A Theia backend
  *  connection handler reaches the port through `CommandService`, so the id it
  *  polls has to be one registered here — and because
  *  `AbstractSocketForwardingConnectionHandler` retries indefinitely by default, a
@@ -46,7 +50,7 @@ export const ORDER_FLOW_HOST_PORT_COMMANDS = {
 /** LSP request id backing each host command in {@link ORDER_FLOW_HOST_PORT_COMMANDS}. */
 const PORT_REQUESTS: Record<keyof typeof ORDER_FLOW_HOST_PORT_COMMANDS, string> = {
    dataServer: ORDER_FLOW_DATA_SERVER_PORT_COMMAND,
-   glsp: ORDER_FLOW_GLSP_PORT_COMMAND
+   glsp: ORDER_FLOW_GLSP_SERVER_PORT_COMMAND
 };
 
 /**

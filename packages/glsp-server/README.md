@@ -44,7 +44,9 @@ decorators need it.
    your diagram modules in `serverModule`,
    `new HydraniumGlspAppModule({ shared })` in `appModules`, and a
    `GlspClientLogger` from `createLogger`. Pass `lspConnection` and
-   `portCommand` to tell the client its port.
+   `portCommand` to tell the client its port. Without an LSP head, pass the
+   workspace root as `workspace`: the head brings the workspace up before it
+   listens.
 3. In a browser, start it with `startGlspServerInWorker` from `./browser`
    instead, on a transferred `MessagePort`.
 

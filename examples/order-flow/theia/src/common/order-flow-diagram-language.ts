@@ -32,7 +32,7 @@ export const PROCESS_DIAGRAM_LABEL = 'Order Flow Process Diagram';
  * are what a Theia backend connection handler executes through `CommandService`.
  *
  * Not to be confused with the LSP request ids
- * (`ORDER_FLOW_DATA_SERVER_PORT_COMMAND` / `ORDER_FLOW_GLSP_PORT_COMMAND` in
+ * (`ORDER_FLOW_DATA_SERVER_PORT_COMMAND` / `ORDER_FLOW_GLSP_SERVER_PORT_COMMAND` in
  * `order-flow-protocol`): the extension asks the *server* under those, and
  * republishes the answer under these. A Theia handler that queries an LSP id
  * finds no command at all.

@@ -265,9 +265,13 @@ function arrayLiteral(elements: readonly string[], indent: string, columns: numb
  * The FRAMEWORK packages each head adds, carrying no version: every
  * `@hydranium/*` pin is derived at scaffold time from {@link frameworkPin}, so
  * none of them can name a version its siblings were not published at.
+ *
+ * `base` is every head set's: the services every head serves from are composed
+ * the same with or without an LSP head.
  */
-const HEAD_FRAMEWORK_DEPENDENCIES: Record<InitHead, readonly string[]> = {
-   lsp: ['@hydranium/core', '@hydranium/langium', '@hydranium/protocol'],
+const HEAD_FRAMEWORK_DEPENDENCIES: Record<InitHead | 'base', readonly string[]> = {
+   base: ['@hydranium/core', '@hydranium/langium', '@hydranium/protocol'],
+   lsp: [],
    data: ['@hydranium/data-server'],
    glsp: ['@hydranium/glsp-server']
 };
@@ -288,12 +292,13 @@ const HEAD_FRAMEWORK_DEPENDENCIES: Record<InitHead, readonly string[]> = {
  * `overrides` block exists to prevent — so a repo gate holds each entry here
  * against the manifest that declares it.
  *
- * `langium` is required by `lsp` even though hand-written code goes through the
+ * `langium` is required even though hand-written code goes through the
  * `@hydranium/langium` chokepoint, because `langium-cli` emits direct imports
- * into the generated files and regenerates them on every build.
+ * into the generated files and regenerates them on every build. The `vscode-*`
+ * packages are required peers of `@hydranium/core`, so they are `base` too.
  */
-const HEAD_THIRD_PARTY_DEPENDENCIES: Record<InitHead, Readonly<Record<string, string>>> = {
-   lsp: {
+const HEAD_THIRD_PARTY_DEPENDENCIES: Record<InitHead | 'base', Readonly<Record<string, string>>> = {
+   base: {
       langium: '4.3.1',
       // Exact, as are the protocol and transport it pins, so Langium and the
       // framework share their copies; across copies, an error a handler throws
@@ -302,6 +307,7 @@ const HEAD_THIRD_PARTY_DEPENDENCIES: Record<InitHead, Readonly<Record<string, st
       'vscode-jsonrpc': '9.0.0',
       'vscode-languageserver-protocol': '3.18.1'
    },
+   lsp: {},
    data: {},
    glsp: {
       '@eclipse-glsp/graph': '2.7.0',
@@ -331,8 +337,13 @@ const PROTOCOL_THIRD_PARTY_DEPENDENCIES: Record<InitHead, Readonly<Record<string
  * package shares with the framework.
  */
 export function workspaceRootPins(heads: readonly InitHead[]): ReadonlyArray<readonly [string, string]> {
-   return heads
-      .flatMap(head => [...Object.entries(HEAD_THIRD_PARTY_DEPENDENCIES[head]), ...Object.entries(PROTOCOL_THIRD_PARTY_DEPENDENCIES[head])])
+   return [
+      ...Object.entries(HEAD_THIRD_PARTY_DEPENDENCIES.base),
+      ...heads.flatMap(head => [
+         ...Object.entries(HEAD_THIRD_PARTY_DEPENDENCIES[head]),
+         ...Object.entries(PROTOCOL_THIRD_PARTY_DEPENDENCIES[head])
+      ])
+   ]
       .filter(([, version]) => /^\d+\.\d+\.\d+$/.test(version))
       .sort(([left], [right]) => left.localeCompare(right));
 }
@@ -371,10 +382,10 @@ function sortedBlock(dependencies: Readonly<Record<string, string>>, indent: str
       .join(',\n');
 }
 
-/** The server's dependency block: the head set's packages and the protocol member. */
+/** The server's dependency block: the base and head set's packages and the protocol member. */
 function dependencyBlock(composition: InitComposition, indent: string): string {
    const merged: Record<string, string> = { [memberPackageName(composition, 'protocol')]: MEMBER_PIN };
-   for (const head of composition.heads) {
+   for (const head of ['base', ...composition.heads] as const) {
       Object.assign(merged, HEAD_THIRD_PARTY_DEPENDENCIES[head]);
       for (const framework of HEAD_FRAMEWORK_DEPENDENCIES[head]) {
          merged[framework] = frameworkPin(composition);
@@ -455,7 +466,7 @@ __BIN__  },
     "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file ../protocol/src/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --languages-file ../protocol/src/generated-hydranium/languages.ts --element-type-name __NAME__Element --terminals-name __NAME__Terminals --regen-command \\"Run: __NPM_RUN__ generate:transfer-model\\"",
     "langium:generate": "langium generate",
     "langium:watch": "langium generate --watch",
-__LINT__    "start": "node lib/main.js --stdio",
+__LINT__    "start": "node lib/main.js__START_ARGS__",
     "test": "npm run typecheck:test && vitest run",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "watch": "tsc -b --watch"
@@ -540,6 +551,7 @@ function packageJson(composition: InitComposition): string {
       .replace('__KEYWORDS__', keywords)
       .replace('__BIN__', binBlock(composition))
       .replace('__LINT__', lintScript(forMember(composition, 'server'), 'src test'))
+      .replace('__START_ARGS__', composition.heads.includes('lsp') ? ' --stdio' : ' ../workspace')
       .replace('__VITEST__', pinsVitest(composition) ? '~4.0.18' : '^4.0.0')
       .replace('__PRIVATE__', composition.packaging.private ? '  "private": true,\n' : '')
       .replace('__NPM_RUN__', npmRun(composition, 'server'))
@@ -896,55 +908,75 @@ ${returnType}
    return project(text, composition);
 }
 
-/**
- * The exported constant names for the head set, in emission order. Both are
- * keyed by the PROJECT rather than by a language: one server of each kind per
- * process serves every registered grammar, so a language-derived name would tie
- * a project-level endpoint to whichever grammar was scaffolded first.
- */
-function portCommandNames(composition: InitComposition): string[] {
-   const upper = screamingSnake(composition.projectId);
-   return [
-      ...(composition.heads.includes('data') ? [`${upper}_DATA_SERVER_PORT_COMMAND`] : []),
-      ...(composition.heads.includes('glsp') ? [`${upper}_GLSP_PORT_COMMAND`] : [])
-   ];
+/** One exported constant of the protocol member's `head-ports.ts`. */
+interface HeadPortConstant {
+   readonly name: string;
+   readonly value: string;
+   readonly doc: string;
 }
 
 /**
- * The socket heads' discovery commands, in the protocol member.
+ * How a host finds each socket head's port, in emission order: an LSP request
+ * when the LSP head publishes the ports, else the environment variable
+ * `main.ts` reads a port from.
  *
- * A host shell has to name the same string the server publishes, and reaches
- * it here without depending on the server. A host that retypes the literal
+ * Keyed by the PROJECT rather than by a language: one server of each kind per
+ * process serves every registered grammar, so a language-derived name would tie
+ * a project-level endpoint to whichever grammar was scaffolded first.
+ */
+function headPortConstants(composition: InitComposition): HeadPortConstant[] {
+   const upper = screamingSnake(composition.projectId);
+   const lsp = composition.heads.includes('lsp');
+   const heads = [
+      ...(composition.heads.includes('data') ? [{ key: 'DATA_SERVER', path: 'data-server', label: 'data-server' }] : []),
+      ...(composition.heads.includes('glsp') ? [{ key: 'GLSP_SERVER', path: 'glsp-server', label: 'GLSP' }] : [])
+   ];
+   return heads.map(head =>
+      lsp
+         ? {
+              name: `${upper}_${head.key}_PORT_COMMAND`,
+              value: `${composition.projectId}/${head.path}/port`,
+              doc: `LSP request the host queries to discover the ${head.label} socket port.`
+           }
+         : {
+              name: `${upper}_${head.key}_PORT_ENV`,
+              value: `${upper}_${head.key}_PORT`,
+              doc: `Environment variable naming the ${head.label} socket port when no \`--${head.path}-port\` flag does.`
+           }
+   );
+}
+
+/**
+ * The socket heads' port commands or variables, in the protocol member.
+ *
+ * A host shell has to name the same string the server reads, and reaches it
+ * here without depending on the server. A host that retypes the literal
  * instead gets no error when it drifts: the framework's port poll defaults to
  * `findPortAttempts = -1`, so a wrong command retries forever rather than
- * failing.
+ * failing, and a wrong variable is never read.
  */
 function headPortsFile(composition: InitComposition): string {
-   const upper = screamingSnake(composition.projectId);
-   const data = composition.heads.includes('data');
-   const glsp = composition.heads.includes('glsp');
-   const blocks = [
-      ...(data
-         ? [
-              `/** LSP request the host queries to discover the data-server socket port. */\nexport const ${upper}_DATA_SERVER_PORT_COMMAND = '${composition.projectId}/data-server/port';`
-           ]
-         : []),
-      ...(glsp
-         ? [
-              `/** LSP request the host queries to discover the GLSP socket port. */\nexport const ${upper}_GLSP_PORT_COMMAND = '${composition.projectId}/glsp/port';`
-           ]
-         : [])
-   ];
-   return `// The LSP requests a host queries to discover this server's socket head${blocks.length > 1 ? 's' : ''}.
+   const constants = headPortConstants(composition);
+   const blocks = constants.map(constant => `/** ${constant.doc} */\nexport const ${constant.name} = '${constant.value}';`);
+   const heads = `socket head${blocks.length > 1 ? 's' : ''}`;
+   const opening = composition.heads.includes('lsp')
+      ? `// The LSP requests a host queries to discover this server's ${heads}.`
+      : `// The environment variables that name the ports of this server's ${heads}.`;
+   const usage = composition.heads.includes('lsp')
+      ? `// The server publishes them and a host shell has to name the same string to
+// reach the head; both import them from here. A shell that retypes the literal
+// gets no error when it drifts: the framework's port poll retries indefinitely
+// by default.`
+      : `// The server reads them and a process that starts it sets them; both import
+// them from here. A variable retyped with a typo is never read, and the head
+// then listens on whichever port is free.`;
+   return `${opening}
 //
-// Both are keyed by the PROJECT, not the language: one server of each kind per
+// ${blocks.length > 1 ? 'Both are' : 'It is'} keyed by the PROJECT, not the language: one server of each kind per
 // process serves every registered grammar, so a language-derived name would tie
 // a project-level endpoint to whichever grammar was scaffolded first.
 //
-// The server publishes them and a host shell has to name the same string to
-// reach the head; both import them from here. A shell that retypes the literal
-// gets no error when it drifts: the framework's port poll retries indefinitely
-// by default.
+${usage}
 
 ${blocks.join('\n\n')}
 `;
@@ -999,10 +1031,12 @@ function mainFile(composition: InitComposition): string {
    const columns = columnsFor(composition);
    const roots = [...composition.grammars.map(grammar => grammar.entryRule)].sort();
    const upper = screamingSnake(composition.projectId);
+   const lsp = composition.heads.includes('lsp');
    const data = composition.heads.includes('data');
    const glsp = composition.heads.includes('glsp');
    const diagrams = composition.grammars.filter(grammar => grammar.diagram);
    const plural = roots.length > 1 ? 's' : '';
+   const portFlags = [...(data ? ['--data-server-port'] : []), ...(glsp ? ['--glsp-server-port'] : [])];
 
    const headNames = composition.heads.map(head =>
       head === 'lsp' ? 'the Langium LSP head' : head === 'data' ? 'a socket data-server (model server) head' : 'a GLSP head'
@@ -1016,7 +1050,7 @@ function mainFile(composition: InitComposition): string {
    // `reflect-metadata` must be imported before anything that reads a
    // decorator's emitted metadata, which inversify does at module scope.
    const reflectImport = glsp ? "import 'reflect-metadata';\n" : '';
-   const coreNodeSymbols = ['NodeFileSystem', ...(data ? ['publishPortOnLspConnection', 'startSocketServer'] : [])];
+   const coreNodeSymbols = ['NodeFileSystem', ...(data ? [...(lsp ? ['publishPortOnLspConnection'] : []), 'startSocketServer'] : [])];
    const glspImports = glsp
       ? `import { ServerModule } from '@eclipse-glsp/server/node.js';
 import { GlspClientLogger, HydraniumGlspAppModule } from '@hydranium/glsp-server';
@@ -1037,22 +1071,33 @@ ${importList(roots, memberPackageName(composition, 'protocol'), columns, true)}
 `
       : '';
 
-   // The commands live in the protocol member, not here: a host shell has to
-   // name the same string to reach the head, and this file is an executable
-   // entry, so nothing can import from it.
-   const portCommands = portCommandNames(composition).length
-      ? importList(portCommandNames(composition), memberPackageName(composition, 'protocol'), columns) + '\n'
-      : '';
+   // The names live in the protocol member, not here: a host shell has to name
+   // the same string to reach the head, and this file is an executable entry,
+   // so nothing can import from it.
+   const portNames = headPortConstants(composition).map(constant => constant.name);
+   const portImports = portNames.length ? importList(portNames, memberPackageName(composition, 'protocol'), columns) + '\n' : '';
 
-   const dataBlock = data
-      ? `
+   const dataBlock = !data
+      ? ''
+      : !lsp
+        ? `
+// Data-server head: each accepted client gets its own DataServer.
+const dataServer = startSocketServer(
+   { shared, workspace, port: portFrom('data-server-port', ${upper}_DATA_SERVER_PORT_ENV), logTag: 'ModelServer', logger: shared.Logger },
+   dataConnection => {
+      new DataServer<${roots.join(' | ')}>(dataConnection, shared);
+      return { dispose: () => undefined };
+   }
+);
+`
+        : `
 // Data-server head alongside LSP: binds an ephemeral port, published over the LSP
 // connection for the host to discover. Each accepted client gets its own DataServer.
 //
 // Neither the bind nor the publish may be swallowed: either failure leaves the LSP
 // head serving text edits while every data client waits on a port command that was
 // never registered, and the launcher reports a bind failure only if given a logger.
-const dataServer = startSocketServer({ port: 0, logTag: 'ModelServer', logger: shared.Logger }, dataConnection => {
+const dataServer = startSocketServer({ shared, port: 0, logTag: 'ModelServer', logger: shared.Logger }, dataConnection => {
    new DataServer<${roots.join(' | ')}>(dataConnection, shared);
    return { dispose: () => undefined };
 });
@@ -1074,8 +1119,7 @@ dataServer.started
    .catch((error: unknown) => {
       shared.Logger.error(\`[ModelServer] Could not publish the data-server port: \${describeErrorWithStack(error)}\`);
    });
-`
-      : '';
+`;
 
    const glspBlock = glsp
       ? `
@@ -1084,42 +1128,35 @@ dataServer.started
 // grammar a request concerns, so nothing per-language belongs there — each
 // diagram module declares its own language instead.
 //
-// GLSP framework logs route through the LSP connection rather than stdout, which
-// IS the LSP transport in stdio mode; writing there corrupts the protocol stream.
+${
+   lsp
+      ? `// GLSP framework logs route through the LSP connection rather than stdout, which
+// IS the LSP transport in stdio mode; writing there corrupts the protocol stream.`
+      : `// GLSP framework logs route through the framework's logger to stderr. GLSP's
+// own startup line goes to stdout, beside the ports line below.`
+}
 const glspServer = startGlspServer({
    // The GLSP log threshold lives on the logger, not beside it: the framework
    // replaces GLSP's own \`Logger\` binding, so a launcher-level \`logLevel\` would
    // be discarded. The logger tracks the framework's process-wide threshold, so
-   // \`HYDRANIUM_LOG_LEVEL\` and the LSP log-level setting govern GLSP output too;
+   // \`HYDRANIUM_LOG_LEVEL\` ${lsp ? 'and the LSP log-level setting govern' : 'governs'} GLSP output too;
    // pass \`logLevel\` only to make GLSP quieter than the rest of the server.
    createLogger: caller => new GlspClientLogger(shared, { component: caller }),
    serverModule: new ServerModule()${diagrams.map(grammar => `.configureDiagramModule(new ${grammar.grammar}DiagramModule())`).join('')},
    appModules: [new HydraniumGlspAppModule({ shared })],
-   lspConnection: shared.lsp.Connection,
-   portCommand: ${upper}_GLSP_PORT_COMMAND
+${
+   lsp
+      ? `   lspConnection: shared.lsp.Connection,
+   portCommand: ${upper}_GLSP_SERVER_PORT_COMMAND`
+      : `   workspace,
+   port: portFrom('glsp-server-port', ${upper}_GLSP_SERVER_PORT_ENV),
+   logger: shared.Logger`
+}
 });
-void glspServer;
-`
+${lsp ? 'void glspServer;\n' : ''}`
       : '';
 
-   const text = `${SHEBANG}// Standalone entry point: starts ${headSummary} in the same
-// process, so every head shares one model store.
-// Invocation: \`node lib/main.js --stdio\`, or the package's \`__PROJECT_ID__\` bin
-// script.${
-      data
-         ? `
-//
-// NOT the entry the data-server subcommands of \`hydranium-cli\` speak to: stdio
-// here carries LSP, and the data head is a socket whose port is published over
-// the LSP connection. Those subcommands spawn \`data-server-main.js\`.`
-         : ''
-   }
-//
-// Everything here runs at module scope, so this file is an executable rather
-// than a library entry — import \`./index.js\` instead to compose the language.
-
-${reflectImport}${glspImports}${importList(coreNodeSymbols, '@hydranium/core/node', columns)}
-${data ? "import { DataServer } from '@hydranium/data-server';\nimport { describeErrorWithStack } from '@hydranium/protocol';\n" : ''}// The framework's entry point, NOT Langium's \`@hydranium/langium/lsp\` one. It is
+   const lspImports = `// The framework's entry point, NOT Langium's \`@hydranium/langium/lsp\` one. It is
 // signature-compatible and delegates straight through; what it adds first is
 // \`assertLspHeadComposed\`, which fails the start if the LSP head's SHARED module
 // was never composed. Reaching for Langium's is the natural mistake and it is
@@ -1127,12 +1164,79 @@ ${data ? "import { DataServer } from '@hydranium/data-server';\nimport { describ
 // didChangeContent debounce and the last-client-close rebuild are all inert.
 import { startLanguageServer, withHydraniumLspFeatures } from '@hydranium/core/lsp';
 import { ProposedFeatures, createConnection } from 'vscode-languageserver/node';
-${diagramImports}${transferImports}import { create__NAME__Services } from './language-server/__PROJECT_ID__-module.js';
-${portCommands === '' ? '' : '\n' + portCommands}
+`;
+
+   const lspStart = `
 const connection = createConnection(withHydraniumLspFeatures(ProposedFeatures.all));
 const { shared } = create__NAME__Services({ connection, ...NodeFileSystem });
 startLanguageServer(shared);
-${dataBlock}${glspBlock}`;
+`;
+
+   // No LSP client names the workspace or asks for the ports here, so the
+   // command line does, and the ports go to stdout once every head listens.
+   const servers = [...(data ? ['dataServer'] : []), ...(glsp ? ['glspServer'] : [])];
+   const socketStart = `
+const { values, positionals } = parseArgs({
+   options: { ${portFlags.map(flag => `'${flag.slice(2)}': { type: 'string' }`).join(', ')} },
+   allowPositionals: true
+});
+// The workspace root: the first argument, else the process cwd.
+const workspace = positionals[0] ?? process.cwd();
+
+/** A head's port: its flag, else its environment variable, else 0 for any free port. */
+function portFrom(flag: keyof typeof values, variable: string): number {
+   const text = values[flag] ?? process.env[variable] ?? '0';
+   const port = Number(text);
+   // Decimal digits only: \`Number\` also reads '' as 0 and takes '1e3' or '0x10'.
+   if (!/^\\d+$/.test(text) || port > 65_535) {
+      throw new Error(\`--\${flag} or \${variable} is '\${text}', not a port\`);
+   }
+   return port;
+}
+
+const { shared } = create__NAME__Services({ ...NodeFileSystem });
+`;
+   const portsLine = `
+// One JSON line on stdout once every head listens, for the process that started
+// this one to read the ports from: the one line that starts with \`{\`. Each
+// head brings the workspace up before it listens; a head that fails to start
+// has logged why and ends the process, which would otherwise serve without it.
+Promise.all([${servers.map(server => `${server}.started`).join(', ')}]).then(
+   () => process.stdout.write(\`\${JSON.stringify({ ${servers.map(server => `${server}: ${server}.port`).join(', ')} })}\\n\`),
+   () => process.exit(1)
+);
+`;
+
+   const invocation = lsp
+      ? `// Invocation: \`node lib/main.js --stdio\`, or the package's \`__PROJECT_ID__\` bin
+// script.`
+      : `// Invocation: \`node lib/main.js [<workspace-path>] ${portFlags.map(flag => `[${flag} <port>]`).join(' ')}\`,
+// or the package's \`__PROJECT_ID__\` bin script. Each port falls back to its
+// environment variable, then to any free port.`;
+   const dataNote = !data
+      ? ''
+      : lsp
+        ? `
+//
+// NOT the entry the data-server subcommands of \`hydranium-cli\` speak to: stdio
+// here carries LSP, and the data head is a socket whose port is published over
+// the LSP connection. Those subcommands spawn \`data-server-main.js\`.`
+        : `
+//
+// NOT the entry the data-server subcommands of \`hydranium-cli\` speak to: they
+// drive the data protocol over a child's stdio, and the data head here is a
+// socket. Those subcommands spawn \`data-server-main.js\`.`;
+
+   const text = `${SHEBANG}// Standalone entry point: starts ${headSummary} in the same
+// process, so every head shares one model store.
+${invocation}${dataNote}
+//
+// Everything here runs at module scope, so this file is an executable rather
+// than a library entry — import \`./index.js\` instead to compose the language.
+
+${reflectImport}${glspImports}${importList(coreNodeSymbols, '@hydranium/core/node', columns)}
+${data ? "import { DataServer } from '@hydranium/data-server';\n" : ''}${data && lsp ? "import { describeErrorWithStack } from '@hydranium/protocol';\n" : ''}${lsp ? lspImports : "import { parseArgs } from 'node:util';\n"}${diagramImports}${transferImports}import { create__NAME__Services } from './language-server/__PROJECT_ID__-module.js';
+${portImports === '' ? '' : '\n' + portImports}${lsp ? lspStart : socketStart}${dataBlock}${glspBlock}${lsp ? '' : portsLine}`;
    return project(text, composition);
 }
 
@@ -1140,13 +1244,12 @@ ${dataBlock}${glspBlock}`;
  * The second executable entry: the data head alone, on stdio.
  *
  * Emitted with the `data` head because it is the ONLY command line that reaches
- * that head from outside the editor. `main.ts` gives stdio to LSP and publishes
- * the data head's socket port over the LSP connection, so a client that is not
- * an LSP client cannot discover it — which is every data-server subcommand of
- * `hydranium-cli`, since each drives the data protocol over a spawned child's
- * stdin/stdout. Without this file a scaffolded project has no `--server` value,
- * and the closest guess — the LSP entry — fails as an unrecognised method
- * rather than as a missing head.
+ * that head from outside the editor. `main.ts` serves the data head on a
+ * socket, so a client driving the data protocol over a spawned child's
+ * stdin/stdout cannot reach it — which is every data-server subcommand of
+ * `hydranium-cli`. Without this file a scaffolded project has no `--server`
+ * value, and the closest guess, `main.ts`, fails as an unrecognised method or
+ * an unknown flag rather than as a missing head.
  *
  * A separate process rather than a flag on `main.ts`: only one protocol can own
  * stdio, so the two entries are mutually exclusive by construction.
@@ -1165,12 +1268,19 @@ function dataServerMainFile(composition: InitComposition): string {
 // package's \`__PROJECT_ID__-data-server\` bin script. The workspace path defaults to
 // the process cwd, which is what the CLI's \`--cwd\` sets on the child.
 //
-// Contrast with \`main.ts\`, the editor entry: there the LSP head owns stdio and
+${
+   composition.heads.includes('lsp')
+      ? `// Contrast with \`main.ts\`, the editor entry: there the LSP head owns stdio and
 // the data head is a socket published over the LSP connection. Here there is no
 // LSP connection at all, so the workspace initialization an
 // \`initialize\`/\`initialized\` pair would otherwise drive has to happen here —
 // which is why this entry uses \`startStdioServer\` rather than wiring a
-// connection directly.
+// connection directly.`
+      : `// Contrast with \`main.ts\`, where the data head is a socket whose port it
+// prints. Here it owns stdio, and as there, no LSP connection drives the
+// workspace initialization, so \`startStdioServer\` brings the workspace up
+// before it listens.`
+}
 //
 // Everything here runs at module scope, so this file is an executable rather
 // than a library entry — import \`./index.js\` instead to compose the language.
@@ -1504,8 +1614,9 @@ function readme(composition: InitComposition): string {
               '',
               '# Data-head operations. `--server` is a command line the CLI spawns and then',
               "# drives the data protocol over the child's stdin/stdout, so it has to name",
-              '# `data-server-main.js` — `main.js` gives stdio to LSP and answers these',
-              '# methods with "Unhandled method".',
+              ...(composition.heads.includes('lsp')
+                 ? ['# `data-server-main.js` — `main.js` gives stdio to LSP and answers these', '# methods with "Unhandled method".']
+                 : ['# `data-server-main.js` — `main.js` serves the data head on a socket.']),
               '#',
               '# The workspace goes to the ENTRY, not to `--cwd`: `--cwd` re-roots the child,',
               '# so a relative entry path is refused by name (an absolute one is fine).',
@@ -1539,7 +1650,7 @@ function readme(composition: InitComposition): string {
             grammar =>
                `- \`src/glsp/${grammar.grammarId}/\` — the \`${grammar.grammar}\` diagram: state, storage, submission handler, GModel factory, configuration, create-node handler, DI module`
          ),
-      `- \`../protocol/\` — the \`${memberPackageName(composition, 'protocol')}\` package: what this server and its clients both import (language ids, ${portCommandNames(composition).length ? 'port commands, ' : ''}${composition.grammars.some(grammar => grammar.diagram) ? 'diagram ids, ' : ''}the transfer model), written partly by \`npm run generate\``,
+      `- \`../protocol/\` — the \`${memberPackageName(composition, 'protocol')}\` package: what this server and its clients both import (language ids, ${headPortConstants(composition).length === 0 ? '' : composition.heads.includes('lsp') ? 'port commands, ' : 'port variables, '}${composition.grammars.some(grammar => grammar.diagram) ? 'diagram ids, ' : ''}the transfer model), written partly by \`npm run generate\``,
       '- `test/services.test.ts` — the DI tree composes; grows as your language does',
       '- `test/parsing.test.ts` / `linking.test.ts` / `validating.test.ts` — the three tiers a new language breaks first',
       '- `test/serialization.test.ts` — each grammar round-trips through its serializer',
@@ -1928,7 +2039,7 @@ function protocolIndexFile(composition: InitComposition): string {
    const modules = [
       './generated-hydranium/languages.js',
       './generated-hydranium/transfer-model.js',
-      ...(portCommandNames(composition).length ? ['./head-ports.js'] : []),
+      ...(headPortConstants(composition).length ? ['./head-ports.js'] : []),
       ...composition.grammars.filter(grammar => grammar.diagram).map(grammar => `./${grammar.grammarId}-diagram-types.js`)
    ];
    const text = `// What the __NAME__ server and its clients both import. A client depends on
@@ -1953,7 +2064,11 @@ function protocolReadme(composition: InitComposition): string {
       '',
       '- `src/generated-hydranium/languages.ts` — each language id and its file extensions',
       '- `src/generated-hydranium/transfer-model.ts` — the wire types of the model, references as plain strings',
-      ...(portCommandNames(composition).length ? ['- `src/head-ports.ts` — the LSP requests a host sends to find the socket heads'] : []),
+      ...(headPortConstants(composition).length === 0
+         ? []
+         : composition.heads.includes('lsp')
+           ? ['- `src/head-ports.ts` — the LSP requests a host sends to find the socket heads']
+           : ["- `src/head-ports.ts` — the environment variables naming the socket heads' ports"]),
       ...composition.grammars
          .filter(grammar => grammar.diagram)
          .map(grammar => `- \`src/${grammar.grammarId}-diagram-types.ts\` — the \`${grammar.grammar}\` diagram's type ids`),
@@ -1974,7 +2089,7 @@ function protocolFiles(composition: InitComposition): InitFile[] {
       ignoreFile('protocol'),
       { path: 'protocol/README.md', content: protocolReadme(composition) },
       { path: 'protocol/src/index.ts', content: protocolIndexFile(composition) },
-      ...(portCommandNames(composition).length ? [{ path: 'protocol/src/head-ports.ts', content: headPortsFile(composition) }] : []),
+      ...(headPortConstants(composition).length ? [{ path: 'protocol/src/head-ports.ts', content: headPortsFile(composition) }] : []),
       ...composition.grammars
          .filter(grammar => grammar.diagram)
          .map(grammar => grammarTemplate('protocol/src/__GRAMMAR_ID__-diagram-types.ts', composition, grammar))

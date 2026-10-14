@@ -3,7 +3,8 @@
 // take it out and put it back; every step must keep the nodes the document
 // already had, and its comments, since the diagram writes the document from its
 // AST, which carries none. A reference into another document draws no edge,
-// since the graph holds no node for its target.
+// since the graph holds no node for its target, but resolves, even when the
+// diagram opened its document before the workspace was up.
 
 import 'reflect-metadata';
 import { type Action, CreateNodeOperation, RedoAction, ServerModule, SetDirtyStateAction, UndoAction } from '@eclipse-glsp/server';
@@ -85,5 +86,27 @@ describe('__GRAMMAR__ diagram', () => {
       // not a dangling reference.
       expect(diagram.state.sourceRoot?.nodes[0].target?.ref?.name).toBe('second');
       expect(diagram.state.root.children.map(child => child.type)).toEqual([__GRAMMAR_ID_CONST___NODE_TYPE]);
+   });
+
+   it('resolves a cross-document reference in a document opened before the workspace is up', async () => {
+      workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
+      workspace.write('declaring.__EXTENSION__', 'node second');
+      const file = workspace.write('referencing.__EXTENSION__', 'node first -> second');
+      const { shared } = createServices();
+      diagram = makeGlspHarness<__GRAMMAR__GlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
+         diagramType: __GRAMMAR_ID_CONST___DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      await diagram.start();
+      // The open waits for the workspace. One that did not would have linked
+      // within this timer against a workspace holding only itself, and the
+      // bring-up does not relink it. Its budget covers the bring-up as well.
+      const opening = diagram.openDocument(file, 10_000);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      await opening;
+
+      expect(diagram.state.sourceRoot?.nodes[0].target?.ref?.name).toBe('second');
    });
 });

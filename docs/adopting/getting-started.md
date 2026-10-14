@@ -32,6 +32,8 @@ Two flags shape it:
 
 - `--heads` picks the heads: LSP serves text editors, data serves forms and
   tools, GLSP serves a diagram. Leave `glsp` out for a language without one.
+  Leave `lsp` out and the server entry takes the workspace path as its
+  argument and prints the ports of the heads it started.
 - Leave `--name` off on a terminal and `init` asks instead, then prints the
   command it composed.
 

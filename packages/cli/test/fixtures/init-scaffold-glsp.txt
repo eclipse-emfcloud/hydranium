@@ -135,7 +135,7 @@ protocol/src/head-ports.ts
 export const BOOKSTORE_DATA_SERVER_PORT_COMMAND = 'bookstore/data-server/port';
 
 /** LSP request the host queries to discover the GLSP socket port. */
-export const BOOKSTORE_GLSP_PORT_COMMAND = 'bookstore/glsp/port';
+export const BOOKSTORE_GLSP_SERVER_PORT_COMMAND = 'bookstore/glsp-server/port';
 
 ==============================================================================
 protocol/src/bookstore-diagram-types.ts
@@ -750,7 +750,7 @@ import { BookstoreDiagramModule } from './glsp/bookstore/diagram-module.js';
 import type { BookstoreModel } from 'bookstore-protocol';
 import { createBookstoreServices } from './language-server/bookstore-module.js';
 
-import { BOOKSTORE_DATA_SERVER_PORT_COMMAND, BOOKSTORE_GLSP_PORT_COMMAND } from 'bookstore-protocol';
+import { BOOKSTORE_DATA_SERVER_PORT_COMMAND, BOOKSTORE_GLSP_SERVER_PORT_COMMAND } from 'bookstore-protocol';
 
 const connection = createConnection(withHydraniumLspFeatures(ProposedFeatures.all));
 const { shared } = createBookstoreServices({ connection, ...NodeFileSystem });
@@ -762,7 +762,7 @@ startLanguageServer(shared);
 // Neither the bind nor the publish may be swallowed: either failure leaves the LSP
 // head serving text edits while every data client waits on a port command that was
 // never registered, and the launcher reports a bind failure only if given a logger.
-const dataServer = startSocketServer({ port: 0, logTag: 'ModelServer', logger: shared.Logger }, dataConnection => {
+const dataServer = startSocketServer({ shared, port: 0, logTag: 'ModelServer', logger: shared.Logger }, dataConnection => {
    new DataServer<BookstoreModel>(dataConnection, shared);
    return { dispose: () => undefined };
 });
@@ -802,7 +802,7 @@ const glspServer = startGlspServer({
    serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
    appModules: [new HydraniumGlspAppModule({ shared })],
    lspConnection: shared.lsp.Connection,
-   portCommand: BOOKSTORE_GLSP_PORT_COMMAND
+   portCommand: BOOKSTORE_GLSP_SERVER_PORT_COMMAND
 });
 void glspServer;
 
@@ -945,7 +945,7 @@ server/src/glsp/bookstore/gmodel-factory.ts
 // pointing at an id that does not exist fails client-side with a far less
 // obvious error than a missing edge. An unresolved reference is SKIPPED rather
 // than treated as an error: a dangling reference is ordinary editing state, and
-// the LSP head already reports it as a diagnostic. A reference into another
+// the language already reports it as a diagnostic. A reference into another
 // document is skipped for the same reason: the graph holds only this
 // document's nodes, so its target has no id here.
 
@@ -1210,7 +1210,8 @@ server/test/bookstore-diagram.test.ts
 // take it out and put it back; every step must keep the nodes the document
 // already had, and its comments, since the diagram writes the document from its
 // AST, which carries none. A reference into another document draws no edge,
-// since the graph holds no node for its target.
+// since the graph holds no node for its target, but resolves, even when the
+// diagram opened its document before the workspace was up.
 
 import 'reflect-metadata';
 import { type Action, CreateNodeOperation, RedoAction, ServerModule, SetDirtyStateAction, UndoAction } from '@eclipse-glsp/server';
@@ -1292,6 +1293,28 @@ describe('Bookstore diagram', () => {
       // not a dangling reference.
       expect(diagram.state.sourceRoot?.nodes[0].target?.ref?.name).toBe('second');
       expect(diagram.state.root.children.map(child => child.type)).toEqual([BOOKSTORE_NODE_TYPE]);
+   });
+
+   it('resolves a cross-document reference in a document opened before the workspace is up', async () => {
+      workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
+      workspace.write('declaring.bookstore', 'node second');
+      const file = workspace.write('referencing.bookstore', 'node first -> second');
+      const { shared } = createServices();
+      diagram = makeGlspHarness<BookstoreGlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
+         diagramType: BOOKSTORE_DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      await diagram.start();
+      // The open waits for the workspace. One that did not would have linked
+      // within this timer against a workspace holding only itself, and the
+      // bring-up does not relink it. Its budget covers the bring-up as well.
+      const opening = diagram.openDocument(file, 10_000);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      await opening;
+
+      expect(diagram.state.sourceRoot?.nodes[0].target?.ref?.name).toBe('second');
    });
 });
 

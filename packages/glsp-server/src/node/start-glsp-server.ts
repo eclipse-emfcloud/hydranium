@@ -16,14 +16,20 @@ import {
    defaultSocketLaunchOptions
 } from '@eclipse-glsp/server/node.js';
 import { Container, ContainerModule, injectable } from 'inversify';
-import { Deferred, describeErrorWithStack, sendByMethodName, type Logger } from '@hydranium/protocol';
+import { Deferred, describeError, describeErrorWithStack, sendByMethodName, type Logger } from '@hydranium/protocol';
 import type * as net from 'node:net';
 import { createMessageConnection, SocketMessageReader, SocketMessageWriter } from 'vscode-jsonrpc/node';
-import type { IntegratedServer } from '@hydranium/core';
+import {
+   initializeWorkspaceWithoutLsp,
+   type IntegratedServer,
+   type ServerSharedServicesMinimal,
+   type WorkspaceFolderInput
+} from '@hydranium/core';
 import { dropNotificationsToGoneClient } from '../launcher/drop-notifications-to-gone-client.js';
 import { createGlspConnectionLogger } from '../launcher/glsp-connection-logger.js';
 import { createGlspFrameworkOverrides } from '../launcher/glsp-framework-overrides.js';
 import { createGlspServerOverrides } from '../launcher/glsp-server-overrides.js';
+import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import type { LspConnectionLike } from '@hydranium/core/node';
 
 /**
@@ -113,6 +119,13 @@ export interface GlspServerOptions {
     */
    readonly appModules?: ReadonlyArray<ContainerModule>;
    /**
+    * Workspace root(s) to initialize — a filesystem path or a `URI`. Required
+    * when no LSP head is composed, refused beside one: see
+    * `initializeWorkspaceWithoutLsp`. The shared services are the ones
+    * `HydraniumGlspAppModule` binds in {@link appModules}.
+    */
+   readonly workspace?: WorkspaceFolderInput | ReadonlyArray<WorkspaceFolderInput>;
+   /**
     * Optional LSP connection used to register a port-discovery request
     * handler. When both `lspConnection` and `portCommand` are set, the
     * framework registers `lspConnection.onRequest(portCommand, () => port)`
@@ -146,12 +159,14 @@ export interface GlspServerOptions {
 /**
  * Live GLSP server handle returned by {@link startGlspServer}.
  *
- * - {@link IntegratedServer.started} resolves once the GLSP socket is
- *   listening AND (if configured) the port-discovery handler has been
- *   registered on the LSP connection.
- * - {@link IntegratedServer.stopped} resolves once GLSP's
- *   `SocketServerLauncher.start` promise settles (i.e. the underlying
- *   `net.Server` has closed).
+ * - {@link IntegratedServer.started} resolves once the workspace is up,
+ *   where the launcher brings it up, AND the GLSP socket is listening AND
+ *   (if configured) the port-discovery handler has been registered on the
+ *   LSP connection. It rejects, and nothing listens, when the bring-up fails.
+ * - {@link IntegratedServer.stopped} settles as GLSP's
+ *   `SocketServerLauncher.start` promise does (i.e. once the underlying
+ *   `net.Server` has closed), or resolves once a failed bring-up has
+ *   rejected `started`.
  * - {@link port} is `undefined` until `started` resolves.
  */
 export interface StartedGlspServer extends IntegratedServer {
@@ -173,6 +188,10 @@ export interface StartedGlspServer extends IntegratedServer {
  * (data-server's pattern), not GLSP's Inversify-driven per-connection
  * server-instance model. Bridging the two would lose GLSP's action-handler
  * registry plumbing.
+ *
+ * **Without an LSP head the launcher brings the workspace up, then
+ * listens**, as `startSocketServer` does: a diagram loaded before the
+ * bring-up starts keeps its cross-file edges missing for good.
  */
 export function startGlspServer(options: GlspServerOptions): StartedGlspServer {
    const launchOptions: SocketLaunchOptions = {
@@ -206,10 +225,16 @@ export function startGlspServer(options: GlspServerOptions): StartedGlspServer {
    launcher.configure(options.serverModule, createGlspServerOverrides());
 
    const started = new Deferred<void>();
+   const stopped = new Deferred<void>();
    const portHandle: { port: number | undefined } = { port: undefined };
 
-   try {
-      const stoppedPromise = Promise.resolve(launcher.start(launchOptions));
+   const listen = (): void => {
+      // `start` creates the `net.Server` and listens, so the listeners below
+      // attach to it synchronously after the call, before any event fires.
+      Promise.resolve(launcher.start(launchOptions)).then(
+         () => stopped.resolve(),
+         (error: unknown) => stopped.reject(error)
+      );
 
       // GLSP's `SocketServerLauncher.netServer` field is `protected`; we
       // access it via property indexing. The alternative is to fork the
@@ -239,22 +264,44 @@ export function startGlspServer(options: GlspServerOptions): StartedGlspServer {
       if (options.onClientConnection) {
          netServer.on('connection', options.onClientConnection);
       }
+   };
 
-      return {
-         get port() {
-            return portHandle.port;
-         },
-         started: started.promise,
-         stopped: stoppedPromise
-      };
-   } catch (error) {
-      lifecycle?.error('Error in GLSP server launcher:', error);
-      return {
-         get port() {
-            return portHandle.port;
-         },
-         started: Promise.reject(error),
-         stopped: Promise.resolve()
-      };
-   }
+   // The workspace manager logs a failed initialization itself; a refused
+   // `workspace` throws before `initializing` is set.
+   let initializing = false;
+   const begin = async (): Promise<void> => {
+      const shared = appContainer.isBound(HydraniumTypes.SharedCoreServices)
+         ? appContainer.get<ServerSharedServicesMinimal>(HydraniumTypes.SharedCoreServices)
+         : undefined;
+      if (shared === undefined) {
+         throw new Error(
+            '[hydranium] startGlspServer found no shared services in its app container. Add `new HydraniumGlspAppModule({ shared })` to `appModules`.'
+         );
+      }
+      const initialization = initializeWorkspaceWithoutLsp(shared, options.workspace);
+      initializing = true;
+      await initialization;
+      initializing = false;
+      listen();
+   };
+   begin().catch((error: unknown) => {
+      if (initializing) {
+         lifecycle?.debug(`[GlspServer] Startup failed: the workspace did not initialize. ${describeError(error)}`);
+      } else {
+         lifecycle?.error(`[GlspServer] Startup failed: ${describeErrorWithStack(error)}`);
+      }
+      started.reject(error);
+      stopped.resolve();
+   });
+   // `started` is always observed internally, as `startStdioServer`'s is, so a
+   // caller that closes early and ignores it cannot crash the process.
+   void started.promise.catch(() => undefined);
+
+   return {
+      get port() {
+         return portHandle.port;
+      },
+      started: started.promise,
+      stopped: stopped.promise
+   };
 }

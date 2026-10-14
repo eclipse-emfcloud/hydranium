@@ -6,7 +6,7 @@
 // pointing at an id that does not exist fails client-side with a far less
 // obvious error than a missing edge. An unresolved reference is SKIPPED rather
 // than treated as an error: a dangling reference is ordinary editing state, and
-// the LSP head already reports it as a diagnostic. A reference into another
+// the language already reports it as a diagnostic. A reference into another
 // document is skipped for the same reason: the graph holds only this
 // document's nodes, so its target has no id here.
 

@@ -57,7 +57,7 @@
 import * as path from 'node:path';
 import { DEFAULT_INIT_HEADS, INIT_HEADS, type InitHead, isNonEmptyDir, isUsableExtension, memberPlacements } from './init.js';
 import { kebab } from './kebab.js';
-import { InitWizardCancelled, OPTIONAL_HEAD_CHOICES, type PromptPort } from './init-prompt.js';
+import { HEAD_CHOICES, InitWizardCancelled, type PromptPort } from './init-prompt.js';
 import { type WorkspaceDetection } from './init-workspace.js';
 
 /** One grammar as the wizard collected it. */
@@ -199,22 +199,10 @@ async function askGrammar(
    return { name, extension: extension.replace(/^\./, ''), diagram: false };
 }
 
-/**
- * Ask for the protocol head set.
- *
- * `lsp` is not offered, it is stated: it owns the workspace, the build pipeline
- * and the shared tier the other heads read through, so a project without it has
- * nothing for them to serve. Presenting it as a checkbox would offer a choice
- * the scaffolder then refuses.
- */
+/** Ask for the protocol head set, in composition order whatever order they were picked in. */
 async function askHeads(prompt: PromptPort): Promise<InitHead[]> {
-   const optional = await prompt.multiselect({
-      message: 'Protocol heads — lsp is always included',
-      choices: OPTIONAL_HEAD_CHOICES,
-      initialValues: DEFAULT_INIT_HEADS.filter((head): head is Exclude<InitHead, 'lsp'> => head !== 'lsp')
-   });
-   const chosen = new Set<InitHead>(['lsp', ...optional]);
-   return INIT_HEADS.filter(head => chosen.has(head));
+   const chosen = await prompt.multiselect({ message: 'Protocol heads', choices: HEAD_CHOICES, initialValues: DEFAULT_INIT_HEADS });
+   return INIT_HEADS.filter(head => chosen.includes(head));
 }
 
 /**

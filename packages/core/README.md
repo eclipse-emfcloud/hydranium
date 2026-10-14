@@ -48,13 +48,15 @@ needs it.
    the LSP shared module is missing.
 3. Start other heads on the same shared services, with `startSocketServer` and
    `publishPortOnLspConnection` beside the LSP head, or `startStdioServer`
-   alone.
+   alone. Without an LSP head, give each starter the workspace root as
+   `workspace`: it brings the workspace up before it listens.
 4. In a web worker, answer the page's bootstrap with `hostHeadsInWorker` from
    `./browser`: it awaits what you prepared, such as `persistentFileSystem`,
    then calls your `start`, which starts the LSP head on its port with
    `startLanguageServerInWorker` and the other heads with their own starters.
    It posts the ready message once every head is up, with the files under the
-   `rootUri` you pass it, runs the validating build and reports a failed
+   `rootUri` you pass it; without an LSP head it brings the workspace up from
+   that root first. It runs the validating build and reports a failed
    start, build or rejection to the page; `reportWorkerError` reports a
    failure of your own. The LSP starter answers the editor's save request,
    which a worker creating its own connection adds with

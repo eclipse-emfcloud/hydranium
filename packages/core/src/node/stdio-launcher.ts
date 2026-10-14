@@ -12,7 +12,7 @@ import type { MessageConnection } from 'vscode-jsonrpc';
 import { createMessageConnection, StreamMessageReader, StreamMessageWriter } from 'vscode-jsonrpc/node';
 import type { IntegratedServer } from '../launcher/integrated-server.js';
 import type { ServerSharedServicesMinimal } from '../langium/shared-services.js';
-import { initializeWorkspaceProgrammatically, type WorkspaceFolderInput } from '../langium/workspace/initialize-workspace.js';
+import { initializeWorkspaceWithoutLsp, type WorkspaceFolderInput } from '../langium/workspace/initialize-workspace.js';
 
 /** Construction-time options for {@link startStdioServer}. */
 export interface StdioServerOptions {
@@ -23,9 +23,9 @@ export interface StdioServerOptions {
     */
    readonly shared: ServerSharedServicesMinimal;
    /**
-    * Workspace root(s) to initialize — a filesystem path or a `URI`. Omit when
-    * the caller has already initialized the workspace itself, in which case the
-    * launcher only wires the transport.
+    * Workspace root(s) to initialize — a filesystem path or a `URI`. Required
+    * when no LSP head is composed, refused beside one: see
+    * {@link initializeWorkspaceWithoutLsp}.
     */
    readonly workspace?: WorkspaceFolderInput | ReadonlyArray<WorkspaceFolderInput>;
    /**
@@ -121,15 +121,17 @@ export function startStdioServer(
    };
    connection.onClose(() => close());
 
-   // The workspace manager logs a failed initialization itself.
+   // The workspace manager logs a failed initialization itself; a refused
+   // `workspace` throws before `initializing` is set.
    let initializing = false;
    const begin = async (): Promise<void> => {
+      const initialization = initializeWorkspaceWithoutLsp(options.shared, options.workspace);
+      initializing = true;
       if (options.workspace !== undefined) {
          logger?.info(`[${tag}] Initializing workspace`);
-         initializing = true;
-         await initializeWorkspaceProgrammatically(options.shared, options.workspace);
-         initializing = false;
       }
+      await initialization;
+      initializing = false;
       // Only now attach the reader — see the ordering note in the doc above.
       connection.listen();
       logger?.info(`[${tag}] Listening on stdio`);

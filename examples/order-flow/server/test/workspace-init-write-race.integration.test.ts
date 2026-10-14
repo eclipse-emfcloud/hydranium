@@ -167,18 +167,18 @@ describe.each(BARRIERS_BY_NAME)('a write that lands during workspace initializat
          const domainUri = URI.file(path.join(workspace.root, WORKSPACE_FILES.ordersDomain)).toString();
          const processUri = URI.file(path.join(workspace.root, WORKSPACE_FILES.fulfillmentProcess)).toString();
 
-         // The open reads the file in the disk queue and takes no lock, so it
-         // completes while the init still holds the write lock.
-         const session = modelService.createSession('init-race', 'init-race');
-         await session.open(domainUri);
+         // Through the store, as a session's write reaches it: a session's open
+         // waits for the bring-up, so a session cannot land a write during it.
+         // A write that does not go through one, a file change or a headless
+         // write, still can. The open reads the file in the disk queue and takes
+         // no lock, so it completes while the init still holds the write lock.
+         const store = harness.shared.workspace.AstDocumentManager;
+         await store.open({ uri: domainUri, clientId: 'init-race' });
+         await store.update(domainUri, DOMAIN_TEXT_WITHOUT_STATUS, 'init-race');
          // Issuing the write cancels the suspended initial build. Deliberately
          // not awaited before the release below: the write queues on the very
          // lock the init still holds.
-         const write = session.update({
-            uri: domainUri,
-            model: DOMAIN_TEXT_WITHOUT_STATUS,
-            baseVersion: 'any'
-         });
+         const write = modelService.rebuild(domainUri, harness.shared.workspace.DocumentBuilder.finalBuildState());
          releaseInit.resolve();
 
          await initialization;

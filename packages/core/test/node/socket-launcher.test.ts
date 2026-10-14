@@ -8,12 +8,21 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { Disposable } from '@hydranium/protocol';
+import { Deferred, Disposable } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import * as net from 'node:net';
 import { createMessageConnection, SocketMessageReader, SocketMessageWriter, type ResponseMessage } from 'vscode-jsonrpc/node';
 import { publishPortOnLspConnection, startSocketServer } from '../../src/node/socket-launcher.js';
-import { makeAttributingLogger } from '../../src/testing/index.js';
+import { makeAttributingLogger, makeNoopSharedServices } from '../../src/testing/index.js';
+import type { ServerSharedServicesMinimal } from '../../src/langium/shared-services.js';
+
+/** Services composed around an LSP connection, whose client brings the workspace up. */
+const lspShared = makeNoopSharedServices({ lsp: { Connection: {} } });
+
+/** Services with no LSP head, whose workspace manager's `initialized` is `initialized`. */
+function sharedWithoutLsp(initialized: () => Promise<void>): ServerSharedServicesMinimal {
+   return makeNoopSharedServices({ workspace: { WorkspaceManager: { initialize: () => undefined, initialized } } });
+}
 
 /**
  * Dial `host:port` and report how it settled: `'connected'`, or the errno the
@@ -46,7 +55,7 @@ async function hasIpv6Loopback(): Promise<boolean> {
 describe('startSocketServer', () => {
    it('binds an ephemeral port, accepts a client, and disposes adopter+connection on shutdown', async () => {
       const adopterDispositions: number[] = [];
-      const handle = startSocketServer({ port: 0, logTag: 'TestServer' }, _connection => {
+      const handle = startSocketServer({ shared: lspShared, port: 0, logTag: 'TestServer' }, _connection => {
          const id = adopterDispositions.length;
          adopterDispositions.push(0);
          return {
@@ -88,7 +97,7 @@ describe('startSocketServer', () => {
    });
 
    it('binds loopback by default, leaving the head unreachable on any other address', async () => {
-      const handle = startSocketServer({ port: 0 }, () => Disposable.EMPTY);
+      const handle = startSocketServer({ shared: lspShared, port: 0 }, () => Disposable.EMPTY);
       await handle.started;
       expect(await dial(handle.port!, '127.0.0.1')).toBe('connected');
       // The IPv6 loopback is a DIFFERENT address, so an IPv4-loopback binding
@@ -105,7 +114,7 @@ describe('startSocketServer', () => {
          // and the default would both answer on IPv4 alone.
          return;
       }
-      const handle = startSocketServer({ port: 0, host: '::' }, () => Disposable.EMPTY);
+      const handle = startSocketServer({ shared: lspShared, port: 0, host: '::' }, () => Disposable.EMPTY);
       await handle.started;
       // Dual-stack: `'::'` is the any-address, so both families connect. This is
       // the spelling that restores the pre-default-loopback binding.
@@ -118,7 +127,7 @@ describe('startSocketServer', () => {
    it('rejects `started` when no local interface holds the host', async () => {
       // TEST-NET-1 (RFC 5737) is assigned to no local interface, so the kernel
       // refuses the bind rather than silently widening it.
-      const handle = startSocketServer({ port: 0, host: '192.0.2.1' }, () => Disposable.EMPTY);
+      const handle = startSocketServer({ shared: lspShared, port: 0, host: '192.0.2.1' }, () => Disposable.EMPTY);
       await expect(handle.started).rejects.toMatchObject({ code: 'EADDRNOTAVAIL' });
    });
 
@@ -135,7 +144,7 @@ describe('startSocketServer', () => {
          throw new Error('Could not bind blocker server');
       }
 
-      const handle = startSocketServer({ port: addressInfo.port }, () => Disposable.EMPTY);
+      const handle = startSocketServer({ shared: lspShared, port: addressInfo.port }, () => Disposable.EMPTY);
       // The errno, not just "some rejection": the launcher rejects `started` for
       // several unrelated reasons (unresolvable address info, a pipe instead of a
       // TCP socket), and those carry a plain Error with no `code`.
@@ -146,7 +155,7 @@ describe('startSocketServer', () => {
 
    it("logs the connection's protocol faults through the logger, under the head's tag", async () => {
       const { logger, lines } = makeAttributingLogger();
-      const handle = startSocketServer({ port: 0, logger, logTag: 'TestServer' }, () => Disposable.EMPTY);
+      const handle = startSocketServer({ shared: lspShared, port: 0, logger, logTag: 'TestServer' }, () => Disposable.EMPTY);
       await handle.started;
       const socket = net.connect({ port: handle.port!, host: '127.0.0.1' });
       try {
@@ -161,6 +170,70 @@ describe('startSocketServer', () => {
          handle.close();
          await handle.stopped;
       }
+   });
+});
+
+describe('startSocketServer without an LSP head', () => {
+   it('brings the workspace up before it listens', async () => {
+      const gate = new Deferred<void>();
+      let started = false;
+      const handle = startSocketServer({ shared: sharedWithoutLsp(() => gate.promise), workspace: '/ws' }, () => Disposable.EMPTY);
+      void handle.started.then(() => {
+         started = true;
+      });
+
+      // A timer, so a launcher that listened first would have resolved by now.
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect({ started, port: handle.port }).toEqual({ started: false, port: undefined });
+
+      gate.resolve();
+      await handle.started;
+      expect(await dial(handle.port!, '127.0.0.1')).toBe('connected');
+      handle.close();
+      await handle.stopped;
+   });
+
+   it('rejects `started` and listens nowhere without a workspace, logging the mistake', async () => {
+      const { logger, lines } = makeAttributingLogger();
+      const handle = startSocketServer({ shared: sharedWithoutLsp(async () => undefined), logger }, () => Disposable.EMPTY);
+
+      await expect(handle.started).rejects.toThrow(/nothing initialises the workspace/);
+      await expect(handle.stopped).resolves.toBeUndefined();
+      expect({ port: handle.port, errors: lines.filter(line => line.level === 'error').length }).toEqual({ port: undefined, errors: 1 });
+   });
+
+   it('rejects `started` without logging an error when the workspace fails to initialize', async () => {
+      const { logger, lines } = makeAttributingLogger();
+      const handle = startSocketServer(
+         { shared: sharedWithoutLsp(() => Promise.reject(new Error('discovery blew up'))), workspace: '/ws', logger },
+         () => Disposable.EMPTY
+      );
+
+      await expect(handle.started).rejects.toThrow(/discovery blew up/);
+      await expect(handle.stopped).resolves.toBeUndefined();
+      expect(lines.filter(line => line.level === 'error')).toEqual([]);
+   });
+
+   it('never listens once closed during the bring-up', async () => {
+      const gate = new Deferred<void>();
+      const handle = startSocketServer({ shared: sharedWithoutLsp(() => gate.promise), workspace: '/ws' }, () => Disposable.EMPTY);
+      handle.close();
+      await handle.stopped;
+
+      gate.resolve();
+      await expect(handle.started).rejects.toThrow(/closed before it listened/);
+      expect(handle.port).toBeUndefined();
+   });
+
+   it('leaves a close during the bring-up no unhandled rejection when nobody awaits `started`', async () => {
+      const gate = new Deferred<void>();
+      const handle = startSocketServer({ shared: sharedWithoutLsp(() => gate.promise), workspace: '/ws' }, () => Disposable.EMPTY);
+      handle.close();
+      await handle.stopped;
+
+      gate.resolve();
+      // A rejection is reported as unhandled once the microtasks have drained.
+      await new Promise(resolve => setTimeout(resolve, 0));
    });
 });
 

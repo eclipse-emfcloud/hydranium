@@ -18,13 +18,13 @@
  * time.
  */
 
-import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from '@hydranium/example-order-flow-protocol';
+import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_SERVER_PORT_COMMAND } from '@hydranium/example-order-flow-protocol';
 import type { LanguageClient } from 'vscode-languageclient/node';
 
 /** The LSP request each socket head answers with its listening port. */
 export const ORDER_FLOW_PORT_COMMANDS = {
    dataServer: ORDER_FLOW_DATA_SERVER_PORT_COMMAND,
-   glsp: ORDER_FLOW_GLSP_PORT_COMMAND
+   glsp: ORDER_FLOW_GLSP_SERVER_PORT_COMMAND
 } as const;
 
 /**
