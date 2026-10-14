@@ -34,6 +34,8 @@ interface ScriptedPrompt extends PromptPort {
    readonly rejected: readonly string[];
    /** The message passed to `outro` — the echoed command. */
    readonly echoed: () => string | undefined;
+   /** Every note's text, in order. */
+   readonly notes: readonly string[];
 }
 
 /**
@@ -47,6 +49,7 @@ function scriptedPrompt(answers: readonly Answer[]): ScriptedPrompt {
    const queue = [...answers];
    const asked: string[] = [];
    const rejected: string[] = [];
+   const notes: string[] = [];
    let echoed: string | undefined;
    const take = (message: string): Answer => {
       asked.push(message);
@@ -59,8 +62,11 @@ function scriptedPrompt(answers: readonly Answer[]): ScriptedPrompt {
       asked,
       rejected,
       echoed: () => echoed,
+      notes,
       intro: () => undefined,
-      note: () => undefined,
+      note: message => {
+         notes.push(message);
+      },
       outro: message => {
          echoed = message;
       },
@@ -88,7 +94,6 @@ const DETECTION: WorkspaceDetection = {
    rootDir: '/repo',
    workspaces: ['packages/*'],
    targetPath: 'packages/order-flow',
-   coveredBy: 'packages/*',
    scope: '@acme',
    baseTsconfig: '../../tsconfig.base.json',
    baseCompilerOptions: { strict: true }
@@ -220,6 +225,16 @@ describe('runInitWizard', () => {
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore', '--public']);
    });
 
+   it('names each package the workspaces entries do not reach', async () => {
+      const prompt = scriptedPrompt(['Bookstore', ['data'], 'Bookstore', 'bookstore', false, false, true]);
+      await runInitWizard(prompt, () => DETECTION, { targetDir: './bookstore', isOccupied: () => false });
+
+      // `packages/*` reaches the project directory, which holds no package.
+      expect(prompt.notes.join('\n')).toContain(
+         'no entry covering packages/order-flow/protocol, packages/order-flow/server, so they are printed for you to add'
+      );
+   });
+
    it('collects several grammars one at a time and asks which one the diagram edits', async () => {
       const prompt = scriptedPrompt([
          'OrderFlow',
@@ -268,6 +283,13 @@ describe('runInitWizard', () => {
       expect(prompt.asked).not.toContain('Which grammar does the GLSP diagram edit?');
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore', '--heads', 'lsp,glsp']);
       expect(resolveInitComposition('Bookstore', [], ['lsp', 'glsp']).grammars[0].diagram).toBe(true);
+   });
+
+   it('re-asks a grammar whose extension differs from a claimed one only in case', async () => {
+      const prompt = scriptedPrompt(['OrderFlow', ['data'], 'Domain', 'shared', true, 'Process', 'Shared', 'process', false, false]);
+      await runInitWizard(prompt, () => undefined, { targetDir: './order-flow', isOccupied: () => false });
+
+      expect(prompt.rejected).toContain("'.Shared' is already claimed by another grammar.");
    });
 
    it('re-asks a grammar whose extension another grammar already claimed', async () => {

@@ -238,8 +238,9 @@ mode, and sit outside the regular gate because each performs a fresh npm
 install. `HYDRANIUM_KEEP_PACKED_CONSUMER=1` keeps the disposable project.
 
 - `check:packed-consumer` installs the packed server-side packages outside the
-  workspace and drives the bookstore server over LSP and the data socket. Run
-  it when changing package exports, peers, or server bootstrap.
+  workspace, with the bookstore's protocol package packed beside them, and
+  drives the bookstore server over LSP and the data socket. Run it when
+  changing package exports, peers, or server bootstrap.
 - `check:init-scaffold` scaffolds with the packed `@hydranium/cli`, as an
   adopter's `npx` does, in each supported shape, then builds, tests and drives
   every head. It shows what an adopter's first install meets, which the

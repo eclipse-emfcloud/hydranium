@@ -1,0 +1,2 @@
+/** Points at a node declared in nodes.__EXTENSION__: hover the target to read its comment from there. */
+node Third -> Second

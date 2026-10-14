@@ -66,7 +66,7 @@ export async function loadHeadlessContext(servicesModule: string): Promise<Headl
    if (stats === undefined || !stats.isFile()) {
       throw new Error(
          `${SERVICES_FLAG} must name an existing ESM file; '${servicesModule}' resolved to ${modulePath}, ` +
-            `which is not one. Pass the path of the head's entry, e.g. \`${SERVICES_FLAG} ./lib/services.js\` — ` +
+            "which is not one. Pass the path of the server package's built `lib/node/services.js` from where you run this — " +
             'not a package name.'
       );
    }

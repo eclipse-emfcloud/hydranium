@@ -64,11 +64,11 @@ const ROT_EXEMPT = new Set(['CODE_OF_CONDUCT.md', 'NOTICE.md']);
 
 /**
  * The one page that quotes versions, so every other page links to it. The
- * scaffold README is exempt as a whole because `check:init-provenance` holds it
- * to what `init` emits.
+ * scaffold READMEs are exempt as a whole because `check:init-provenance` holds
+ * them to what `init` emits.
  */
 const VERSION_HOME = 'docs/adopting/requirements.md';
-const SCAFFOLD_README = 'examples/bookstore/server/README.md';
+const SCAFFOLD_READMES = new Set(['examples/bookstore/protocol/README.md', 'examples/bookstore/server/README.md']);
 
 type Category = 'unreachable' | 'version' | 'date' | 'size' | 'timing' | 'history' | 'line-reference';
 
@@ -200,7 +200,7 @@ export function linksOf(text: string): { line: number; target: string }[] {
 /** Rot hits per category on one page, minus the exemptions the policy grants it. */
 export function rotCounts(file: string, text: string, peers: readonly string[] = []): Map<Category, number> {
    const counts = new Map<Category, number>();
-   if (ROT_EXEMPT.has(file) || file === SCAFFOLD_README) return counts;
+   if (ROT_EXEMPT.has(file) || SCAFFOLD_READMES.has(file)) return counts;
    for (const { text: line } of proseLines(text)) {
       for (const { category, pattern } of ROT_PATTERNS) {
          if (category === 'version' && (file === VERSION_HOME || peers.some(peer => line.includes(`\`${peer}\``)))) continue;
@@ -421,7 +421,7 @@ for (const [page, text] of texts) {
 }
 
 for (const [page, text] of texts) {
-   if (ROT_EXEMPT.has(page) || page === SCAFFOLD_README) continue;
+   if (ROT_EXEMPT.has(page) || SCAFFOLD_READMES.has(page)) continue;
    for (const line of overlongLines(text)) {
       failed = true;
       console.error(`✗ ${page}:${line}: prose runs past column ${WRAP_COLUMN} — wrap it; only a lone link, code span or word may run long`);

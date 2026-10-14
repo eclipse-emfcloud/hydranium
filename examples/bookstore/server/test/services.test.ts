@@ -16,7 +16,7 @@
 // is missing from the composition.
 
 import { describe, expect, it } from 'vitest';
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 describe('Bookstore services', () => {
    it('composes the DI tree and registers exactly one language', () => {

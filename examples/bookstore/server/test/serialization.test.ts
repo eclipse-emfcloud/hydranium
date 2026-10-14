@@ -20,8 +20,8 @@
 import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 import type { BookstoreModel } from '../src/language-server/ast.js';
-import type { BookstoreModel as TransferBookstoreModel } from '../src/language-server/generated-hydranium/transfer-model.js';
-import { createServices } from '../src/services.js';
+import type { BookstoreModel as TransferBookstoreModel } from '@hydranium/bookstore-protocol';
+import { createServices } from '../src/node/services.js';
 
 describe('Bookstore serialization', () => {
    const source = 'node first -> second\nnode second';

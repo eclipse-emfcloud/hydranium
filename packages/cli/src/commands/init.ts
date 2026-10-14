@@ -11,7 +11,15 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { buildInitTemplates, readFrameworkVersion, workspaceRootPins } from './init-templates.js';
 import { kebab } from './kebab.js';
-import { createNodeWorkspaceProbe, detectWorkspace, parseNpmVersion, type JsonValue, type WorkspaceProbe } from './init-workspace.js';
+import {
+   createNodeWorkspaceProbe,
+   detectWorkspace,
+   parseNpmVersion,
+   workspaceGlobCovers,
+   type JsonValue,
+   type WorkspaceDetection,
+   type WorkspaceProbe
+} from './init-workspace.js';
 
 /**
  * The protocol heads a scaffold can start, in composition order.
@@ -27,6 +35,35 @@ export type InitHead = (typeof INIT_HEADS)[number];
 
 /** The heads a scaffold emits when `--heads` is not given. */
 export const DEFAULT_INIT_HEADS: readonly InitHead[] = ['lsp', 'data'];
+
+/**
+ * The library packages of a scaffolded project, each in the directory of its
+ * name, in the order a workspace lists them.
+ */
+export const INIT_MEMBERS = ['protocol', 'server'] as const;
+
+/** One library member — see {@link INIT_MEMBERS}. */
+export type InitMember = (typeof INIT_MEMBERS)[number];
+
+/** A member's path relative to the workspace root, and the `workspaces` entry already covering it. */
+export interface InitMemberPlacement {
+   readonly path: string;
+   readonly coveredBy?: string;
+}
+
+/**
+ * Where each member lands in a detected workspace.
+ *
+ * Judged per member rather than for the project directory, which holds no
+ * package: a root listing its members one by one needs an entry for each,
+ * while a `packages/*` glob covers none of them one level deeper.
+ */
+export function memberPlacements(detection: WorkspaceDetection): readonly InitMemberPlacement[] {
+   return INIT_MEMBERS.map(member => {
+      const memberPath = `${detection.targetPath}/${member}`;
+      return { path: memberPath, coveredBy: detection.workspaces.find(glob => workspaceGlobCovers(glob, memberPath)) };
+   });
+}
 
 /** True for a string naming one of {@link INIT_HEADS}. */
 export function isInitHead(value: string): value is InitHead {
@@ -254,11 +291,21 @@ function isPascalIdentifier(value: string): boolean {
    return /^[A-Za-z][A-Za-z0-9]*$/.test(value);
 }
 
-/** Strip a leading dot and reject an extension that is empty or dotted through. */
+/**
+ * True for a file extension, without its leading dot, that is safe in an
+ * emitted file name and string literal: letters, digits and dashes.
+ */
+export function isUsableExtension(extension: string): boolean {
+   return /^[A-Za-z0-9][A-Za-z0-9-]*$/.test(extension);
+}
+
+/** Strip a leading dot and reject an extension {@link isUsableExtension} refuses. */
 function normalizeExtension(value: string, grammar: string): string {
    const extension = value.replace(/^\./, '');
-   if (extension.length === 0) {
-      throw new Error(`Invalid extension '${value}' for grammar '${grammar}': an extension cannot be empty.`);
+   if (!isUsableExtension(extension)) {
+      throw new Error(
+         `Invalid extension '${value}' for grammar '${grammar}': use letters, digits and dashes, starting with a letter or digit.`
+      );
    }
    return extension;
 }
@@ -281,6 +328,11 @@ function resolveGrammar(spec: InitGrammarSpec, projectId: string, qualify: boole
    const extensions = (spec.extensions ?? [grammarId]).map(extension => normalizeExtension(extension, spec.name));
    if (extensions.length === 0) {
       throw new Error(`Invalid --extensions for grammar '${spec.name}': at least one extension is required.`);
+   }
+   if (spec.languageId !== undefined && !/^[a-z0-9][a-z0-9-]*$/.test(spec.languageId)) {
+      throw new Error(
+         `Invalid --language-id '${spec.languageId}' for grammar '${spec.name}': use lowercase letters, digits and dashes, e.g. 'my-lang'.`
+      );
    }
    return {
       grammar: spec.name,
@@ -369,15 +421,18 @@ function assertNoCollisions(grammars: readonly InitGrammarNames[]): void {
       }
       byLanguageId.set(grammar.languageId, grammar.grammar);
 
+      // Case-folded: a starter file is named by extension, and `nodes.Foo` and
+      // `nodes.foo` are one file on a case-insensitive file system.
       for (const extension of grammar.extensions) {
-         const clashingExtension = byExtension.get(extension);
+         const key = extension.toLowerCase();
+         const clashingExtension = byExtension.get(key);
          if (clashingExtension !== undefined) {
             throw new Error(
                `File extension '.${extension}' is claimed by both '${clashingExtension}' and '${grammar.grammar}'. ` +
                   'Langium routes documents by extension, so each grammar needs its own.'
             );
          }
-         byExtension.set(extension, grammar.grammar);
+         byExtension.set(key, grammar.grammar);
       }
    }
 }
@@ -515,31 +570,36 @@ export function runInit(options: InitCommandOptions): void {
       write('\n');
       write(`Workspace root: ${detection.rootDir}\n`);
       if (detection.baseTsconfig !== undefined) {
-         write(`  tsconfig.json extends ${detection.baseTsconfig}, minus the options it inherits unchanged.\n`);
+         write(
+            `  Each package's tsconfig.json extends the root's ${path.posix.basename(detection.baseTsconfig)}, minus the options it inherits unchanged.\n`
+         );
       } else {
-         write('  No root tsconfig carries compilerOptions, so the emitted one stands alone.\n');
+         write("  No root tsconfig carries compilerOptions, so each package's stands alone.\n");
       }
       if (detection.printWidth !== undefined) {
          write(`  Sources wrapped at ${detection.printWidth} columns, from ${detection.rootDir}'s formatter config.\n`);
       }
       if (detection.oxlintConfig !== undefined || detection.eslintConfig !== undefined) {
          write(
-            `  A lint script was added — ${detection.oxlintConfig ?? detection.eslintConfig} says this repo lints. Adjust it if your invocation differs.\n`
+            `  Each package got a lint script — ${detection.oxlintConfig ?? detection.eslintConfig} says this repo lints. Adjust them if your invocation differs.\n`
          );
       }
       // Printed rather than applied: `init` writes inside the target directory
       // and nowhere else, so a scaffold can never surprise-edit a manifest that
       // is under review, mid-rebase, or simply not the caller's to change.
-      if (detection.coveredBy === undefined) {
-         write(`  Add this to "workspaces" in ${path.join(detection.rootDir, 'package.json')}:\n`);
-         write(`    "${detection.targetPath}"\n`);
-      } else {
-         write(`  Already covered by the "${detection.coveredBy}" workspaces entry.\n`);
+      const placements = memberPlacements(detection);
+      const uncovered = placements.filter(placement => placement.coveredBy === undefined);
+      if (uncovered.length > 0) {
+         write(`  Add ${uncovered.length === 1 ? 'this' : 'these'} to "workspaces" in ${path.join(detection.rootDir, 'package.json')}:\n`);
+         write(`${uncovered.map(placement => `    "${placement.path}"`).join(',\n')}\n`);
+      }
+      for (const placement of placements.filter(candidate => candidate.coveredBy !== undefined)) {
+         write(`  ${placement.path} is already covered by the "${placement.coveredBy}" workspaces entry.\n`);
       }
       const pins = workspaceRootPins(composition.heads).map(([name, version]) => `    "${name}": "${version}"`);
       write(
          `  Add these to "devDependencies" in ${path.join(detection.rootDir, 'package.json')}, so another member's version of one ` +
-            `cannot displace the copy this package shares with the framework:\n${pins.join(',\n')}\n`
+            `cannot displace the copy these packages share with the framework:\n${pins.join(',\n')}\n`
       );
       if (composition.packaging.scope === undefined && detection.scope !== undefined) {
          write(`  Sibling packages all use the "${detection.scope}" scope; pass --scope ${detection.scope} to match them.\n`);
@@ -547,13 +607,23 @@ export function runInit(options: InitCommandOptions): void {
    }
    write('\n');
    write('Next steps:\n');
-   write(`  cd ${options.targetDir}\n`);
-   write('  npm install\n');
-   write('  npm run build            # langium generate + tsc\n');
-   write('  npm test                 # the scaffolded DI-composition test\n');
+   // A workspace member's project has no manifest of its own, so its steps run
+   // from the workspace root and name the server by `--prefix`.
+   const server = detection === undefined ? 'server' : `${detection.targetPath}/server`;
+   if (detection === undefined) {
+      write(`  cd ${options.targetDir}\n`);
+      write('  npm install\n');
+      write('  npm run build            # langium generate + tsc, every package\n');
+      write('  npm test                 # the server tests\n');
+   } else {
+      write(`  cd ${detection.rootDir}\n`);
+      write('  npm install\n');
+      write(`  npm --prefix ${server} run build   # langium generate + tsc, protocol included\n`);
+      write(`  npm --prefix ${server} test\n`);
+   }
    // `npx`, not a bare invocation: `@hydranium/cli` is a devDependency of the
    // scaffold, so the binary is on PATH inside an npm script and nowhere else.
-   write('  npx hydranium-cli reflect --services ./lib/services.js\n');
+   write(`  npx hydranium-cli reflect --services ./${server}/lib/node/services.js\n`);
    write('\n');
    write('The emitted sources carry no license header — run your own header tool if\n');
    write('your repo gates them. See the README section on that.\n');

@@ -9,12 +9,14 @@
 
 // Exercise the framework packages from outside the workspace graph, installed
 // the way a consumer installs them, then compile and smoke that consumer. Run
-// after build. By default the consumer gets the candidate tarballs packed from
-// this tree; `--published-prerelease` gives it the published prerelease instead,
-// and `--upgrade-from-published` installs the published prerelease first and
-// then upgrades the same consumer to the candidates. `--init-scaffold` makes the
-// consumer an `init` scaffold instead, changed only in its `@hydranium/*`
-// dependencies, so what is tested is what an adopter gets.
+// after build. The consumer is the bookstore's server, with the bookstore's
+// protocol package packed from this tree in every mode. By default it gets the
+// candidate tarballs packed from this tree; `--published-prerelease` gives it
+// the published prerelease instead, and `--upgrade-from-published` installs the
+// published prerelease first and then upgrades the same consumer to the
+// candidates. `--init-scaffold` makes the consumer an `init` scaffold instead,
+// changed only in its `@hydranium/*` dependencies, so what is tested is what an
+// adopter gets.
 //
 // The published baseline is the `latest` dist-tag, resolved per run, because a
 // release lands with nearly every merge: a version pinned here is stale within
@@ -74,6 +76,7 @@ const WORKSPACE_NPM = '11.15.0';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const example = join(root, 'examples/bookstore/server');
+const exampleProtocol = join(root, 'examples/bookstore/protocol');
 const scratch = mkdtempSync(join(tmpdir(), 'hydranium-packed-consumer-'));
 const tarballs = join(scratch, 'tarballs');
 const consumer = join(scratch, 'consumer');
@@ -106,19 +109,31 @@ function publishedBaseline(override: string | undefined): string {
    return version;
 }
 
+/** Pack one package directory into `tarballs`, answering its `file:` specifier. */
+function packDirectory(directory: string): string {
+   const output = execFileSync('npm', ['pack', '--json', '--pack-destination', tarballs], { cwd: directory, encoding: 'utf8' });
+   const filename = (JSON.parse(output) as { filename?: string }[])[0]?.filename;
+   if (!filename) throw new Error(`npm pack produced no tarball for ${directory}`);
+   return `file:${join(tarballs, filename)}`;
+}
+
 /** Pack every framework package into `tarballs`, answering name → `file:` specifier. */
 function packCandidates(): Map<string, string> {
-   const candidates = new Map<string, string>();
-   for (const directory of packageDirs) {
-      const output = execFileSync('npm', ['pack', '--json', '--pack-destination', tarballs], {
-         cwd: join(root, 'packages', directory),
-         encoding: 'utf8'
-      });
-      const filename = (JSON.parse(output) as { filename?: string }[])[0]?.filename;
-      if (!filename) throw new Error(`npm pack produced no tarball for ${directory}`);
-      candidates.set(packageName(directory), `file:${join(tarballs, filename)}`);
-   }
-   return candidates;
+   return new Map(packageDirs.map(directory => [packageName(directory), packDirectory(join(root, 'packages', directory))]));
+}
+
+/**
+ * Build and pack the bookstore's protocol package, which its server imports.
+ *
+ * Packed rather than copied beside the server, so what the consumer compiles
+ * against is what npm ships for it: a `files` list that left out its build
+ * fails here. Packed from this tree in every mode, since it is never
+ * published. Its generated modules are committed, so `tsc` alone builds it.
+ */
+function packExampleProtocol(): [string, string] {
+   run('Bookstore protocol build', 'npx', ['tsc', '-b', join(exampleProtocol, 'tsconfig.json')], root);
+   const name = (JSON.parse(readFileSync(join(exampleProtocol, 'package.json'), 'utf8')) as { name: string }).name;
+   return [name, packDirectory(exampleProtocol)];
 }
 
 /** The bookstore server's declared version of `name`. */
@@ -340,11 +355,18 @@ interface ScaffoldShape {
    readonly npm?: string;
    /** The `vitest` range `init` must emit. */
    readonly vitest: string;
+   /** `--grammar` arguments; the smoke drives the first, so it keeps the `my-lang` language id. */
+   readonly grammars?: readonly string[];
 }
 
 const SCAFFOLD_SHAPES: readonly ScaffoldShape[] = [
    { label: 'standalone, all heads', heads: 'lsp,data,glsp', production: true, vitest: '~4.0.18' },
-   { label: 'standalone, LSP and data', heads: 'lsp,data', vitest: '~4.0.18' },
+   {
+      label: 'standalone, LSP and data, two grammars',
+      heads: 'lsp,data',
+      grammars: ['--grammar', 'MyLang', '--language-id', 'my-lang', '--grammar', 'Other'],
+      vitest: '~4.0.18'
+   },
    { label: 'standalone, LSP and GLSP', heads: 'lsp,glsp', vitest: '~4.0.18' },
    { label: 'standalone, LSP only', heads: 'lsp', vitest: '~4.0.18' },
    { label: 'workspace member, all heads', heads: 'lsp,data,glsp', monorepo: true, vitest: '~4.0.18' },
@@ -363,8 +385,8 @@ const SCAFFOLD_SHAPES: readonly ScaffoldShape[] = [
 /** Make the root manifest changes `init --monorepo` printed, as an adopter following them does. */
 function applyPrintedRootChanges(manifestPath: string, printed: string): void {
    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { workspaces: string[]; devDependencies?: Record<string, string> };
-   const workspace = /Add this to "workspaces" in [^\n]*\n {4}"([^"]+)"/.exec(printed)?.[1];
-   if (workspace !== undefined) manifest.workspaces.push(workspace);
+   const entries = /Add (?:this|these) to "workspaces" in [^\n]*\n((?: {4}"[^"]+",?\n)+)/.exec(printed)?.[1];
+   if (entries !== undefined) manifest.workspaces.push(...(JSON.parse(`[${entries}]`) as string[]));
    const pins = /Add these to "devDependencies" in [^\n]*\n((?: {4}"[^"]+": "[^"]+",?\n)+)/.exec(printed)?.[1];
    if (pins === undefined) throw new Error('init --monorepo printed no root pins');
    manifest.devDependencies = { ...manifest.devDependencies, ...(JSON.parse(`{${pins}}`) as Record<string, string>) };
@@ -389,12 +411,17 @@ function installPackedCli(candidates: Map<string, string>): string {
 /** Scaffold one shape with the packed CLI, install it with the floor npm, then build, test and smoke it. */
 function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, candidates: Map<string, string>): void {
    const installRoot = join(scratch, `scaffold-${index}`);
-   const member = shape.monorepo ? 'packages/my-lang' : undefined;
-   const project = member === undefined ? installRoot : join(installRoot, member);
-   const init = [cli, 'init', project, '--name', 'MyLang', '--heads', shape.heads];
-   // A workspace has to see its members, which the inherited setting would hide, and
-   // npm refuses it for any script run inside a member.
-   const installEnv = shape.monorepo ? { ...process.env, npm_config_workspaces: undefined } : env;
+   const projectPath = shape.monorepo ? 'packages/my-lang' : undefined;
+   const project = projectPath === undefined ? installRoot : join(installRoot, projectPath);
+   // The package carrying the framework dependencies, the tests and the entries
+   // the smoke starts, as a path in the workspace and on disk.
+   const member = projectPath === undefined ? 'server' : `${projectPath}/server`;
+   const server = join(installRoot, member);
+   const init = [cli, 'init', project, '--name', 'MyLang', '--heads', shape.heads, ...(shape.grammars ?? [])];
+   // Every shape is a workspace, a standalone one rooted at the project: it has
+   // to see its members, which the inherited setting would hide, and npm
+   // refuses it for any script run inside a member.
+   const installEnv = { ...process.env, npm_config_workspaces: undefined };
    const npm = shape.npm ?? SCAFFOLD_NPM;
    const shapeInstall = (label: string, args = install) =>
       run(`${shape.label}: ${label} (npm ${npm})`, 'npx', ['--yes', `npm@${npm}`, ...args], installRoot, installEnv);
@@ -426,17 +453,17 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
    } else {
       run(`${shape.label}: scaffold`, 'node', init, scratch, initEnv);
    }
-   const vitest = (JSON.parse(readFileSync(join(project, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string> })
+   const vitest = (JSON.parse(readFileSync(join(server, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string> })
       .devDependencies?.vitest;
    if (vitest !== shape.vitest) throw new Error(`${shape.label}: init emitted vitest ${vitest}, expected ${shape.vitest}`);
-   const repointed = repointFramework(join(project, 'package.json'), candidates);
-   cpSync(join(root, 'scripts/fixtures/packed-consumer/scaffold-smoke.mjs'), join(project, 'scaffold-smoke.mjs'));
-   writeFileSync(join(project, 'test/decorated.test.ts'), DECORATED_TEST);
+   const repointed = repointFramework(join(server, 'package.json'), candidates);
+   cpSync(join(root, 'scripts/fixtures/packed-consumer/scaffold-smoke.mjs'), join(server, 'scaffold-smoke.mjs'));
+   writeFileSync(join(server, 'test/decorated.test.ts'), DECORATED_TEST);
 
    shapeInstall('install');
    assertInstalledFrom(repointed, installRoot, member);
    for (const name of candidates.keys()) {
-      if (!repointed.has(name) && [installRoot, project].some(directory => existsSync(join(directory, 'node_modules', name)))) {
+      if (!repointed.has(name) && [installRoot, project, server].some(directory => existsSync(join(directory, 'node_modules', name)))) {
          throw new Error(`${shape.label}: installed ${name}, which the scaffold does not declare`);
       }
    }
@@ -450,27 +477,32 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
       member
    );
    assertOneTransport(installRoot, installEnv, member);
-   run(`${shape.label}: build`, 'npm', ['run', 'build'], project, installEnv);
+   // A standalone project builds and tests through the root scripts it emits,
+   // which an adopter runs; a workspace member's project has no root of its own.
+   const scriptsDir = shape.monorepo ? server : project;
+   run(`${shape.label}: build`, 'npm', ['run', 'build'], scriptsDir, installEnv);
    run(
       `${shape.label}: compile with TypeScript ${TYPESCRIPT_FLOOR}`,
       'npx',
       ['--yes', '-p', `typescript@${TYPESCRIPT_FLOOR}`, 'tsc', '--noEmit', '-p', 'tsconfig.json'],
-      project,
+      server,
       installEnv
    );
-   run(`${shape.label}: tests`, 'npm', ['test'], project, installEnv);
-   run(`${shape.label}: smoke`, 'node', ['scaffold-smoke.mjs', shape.heads], project, env, SMOKE_TIMEOUT_MS);
+   run(`${shape.label}: tests`, 'npm', ['test'], scriptsDir, installEnv);
+   // The starter files are the one emission no test reads: they have to parse
+   // and link against the starter grammar, the cross-file reference included.
+   run(
+      `${shape.label}: validate the starter workspace`,
+      'npx',
+      ['hydranium-cli', 'validate', '--services', './lib/node/services.js', join(project, 'workspace')],
+      server,
+      installEnv
+   );
+   run(`${shape.label}: smoke`, 'node', ['scaffold-smoke.mjs', shape.heads], server, env, SMOKE_TIMEOUT_MS);
    if (shape.production) {
       rmSync(join(installRoot, 'node_modules'), { recursive: true, force: true });
       shapeInstall('production install', ['ci', '--omit=dev', '--no-audit', '--no-fund']);
-      run(
-         `${shape.label}: smoke after the production install`,
-         'node',
-         ['scaffold-smoke.mjs', shape.heads],
-         project,
-         env,
-         SMOKE_TIMEOUT_MS
-      );
+      run(`${shape.label}: smoke after the production install`, 'node', ['scaffold-smoke.mjs', shape.heads], server, env, SMOKE_TIMEOUT_MS);
    }
    process.stdout.write(`init scaffold, ${shape.label}: passed.\n`);
 }
@@ -493,7 +525,10 @@ function checkBookstoreConsumer(): void {
       process.stdout.write(`Upgrading from ${published} (set HYDRANIUM_UPGRADE_FROM to repeat this run).\n`);
    }
    const candidates = publishedPrerelease ? undefined : packCandidates();
-   const first = new Map(packageDirs.map(directory => [packageName(directory), published ?? candidates!.get(packageName(directory))!]));
+   const first = new Map([
+      ...packageDirs.map(directory => [packageName(directory), published ?? candidates!.get(packageName(directory))!] as const),
+      packExampleProtocol()
+   ]);
 
    // A published release peers the transport it shipped with, which need not be the bookstore's.
    writeConsumer(published ? new Map([...first, ['vscode-jsonrpc', publishedTransport(published)]]) : first);

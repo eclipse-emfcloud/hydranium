@@ -32,7 +32,7 @@ import {
    getDefaultMapping
 } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
-import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_NODE_TYPE } from './types.js';
+import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_NODE_TYPE } from '@hydranium/bookstore-protocol';
 
 @injectable()
 export class BookstoreDiagramConfiguration implements DiagramConfiguration {

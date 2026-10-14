@@ -19,6 +19,7 @@
 
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { memberPlacements } from '../src/commands/init.js';
 import {
    detectWorkspace,
    findBaseTsconfig,
@@ -184,26 +185,35 @@ describe('inferPackageScope', () => {
 });
 
 describe('detectWorkspace', () => {
-   it('reports the placement of a package a glob already covers', () => {
+   it('reports the placement of a project inside the workspace', () => {
       const detection = detectWorkspace(path.join(ROOT, 'packages/new-lang'), fakeProbe(MONOREPO));
       expect(detection).toMatchObject({
          rootDir: ROOT,
          targetPath: 'packages/new-lang',
-         coveredBy: 'packages/*',
          scope: '@acme',
          baseTsconfig: '../../tsconfig.base.json'
       });
    });
 
    /**
-    * The case that decides whether a root-manifest line gets printed: `examples/`
-    * is listed one entry at a time, so a new example is NOT covered even though
-    * its siblings are.
+    * The case that decides whether root-manifest lines get printed: coverage is
+    * judged for each package one level below the project, so `packages/*`,
+    * which covers the project directory, covers none of them, while a glob
+    * written for the nesting covers both.
     */
-   it('leaves coveredBy undefined when no glob reaches the target', () => {
-      const detection = detectWorkspace(path.join(ROOT, 'examples/new-example'), fakeProbe(MONOREPO));
-      expect(detection?.coveredBy).toBeUndefined();
-      expect(detection?.targetPath).toBe('examples/new-example');
+   it('judges workspaces coverage per package, one level below the project', () => {
+      const detection = detectWorkspace(path.join(ROOT, 'packages/new-lang'), fakeProbe(MONOREPO));
+      expect(detection && memberPlacements(detection)).toEqual([
+         { path: 'packages/new-lang/protocol', coveredBy: undefined },
+         { path: 'packages/new-lang/server', coveredBy: undefined }
+      ]);
+
+      const nested = { ...MONOREPO, 'package.json': { name: 'hydranium-root', workspaces: ['packages/*/*'] } };
+      const covered = detectWorkspace(path.join(ROOT, 'packages/new-lang'), fakeProbe(nested));
+      expect(covered && memberPlacements(covered)).toEqual([
+         { path: 'packages/new-lang/protocol', coveredBy: 'packages/*/*' },
+         { path: 'packages/new-lang/server', coveredBy: 'packages/*/*' }
+      ]);
    });
 
    it('returns undefined outside a workspace', () => {

@@ -55,7 +55,7 @@
  */
 
 import * as path from 'node:path';
-import { DEFAULT_INIT_HEADS, INIT_HEADS, type InitHead, isNonEmptyDir } from './init.js';
+import { DEFAULT_INIT_HEADS, INIT_HEADS, type InitHead, isNonEmptyDir, isUsableExtension, memberPlacements } from './init.js';
 import { kebab } from './kebab.js';
 import { InitWizardCancelled, OPTIONAL_HEAD_CHOICES, type PromptPort } from './init-prompt.js';
 import { type WorkspaceDetection } from './init-workspace.js';
@@ -159,13 +159,13 @@ export function formatCommand(argv: readonly string[]): string {
 /** Validate a file extension, and reject one another grammar already claims. */
 function extensionProblem(value: string, taken: ReadonlySet<string>): string | undefined {
    const extension = value.replace(/^\./, '');
-   if (!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(extension)) {
+   if (!isUsableExtension(extension)) {
       return `'${value}' is not a usable file extension.`;
    }
    // Checked here rather than left to the scaffolder so the answer is corrected
    // while the grammar that owns it is still on screen. Langium routes documents
    // to a language BY extension, so a duplicate is a silent mis-route.
-   return taken.has(extension) ? `'.${extension}' is already claimed by another grammar.` : undefined;
+   return taken.has(extension.toLowerCase()) ? `'.${extension}' is already claimed by another grammar.` : undefined;
 }
 
 /**
@@ -269,10 +269,11 @@ async function askWorkspaceMembership(
    if (detection === undefined) {
       return { monorepo: false };
    }
+   const uncovered = memberPlacements(detection).filter(placement => placement.coveredBy === undefined);
    const covered =
-      detection.coveredBy === undefined
-         ? `The root manifest has no entry covering it, so one is printed for you to add.`
-         : `Already covered by the "${detection.coveredBy}" workspaces entry.`;
+      uncovered.length === 0
+         ? 'Its packages are already covered by the workspaces entries.'
+         : `The root manifest has no entry covering ${uncovered.map(placement => placement.path).join(', ')}, so ${uncovered.length === 1 ? 'one is' : 'they are'} printed for you to add.`;
    // The placement is named, not just the root. The root alone reads as "this
    // ran somewhere I did not ask for" whenever the command was issued from a
    // different directory than the target, which is the normal case.
@@ -365,7 +366,7 @@ export async function runInitWizard(
       const grammar = await askGrammar(prompt, grammars.length, grammars.length === 0 ? name : undefined, takenNames, takenExtensions);
       grammars.push(grammar);
       takenNames.add(grammar.name);
-      takenExtensions.add(grammar.extension);
+      takenExtensions.add(grammar.extension.toLowerCase());
    } while (await prompt.confirm({ message: 'Add another grammar?', initialValue: false }));
 
    const withDiagram = await askDiagramGrammar(prompt, heads, grammars);

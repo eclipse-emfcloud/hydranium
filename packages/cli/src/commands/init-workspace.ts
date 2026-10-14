@@ -169,14 +169,6 @@ export interface WorkspaceDetection {
    readonly workspaces: readonly string[];
    /** POSIX path of the target relative to {@link rootDir}, e.g. `packages/foo`. */
    readonly targetPath: string;
-   /**
-    * The `workspaces` glob already covering {@link targetPath}, if any.
-    *
-    * Absent means the root manifest needs a new entry — which is why this is
-    * computed per target rather than assumed: a `packages/*` glob covers a new
-    * package for free, while a repo that lists its examples one by one does not.
-    */
-   readonly coveredBy?: string;
    /** The npm scope the sibling packages agree on (`@acme`), when they agree. */
    readonly scope?: string;
    /**
@@ -454,7 +446,6 @@ export function detectWorkspace(targetDir: string, probe: WorkspaceProbe): Works
       rootDir,
       workspaces,
       targetPath,
-      coveredBy: workspaces.find(glob => workspaceGlobCovers(glob, targetPath)),
       scope: inferPackageScope(rootDir, workspaces, probe),
       baseTsconfig: base && posixRelative(absoluteTarget, path.join(rootDir, base.file)),
       baseCompilerOptions: base?.compilerOptions,

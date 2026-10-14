@@ -19,11 +19,12 @@ package's main entry; see
 
 ## Steps
 
-1. **Start from the scaffold's tests.** `test/` holds one file per layer:
-   the services compose, the starter rules parse, references link within and
-   across documents, a dangling reference is reported, and a model serializes
-   back to text. With a diagram, a further test runs a create-node operation,
-   an undo and a redo against a real GLSP server. Keep each layer's test next
+1. **Start from the scaffold's tests.** `server/test/` holds one file per
+   layer: the services compose, the starter rules parse, references link
+   within and across documents, a dangling reference is reported, and a model
+   serializes back to text. With a diagram, a further test runs a create-node
+   operation, an undo and a redo against a real GLSP server, and checks that a
+   reference into another document draws no edge. Keep each layer's test next
    to the rules it checks as you change them.
 
 2. **Test each validation check you add.** Parse a model with `parseHelper`,

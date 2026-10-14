@@ -30,17 +30,18 @@
 // starter grammar persists no bounds, so there is nowhere to put a coordinate: the
 // node is appended at the end of the document and the client places it.
 //
-// Like `types.ts`, `gmodel-factory.ts` and `diagram-configuration.ts`, this file
-// knows the starter grammar's shape — the `nodes` list and the `BookstoreNode`
-// it holds. Replacing the grammar means replacing these four together.
+// Like protocol's `bookstore-diagram-types.ts`, `gmodel-factory.ts` and
+// `diagram-configuration.ts`, this file knows the starter grammar's shape — the
+// `nodes` list and the `BookstoreNode` it holds. Replacing the grammar means
+// replacing these four together.
 
 import { type Command, type CreateNodeOperation, JsonCreateNodeOperationHandler, type MaybePromise } from '@eclipse-glsp/server';
 import { appendChild } from '@hydranium/core';
 import { HydraniumGlspRecordingCommand } from '@hydranium/glsp-server';
 import { findNextUnique } from '@hydranium/protocol';
+import { BOOKSTORE_NODE_TYPE } from '@hydranium/bookstore-protocol';
 import { injectable } from 'inversify';
 import type { BookstoreNode } from '../../language-server/ast.js';
-import { BOOKSTORE_NODE_TYPE } from './types.js';
 import type { BookstoreGlspState } from './state.js';
 
 /** Proposed name for a new node, uniquified against the ones the document already has. */

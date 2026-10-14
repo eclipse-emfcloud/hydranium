@@ -1,0 +1,2 @@
+/** Points at a node declared in nodes.bookstore: hover the target to read its comment from there. */
+node Third -> Second

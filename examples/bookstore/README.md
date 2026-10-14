@@ -5,17 +5,23 @@ grammar, three heads, a graphical editor, no host application, and no adopter
 overrides. Read it beside your own scaffold.
 
 ```
-server/      the scaffold, verbatim but for its package name, plus the
-             generated tree its own `build` writes
-workspace/   two `.bookstore` files it is exercised against
+protocol/    what the server and its clients both import: ids, port
+             commands, diagram ids and the generated transfer model
+server/      the grammar, the language and its heads, plus the generated
+             tree its own `build` writes
+workspace/   the two starter `.bookstore` files it is exercised against
 ```
 
-It was created by exactly this, and nothing else:
+Each package's README is the scaffold's own:
+[server](server/README.md) and [protocol](protocol/README.md).
+
+It was created by exactly this; the few files it holds that `init` does not
+write are named under "Changing this example":
 
 ```bash
-npx hydranium-cli init examples/bookstore/server \
+npx hydranium-cli init examples/bookstore \
    --name Bookstore --heads lsp,data,glsp --grammar Bookstore --diagram \
-   --monorepo
+   --scope @hydranium --monorepo
 ```
 
 ## Running it
@@ -24,15 +30,19 @@ npx hydranium-cli init examples/bookstore/server \
 npm --prefix examples/bookstore/server run build
 npm --prefix examples/bookstore/server test
 
-npx hydranium-cli reflect      --services examples/bookstore/server/lib/services.js
-npx hydranium-cli lint-grammar --services examples/bookstore/server/lib/services.js
-npx hydranium-cli validate     --services examples/bookstore/server/lib/services.js \
+npx hydranium-cli reflect      --services examples/bookstore/server/lib/node/services.js
+npx hydranium-cli lint-grammar --services examples/bookstore/server/lib/node/services.js
+npx hydranium-cli validate     --services examples/bookstore/server/lib/node/services.js \
    examples/bookstore/workspace
 
 # A data-head subcommand, against the emitted stdio entry
 npx hydranium-cli projects --server \
    "node ./examples/bookstore/server/lib/data-server-main.js ./examples/bookstore/workspace"
 ```
+
+The server's `build` runs `generate` first, which writes the protocol
+package's `src/generated-hydranium/` from the grammar, then compiles both.
+`validate` exits zero: nothing in the workspace is deliberately broken.
 
 `--server` spawns `src/data-server-main.ts`, the stdio data entry `init` emits
 with the `data` head; pass the workspace to it rather than through `--cwd`,
@@ -47,12 +57,24 @@ slot below is `init`'s, not an adopter's.
 
 | Seam | bookstore | what answers instead |
 | --- | --- | --- |
-| Hover | no `HoverProvider` | Langium's default, over the fixture's `/** … */` comments |
+| Hover | no `HoverProvider` | Langium's default, over the workspace's `/** … */` comments |
 | Semantic tokens | no provider | the client's own TextMate grammar |
 | Validation | no checks | parser + linker diagnostics |
 | Integrity | no rules | the framework's build pipeline |
 | Scoping | no `project` header | the `universal` export tier |
 | Serialization | the emitted `BookstoreSerializer` | the one slot `init` binds, the framework's default being a throw |
+
+The workspace shows the hover and scoping rows at work:
+
+- **A cross-document reference.** `references.bookstore` points at a node
+  declared in `nodes.bookstore`. The grammar declares no `project` header, so
+  every name is exported at the `universal` tier and the reference resolves
+  without a scope contribution, a project descriptor or a `requires` edge.
+- **Hover with no hover provider.** Each node carries a `/** … */` comment,
+  and Langium's default hover renders it, on the declaration and on a
+  reference in either file. Keep the second asterisk: the hover reads
+  comments through `JSDocDocumentationProvider`, which accepts only a `/**`
+  opener, so a plain `/* … */` comment yields no hover.
 
 ## The editable diagram
 
@@ -63,22 +85,28 @@ document, written once through the emitted
 [bookstore-serializer.ts](server/src/language-server/bookstore-serializer.ts),
 and undo and redo apply that one change. Delete the handler and its
 registration in `diagram-module.ts` for a read-only viewer.
+
+The diagram draws the nodes of one document, so a reference into another
+document draws no edge: `nodes.bookstore` shows its edge, `references.bookstore`
+shows its node alone.
 [bookstore-diagram.test.ts](server/test/bookstore-diagram.test.ts) runs the
-handler through an in-process GLSP server and checks that the create, the undo
-and the redo keep the existing nodes.
+handler through an in-process GLSP server, checking that the create, the undo
+and the redo keep the existing nodes, and checks that no edge is drawn into
+another document.
 
 ## Changing this example
 
 Bookstore must stay reproducible from one `init` invocation plus its grammar.
 `scripts/check-init-provenance.mts` re-derives the scaffold from the invocation
-above and compares it file by file, so every file must stay identical to what
-`init` emits except one field:
+above and compares it file by file, so every file it emits must stay identical
+to what `init` writes, the package names included: `--scope @hydranium` makes
+them the scaffold's own. That includes `server/vitest.config.ts`, which keeps
+the scaffold's own config rather than the repo's shared helper.
 
-| File | Verdict | Why |
-| --- | --- | --- |
-| `server/package.json` | adapted | the in-repo `@hydranium/example-*` package name, and only that field |
-| everything else | identical | including `vitest.config.ts`, which keeps the scaffold's own config rather than the repo's shared helper |
+The files `init` does not emit are the generated trees each `build` writes and
+the two `turbo.json` files, which order the protocol package's build after
+the server's `generate` in this repo's task runner.
 
-Anything `init` does not emit belongs in [order-flow](../order-flow/README.md),
-or teach `init` to emit it. `server/README.md` is the scaffold's own README,
-so example prose goes in this file.
+Anything else `init` does not emit belongs in
+[order-flow](../order-flow/README.md), or teach `init` to emit it. The package
+READMEs are the scaffold's own, so example prose goes in this file.

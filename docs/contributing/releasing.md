@@ -160,7 +160,7 @@ Right after the cut, `next` still points at the last prerelease and so is
 
 ## Re-deriving the scaffold provenance targets
 
-`examples/bookstore/server` is generated from the `init` templates and recorded
+`examples/bookstore` is generated from the `init` templates and recorded
 as `identical`, so any change to what `init` emits leaves those targets stale.
 Re-derive them; never hand-edit the derived copy:
 

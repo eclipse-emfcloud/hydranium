@@ -1,0 +1,19 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // Uncached: part of the output lands in the protocol member, outside this
+    // package, where a cache replay would not restore it. Its hash still keys
+    // the protocol member's build, so list every file the generators read.
+    "generate": {
+      "dependsOn": ["@hydranium/cli#build"],
+      "inputs": [
+        "src/grammar/**",
+        "src/language-server/ast.ts",
+        "langium-config.json",
+        "package.json"
+      ],
+      "cache": false
+    }
+  }
+}

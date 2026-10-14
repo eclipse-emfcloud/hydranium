@@ -51,9 +51,9 @@ function renderScaffold(name: string, grammars?: readonly InitGrammarSpec[], hea
       .join('\n');
 }
 
-/** The emitted `package.json`, parsed, for the three-head shape that carries every framework package. */
+/** The server's emitted `package.json`, parsed: the member carrying every framework package. */
 function emittedManifest(composition: InitComposition): Record<string, Record<string, string>> {
-   const content = planInitFiles(composition).find(file => file.path === 'package.json')?.content ?? '';
+   const content = planInitFiles(composition).find(file => file.path === 'server/package.json')?.content ?? '';
    return JSON.parse(content) as Record<string, Record<string, string>>;
 }
 

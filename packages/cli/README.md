@@ -53,7 +53,8 @@ first run.
 `hydranium-cli --help` lists the commands, and `hydranium-cli <command> --help`
 lists each command's flags.
 
-- **Scaffolding.** `init` writes a project you can build right away.
+- **Scaffolding.** `init` writes a project you can build right away: a server
+  package, a protocol package its clients share, and a starter workspace.
 - **Grammar and workspace.** Boot your built head to reflect its grammar, lint
   it, write a model reference, validate a workspace, or count its AST nodes.
 - **Codegen.** `generate-transfer-model` turns the AST into a transfer model,
@@ -65,18 +66,19 @@ lists each command's flags.
   save, delete or watch a document.
 
 The commands that boot your head take `--services <module>`. That is an ESM
-module exporting a zero-arg `createServices()` that returns `{ shared }`,
-normally your build's `./lib/services.js`. To run the head from its TypeScript
-source instead, register a loader with `--import`:
-`npx hydranium-cli reflect --import tsx --services ./src/services.ts`.
+module exporting a zero-arg `createServices()` that returns `{ shared }`; in a
+scaffolded project, that is `./server/lib/node/services.js` from the project
+root. To run the head from its TypeScript source instead, register a loader
+with `--import`:
+`npx hydranium-cli reflect --import tsx --services ./server/src/node/services.ts`.
 
 The data-server commands take `--server "<cmd> [args...]"`. Point it at the
-data head's stdio entry, `lib/data-server-main.js` in a scaffolded project, not
-at the editor entry `lib/main.js`, whose stdio carries LSP. Pass the workspace
-as the entry's argument rather than through `--cwd`:
+data head's stdio entry, `server/lib/data-server-main.js` in a scaffolded
+project, not at the editor entry `server/lib/main.js`, whose stdio carries LSP.
+Pass the workspace as the entry's argument rather than through `--cwd`:
 
 ```bash
-hydranium-cli projects --server "node ./lib/data-server-main.js ./models"
+hydranium-cli projects --server "node ./server/lib/data-server-main.js ./workspace"
 ```
 
 `create`, `save` and `delete` spawn a data server of their own, and a
