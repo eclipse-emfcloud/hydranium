@@ -2,7 +2,191 @@
 package.json
 ==============================================================================
 {
-  "name": "bookstore",
+  "name": "bookstore-root",
+  "version": "0.0.0",
+  "private": true,
+  "workspaces": [
+    "protocol",
+    "server"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "clean": "npm run clean --workspaces --if-present",
+    "test": "npm test --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
+
+==============================================================================
+.gitignore
+==============================================================================
+node_modules/
+
+==============================================================================
+protocol/package.json
+==============================================================================
+{
+  "name": "bookstore-protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "What the Bookstore language server and its clients share: language ids, wire types and diagram ids.",
+  "license": "UNLICENSED",
+  "author": "",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "scripts": {
+    "build": "npm --prefix ../server run generate && tsc -b",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "watch": "tsc -b --watch"
+  },
+  "dependencies": {
+    "@eclipse-glsp/protocol": "2.7.0"
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
+
+==============================================================================
+protocol/tsconfig.json
+==============================================================================
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "lib",
+    "strict": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "composite": true,
+    "types": []
+  },
+  "include": ["src"]
+}
+
+==============================================================================
+protocol/.gitignore
+==============================================================================
+node_modules/
+lib/
+*.tsbuildinfo
+
+==============================================================================
+protocol/README.md
+==============================================================================
+# bookstore-protocol
+
+What the Bookstore language server and its clients both import, so a client
+never depends on the server or installs Langium.
+
+- `src/generated-hydranium/languages.ts` — each language id and its file extensions
+- `src/generated-hydranium/transfer-model.ts` — the wire types of the model, references as plain strings
+- `src/head-ports.ts` — the LSP requests a host sends to find the socket heads
+- `src/bookstore-diagram-types.ts` — the `Bookstore` diagram's type ids
+
+The server's `npm run generate` writes `src/generated-hydranium/` from the
+grammar, and `npm run build` here runs it first. Commit the generated
+modules with the grammar change that produced them.
+
+==============================================================================
+protocol/src/index.ts
+==============================================================================
+// What the Bookstore server and its clients both import. A client depends on
+// this package instead of the server, so it never installs Langium to reach a
+// constant or a wire type.
+//
+// The server's `generate` writes `generated-hydranium/` from the grammar;
+// commit those modules with the grammar change that produced them.
+
+export * from './generated-hydranium/languages.js';
+export * from './generated-hydranium/transfer-model.js';
+export * from './head-ports.js';
+export * from './bookstore-diagram-types.js';
+
+==============================================================================
+protocol/src/head-ports.ts
+==============================================================================
+// The LSP requests a host queries to discover this server's socket heads.
+//
+// Both are keyed by the PROJECT, not the language: one server of each kind per
+// process serves every registered grammar, so a language-derived name would tie
+// a project-level endpoint to whichever grammar was scaffolded first.
+//
+// The server publishes them and a host shell has to name the same string to
+// reach the head; both import them from here. A shell that retypes the literal
+// gets no error when it drifts: the framework's port poll retries indefinitely
+// by default.
+
+/** LSP request the host queries to discover the data-server socket port. */
+export const BOOKSTORE_DATA_SERVER_PORT_COMMAND = 'bookstore/data-server/port';
+
+/** LSP request the host queries to discover the GLSP socket port. */
+export const BOOKSTORE_GLSP_PORT_COMMAND = 'bookstore/glsp/port';
+
+==============================================================================
+protocol/src/bookstore-diagram-types.ts
+==============================================================================
+// GLSP diagram-type and element-type ids for the Bookstore diagram, which the
+// server stamps onto the graph and every client registers.
+//
+// Declared once, here, for both ends. A drift between them fails silently:
+// sprotty's registries are exact-key maps with no prefix fallback, so an id the
+// client does not know yields an element with none of a node's features,
+// rendered by `MissingView` with only a `no registered view for type '…'`
+// console warning. Nothing fails server-side.
+//
+// The ids stay namespaced under the GLSP defaults (`node:` / `edge:`) so a
+// reader can tell a node id from an edge id at a glance.
+
+import { DefaultTypes } from '@eclipse-glsp/protocol';
+import { BOOKSTORE_LANGUAGE } from './generated-hydranium/languages.js';
+
+/**
+ * The GLSP diagram type — the string GLSP routes every per-diagram-type request
+ * by. A mismatch silently DROPS the request rather than reporting an unknown
+ * diagram type. Read from the language id, so renaming the language renames
+ * the diagram type at the next `generate`.
+ */
+export const BOOKSTORE_DIAGRAM_TYPE = BOOKSTORE_LANGUAGE.languageId;
+
+/** A `BookstoreNode` — the starter grammar's one named, referenceable node. */
+export const BOOKSTORE_NODE_TYPE = `${DefaultTypes.NODE}:bookstore-node`;
+
+/** A resolved `target` reference, drawn as a connection between two nodes. */
+export const BOOKSTORE_EDGE_TYPE = `${DefaultTypes.EDGE}:bookstore-target`;
+
+/**
+ * Every element type id the server stamps.
+ *
+ * A tuple, so {@link BookstoreElementType} is a union of the ids rather than
+ * `string`: a client table keyed by that union does not compile while an id
+ * lacks its registration. Nothing holds the tuple to the constants above, so
+ * an id declared without joining it escapes that check.
+ */
+export const BOOKSTORE_ELEMENT_TYPES = [BOOKSTORE_NODE_TYPE, BOOKSTORE_EDGE_TYPE] as const;
+
+/** One of the element type ids in {@link BOOKSTORE_ELEMENT_TYPES}. */
+export type BookstoreElementType = (typeof BOOKSTORE_ELEMENT_TYPES)[number];
+
+==============================================================================
+server/package.json
+==============================================================================
+{
+  "name": "bookstore-server",
   "version": "0.0.0",
   "private": true,
   "description": "Bookstore language server, built with the Hydranium framework.",
@@ -26,17 +210,29 @@ package.json
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./node": {
+      "types": "./lib/node/services.d.ts",
+      "default": "./lib/node/services.js"
+    },
+    "./lib/*": "./lib/*",
+    "./package.json": "./package.json"
+  },
   "scripts": {
-    "build": "npm run generate && tsc",
+    "build": "npm run generate && tsc -b",
     "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium tsconfig.tsbuildinfo",
     "generate": "npm run langium:generate && npm run generate:transfer-model",
-    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file src/language-server/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --element-type-name BookstoreElement --terminals-name BookstoreTerminals --regen-command \"Run: npm run generate:transfer-model\"",
+    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file ../protocol/src/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --languages-file ../protocol/src/generated-hydranium/languages.ts --element-type-name BookstoreElement --terminals-name BookstoreTerminals --regen-command \"Run: npm --prefix server run generate:transfer-model\"",
     "langium:generate": "langium generate",
     "langium:watch": "langium generate --watch",
     "start": "node lib/main.js --stdio",
     "test": "npm run typecheck:test && vitest run",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
-    "watch": "tsc --watch"
+    "watch": "tsc -b --watch"
   },
   "dependencies": {
     "@eclipse-glsp/graph": "2.7.0",
@@ -46,6 +242,7 @@ package.json
     "@hydranium/glsp-server": "^__FRAMEWORK_VERSION__",
     "@hydranium/langium": "^__FRAMEWORK_VERSION__",
     "@hydranium/protocol": "^__FRAMEWORK_VERSION__",
+    "bookstore-protocol": "0.0.0",
     "inversify": "^6.1.3",
     "langium": "4.3.1",
     "reflect-metadata": "~0.2.2",
@@ -67,7 +264,7 @@ package.json
 }
 
 ==============================================================================
-langium-config.json
+server/langium-config.json
 ==============================================================================
 {
   "projectName": "Bookstore",
@@ -85,7 +282,7 @@ langium-config.json
 }
 
 ==============================================================================
-tsconfig.json
+server/tsconfig.json
 ==============================================================================
 {
   "compilerOptions": {
@@ -105,11 +302,12 @@ tsconfig.json
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["src", "src/**/*.json"]
+  "include": ["src", "src/**/*.json"],
+  "references": [{ "path": "../protocol" }]
 }
 
 ==============================================================================
-tsconfig.test.json
+server/tsconfig.test.json
 ==============================================================================
 {
   "extends": "./tsconfig.json",
@@ -123,7 +321,7 @@ tsconfig.test.json
 }
 
 ==============================================================================
-test/tsconfig.json
+server/test/tsconfig.json
 ==============================================================================
 {
   "extends": "../tsconfig.test.json",
@@ -131,7 +329,7 @@ test/tsconfig.json
 }
 
 ==============================================================================
-vitest.config.ts
+server/vitest.config.ts
 ==============================================================================
 import { defineConfig } from 'vitest/config';
 
@@ -149,7 +347,7 @@ export default defineConfig({
 });
 
 ==============================================================================
-.gitignore
+server/.gitignore
 ==============================================================================
 node_modules/
 lib/
@@ -159,7 +357,7 @@ lib/
 syntaxes/
 
 ==============================================================================
-README.md
+server/README.md
 ==============================================================================
 # Bookstore
 
@@ -178,13 +376,13 @@ npm test                   # typecheck the tests, then run them
 
 ```bash
 # Grammar / AST reflection
-npx hydranium-cli reflect --services ./lib/services.js
+npx hydranium-cli reflect --services ./lib/node/services.js
 
 # Grammar-convention lint (CI gate)
-npx hydranium-cli lint-grammar --services ./lib/services.js
+npx hydranium-cli lint-grammar --services ./lib/node/services.js
 
 # Validate a workspace of model files (non-zero exit on errors)
-npx hydranium-cli validate --services ./lib/services.js <workspace-dir>
+npx hydranium-cli validate --services ./lib/node/services.js ../workspace
 
 # Data-head operations. `--server` is a command line the CLI spawns and then
 # drives the data protocol over the child's stdin/stdout, so it has to name
@@ -193,8 +391,8 @@ npx hydranium-cli validate --services ./lib/services.js <workspace-dir>
 #
 # The workspace goes to the ENTRY, not to `--cwd`: `--cwd` re-roots the child,
 # so a relative entry path is refused by name (an absolute one is fine).
-npx hydranium-cli projects --server "node ./lib/data-server-main.js <workspace-dir>"
-npx hydranium-cli query --server "node ./lib/data-server-main.js <workspace-dir>" --uri <file:// URI of a .bookstore file>
+npx hydranium-cli projects --server "node ./lib/data-server-main.js ../workspace"
+npx hydranium-cli query --server "node ./lib/data-server-main.js ../workspace" --uri <file:// URI of ../workspace/nodes.bookstore>
 ```
 
 ## Layout
@@ -202,12 +400,13 @@ npx hydranium-cli query --server "node ./lib/data-server-main.js <workspace-dir>
 - `src/grammar/bookstore.langium` — the `Bookstore` grammar (.bookstore)
 - `src/language-server/bookstore-module.ts` — `createBookstoreServices` DI wiring
 - `src/language-server/bookstore-serializer.ts` — emits `Bookstore` back to text (the framework defaults this to a throw)
-- `src/services.ts` — zero-arg `createServices()` for the headless CLI
-- `src/index.ts` — the package entry (`main`): DI factory + generated AST
+- `src/node/services.ts` — zero-arg `createServices()` for the headless CLI, the package's `./node` entry
+- `src/index.ts` — the package root, loadable in a browser worker: DI factory + generated AST + diagram module
 - `src/main.ts` — starts lsp + data + glsp, the `bookstore` bin entry
 - `src/data-server-main.ts` — the data head alone on stdio, the
   `bookstore-data-server` bin entry and the `--server` value the CLI needs
-- `src/glsp/bookstore/` — the `Bookstore` diagram: type ids, state, storage, submission handler, GModel factory, configuration, create-node handler, DI module
+- `src/glsp/bookstore/` — the `Bookstore` diagram: state, storage, submission handler, GModel factory, configuration, create-node handler, DI module
+- `../protocol/` — the `bookstore-protocol` package: what this server and its clients both import (language ids, port commands, diagram ids, the transfer model), written partly by `npm run generate`
 - `test/services.test.ts` — the DI tree composes; grows as your language does
 - `test/parsing.test.ts` / `linking.test.ts` / `validating.test.ts` — the three tiers a new language breaks first
 - `test/serialization.test.ts` — each grammar round-trips through its serializer
@@ -269,7 +468,7 @@ line: a header tool that prepends unconditionally leaves the shell reading
 the license comment as a script, which is what a linked binary then runs.
 
 ==============================================================================
-src/grammar/bookstore.langium
+server/src/grammar/bookstore.langium
 ==============================================================================
 grammar Bookstore
 
@@ -300,7 +499,7 @@ hidden terminal SL_COMMENT: /\/\/[^\n\r]*/;
 hidden terminal ML_COMMENT: /\/\*[\s\S]*?\*\//;
 
 ==============================================================================
-src/language-server/bookstore-module.ts
+server/src/language-server/bookstore-module.ts
 ==============================================================================
 // DI bootstrap for Bookstore. Composes the framework defaults with adopter
 // overrides via Langium's `inject()` (through the framework's
@@ -391,7 +590,7 @@ export function createBookstoreServices(
 }
 
 ==============================================================================
-src/language-server/ast.ts
+server/src/language-server/ast.ts
 ==============================================================================
 // The language's AST entry point: a re-export of what `langium generate`
 // emits, plus anywhere you augment those types.
@@ -418,7 +617,7 @@ src/language-server/ast.ts
 export * from './generated/ast.js';
 
 ==============================================================================
-src/language-server/bookstore-serializer.ts
+server/src/language-server/bookstore-serializer.ts
 ==============================================================================
 // Concrete-syntax emitter for Bookstore — the parser's inverse, turning a
 // model back into text this grammar accepts. Derived from the starter grammar
@@ -475,38 +674,43 @@ export class BookstoreSerializer extends AbstractSerializer<BookstoreModel> {
 }
 
 ==============================================================================
-src/index.ts
+server/src/index.ts
 ==============================================================================
-// Public surface of the Bookstore language server: the DI factory, the generated
-// AST, and the headless `createServices` entry.
+// Public surface of the Bookstore language server: the DI factory and the
+// generated AST, plus the diagram module.
 //
-// The entry points under `src/` are deliberately NOT re-exported. Each opens a
-// transport at module scope, so importing one starts a server as a side effect
-// — which is why they are `bin` targets and this file is `main`.
+// Everything here loads in a browser worker as well as in Node, so a host can
+// compose the language wherever it runs it. `createServices`, which reads the
+// real filesystem, is the package's `./node` entry instead. The entry points
+// under `src/` are not re-exported either: each opens a transport at module
+// scope, so importing one starts a server, which is why they are `bin` targets.
 
 export * from './language-server/bookstore-module.js';
 export * from './language-server/ast.js';
-export { createServices } from './services.js';
-export * from './head-ports.js';
+export * from './glsp/bookstore/diagram-module.js';
 
 ==============================================================================
-src/services.ts
+server/src/node/services.ts
 ==============================================================================
 // Zero-arg service factory for the headless `hydranium-cli` tooling: the
 // `reflect` / `lint-grammar` / `validate` subcommands import this via
-// `--services ./lib/services.js`. The head wires its own filesystem here.
+// `--services ./lib/node/services.js`. The head wires its own filesystem here.
+//
+// Behind the package's `./node` entry rather than its root because it reads
+// the real filesystem: the root stays loadable in a browser worker, which has
+// no `node:fs`.
 //
 // The contract is language-count-agnostic — a second grammar needs no edit here.
 
 import { NodeFileSystem } from '@hydranium/core/node';
-import { createBookstoreServices } from './language-server/bookstore-module.js';
+import { createBookstoreServices } from '../language-server/bookstore-module.js';
 
 export function createServices(): ReturnType<typeof createBookstoreServices> {
    return createBookstoreServices({ ...NodeFileSystem });
 }
 
 ==============================================================================
-src/main.ts
+server/src/main.ts
 ==============================================================================
 #!/usr/bin/env node
 // Standalone entry point: starts the Langium LSP head, a socket data-server (model server) head and a GLSP head in the same
@@ -543,10 +747,10 @@ import { BookstoreDiagramModule } from './glsp/bookstore/diagram-module.js';
 // `TransferElement` structurally, so naming the AST type here compiles fine and
 // silently tells every typed client that a reference is a resolvable object
 // rather than a name.
-import type { BookstoreModel } from './language-server/generated-hydranium/transfer-model.js';
+import type { BookstoreModel } from 'bookstore-protocol';
 import { createBookstoreServices } from './language-server/bookstore-module.js';
 
-import { BOOKSTORE_DATA_SERVER_PORT_COMMAND, BOOKSTORE_GLSP_PORT_COMMAND } from './head-ports.js';
+import { BOOKSTORE_DATA_SERVER_PORT_COMMAND, BOOKSTORE_GLSP_PORT_COMMAND } from 'bookstore-protocol';
 
 const connection = createConnection(withHydraniumLspFeatures(ProposedFeatures.all));
 const { shared } = createBookstoreServices({ connection, ...NodeFileSystem });
@@ -603,7 +807,7 @@ const glspServer = startGlspServer({
 void glspServer;
 
 ==============================================================================
-src/data-server-main.ts
+server/src/data-server-main.ts
 ==============================================================================
 #!/usr/bin/env node
 // Standalone entry point: a data-server head on **stdio**, with no LSP head in
@@ -628,7 +832,7 @@ src/data-server-main.ts
 import { NodeFileSystem, startStdioServer } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
 // The TRANSFER root, not the AST one — same reasoning as `main.ts`.
-import type { BookstoreModel } from './language-server/generated-hydranium/transfer-model.js';
+import type { BookstoreModel } from 'bookstore-protocol';
 import { createBookstoreServices } from './language-server/bookstore-module.js';
 
 const { shared } = createBookstoreServices({ ...NodeFileSystem });
@@ -661,58 +865,7 @@ const server = startStdioServer(
 server.started.catch(() => process.exit(1));
 
 ==============================================================================
-src/head-ports.ts
-==============================================================================
-// The LSP requests a host queries to discover this server's socket heads.
-//
-// Both are keyed by the PROJECT, not the language: one server of each kind per
-// process serves every registered grammar, so a language-derived name would tie
-// a project-level endpoint to whichever grammar was scaffolded first.
-//
-// They live here rather than in `main.ts` because a host shell has to name the
-// same string to reach the head, and `main.ts` is an executable entry — nothing
-// can import from it. A shell that retypes the literal gets no error when it
-// drifts: the framework's port poll retries indefinitely by default. Import
-// these instead, and assert any host-side copy against them.
-
-/** LSP request the host queries to discover the data-server socket port. */
-export const BOOKSTORE_DATA_SERVER_PORT_COMMAND = 'bookstore/data-server/port';
-
-/** LSP request the host queries to discover the GLSP socket port. */
-export const BOOKSTORE_GLSP_PORT_COMMAND = 'bookstore/glsp/port';
-
-==============================================================================
-src/glsp/bookstore/types.ts
-==============================================================================
-// GLSP diagram-type and element-type ids for the Bookstore diagram.
-//
-// **Authoritative half of a client/server contract.** Every id here has to be
-// registered on the client too: sprotty's registries are exact-key maps with no
-// prefix fallback, so an id the client does not know yields an element with none
-// of a node's features, rendered by `MissingView` with only a
-// `no registered view for type '…'` console warning. Nothing fails server-side.
-//
-// The ids stay namespaced under the GLSP defaults (`node:` / `edge:`) so a
-// reader can tell a node id from an edge id at a glance.
-
-import { DefaultTypes } from '@eclipse-glsp/server';
-
-/**
- * The GLSP diagram type — the string GLSP routes every per-diagram-type request
- * by. Mirrored by the client; a mismatch silently DROPS the request rather than
- * reporting an unknown diagram type. Same value as the language id, so the two
- * cannot drift apart as a diagram gains element types.
- */
-export const BOOKSTORE_DIAGRAM_TYPE = 'bookstore';
-
-/** A `BookstoreNode` — the starter grammar's one named, referenceable node. */
-export const BOOKSTORE_NODE_TYPE = `${DefaultTypes.NODE}:bookstore-node`;
-
-/** A resolved `target` reference, drawn as a connection between two nodes. */
-export const BOOKSTORE_EDGE_TYPE = `${DefaultTypes.EDGE}:bookstore-target`;
-
-==============================================================================
-src/glsp/bookstore/state.ts
+server/src/glsp/bookstore/state.ts
 ==============================================================================
 // GLSP state for the Bookstore diagram.
 //
@@ -734,7 +887,7 @@ import type { BookstoreModel } from '../../language-server/ast.js';
 export class BookstoreGlspState extends FullTextHydraniumGlspState<BookstoreModel> {}
 
 ==============================================================================
-src/glsp/bookstore/storage.ts
+server/src/glsp/bookstore/storage.ts
 ==============================================================================
 // Source-model storage for the Bookstore diagram, inheriting both framework
 // defaults: `loadSourceModel` (open + settle + `setSourceRoot`) and
@@ -754,7 +907,7 @@ import type { BookstoreModel } from '../../language-server/ast.js';
 export class BookstoreGlspStorage extends HydraniumGlspStorage<BookstoreModel, FullTextSourceModel> {}
 
 ==============================================================================
-src/glsp/bookstore/submission-handler.ts
+server/src/glsp/bookstore/submission-handler.ts
 ==============================================================================
 // Submission handler for the Bookstore diagram.
 //
@@ -782,7 +935,7 @@ export class BookstoreSubmissionHandler extends HydraniumGlspSubmissionHandler<B
 }
 
 ==============================================================================
-src/glsp/bookstore/gmodel-factory.ts
+server/src/glsp/bookstore/gmodel-factory.ts
 ==============================================================================
 // AST → GModel for the Bookstore diagram: one node per `BookstoreNode`, one
 // edge per resolved `target` reference.
@@ -792,12 +945,15 @@ src/glsp/bookstore/gmodel-factory.ts
 // pointing at an id that does not exist fails client-side with a far less
 // obvious error than a missing edge. An unresolved reference is SKIPPED rather
 // than treated as an error: a dangling reference is ordinary editing state, and
-// the LSP head already reports it as a diagnostic.
+// the LSP head already reports it as a diagnostic. A reference into another
+// document is skipped for the same reason: the graph holds only this
+// document's nodes, so its target has no id here.
 
 import { DefaultTypes, GEdge, GGraph, GLabel, type GModelFactory, GNode, ModelState } from '@eclipse-glsp/server';
+import { AstUtils } from '@hydranium/langium';
+import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_NODE_TYPE } from 'bookstore-protocol';
 import { inject, injectable } from 'inversify';
 import type { BookstoreModel } from '../../language-server/ast.js';
-import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_NODE_TYPE } from './types.js';
 import type { BookstoreGlspState } from './state.js';
 
 @injectable()
@@ -826,7 +982,7 @@ export class BookstoreGModelFactory implements GModelFactory {
       }
       for (const node of root.nodes) {
          const target = node.target?.ref;
-         if (!target) {
+         if (!target || AstUtils.findRootNode(target) !== root) {
             continue;
          }
          const sourceId = this.modelState.index.createId(node);
@@ -843,7 +999,7 @@ export class BookstoreGModelFactory implements GModelFactory {
 }
 
 ==============================================================================
-src/glsp/bookstore/diagram-configuration.ts
+server/src/glsp/bookstore/diagram-configuration.ts
 ==============================================================================
 // Diagram configuration for the Bookstore diagram.
 //
@@ -870,7 +1026,7 @@ import {
    getDefaultMapping
 } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
-import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_NODE_TYPE } from './types.js';
+import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_NODE_TYPE } from 'bookstore-protocol';
 
 @injectable()
 export class BookstoreDiagramConfiguration implements DiagramConfiguration {
@@ -903,7 +1059,7 @@ export class BookstoreDiagramConfiguration implements DiagramConfiguration {
 }
 
 ==============================================================================
-src/glsp/bookstore/create-node-operation-handler.ts
+server/src/glsp/bookstore/create-node-operation-handler.ts
 ==============================================================================
 // The starter operation handler for the Bookstore diagram: the tool-palette
 // entry that creates a `BookstoreNode`.
@@ -928,17 +1084,18 @@ src/glsp/bookstore/create-node-operation-handler.ts
 // starter grammar persists no bounds, so there is nowhere to put a coordinate: the
 // node is appended at the end of the document and the client places it.
 //
-// Like `types.ts`, `gmodel-factory.ts` and `diagram-configuration.ts`, this file
-// knows the starter grammar's shape — the `nodes` list and the `BookstoreNode`
-// it holds. Replacing the grammar means replacing these four together.
+// Like protocol's `bookstore-diagram-types.ts`, `gmodel-factory.ts` and
+// `diagram-configuration.ts`, this file knows the starter grammar's shape — the
+// `nodes` list and the `BookstoreNode` it holds. Replacing the grammar means
+// replacing these four together.
 
 import { type Command, type CreateNodeOperation, JsonCreateNodeOperationHandler, type MaybePromise } from '@eclipse-glsp/server';
 import { appendChild } from '@hydranium/core';
 import { HydraniumGlspRecordingCommand } from '@hydranium/glsp-server';
 import { findNextUnique } from '@hydranium/protocol';
+import { BOOKSTORE_NODE_TYPE } from 'bookstore-protocol';
 import { injectable } from 'inversify';
 import type { BookstoreNode } from '../../language-server/ast.js';
-import { BOOKSTORE_NODE_TYPE } from './types.js';
 import type { BookstoreGlspState } from './state.js';
 
 /** Proposed name for a new node, uniquified against the ones the document already has. */
@@ -968,7 +1125,7 @@ export class BookstoreCreateNodeOperationHandler extends JsonCreateNodeOperation
 }
 
 ==============================================================================
-src/glsp/bookstore/diagram-module.ts
+server/src/glsp/bookstore/diagram-module.ts
 ==============================================================================
 // GLSP diagram module for Bookstore — the DI wiring of one diagram type.
 //
@@ -1004,7 +1161,7 @@ import { BookstoreGModelFactory } from './gmodel-factory.js';
 import { BookstoreGlspState } from './state.js';
 import { BookstoreGlspStorage } from './storage.js';
 import { BookstoreSubmissionHandler } from './submission-handler.js';
-import { BOOKSTORE_DIAGRAM_TYPE } from './types.js';
+import { BOOKSTORE_DIAGRAM_TYPE } from 'bookstore-protocol';
 
 export class BookstoreDiagramModule extends AbstractHydraniumGlspDiagramModule {
    readonly diagramType = BOOKSTORE_DIAGRAM_TYPE;
@@ -1046,13 +1203,14 @@ export class BookstoreDiagramModule extends AbstractHydraniumGlspDiagramModule {
 }
 
 ==============================================================================
-test/bookstore-diagram.test.ts
+server/test/bookstore-diagram.test.ts
 ==============================================================================
-// The starter create-node handler, run the way a client runs it: an in-process
-// GLSP server opens a document, a create-node operation adds a node, and an undo
-// and a redo take it out and put it back. Every step must keep the nodes the
-// document already had, and its comments: the diagram writes the document from
-// its AST, which carries none.
+// The starter diagram, run the way a client runs it: an in-process GLSP server
+// opens a document. A create-node operation adds a node, and an undo and a redo
+// take it out and put it back; every step must keep the nodes the document
+// already had, and its comments, since the diagram writes the document from its
+// AST, which carries none. A reference into another document draws no edge,
+// since the graph holds no node for its target.
 
 import 'reflect-metadata';
 import { type Action, CreateNodeOperation, RedoAction, ServerModule, SetDirtyStateAction, UndoAction } from '@eclipse-glsp/server';
@@ -1061,11 +1219,11 @@ import { makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/tes
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import { waitFor } from '@hydranium/protocol/testing';
+import { BOOKSTORE_DIAGRAM_TYPE, BOOKSTORE_NODE_TYPE } from 'bookstore-protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BookstoreDiagramModule } from '../src/glsp/bookstore/diagram-module.js';
 import type { BookstoreGlspState } from '../src/glsp/bookstore/state.js';
-import { BOOKSTORE_DIAGRAM_TYPE, BOOKSTORE_NODE_TYPE } from '../src/glsp/bookstore/types.js';
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 let workspace: ScratchWorkspace | undefined;
 let diagram: GlspHarness<BookstoreGlspState> | undefined;
@@ -1115,10 +1273,30 @@ describe('Bookstore diagram', () => {
          redone: `${original}\nnode Node`
       });
    });
+
+   it('draws no edge for a reference that resolves into another document', async () => {
+      workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
+      workspace.write('declaring.bookstore', 'node second');
+      const file = workspace.write('referencing.bookstore', 'node first -> second');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      diagram = makeGlspHarness<BookstoreGlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
+         diagramType: BOOKSTORE_DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      await diagram.start();
+      await diagram.openDocument(file);
+
+      // The reference resolves, so the missing edge is the document rule and
+      // not a dangling reference.
+      expect(diagram.state.sourceRoot?.nodes[0].target?.ref?.name).toBe('second');
+      expect(diagram.state.root.children.map(child => child.type)).toEqual([BOOKSTORE_NODE_TYPE]);
+   });
 });
 
 ==============================================================================
-test/services.test.ts
+server/test/services.test.ts
 ==============================================================================
 // The scaffold's first test: the DI tree composes and every language is
 // registered. Deliberately grammar-agnostic, so it keeps passing once you
@@ -1129,7 +1307,7 @@ test/services.test.ts
 // is missing from the composition.
 
 import { describe, expect, it } from 'vitest';
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 describe('Bookstore services', () => {
    it('composes the DI tree and registers exactly one language', () => {
@@ -1148,7 +1326,7 @@ describe('Bookstore services', () => {
 });
 
 ==============================================================================
-test/parsing.test.ts
+server/test/parsing.test.ts
 ==============================================================================
 // Tier one of the three a new language breaks in order: does my rule parse.
 //
@@ -1159,7 +1337,7 @@ test/parsing.test.ts
 import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 import type { BookstoreModel } from '../src/language-server/ast.js';
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 describe('Bookstore parsing', () => {
    it('parses the starter rules and populates the AST', async () => {
@@ -1188,7 +1366,7 @@ describe('Bookstore parsing', () => {
 });
 
 ==============================================================================
-test/linking.test.ts
+server/test/linking.test.ts
 ==============================================================================
 // Tier two: does my cross-reference resolve.
 //
@@ -1201,7 +1379,7 @@ import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 import { AstUtils } from '@hydranium/langium';
 import type { BookstoreModel } from '../src/language-server/ast.js';
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 describe('Bookstore linking', () => {
    it('resolves a reference within one document', async () => {
@@ -1233,7 +1411,7 @@ describe('Bookstore linking', () => {
 });
 
 ==============================================================================
-test/validating.test.ts
+server/test/validating.test.ts
 ==============================================================================
 // Tier three: does a broken model get reported.
 //
@@ -1246,7 +1424,7 @@ import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 import { DiagnosticSeverity } from 'vscode-languageserver';
 import type { BookstoreModel } from '../src/language-server/ast.js';
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 describe('Bookstore validation', () => {
    it('reports nothing for a well-formed document', async () => {
@@ -1276,7 +1454,7 @@ describe('Bookstore validation', () => {
 });
 
 ==============================================================================
-test/serialization.test.ts
+server/test/serialization.test.ts
 ==============================================================================
 // Round-trips each grammar through its serializer: parse the source, serialize
 // the model, compare the text. The serializer is the parser's inverse, so this
@@ -1291,10 +1469,8 @@ test/serialization.test.ts
 import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 import type { BookstoreModel } from '../src/language-server/ast.js';
-import type {
-   BookstoreModel as TransferBookstoreModel
-} from '../src/language-server/generated-hydranium/transfer-model.js';
-import { createServices } from '../src/services.js';
+import type { BookstoreModel as TransferBookstoreModel } from 'bookstore-protocol';
+import { createServices } from '../src/node/services.js';
 
 describe('Bookstore serialization', () => {
    const source = 'node first -> second\nnode second';
@@ -1321,3 +1497,18 @@ describe('Bookstore serialization', () => {
       expect(await Bookstore.serializer.Serializer.serializeTransfer(model)).toBe(source);
    });
 });
+
+==============================================================================
+workspace/nodes.bookstore
+==============================================================================
+/** The first node. Hover a name to read its comment. */
+node First
+
+/** A second node, pointing at the first in the same file. */
+node Second -> First
+
+==============================================================================
+workspace/references.bookstore
+==============================================================================
+/** Points at a node declared in nodes.bookstore: hover the target to read its comment from there. */
+node Third -> Second

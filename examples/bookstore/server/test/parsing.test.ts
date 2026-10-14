@@ -16,7 +16,7 @@
 import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 import type { BookstoreModel } from '../src/language-server/ast.js';
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 describe('Bookstore parsing', () => {
    it('parses the starter rules and populates the AST', async () => {

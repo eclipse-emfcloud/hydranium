@@ -18,9 +18,17 @@ names.
 npx @hydranium/cli init ./my-lang --name MyLang --heads lsp,data,glsp
 ```
 
-`init` writes a complete project: a starter grammar in `src/grammar/`, the
-services wiring, a server entry that starts every head, and build and test
-scripts.
+`init` writes a complete project: two packages and a starter workspace, each in
+its own directory.
+
+- `server/` holds a starter grammar in `src/grammar/`, the services wiring, a
+  server entry that starts every head, and build and test scripts.
+- `protocol/` holds what the server and its clients both import: language ids,
+  wire types and, with a diagram, its type ids. A client depends on it instead
+  of the server.
+- `workspace/` holds two starter model files, one referencing the other.
+
+Two flags shape it:
 
 - `--heads` picks the heads: LSP serves text editors, data serves forms and
   tools, GLSP serves a diagram. Leave `glsp` out for a language without one.
@@ -34,36 +42,32 @@ scripts.
 ```bash
 cd my-lang
 npm install
-npm run build    # generate the AST and the transfer model, compile into lib/
-npm test         # a test that composes your services
+npm run build    # generate the AST and the transfer model, compile every package
+npm test         # the server's tests, starting with one that composes your services
 ```
 
-The project's own README describes each file `init` wrote.
+Each package's own README describes the files `init` wrote there.
 
 ## Validate a model
 
-The starter grammar declares nodes, each of which may point at another. Write
-one into a model directory, `models/first.my-lang`:
-
-```text
-node Start -> End
-node End
-```
+The starter grammar declares nodes, each of which may point at another.
+`workspace/references.my-lang` points at a node declared in
+`workspace/nodes.my-lang`:
 
 ```bash
-npx hydranium-cli validate --services ./lib/services.js ./models
+npx hydranium-cli validate --services ./server/lib/node/services.js ./workspace
 ```
 
-It reports no problems. Change `End` in the first line to `Missing` and run it
-again. This time it reports the unresolved reference with its position and exits
-non-zero, so you can use it as a check in CI.
+It reports no problems. Change `Second` in `references.my-lang` to `Missing`
+and run it again. This time it reports the unresolved reference with its
+position and exits non-zero, so you can use it as a check in CI.
 
 ## Look at the language with the CLI
 
 ```bash
-npx hydranium-cli reflect --services ./lib/services.js        # types, terminals, cross-references
-npx hydranium-cli lint-grammar --services ./lib/services.js   # grammar conventions, as a CI check
-npx hydranium-cli model-docs --services ./lib/services.js --out-file model-reference.md
+npx hydranium-cli reflect --services ./server/lib/node/services.js        # types, terminals, cross-references
+npx hydranium-cli lint-grammar --services ./server/lib/node/services.js   # grammar conventions, as a CI check
+npx hydranium-cli model-docs --services ./server/lib/node/services.js --out-file model-reference.md
 ```
 
 Each reads the built services. Edit the grammar, rebuild, and run them again to
@@ -73,8 +77,8 @@ see the language as it is.
 
 - **Understand what you built.** [How it works](../concepts/how-it-works.md)
   explains the heads and the one shared workspace behind them.
-  [bookstore](../../examples/bookstore/README.md) is what `init` gives you, with
-  a sample workspace; read it beside your own project.
+  [bookstore](../../examples/bookstore/README.md) is what `init` gives you;
+  read it beside your own project.
 - **Build a complete application.**
   [order-flow](../../examples/order-flow/README.md) is the application behind
   the [live demo](https://eclipse-emfcloud.github.io/hydranium/): three grammars

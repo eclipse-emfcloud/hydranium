@@ -33,7 +33,9 @@
  * They run inside the repo (under a gitignored `out/`) because the scaffold
  * imports `@hydranium/*`, `langium` and `@eclipse-glsp/*`, which resolve through
  * this package's devDependencies — the scaffold's own `npm install` would 404
- * until the packages are published.
+ * until the packages are published. The server's import of its sibling
+ * protocol member is the one no devDependency can answer, so the test links
+ * that member where the server resolves it, as the scaffold's workspace would.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -126,47 +128,56 @@ describe('the emitted scaffold compiles', () => {
                force: true,
                write: () => undefined
             });
+            const server = path.join(targetDir, 'server');
+            const protocol = path.join(targetDir, 'protocol');
             // The scaffold is the input to everything below, so its absence must
             // read as "nothing was written" rather than as a generator failing
             // on a file it cannot find.
-            expect(fs.existsSync(path.join(targetDir, 'langium-config.json')), 'runInit wrote no scaffold').toBe(true);
+            expect(fs.existsSync(path.join(server, 'langium-config.json')), 'runInit wrote no scaffold').toBe(true);
 
             // The `extends` is only meaningful if it resolves; assert that before
             // handing the project to tsc, so a broken path reads as a broken path
             // rather than as a wall of missing-compiler-option errors.
-            const tsconfig = JSON.parse(fs.readFileSync(path.join(targetDir, 'tsconfig.json'), 'utf-8')) as { extends?: string };
-            expect(tsconfig.extends).toBeDefined();
-            const base = path.resolve(targetDir, tsconfig.extends as string);
-            expect(fs.existsSync(base), `${tsconfig.extends} does not resolve from the scaffold`).toBe(true);
-            expect(JSON.parse(fs.readFileSync(base, 'utf-8'))).toHaveProperty('compilerOptions');
+            for (const member of [server, protocol]) {
+               const tsconfig = JSON.parse(fs.readFileSync(path.join(member, 'tsconfig.json'), 'utf-8')) as { extends?: string };
+               expect(tsconfig.extends).toBeDefined();
+               const base = path.resolve(member, tsconfig.extends as string);
+               expect(fs.existsSync(base), `${tsconfig.extends} does not resolve from ${member}`).toBe(true);
+               expect(JSON.parse(fs.readFileSync(base, 'utf-8'))).toHaveProperty('compilerOptions');
+            }
+
+            const protocolName = (JSON.parse(fs.readFileSync(path.join(protocol, 'package.json'), 'utf-8')) as { name: string }).name;
+            const link = path.join(server, 'node_modules', protocolName);
+            fs.mkdirSync(path.dirname(link), { recursive: true });
+            fs.symlinkSync(protocol, link, 'dir');
 
             // Both halves of the emitted `generate` script, in its order.
-            runTool(targetDir, 'langium-cli', 'langium', ['generate', '--file', path.join(targetDir, 'langium-config.json')]);
+            runTool(server, 'langium-cli', 'langium', ['generate', '--file', path.join(server, 'langium-config.json')]);
             generateTransferModel({
-               astFile: path.join(targetDir, 'src/language-server/generated/ast.ts'),
-               augmentationFile: path.join(targetDir, 'src/language-server/ast.ts'),
-               outFile: path.join(targetDir, 'src/language-server/generated-hydranium/transfer-model.ts'),
+               astFile: path.join(server, 'src/language-server/generated/ast.ts'),
+               augmentationFile: path.join(server, 'src/language-server/ast.ts'),
+               outFile: path.join(protocol, 'src/generated-hydranium/transfer-model.ts'),
+               languagesFile: path.join(protocol, 'src/generated-hydranium/languages.ts'),
                elementTypeName: `${name}Element`,
                terminalsName: `${name}Terminals`
             });
 
-            expect(() => runTool(targetDir, 'typescript', 'tsc', ['--noEmit', '-p', path.join(targetDir, 'tsconfig.json')])).not.toThrow();
+            // The emitted `build`'s compile: protocol through the reference, then the server.
+            expect(() => runTool(server, 'typescript', 'tsc', ['-b', path.join(server, 'tsconfig.json')])).not.toThrow();
 
             // The emitted `typecheck:test`, which is a DIFFERENT check: it also
             // covers `test/`, and it turns on `isolatedModules`, so it is the only
             // thing that proves the emitted sources satisfy the stricter rules
             // vitest's per-file transform needs.
-            expect(() =>
-               runTool(targetDir, 'typescript', 'tsc', ['--noEmit', '-p', path.join(targetDir, 'tsconfig.test.json')])
-            ).not.toThrow();
+            expect(() => runTool(server, 'typescript', 'tsc', ['--noEmit', '-p', path.join(server, 'tsconfig.test.json')])).not.toThrow();
 
             // The diagram tests run the starter operation handler through an
             // in-process GLSP server; the type check above cannot see what it
             // writes to the document.
-            const diagramTests = fs.readdirSync(path.join(targetDir, 'test')).filter(file => file.endsWith('-diagram.test.ts'));
+            const diagramTests = fs.readdirSync(path.join(server, 'test')).filter(file => file.endsWith('-diagram.test.ts'));
             expect(diagramTests.length > 0).toBe(heads?.includes('glsp') ?? false);
             for (const diagramTest of diagramTests) {
-               expect(() => runTool(targetDir, 'vitest', 'vitest', ['run', `test/${diagramTest}`])).not.toThrow();
+               expect(() => runTool(server, 'vitest', 'vitest', ['run', `test/${diagramTest}`])).not.toThrow();
             }
          } finally {
             // In `finally`, so a failing case cannot leave a directory that

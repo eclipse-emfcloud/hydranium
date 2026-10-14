@@ -68,7 +68,8 @@ layers.
 npx @hydranium/cli init ./my-lang --name MyLang --heads lsp,data,glsp
 ```
 
-This scaffolds a language server with a starter grammar and a diagram.
+This scaffolds a language server with a starter grammar and a diagram, the
+package its clients share, and a starter workspace.
 `npm run build` and `npm test` work out of the box, and
 [Adopting Hydranium](docs/ADOPTING.md) takes it from there.
 

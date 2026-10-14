@@ -30,7 +30,7 @@
 import { NodeFileSystem, startStdioServer } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
 // The TRANSFER root, not the AST one — same reasoning as `main.ts`.
-import type { BookstoreModel } from './language-server/generated-hydranium/transfer-model.js';
+import type { BookstoreModel } from '@hydranium/bookstore-protocol';
 import { createBookstoreServices } from './language-server/bookstore-module.js';
 
 const { shared } = createBookstoreServices({ ...NodeFileSystem });

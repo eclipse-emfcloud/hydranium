@@ -1,0 +1,12 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // The build runs the server's `generate` itself, but turbo hashes only this
+    // package's files: without the edge a grammar edit replays a cached build
+    // of the previous grammar.
+    "build": {
+      "dependsOn": ["^build", "@hydranium/bookstore-server#generate"]
+    }
+  }
+}

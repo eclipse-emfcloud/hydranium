@@ -1,0 +1,5 @@
+/** The first node. Hover a name to read its comment. */
+node First
+
+/** A second node, pointing at the first in the same file. */
+node Second -> First

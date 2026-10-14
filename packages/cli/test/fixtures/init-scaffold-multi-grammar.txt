@@ -2,7 +2,138 @@
 package.json
 ==============================================================================
 {
-  "name": "order-flow",
+  "name": "order-flow-root",
+  "version": "0.0.0",
+  "private": true,
+  "workspaces": [
+    "protocol",
+    "server"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "clean": "npm run clean --workspaces --if-present",
+    "test": "npm test --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
+
+==============================================================================
+.gitignore
+==============================================================================
+node_modules/
+
+==============================================================================
+protocol/package.json
+==============================================================================
+{
+  "name": "order-flow-protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "What the OrderFlow language server and its clients share: language ids, wire types and diagram ids.",
+  "license": "UNLICENSED",
+  "author": "",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "scripts": {
+    "build": "npm --prefix ../server run generate && tsc -b",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "watch": "tsc -b --watch"
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
+
+==============================================================================
+protocol/tsconfig.json
+==============================================================================
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "lib",
+    "strict": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "composite": true,
+    "types": []
+  },
+  "include": ["src"]
+}
+
+==============================================================================
+protocol/.gitignore
+==============================================================================
+node_modules/
+lib/
+*.tsbuildinfo
+
+==============================================================================
+protocol/README.md
+==============================================================================
+# order-flow-protocol
+
+What the OrderFlow language server and its clients both import, so a client
+never depends on the server or installs Langium.
+
+- `src/generated-hydranium/languages.ts` — each language id and its file extensions
+- `src/generated-hydranium/transfer-model.ts` — the wire types of the model, references as plain strings
+- `src/head-ports.ts` — the LSP requests a host sends to find the socket heads
+
+The server's `npm run generate` writes `src/generated-hydranium/` from the
+grammar, and `npm run build` here runs it first. Commit the generated
+modules with the grammar change that produced them.
+
+==============================================================================
+protocol/src/index.ts
+==============================================================================
+// What the OrderFlow server and its clients both import. A client depends on
+// this package instead of the server, so it never installs Langium to reach a
+// constant or a wire type.
+//
+// The server's `generate` writes `generated-hydranium/` from the grammar;
+// commit those modules with the grammar change that produced them.
+
+export * from './generated-hydranium/languages.js';
+export * from './generated-hydranium/transfer-model.js';
+export * from './head-ports.js';
+
+==============================================================================
+protocol/src/head-ports.ts
+==============================================================================
+// The LSP requests a host queries to discover this server's socket head.
+//
+// Both are keyed by the PROJECT, not the language: one server of each kind per
+// process serves every registered grammar, so a language-derived name would tie
+// a project-level endpoint to whichever grammar was scaffolded first.
+//
+// The server publishes them and a host shell has to name the same string to
+// reach the head; both import them from here. A shell that retypes the literal
+// gets no error when it drifts: the framework's port poll retries indefinitely
+// by default.
+
+/** LSP request the host queries to discover the data-server socket port. */
+export const ORDER_FLOW_DATA_SERVER_PORT_COMMAND = 'order-flow/data-server/port';
+
+==============================================================================
+server/package.json
+==============================================================================
+{
+  "name": "order-flow-server",
   "version": "0.0.0",
   "private": true,
   "description": "OrderFlow language server, built with the Hydranium framework.",
@@ -26,17 +157,29 @@ package.json
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./node": {
+      "types": "./lib/node/services.d.ts",
+      "default": "./lib/node/services.js"
+    },
+    "./lib/*": "./lib/*",
+    "./package.json": "./package.json"
+  },
   "scripts": {
-    "build": "npm run generate && tsc",
+    "build": "npm run generate && tsc -b",
     "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium tsconfig.tsbuildinfo",
     "generate": "npm run langium:generate && npm run generate:transfer-model",
-    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file src/language-server/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --element-type-name OrderFlowElement --terminals-name OrderFlowTerminals --regen-command \"Run: npm run generate:transfer-model\"",
+    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file ../protocol/src/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --languages-file ../protocol/src/generated-hydranium/languages.ts --element-type-name OrderFlowElement --terminals-name OrderFlowTerminals --regen-command \"Run: npm --prefix server run generate:transfer-model\"",
     "langium:generate": "langium generate",
     "langium:watch": "langium generate --watch",
     "start": "node lib/main.js --stdio",
     "test": "npm run typecheck:test && vitest run",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
-    "watch": "tsc --watch"
+    "watch": "tsc -b --watch"
   },
   "dependencies": {
     "@hydranium/core": "^__FRAMEWORK_VERSION__",
@@ -44,6 +187,7 @@ package.json
     "@hydranium/langium": "^__FRAMEWORK_VERSION__",
     "@hydranium/protocol": "^__FRAMEWORK_VERSION__",
     "langium": "4.3.1",
+    "order-flow-protocol": "0.0.0",
     "vscode-jsonrpc": "9.0.0",
     "vscode-languageserver": "10.0.1",
     "vscode-languageserver-protocol": "3.18.1"
@@ -62,7 +206,7 @@ package.json
 }
 
 ==============================================================================
-langium-config.json
+server/langium-config.json
 ==============================================================================
 {
   "projectName": "OrderFlow",
@@ -96,7 +240,7 @@ langium-config.json
 }
 
 ==============================================================================
-tsconfig.json
+server/tsconfig.json
 ==============================================================================
 {
   "compilerOptions": {
@@ -116,11 +260,12 @@ tsconfig.json
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["src", "src/**/*.json"]
+  "include": ["src", "src/**/*.json"],
+  "references": [{ "path": "../protocol" }]
 }
 
 ==============================================================================
-tsconfig.test.json
+server/tsconfig.test.json
 ==============================================================================
 {
   "extends": "./tsconfig.json",
@@ -134,7 +279,7 @@ tsconfig.test.json
 }
 
 ==============================================================================
-test/tsconfig.json
+server/test/tsconfig.json
 ==============================================================================
 {
   "extends": "../tsconfig.test.json",
@@ -142,7 +287,7 @@ test/tsconfig.json
 }
 
 ==============================================================================
-vitest.config.ts
+server/vitest.config.ts
 ==============================================================================
 import { defineConfig } from 'vitest/config';
 
@@ -160,7 +305,7 @@ export default defineConfig({
 });
 
 ==============================================================================
-.gitignore
+server/.gitignore
 ==============================================================================
 node_modules/
 lib/
@@ -170,7 +315,7 @@ lib/
 syntaxes/
 
 ==============================================================================
-README.md
+server/README.md
 ==============================================================================
 # OrderFlow
 
@@ -189,13 +334,13 @@ npm test                   # typecheck the tests, then run them
 
 ```bash
 # Grammar / AST reflection
-npx hydranium-cli reflect --services ./lib/services.js
+npx hydranium-cli reflect --services ./lib/node/services.js
 
 # Grammar-convention lint (CI gate)
-npx hydranium-cli lint-grammar --services ./lib/services.js
+npx hydranium-cli lint-grammar --services ./lib/node/services.js
 
 # Validate a workspace of model files (non-zero exit on errors)
-npx hydranium-cli validate --services ./lib/services.js <workspace-dir>
+npx hydranium-cli validate --services ./lib/node/services.js ../workspace
 
 # Data-head operations. `--server` is a command line the CLI spawns and then
 # drives the data protocol over the child's stdin/stdout, so it has to name
@@ -204,8 +349,8 @@ npx hydranium-cli validate --services ./lib/services.js <workspace-dir>
 #
 # The workspace goes to the ENTRY, not to `--cwd`: `--cwd` re-roots the child,
 # so a relative entry path is refused by name (an absolute one is fine).
-npx hydranium-cli projects --server "node ./lib/data-server-main.js <workspace-dir>"
-npx hydranium-cli query --server "node ./lib/data-server-main.js <workspace-dir>" --uri <file:// URI of a .domain file>
+npx hydranium-cli projects --server "node ./lib/data-server-main.js ../workspace"
+npx hydranium-cli query --server "node ./lib/data-server-main.js ../workspace" --uri <file:// URI of ../workspace/nodes.domain>
 ```
 
 ## Layout
@@ -218,11 +363,12 @@ npx hydranium-cli query --server "node ./lib/data-server-main.js <workspace-dir>
 - `src/language-server/domain-serializer.ts` — emits `Domain` back to text (the framework defaults this to a throw)
 - `src/language-server/process-serializer.ts` — emits `Process` back to text (the framework defaults this to a throw)
 - `src/language-server/layout-serializer.ts` — emits `Layout` back to text (the framework defaults this to a throw)
-- `src/services.ts` — zero-arg `createServices()` for the headless CLI
-- `src/index.ts` — the package entry (`main`): DI factory + generated AST
+- `src/node/services.ts` — zero-arg `createServices()` for the headless CLI, the package's `./node` entry
+- `src/index.ts` — the package root, loadable in a browser worker: DI factory + generated AST
 - `src/main.ts` — starts lsp + data, the `order-flow` bin entry
 - `src/data-server-main.ts` — the data head alone on stdio, the
   `order-flow-data-server` bin entry and the `--server` value the CLI needs
+- `../protocol/` — the `order-flow-protocol` package: what this server and its clients both import (language ids, port commands, the transfer model), written partly by `npm run generate`
 - `test/services.test.ts` — the DI tree composes; grows as your language does
 - `test/parsing.test.ts` / `linking.test.ts` / `validating.test.ts` — the three tiers a new language breaks first
 - `test/serialization.test.ts` — each grammar round-trips through its serializer
@@ -289,7 +435,7 @@ line: a header tool that prepends unconditionally leaves the shell reading
 the license comment as a script, which is what a linked binary then runs.
 
 ==============================================================================
-src/grammar/common.langium
+server/src/grammar/common.langium
 ==============================================================================
 // Shared lexical basis for this project's grammars. Imported, never registered:
 // it has no entry rule and no `langium-config.json` entry, so it is a fragment
@@ -305,7 +451,7 @@ hidden terminal SL_COMMENT: /\/\/[^\n\r]*/;
 hidden terminal ML_COMMENT: /\/\*[\s\S]*?\*\//;
 
 ==============================================================================
-src/grammar/domain.langium
+server/src/grammar/domain.langium
 ==============================================================================
 grammar Domain
 
@@ -333,7 +479,7 @@ DomainNode:
     'node' name=ID ('->' target=[DomainNode:ID])?;
 
 ==============================================================================
-src/grammar/process.langium
+server/src/grammar/process.langium
 ==============================================================================
 grammar Process
 
@@ -361,7 +507,7 @@ ProcessNode:
     'node' name=ID ('->' target=[ProcessNode:ID])?;
 
 ==============================================================================
-src/grammar/layout.langium
+server/src/grammar/layout.langium
 ==============================================================================
 grammar Layout
 
@@ -389,7 +535,7 @@ LayoutNode:
     'node' name=ID ('->' target=[LayoutNode:ID])?;
 
 ==============================================================================
-src/language-server/order-flow-module.ts
+server/src/language-server/order-flow-module.ts
 ==============================================================================
 // DI bootstrap for OrderFlow. Composes the framework defaults with adopter
 // overrides via Langium's `inject()` (through the framework's
@@ -518,7 +664,7 @@ export function createOrderFlowServices(
 }
 
 ==============================================================================
-src/language-server/ast.ts
+server/src/language-server/ast.ts
 ==============================================================================
 // The language's AST entry point: a re-export of what `langium generate`
 // emits, plus anywhere you augment those types.
@@ -545,7 +691,7 @@ src/language-server/ast.ts
 export * from './generated/ast.js';
 
 ==============================================================================
-src/language-server/domain-serializer.ts
+server/src/language-server/domain-serializer.ts
 ==============================================================================
 // Concrete-syntax emitter for Domain — the parser's inverse, turning a
 // model back into text this grammar accepts. Derived from the starter grammar
@@ -602,7 +748,7 @@ export class DomainSerializer extends AbstractSerializer<DomainModel> {
 }
 
 ==============================================================================
-src/language-server/process-serializer.ts
+server/src/language-server/process-serializer.ts
 ==============================================================================
 // Concrete-syntax emitter for Process — the parser's inverse, turning a
 // model back into text this grammar accepts. Derived from the starter grammar
@@ -659,7 +805,7 @@ export class ProcessSerializer extends AbstractSerializer<ProcessModel> {
 }
 
 ==============================================================================
-src/language-server/layout-serializer.ts
+server/src/language-server/layout-serializer.ts
 ==============================================================================
 // Concrete-syntax emitter for Layout — the parser's inverse, turning a
 // model back into text this grammar accepts. Derived from the starter grammar
@@ -716,38 +862,42 @@ export class LayoutSerializer extends AbstractSerializer<LayoutModel> {
 }
 
 ==============================================================================
-src/index.ts
+server/src/index.ts
 ==============================================================================
-// Public surface of the OrderFlow language server: the DI factory, the generated
-// AST, and the headless `createServices` entry.
+// Public surface of the OrderFlow language server: the DI factory and the
+// generated AST.
 //
-// The entry points under `src/` are deliberately NOT re-exported. Each opens a
-// transport at module scope, so importing one starts a server as a side effect
-// — which is why they are `bin` targets and this file is `main`.
+// Everything here loads in a browser worker as well as in Node, so a host can
+// compose the language wherever it runs it. `createServices`, which reads the
+// real filesystem, is the package's `./node` entry instead. The entry points
+// under `src/` are not re-exported either: each opens a transport at module
+// scope, so importing one starts a server, which is why they are `bin` targets.
 
 export * from './language-server/order-flow-module.js';
 export * from './language-server/ast.js';
-export { createServices } from './services.js';
-export * from './head-ports.js';
 
 ==============================================================================
-src/services.ts
+server/src/node/services.ts
 ==============================================================================
 // Zero-arg service factory for the headless `hydranium-cli` tooling: the
 // `reflect` / `lint-grammar` / `validate` subcommands import this via
-// `--services ./lib/services.js`. The head wires its own filesystem here.
+// `--services ./lib/node/services.js`. The head wires its own filesystem here.
+//
+// Behind the package's `./node` entry rather than its root because it reads
+// the real filesystem: the root stays loadable in a browser worker, which has
+// no `node:fs`.
 //
 // The contract is language-count-agnostic — a second grammar needs no edit here.
 
 import { NodeFileSystem } from '@hydranium/core/node';
-import { createOrderFlowServices } from './language-server/order-flow-module.js';
+import { createOrderFlowServices } from '../language-server/order-flow-module.js';
 
 export function createServices(): ReturnType<typeof createOrderFlowServices> {
    return createOrderFlowServices({ ...NodeFileSystem });
 }
 
 ==============================================================================
-src/main.ts
+server/src/main.ts
 ==============================================================================
 #!/usr/bin/env node
 // Standalone entry point: starts the Langium LSP head and a socket data-server (model server) head in the same
@@ -779,10 +929,10 @@ import { ProposedFeatures, createConnection } from 'vscode-languageserver/node';
 // `TransferElement` structurally, so naming the AST type here compiles fine and
 // silently tells every typed client that a reference is a resolvable object
 // rather than a name.
-import type { DomainModel, LayoutModel, ProcessModel } from './language-server/generated-hydranium/transfer-model.js';
+import type { DomainModel, LayoutModel, ProcessModel } from 'order-flow-protocol';
 import { createOrderFlowServices } from './language-server/order-flow-module.js';
 
-import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND } from './head-ports.js';
+import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND } from 'order-flow-protocol';
 
 const connection = createConnection(withHydraniumLspFeatures(ProposedFeatures.all));
 const { shared } = createOrderFlowServices({ connection, ...NodeFileSystem });
@@ -818,7 +968,7 @@ dataServer.started
    });
 
 ==============================================================================
-src/data-server-main.ts
+server/src/data-server-main.ts
 ==============================================================================
 #!/usr/bin/env node
 // Standalone entry point: a data-server head on **stdio**, with no LSP head in
@@ -843,7 +993,7 @@ src/data-server-main.ts
 import { NodeFileSystem, startStdioServer } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
 // The TRANSFER roots, not the AST ones — same reasoning as `main.ts`.
-import type { DomainModel, LayoutModel, ProcessModel } from './language-server/generated-hydranium/transfer-model.js';
+import type { DomainModel, LayoutModel, ProcessModel } from 'order-flow-protocol';
 import { createOrderFlowServices } from './language-server/order-flow-module.js';
 
 const { shared } = createOrderFlowServices({ ...NodeFileSystem });
@@ -876,25 +1026,7 @@ const server = startStdioServer(
 server.started.catch(() => process.exit(1));
 
 ==============================================================================
-src/head-ports.ts
-==============================================================================
-// The LSP requests a host queries to discover this server's socket head.
-//
-// Both are keyed by the PROJECT, not the language: one server of each kind per
-// process serves every registered grammar, so a language-derived name would tie
-// a project-level endpoint to whichever grammar was scaffolded first.
-//
-// They live here rather than in `main.ts` because a host shell has to name the
-// same string to reach the head, and `main.ts` is an executable entry — nothing
-// can import from it. A shell that retypes the literal gets no error when it
-// drifts: the framework's port poll retries indefinitely by default. Import
-// these instead, and assert any host-side copy against them.
-
-/** LSP request the host queries to discover the data-server socket port. */
-export const ORDER_FLOW_DATA_SERVER_PORT_COMMAND = 'order-flow/data-server/port';
-
-==============================================================================
-test/services.test.ts
+server/test/services.test.ts
 ==============================================================================
 // The scaffold's first test: the DI tree composes and every language is
 // registered. Deliberately grammar-agnostic, so it keeps passing once you
@@ -905,7 +1037,7 @@ test/services.test.ts
 // is missing from the composition.
 
 import { describe, expect, it } from 'vitest';
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 describe('OrderFlow services', () => {
    it('composes the DI tree and registers all 3 languages', () => {
@@ -924,7 +1056,7 @@ describe('OrderFlow services', () => {
 });
 
 ==============================================================================
-test/parsing.test.ts
+server/test/parsing.test.ts
 ==============================================================================
 // Tier one of the three a new language breaks in order: does my rule parse.
 //
@@ -935,7 +1067,7 @@ test/parsing.test.ts
 import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 import type { DomainModel, ProcessModel, LayoutModel } from '../src/language-server/ast.js';
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 describe('Domain parsing', () => {
    it('parses the starter rules and populates the AST', async () => {
@@ -1016,7 +1148,7 @@ describe('Layout parsing', () => {
 });
 
 ==============================================================================
-test/linking.test.ts
+server/test/linking.test.ts
 ==============================================================================
 // Tier two: does my cross-reference resolve.
 //
@@ -1029,7 +1161,7 @@ import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 import { AstUtils } from '@hydranium/langium';
 import type { DomainModel, ProcessModel, LayoutModel } from '../src/language-server/ast.js';
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 describe('Domain linking', () => {
    it('resolves a reference within one document', async () => {
@@ -1119,7 +1251,7 @@ describe('Layout linking', () => {
 });
 
 ==============================================================================
-test/validating.test.ts
+server/test/validating.test.ts
 ==============================================================================
 // Tier three: does a broken model get reported.
 //
@@ -1132,7 +1264,7 @@ import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 import { DiagnosticSeverity } from 'vscode-languageserver';
 import type { DomainModel, ProcessModel, LayoutModel } from '../src/language-server/ast.js';
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 describe('Domain validation', () => {
    it('reports nothing for a well-formed document', async () => {
@@ -1216,7 +1348,7 @@ describe('Layout validation', () => {
 });
 
 ==============================================================================
-test/serialization.test.ts
+server/test/serialization.test.ts
 ==============================================================================
 // Round-trips each grammar through its serializer: parse the source, serialize
 // the model, compare the text. The serializer is the parser's inverse, so this
@@ -1235,8 +1367,8 @@ import type {
    DomainModel as TransferDomainModel,
    ProcessModel as TransferProcessModel,
    LayoutModel as TransferLayoutModel
-} from '../src/language-server/generated-hydranium/transfer-model.js';
-import { createServices } from '../src/services.js';
+} from 'order-flow-protocol';
+import { createServices } from '../src/node/services.js';
 
 describe('Domain serialization', () => {
    const source = 'node first -> second\nnode second';
@@ -1315,3 +1447,48 @@ describe('Layout serialization', () => {
       expect(await Layout.serializer.Serializer.serializeTransfer(model)).toBe(source);
    });
 });
+
+==============================================================================
+workspace/nodes.domain
+==============================================================================
+/** The first node. Hover a name to read its comment. */
+node First
+
+/** A second node, pointing at the first in the same file. */
+node Second -> First
+
+==============================================================================
+workspace/references.domain
+==============================================================================
+/** Points at a node declared in nodes.domain: hover the target to read its comment from there. */
+node Third -> Second
+
+==============================================================================
+workspace/nodes.process
+==============================================================================
+/** The first node. Hover a name to read its comment. */
+node First
+
+/** A second node, pointing at the first in the same file. */
+node Second -> First
+
+==============================================================================
+workspace/references.process
+==============================================================================
+/** Points at a node declared in nodes.process: hover the target to read its comment from there. */
+node Third -> Second
+
+==============================================================================
+workspace/nodes.diagram
+==============================================================================
+/** The first node. Hover a name to read its comment. */
+node First
+
+/** A second node, pointing at the first in the same file. */
+node Second -> First
+
+==============================================================================
+workspace/references.diagram
+==============================================================================
+/** Points at a node declared in nodes.diagram: hover the target to read its comment from there. */
+node Third -> Second

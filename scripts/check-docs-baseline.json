@@ -4,11 +4,5 @@
   },
   "docs/contributing/perf-baseline.md": {
     "version": 1
-  },
-  "examples/bookstore/server/README.md": {
-    "unreachable": 1
-  },
-  "examples/bookstore/workspace/README.md": {
-    "unreachable": 1
   }
 }

@@ -21,17 +21,18 @@
 // starter grammar persists no bounds, so there is nowhere to put a coordinate: the
 // node is appended at the end of the document and the client places it.
 //
-// Like `types.ts`, `gmodel-factory.ts` and `diagram-configuration.ts`, this file
-// knows the starter grammar's shape — the `nodes` list and the `__NODE_RULE__`
-// it holds. Replacing the grammar means replacing these four together.
+// Like protocol's `__GRAMMAR_ID__-diagram-types.ts`, `gmodel-factory.ts` and
+// `diagram-configuration.ts`, this file knows the starter grammar's shape — the
+// `nodes` list and the `__NODE_RULE__` it holds. Replacing the grammar means
+// replacing these four together.
 
 import { type Command, type CreateNodeOperation, JsonCreateNodeOperationHandler, type MaybePromise } from '@eclipse-glsp/server';
 import { appendChild } from '@hydranium/core';
 import { HydraniumGlspRecordingCommand } from '@hydranium/glsp-server';
 import { findNextUnique } from '@hydranium/protocol';
+import { __GRAMMAR_ID_CONST___NODE_TYPE } from '__PROTOCOL_PACKAGE__';
 import { injectable } from 'inversify';
 import type { __NODE_RULE__ } from '../../language-server/ast.js';
-import { __GRAMMAR_ID_CONST___NODE_TYPE } from './types.js';
 import type { __GRAMMAR__GlspState } from './state.js';
 
 /** Proposed name for a new node, uniquified against the ones the document already has. */

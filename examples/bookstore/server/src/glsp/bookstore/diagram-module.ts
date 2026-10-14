@@ -37,7 +37,7 @@ import { BookstoreGModelFactory } from './gmodel-factory.js';
 import { BookstoreGlspState } from './state.js';
 import { BookstoreGlspStorage } from './storage.js';
 import { BookstoreSubmissionHandler } from './submission-handler.js';
-import { BOOKSTORE_DIAGRAM_TYPE } from './types.js';
+import { BOOKSTORE_DIAGRAM_TYPE } from '@hydranium/bookstore-protocol';
 
 export class BookstoreDiagramModule extends AbstractHydraniumGlspDiagramModule {
    readonly diagramType = BOOKSTORE_DIAGRAM_TYPE;

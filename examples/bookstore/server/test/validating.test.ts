@@ -18,7 +18,7 @@ import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 import { DiagnosticSeverity } from 'vscode-languageserver';
 import type { BookstoreModel } from '../src/language-server/ast.js';
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 describe('Bookstore validation', () => {
    it('reports nothing for a well-formed document', async () => {

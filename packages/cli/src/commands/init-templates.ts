@@ -22,6 +22,9 @@
  *   `bin` key, the DI module filename, and the data-server port command.
  * - `__CONFIG_ROOT_CONST__` — SCREAMING_SNAKE project id, naming the
  *   `lsp.configurationRoot` constant a multi-grammar project binds.
+ * - `__PROTOCOL_PACKAGE__` — the protocol member's package name, scope
+ *   included, which the server and every client import ids and wire types
+ *   from.
  *
  * GRAMMAR tokens, substituted once per grammar:
  *
@@ -51,9 +54,16 @@
  * generator emits `interface <projectName>Element` as the base type every rule
  * extends, which a rule of that name would collide with.
  *
+ * The project is two packages and a starter workspace, each in its own
+ * directory: `server/` (the grammar, the language and its heads), `protocol/`
+ * (what the server and its clients both import, so a client never installs
+ * Langium), and `workspace/` (starter model files every host and the CLI
+ * open). A standalone project adds a root manifest naming them as npm
+ * workspaces; a workspace member joins the surrounding root instead.
+ *
  * A file that is fixed text with tokens lives in the `templates/` tree the
  * package ships beside `lib`, at the path it is emitted at, tokens included
- * (the ignore file without its dot); one computed from the composition is
+ * (each ignore file without its dot); one computed from the composition is
  * built here. The tree is read synchronously, so `runInit` stays synchronous,
  * and it is neither formatted with the repo's settings nor given a license
  * header, since either would change what `init` emits.
@@ -78,7 +88,7 @@
 
 import { readFileSync } from 'node:fs';
 import { readCliVersion } from '../cli-version.js';
-import type { InitComposition, InitFile, InitGrammarNames, InitHead } from './init.js';
+import type { InitComposition, InitFile, InitGrammarNames, InitHead, InitMember } from './init.js';
 import type { JsonValue } from './init-workspace.js';
 
 /** One template file: its path (tokens allowed) and its content (tokens allowed). */
@@ -117,12 +127,49 @@ function screamingSnake(projectId: string): string {
    return projectId.replace(/-/g, '_').toUpperCase();
 }
 
+/**
+ * A member's package name: `<id>-<member>`, under the scope when there is one.
+ *
+ * Suffixed even for the server, because a project of several packages has no
+ * member entitled to the bare id, and a later client or host would otherwise
+ * read as a part of the server.
+ */
+export function memberPackageName(composition: InitComposition, member: InitMember): string {
+   const { scope } = composition.packaging;
+   const name = `${composition.projectId}-${member}`;
+   return scope === undefined ? name : `${scope}/${name}`;
+}
+
+/**
+ * The composition as one member sees it: inside a workspace, its placement
+ * sits one directory below the project's, so its `extends` and its lint
+ * config path reach one level further up.
+ */
+function forMember(composition: InitComposition, member: InitMember): InitComposition {
+   const workspace = composition.packaging.workspace;
+   if (workspace === undefined) {
+      return composition;
+   }
+   return {
+      ...composition,
+      packaging: {
+         ...composition.packaging,
+         workspace: {
+            ...workspace,
+            targetPath: `${workspace.targetPath}/${member}`,
+            baseTsconfig: workspace.baseTsconfig === undefined ? undefined : `../${workspace.baseTsconfig}`
+         }
+      }
+   };
+}
+
 /** Substitute the project-tier tokens. */
 function project(text: string, composition: InitComposition): string {
    return text
       .replace(/__NAME__/g, composition.name)
       .replace(/__PROJECT_ID__/g, composition.projectId)
-      .replace(/__CONFIG_ROOT_CONST__/g, screamingSnake(composition.projectId));
+      .replace(/__CONFIG_ROOT_CONST__/g, screamingSnake(composition.projectId))
+      .replace(/__PROTOCOL_PACKAGE__/g, memberPackageName(composition, 'protocol'));
 }
 
 /**
@@ -157,14 +204,20 @@ function template(path: string): string {
    return readFileSync(new URL(path, TEMPLATES), 'utf-8');
 }
 
-/** A `server/` template emitted once per project, rendered with the project tokens. */
+/** A template emitted once per project at its own path, rendered with the project tokens. */
 function projectTemplate(path: string, composition: InitComposition): InitFile {
-   return { path, content: project(template(`server/${path}`), composition) };
+   return { path, content: project(template(path), composition) };
 }
 
-/** A `server/` template emitted once per grammar, its path rendered like its content. */
+/** A template emitted once per grammar, its path rendered like its content. */
 function grammarTemplate(path: string, composition: InitComposition, grammar: InitGrammarNames): InitFile {
-   return { path: render(path, composition, grammar), content: render(template(`server/${path}`), composition, grammar) };
+   return { path: render(path, composition, grammar), content: render(template(path), composition, grammar) };
+}
+
+/** An ignore file, stored without its dot because `npm pack` drops a nested `.gitignore` and applies it as an ignore file. */
+function ignoreFile(directory: string): InitFile {
+   const prefix = directory === '' ? '' : `${directory}/`;
+   return { path: `${prefix}.gitignore`, content: template(`${prefix}gitignore`) };
 }
 
 /** A comma-separated list of single-quoted TypeScript/JS string literals. */
@@ -261,6 +314,17 @@ const HEAD_THIRD_PARTY_DEPENDENCIES: Record<InitHead, Readonly<Record<string, st
 };
 
 /**
+ * What each head adds to the protocol member, which carries only what a
+ * client may install. Keyed by head because the `glsp` head implies a diagram,
+ * whose element ids extend GLSP's default type names.
+ */
+const PROTOCOL_THIRD_PARTY_DEPENDENCIES: Record<InitHead, Readonly<Record<string, string>>> = {
+   lsp: {},
+   data: {},
+   glsp: { '@eclipse-glsp/protocol': '2.7.0' }
+};
+
+/**
  * The exact pins of `heads`, for a workspace root to declare too. npm installs a
  * root's own dependencies at the top of the tree, so another member's version of
  * one nests beneath that member instead of taking the place of the copy this
@@ -268,7 +332,7 @@ const HEAD_THIRD_PARTY_DEPENDENCIES: Record<InitHead, Readonly<Record<string, st
  */
 export function workspaceRootPins(heads: readonly InitHead[]): ReadonlyArray<readonly [string, string]> {
    return heads
-      .flatMap(head => Object.entries(HEAD_THIRD_PARTY_DEPENDENCIES[head]))
+      .flatMap(head => [...Object.entries(HEAD_THIRD_PARTY_DEPENDENCIES[head]), ...Object.entries(PROTOCOL_THIRD_PARTY_DEPENDENCIES[head])])
       .filter(([, version]) => /^\d+\.\d+\.\d+$/.test(version))
       .sort(([left], [right]) => left.localeCompare(right));
 }
@@ -291,19 +355,32 @@ function pinsVitest(composition: InitComposition): boolean {
    return !(installsVitest41(workspace?.packageManagerNpm) && installsVitest41(workspace?.npmVersion));
 }
 
-/** The dependency block for a head set, merged and sorted as npm writes it. */
+/**
+ * The version a member pins a sibling member at: exact, at the version every
+ * member starts with. npm links a sibling only when the range admits its local
+ * version, and otherwise looks for it in the registry, where it was never
+ * published.
+ */
+const MEMBER_PIN = '0.0.0';
+
+/** A dependency block, sorted as npm writes it. */
+function sortedBlock(dependencies: Readonly<Record<string, string>>, indent: string): string {
+   return Object.keys(dependencies)
+      .sort()
+      .map(name => `${indent}"${name}": "${dependencies[name]}"`)
+      .join(',\n');
+}
+
+/** The server's dependency block: the head set's packages and the protocol member. */
 function dependencyBlock(composition: InitComposition, indent: string): string {
-   const merged: Record<string, string> = {};
+   const merged: Record<string, string> = { [memberPackageName(composition, 'protocol')]: MEMBER_PIN };
    for (const head of composition.heads) {
       Object.assign(merged, HEAD_THIRD_PARTY_DEPENDENCIES[head]);
       for (const framework of HEAD_FRAMEWORK_DEPENDENCIES[head]) {
          merged[framework] = frameworkPin(composition);
       }
    }
-   return Object.keys(merged)
-      .sort()
-      .map(name => `${indent}"${name}": "${merged[name]}"`)
-      .join(',\n');
+   return sortedBlock(merged, indent);
 }
 
 // JSON at two-space indent, not the three the `.ts` templates use: that is the
@@ -330,6 +407,11 @@ function dependencyBlock(composition: InitComposition, indent: string): string {
 // from this package's own grammar and can reach a consumer from nowhere else; a
 // listed path that does not exist yet is inert.
 //
+// `exports` puts `createServices`, the one module reading the real filesystem,
+// behind `./node`, so the root loads in a browser worker that has no `node:fs`.
+// `./lib/*` and `./package.json` stay reachable for a host that resolves
+// `<server>/lib/main.js` to spawn the server.
+//
 // `repository` is deliberately NOT emitted while `author` is emitted empty. An
 // empty `author` is the form `npm init` itself writes and asserts nothing, but
 // `repository` is CONSUMED — the registry page, `npm repo` and publish
@@ -354,17 +436,29 @@ __BIN__  },
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./node": {
+      "types": "./lib/node/services.d.ts",
+      "default": "./lib/node/services.js"
+    },
+    "./lib/*": "./lib/*",
+    "./package.json": "./package.json"
+  },
   "scripts": {
-    "build": "npm run generate && tsc",
+    "build": "npm run generate && tsc -b",
     "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium tsconfig.tsbuildinfo",
     "generate": "npm run langium:generate && npm run generate:transfer-model",
-    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file src/language-server/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --element-type-name __NAME__Element --terminals-name __NAME__Terminals --regen-command \\"Run: __NPM_RUN__ generate:transfer-model\\"",
+    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file ../protocol/src/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --languages-file ../protocol/src/generated-hydranium/languages.ts --element-type-name __NAME__Element --terminals-name __NAME__Terminals --regen-command \\"Run: __NPM_RUN__ generate:transfer-model\\"",
     "langium:generate": "langium generate",
     "langium:watch": "langium generate --watch",
 __LINT__    "start": "node lib/main.js --stdio",
     "test": "npm run typecheck:test && vitest run",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
-    "watch": "tsc --watch"
+    "watch": "tsc -b --watch"
   },
   "dependencies": {
 __DEPENDENCIES__
@@ -384,16 +478,17 @@ __DEPENDENCIES__
 `;
 
 /**
- * How the scaffold names `npm run` when talking about itself.
+ * How the scaffold names `npm run` for one member's script.
  *
- * A workspace member's scripts are routinely invoked from the repo root, where
- * a bare `npm run` reaches the ROOT manifest and fails — so the regen hint a
- * generated file prints has to name the package, or it sends every reader who
- * follows it to the wrong place.
+ * Always with `--prefix`, from the directory commands are run in: the
+ * workspace root for a member, the project root for a standalone project. A
+ * bare `npm run` there reaches the ROOT manifest and fails, and the regen hint
+ * a generated file prints is read in `protocol/` as well, where the script it
+ * names does not exist.
  */
-function npmRun(composition: InitComposition): string {
+function npmRun(composition: InitComposition, member: InitMember): string {
    const workspace = composition.packaging.workspace;
-   return workspace === undefined ? 'npm run' : `npm --prefix ${workspace.targetPath} run`;
+   return `npm --prefix ${workspace === undefined ? member : `${workspace.targetPath}/${member}`} run`;
 }
 
 /**
@@ -416,38 +511,38 @@ function binBlock(composition: InitComposition): string {
    return entries.map(([name, target]) => `    "${name}": "${target}"`).join(',\n') + '\n';
 }
 
-/** `package.json` with the name, the private flag and the dependency block all derived. */
+/**
+ * A member's `lint` script line, over `directories`, or nothing.
+ *
+ * Emitted only where a root lint config says the repo lints. The absence is
+ * the dangerous direction: a task runner runs a script only where one is
+ * declared, so a package with no `lint` is SKIPPED rather than reported, and
+ * that reads as a clean lint. A wrong invocation is one visible line to edit.
+ */
+function lintScript(member: InitComposition, directories: string): string {
+   const workspace = member.packaging.workspace;
+   if (workspace?.oxlintConfig !== undefined) {
+      const config = `${'../'.repeat(workspace.targetPath.split('/').length)}${workspace.oxlintConfig}`;
+      return `    "lint": "oxlint --report-unused-disable-directives --format stylish --config ${config} ${directories} --max-warnings 0",\n`;
+   }
+   return workspace?.eslintConfig !== undefined ? `    "lint": "eslint ${directories} --max-warnings 0",\n` : '';
+}
+
+/** The server's `package.json`, with the name, the private flag and the dependency block all derived. */
 function packageJson(composition: InitComposition): string {
-   const { scope } = composition.packaging;
-   const packageName = scope === undefined ? composition.projectId : `${scope}/${composition.projectId}`;
    const keywords =
       ['hydranium', 'langium', 'language-server', composition.projectId]
          .sort()
          .map(keyword => `    ${JSON.stringify(keyword)}`)
          .join(',\n') + '\n';
-   // Emitted only where a root lint config says the repo lints. The absence is
-   // the dangerous direction: a task runner runs a script only where one is
-   // declared, so a package with no `lint` is SKIPPED rather than reported, and
-   // that reads as a clean lint. A wrong invocation is one visible line to edit.
-   const workspace = composition.packaging.workspace;
-   const oxlintConfig =
-      workspace?.oxlintConfig === undefined
-         ? undefined
-         : `${'../'.repeat(workspace.targetPath.split('/').length)}${workspace.oxlintConfig}`;
-   const lint =
-      workspace?.oxlintConfig !== undefined
-         ? `    "lint": "oxlint --report-unused-disable-directives --format stylish --config ${oxlintConfig} src test --max-warnings 0",\n`
-         : workspace?.eslintConfig !== undefined
-           ? '    "lint": "eslint src test --max-warnings 0",\n'
-           : '';
    return project(PACKAGE_JSON, composition)
-      .replace('__PACKAGE_NAME__', packageName)
+      .replace('__PACKAGE_NAME__', memberPackageName(composition, 'server'))
       .replace('__KEYWORDS__', keywords)
       .replace('__BIN__', binBlock(composition))
-      .replace('__LINT__', lint)
+      .replace('__LINT__', lintScript(forMember(composition, 'server'), 'src test'))
       .replace('__VITEST__', pinsVitest(composition) ? '~4.0.18' : '^4.0.0')
       .replace('__PRIVATE__', composition.packaging.private ? '  "private": true,\n' : '')
-      .replace('__NPM_RUN__', npmRun(composition))
+      .replace('__NPM_RUN__', npmRun(composition, 'server'))
       .replace('__FRAMEWORK_PIN__', frameworkPin(composition))
       .replace('__DEPENDENCIES__', dependencyBlock(composition, '    '));
 }
@@ -515,6 +610,24 @@ const TSCONFIG_COMPILER_OPTIONS: ReadonlyArray<readonly [string, JsonValue]> = [
    ['types', ['node']]
 ];
 
+/** The protocol member's compiler options, pruned against a workspace base like the server's. */
+const PROTOCOL_COMPILER_OPTIONS: ReadonlyArray<readonly [string, JsonValue]> = [
+   ['target', 'ES2022'],
+   ['lib', ['ES2022']],
+   ['module', 'NodeNext'],
+   ['moduleResolution', 'NodeNext'],
+   ['rootDir', 'src'],
+   ['outDir', 'lib'],
+   ['strict', true],
+   ['skipLibCheck', true],
+   ['declaration', true],
+   // The server's `tsc -b` builds this project through a reference, which
+   // `tsc` refuses unless the referenced project is composite.
+   ['composite', true],
+   // No ambient Node types: a browser client compiles against this package.
+   ['types', []]
+];
+
 /**
  * The options that describe where THIS package's own files live. Never pruned,
  * and emitted first in the workspace case: a base config that supplied them
@@ -546,22 +659,42 @@ function optionEquals(key: string, left: JsonValue | undefined, right: JsonValue
  * the same key: inheriting `"module": "CommonJS"` where the scaffold needs
  * `NodeNext` would break every emitted import, so a differing base value is a
  * reason to keep the override rather than to trust the parent.
+ *
+ * `member` is the composition as that member sees it, so `extends` reaches the
+ * workspace base from the member's own directory.
  */
-function tsconfigJson(composition: InitComposition): string {
-   const workspace = composition.packaging.workspace;
+function tsconfigJson(
+   member: InitComposition,
+   compilerOptions: ReadonlyArray<readonly [string, JsonValue]>,
+   include: string,
+   references = ''
+): string {
+   const workspace = member.packaging.workspace;
    const base = workspace?.baseTsconfig === undefined ? undefined : (workspace.baseCompilerOptions ?? {});
    const options =
       base === undefined
-         ? TSCONFIG_COMPILER_OPTIONS
+         ? compilerOptions
          : [
-              ...TSCONFIG_COMPILER_OPTIONS.filter(([key]) => PACKAGE_LOCAL_OPTIONS.includes(key)),
-              ...TSCONFIG_COMPILER_OPTIONS.filter(
-                 ([key, value]) => !PACKAGE_LOCAL_OPTIONS.includes(key) && !optionEquals(key, base[key], value)
-              )
+              ...compilerOptions.filter(([key]) => PACKAGE_LOCAL_OPTIONS.includes(key)),
+              ...compilerOptions.filter(([key, value]) => !PACKAGE_LOCAL_OPTIONS.includes(key) && !optionEquals(key, base[key], value))
            ];
    const extendsLine = workspace?.baseTsconfig === undefined ? '' : `  "extends": "${workspace.baseTsconfig}",\n`;
    const body = options.map(([key, value]) => `    "${key}": ${JSON.stringify(value)}`).join(',\n');
-   return `{\n${extendsLine}  "compilerOptions": {\n${body}\n  },\n  "include": ["src", "src/**/*.json"]\n}\n`;
+   const referencesLine = references === '' ? '' : `,\n  "references": ${references}`;
+   return `{\n${extendsLine}  "compilerOptions": {\n${body}\n  },\n  "include": ${include}${referencesLine}\n}\n`;
+}
+
+/**
+ * The server's `tsconfig.json`. It references the protocol member, so `tsc -b`
+ * compiles protocol first, after `generate` has written its generated modules.
+ */
+function serverTsconfigJson(composition: InitComposition): string {
+   return tsconfigJson(
+      forMember(composition, 'server'),
+      TSCONFIG_COMPILER_OPTIONS,
+      '["src", "src/**/*.json"]',
+      '[{ "path": "../protocol" }]'
+   );
 }
 
 /**
@@ -778,14 +911,13 @@ function portCommandNames(composition: InitComposition): string[] {
 }
 
 /**
- * The socket heads' discovery commands, as an importable module.
+ * The socket heads' discovery commands, in the protocol member.
  *
- * Deliberately NOT declared in `main.ts`. A host shell has to name the same
- * string to reach the head, and `main.ts` opens a connection at module scope,
- * so importing a constant from it would start a server. A host that retypes the
- * literal instead gets no error when it drifts: the framework's port poll
- * defaults to `findPortAttempts = -1`, so a wrong command retries forever
- * rather than failing.
+ * A host shell has to name the same string the server publishes, and reaches
+ * it here without depending on the server. A host that retypes the literal
+ * instead gets no error when it drifts: the framework's port poll defaults to
+ * `findPortAttempts = -1`, so a wrong command retries forever rather than
+ * failing.
  */
 function headPortsFile(composition: InitComposition): string {
    const upper = screamingSnake(composition.projectId);
@@ -809,37 +941,35 @@ function headPortsFile(composition: InitComposition): string {
 // process serves every registered grammar, so a language-derived name would tie
 // a project-level endpoint to whichever grammar was scaffolded first.
 //
-// They live here rather than in \`main.ts\` because a host shell has to name the
-// same string to reach the head, and \`main.ts\` is an executable entry — nothing
-// can import from it. A shell that retypes the literal gets no error when it
-// drifts: the framework's port poll retries indefinitely by default. Import
-// these instead, and assert any host-side copy against them.
+// The server publishes them and a host shell has to name the same string to
+// reach the head; both import them from here. A shell that retypes the literal
+// gets no error when it drifts: the framework's port poll retries indefinitely
+// by default.
 
 ${blocks.join('\n\n')}
 `;
 }
 
-const INDEX = `// Public surface of the __NAME__ language server: the DI factory, the generated
-// AST, and the headless \`createServices\` entry.
+/**
+ * The server's root entry: the DI factory, the generated AST and each diagram
+ * module, all loadable in a browser worker.
+ */
+function indexFile(composition: InitComposition): string {
+   const diagrams = composition.grammars.filter(grammar => grammar.diagram);
+   const diagramPhrase = diagrams.length === 0 ? '' : diagrams.length === 1 ? ', plus the diagram module' : ', plus the diagram modules';
+   const text = `// Public surface of the __NAME__ language server: the DI factory and the
+// generated AST${diagramPhrase}.
 //
-// The entry points under \`src/\` are deliberately NOT re-exported. Each opens a
-// transport at module scope, so importing one starts a server as a side effect
-// — which is why they are \`bin\` targets and this file is \`main\`.
+// Everything here loads in a browser worker as well as in Node, so a host can
+// compose the language wherever it runs it. \`createServices\`, which reads the
+// real filesystem, is the package's \`./node\` entry instead. The entry points
+// under \`src/\` are not re-exported either: each opens a transport at module
+// scope, so importing one starts a server, which is why they are \`bin\` targets.
 
 export * from './language-server/__PROJECT_ID__-module.js';
 export * from './language-server/ast.js';
-export { createServices } from './services.js';
-`;
-
-/**
- * The public surface, plus the head-port commands when there is a socket head.
- *
- * The commands belong here rather than only in `head-ports.ts` so a host shell
- * reaches them from the package root, the same way it reaches `createServices`.
- */
-function indexFile(composition: InitComposition): string {
-   const base = project(INDEX, composition);
-   return portCommandNames(composition).length ? `${base}export * from './head-ports.js';\n` : base;
+${diagrams.map(grammar => `export * from './glsp/${grammar.grammarId}/diagram-module.js';\n`).join('')}`;
+   return project(text, composition);
 }
 
 /**
@@ -903,15 +1033,15 @@ import { startGlspServer } from '@hydranium/glsp-server/node';
 // \`TransferElement\` structurally, so naming the AST type here compiles fine and
 // silently tells every typed client that a reference is a resolvable object
 // rather than a name.
-${importList(roots, './language-server/generated-hydranium/transfer-model.js', columns, true)}
+${importList(roots, memberPackageName(composition, 'protocol'), columns, true)}
 `
       : '';
 
-   // The commands live in `head-ports.ts`, not here: a host shell has to name
-   // the same string to reach the head, and this file is an executable entry, so
-   // nothing can import from it.
+   // The commands live in the protocol member, not here: a host shell has to
+   // name the same string to reach the head, and this file is an executable
+   // entry, so nothing can import from it.
    const portCommands = portCommandNames(composition).length
-      ? importList(portCommandNames(composition), './head-ports.js', columns) + '\n'
+      ? importList(portCommandNames(composition), memberPackageName(composition, 'protocol'), columns) + '\n'
       : '';
 
    const dataBlock = data
@@ -1048,7 +1178,7 @@ function dataServerMainFile(composition: InitComposition): string {
 ${importList(['NodeFileSystem', 'startStdioServer'], '@hydranium/core/node', columns)}
 import { DataServer } from '@hydranium/data-server';
 // The TRANSFER root${plural}, not the AST one${plural} — same reasoning as \`main.ts\`.
-${importList(roots, './language-server/generated-hydranium/transfer-model.js', columns, true)}
+${importList(roots, memberPackageName(composition, 'protocol'), columns, true)}
 import { create__NAME__Services } from './language-server/__PROJECT_ID__-module.js';
 
 const { shared } = create__NAME__Services({ ...NodeFileSystem });
@@ -1097,7 +1227,7 @@ function servicesTest(composition: InitComposition): string {
 // is missing from the composition.
 
 import { describe, expect, it } from 'vitest';
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 describe('__NAME__ services', () => {
    it('composes the DI tree and registers ${title}', () => {
@@ -1178,8 +1308,8 @@ function serializationTest(composition: InitComposition): string {
 import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 ${importList(astTypes, '../src/language-server/ast.js', columns, true)}
-${importList(transferTypes, '../src/language-server/generated-hydranium/transfer-model.js', columns, true)}
-import { createServices } from '../src/services.js';
+${importList(transferTypes, memberPackageName(composition, 'protocol'), columns, true)}
+import { createServices } from '../src/node/services.js';
 
 ${composition.grammars.map(grammar => render(SERIALIZATION_SUITE, composition, grammar)).join('\n\n')}
 `;
@@ -1306,7 +1436,7 @@ function grammarTest(composition: InitComposition, header: string, imports: read
 import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 ${imports.join('\n')}${imports.length ? '\n' : ''}${importList(astTypes, '../src/language-server/ast.js', columns, true)}
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 ${composition.grammars.map(grammar => render(suite, composition, grammar)).join('\n\n')}
 `;
@@ -1337,6 +1467,7 @@ function readme(composition: InitComposition): string {
    const multi = composition.grammars.length > 1;
    const data = composition.heads.includes('data');
    const primaryExtension = composition.grammars[0].extensions[0];
+   const diagramCount = composition.grammars.filter(grammar => grammar.diagram).length;
    const grammarBullets = composition.grammars.map(
       grammar => `- \`src/grammar/${grammar.grammarId}.langium\` — the \`${grammar.grammar}\` grammar (.${grammar.extensions.join(', .')})`
    );
@@ -1361,13 +1492,13 @@ function readme(composition: InitComposition): string {
       // nowhere else.
       '```bash',
       '# Grammar / AST reflection',
-      'npx hydranium-cli reflect --services ./lib/services.js',
+      'npx hydranium-cli reflect --services ./lib/node/services.js',
       '',
       '# Grammar-convention lint (CI gate)',
-      'npx hydranium-cli lint-grammar --services ./lib/services.js',
+      'npx hydranium-cli lint-grammar --services ./lib/node/services.js',
       '',
       '# Validate a workspace of model files (non-zero exit on errors)',
-      'npx hydranium-cli validate --services ./lib/services.js <workspace-dir>',
+      'npx hydranium-cli validate --services ./lib/node/services.js ../workspace',
       ...(data
          ? [
               '',
@@ -1378,8 +1509,8 @@ function readme(composition: InitComposition): string {
               '#',
               '# The workspace goes to the ENTRY, not to `--cwd`: `--cwd` re-roots the child,',
               '# so a relative entry path is refused by name (an absolute one is fine).',
-              'npx hydranium-cli projects --server "node ./lib/data-server-main.js <workspace-dir>"',
-              `npx hydranium-cli query --server "node ./lib/data-server-main.js <workspace-dir>" --uri <file:// URI of a .${primaryExtension} file>`
+              'npx hydranium-cli projects --server "node ./lib/data-server-main.js ../workspace"',
+              `npx hydranium-cli query --server "node ./lib/data-server-main.js ../workspace" --uri <file:// URI of ../workspace/nodes.${primaryExtension}>`
            ]
          : []),
       '```',
@@ -1393,8 +1524,8 @@ function readme(composition: InitComposition): string {
          grammar =>
             `- \`src/language-server/${grammar.grammarId}-serializer.ts\` — emits \`${grammar.grammar}\` back to text (the framework defaults this to a throw)`
       ),
-      '- `src/services.ts` — zero-arg `createServices()` for the headless CLI',
-      '- `src/index.ts` — the package entry (`main`): DI factory + generated AST',
+      "- `src/node/services.ts` — zero-arg `createServices()` for the headless CLI, the package's `./node` entry",
+      `- \`src/index.ts\` — the package root, loadable in a browser worker: DI factory + generated AST${diagramCount === 0 ? '' : diagramCount === 1 ? ' + diagram module' : ' + diagram modules'}`,
       `- \`src/main.ts\` — starts ${composition.heads.join(' + ')}, the \`__PROJECT_ID__\` bin entry`,
       ...(data
          ? [
@@ -1406,8 +1537,9 @@ function readme(composition: InitComposition): string {
          .filter(grammar => grammar.diagram)
          .map(
             grammar =>
-               `- \`src/glsp/${grammar.grammarId}/\` — the \`${grammar.grammar}\` diagram: type ids, state, storage, submission handler, GModel factory, configuration, create-node handler, DI module`
+               `- \`src/glsp/${grammar.grammarId}/\` — the \`${grammar.grammar}\` diagram: state, storage, submission handler, GModel factory, configuration, create-node handler, DI module`
          ),
+      `- \`../protocol/\` — the \`${memberPackageName(composition, 'protocol')}\` package: what this server and its clients both import (language ids, ${portCommandNames(composition).length ? 'port commands, ' : ''}${composition.grammars.some(grammar => grammar.diagram) ? 'diagram ids, ' : ''}the transfer model), written partly by \`npm run generate\``,
       '- `test/services.test.ts` — the DI tree composes; grows as your language does',
       '- `test/parsing.test.ts` / `linking.test.ts` / `validating.test.ts` — the three tiers a new language breaks first',
       '- `test/serialization.test.ts` — each grammar round-trips through its serializer',
@@ -1513,9 +1645,9 @@ function readme(composition: InitComposition): string {
  */
 function glspFiles(composition: InitComposition, grammar: InitGrammarNames): InitFile[] {
    const columns = columnsFor(composition);
-   const fixed = (file: string): InitFile => grammarTemplate(`src/glsp/__GRAMMAR_ID__/${file}`, composition, grammar);
+   const fixed = (file: string): InitFile => grammarTemplate(`server/src/glsp/__GRAMMAR_ID__/${file}`, composition, grammar);
    const computed = (file: string, text: string): InitFile => ({
-      path: `src/glsp/${grammar.grammarId}/${file}`,
+      path: `server/src/glsp/${grammar.grammarId}/${file}`,
       content: render(text, composition, grammar)
    });
 
@@ -1542,7 +1674,7 @@ ${importList(
    columns
 )}
 import { injectable } from 'inversify';
-import { __GRAMMAR_ID_CONST___EDGE_TYPE, __GRAMMAR_ID_CONST___NODE_TYPE } from './types.js';
+import { __GRAMMAR_ID_CONST___EDGE_TYPE, __GRAMMAR_ID_CONST___NODE_TYPE } from '__PROTOCOL_PACKAGE__';
 
 @injectable()
 export class __GRAMMAR__DiagramConfiguration implements DiagramConfiguration {
@@ -1614,7 +1746,7 @@ import { __GRAMMAR__GModelFactory } from './gmodel-factory.js';
 import { __GRAMMAR__GlspState } from './state.js';
 import { __GRAMMAR__GlspStorage } from './storage.js';
 import { __GRAMMAR__SubmissionHandler } from './submission-handler.js';
-import { __GRAMMAR_ID_CONST___DIAGRAM_TYPE } from './types.js';
+import { __GRAMMAR_ID_CONST___DIAGRAM_TYPE } from '__PROTOCOL_PACKAGE__';
 
 export class __GRAMMAR__DiagramModule extends AbstractHydraniumGlspDiagramModule {
    readonly diagramType = __GRAMMAR_ID_CONST___DIAGRAM_TYPE;
@@ -1657,7 +1789,6 @@ export class __GRAMMAR__DiagramModule extends AbstractHydraniumGlspDiagramModule
 `;
 
    return [
-      fixed('types.ts'),
       fixed('state.ts'),
       fixed('storage.ts'),
       fixed('submission-handler.ts'),
@@ -1665,35 +1796,35 @@ export class __GRAMMAR__DiagramModule extends AbstractHydraniumGlspDiagramModule
       computed('diagram-configuration.ts', configuration),
       fixed('create-node-operation-handler.ts'),
       computed('diagram-module.ts', module),
-      grammarTemplate('test/__GRAMMAR_ID__-diagram.test.ts', composition, grammar)
+      grammarTemplate('server/test/__GRAMMAR_ID__-diagram.test.ts', composition, grammar)
    ];
 }
 
 /**
- * Every file the scaffold emits, fully rendered.
+ * The server member: the grammar, the language and its heads.
  *
  * Grammar-count-dependent emissions live here rather than in a template string:
  * one `.langium` file per grammar, and the shared `common.langium` fragment only
  * when there is more than one grammar to share it.
  */
-export function buildInitTemplates(composition: InitComposition): InitFile[] {
+function serverFiles(composition: InitComposition): InitFile[] {
    const multi = composition.grammars.length > 1;
    const grammarFiles: InitFile[] = composition.grammars.map(grammar => ({
-      path: `src/grammar/${grammar.grammarId}.langium`,
+      path: `server/src/grammar/${grammar.grammarId}.langium`,
       content: render(grammarFile(multi), composition, grammar)
    }));
    // The shared lexical fragment, only for several grammars: each declaring its
    // own `WS` / `ID` lets the token sets drift apart.
    if (multi) {
-      grammarFiles.unshift(projectTemplate('src/grammar/common.langium', composition));
+      grammarFiles.unshift(projectTemplate('server/src/grammar/common.langium', composition));
    }
 
    const diagramFiles = composition.grammars.filter(grammar => grammar.diagram).flatMap(grammar => glspFiles(composition, grammar));
 
    return [
-      { path: 'package.json', content: packageJson(composition) },
-      { path: 'langium-config.json', content: langiumConfig(composition) },
-      { path: 'tsconfig.json', content: tsconfigJson(composition) },
+      { path: 'server/package.json', content: packageJson(composition) },
+      { path: 'server/langium-config.json', content: langiumConfig(composition) },
+      { path: 'server/tsconfig.json', content: serverTsconfigJson(composition) },
       // `isolatedModules` is what makes this check agree with the transform that
       // actually runs the tests. `npm test` is `typecheck:test && vitest run`, and
       // vitest compiles each file on its own — a transform with no type
@@ -1702,40 +1833,39 @@ export function buildInitTemplates(composition: InitComposition): InitFile[] {
       // transform then emits as a real import of a symbol that does not exist at
       // runtime, so the typecheck passes and the suite fails with a confusing
       // missing-export.
-      projectTemplate('tsconfig.test.json', composition),
+      projectTemplate('server/tsconfig.test.json', composition),
       // Found by name, unlike `tsconfig.test.json`. Under vite 8, vitest's transform
       // applies a tsconfig only to the files its own `include` lists, so without this
       // a test declaring a decorated class fails to load.
-      projectTemplate('test/tsconfig.json', composition),
-      projectTemplate('vitest.config.ts', composition),
+      projectTemplate('server/test/tsconfig.json', composition),
+      projectTemplate('server/vitest.config.ts', composition),
       // Written for a workspace member too: its root may not ignore `lib/` (a `yo
       // langium` root ignores `out/`), and a rule the root repeats costs nothing.
-      // Stored without its dot, because `npm pack` drops a nested `.gitignore` from
-      // the tarball and applies it as an ignore file.
-      { path: '.gitignore', content: template('server/gitignore') },
-      { path: 'README.md', content: readme(composition) },
+      ignoreFile('server'),
+      { path: 'server/README.md', content: readme(composition) },
       ...grammarFiles,
-      { path: `src/language-server/${composition.projectId}-module.ts`, content: moduleFile(composition) },
-      grammarTemplate('src/language-server/ast.ts', composition, composition.grammars[0]),
+      { path: `server/src/language-server/${composition.projectId}-module.ts`, content: moduleFile(composition) },
+      grammarTemplate('server/src/language-server/ast.ts', composition, composition.grammars[0]),
       // Per grammar, because `services.serializer.Serializer` is a per-language slot
       // and a serializer is grammar-shaped by definition. That is also why the
       // framework refuses to default it: its `UnboundSerializer` throws, naming the
       // binding to add, rather than guessing a syntax.
-      ...composition.grammars.map(grammar => grammarTemplate('src/language-server/__GRAMMAR_ID__-serializer.ts', composition, grammar)),
-      { path: 'src/index.ts', content: indexFile(composition) },
-      projectTemplate('src/services.ts', composition),
-      { path: 'src/main.ts', content: mainFile(composition) },
-      ...(composition.heads.includes('data') ? [{ path: 'src/data-server-main.ts', content: dataServerMainFile(composition) }] : []),
-      ...(portCommandNames(composition).length ? [{ path: 'src/head-ports.ts', content: headPortsFile(composition) }] : []),
+      ...composition.grammars.map(grammar =>
+         grammarTemplate('server/src/language-server/__GRAMMAR_ID__-serializer.ts', composition, grammar)
+      ),
+      { path: 'server/src/index.ts', content: indexFile(composition) },
+      projectTemplate('server/src/node/services.ts', composition),
+      { path: 'server/src/main.ts', content: mainFile(composition) },
+      ...(composition.heads.includes('data') ? [{ path: 'server/src/data-server-main.ts', content: dataServerMainFile(composition) }] : []),
       ...diagramFiles,
-      { path: 'test/services.test.ts', content: servicesTest(composition) },
-      { path: 'test/parsing.test.ts', content: grammarTest(composition, PARSING_HEADER, [], PARSING_SUITE) },
+      { path: 'server/test/services.test.ts', content: servicesTest(composition) },
+      { path: 'server/test/parsing.test.ts', content: grammarTest(composition, PARSING_HEADER, [], PARSING_SUITE) },
       {
-         path: 'test/linking.test.ts',
+         path: 'server/test/linking.test.ts',
          content: grammarTest(composition, LINKING_HEADER, ["import { AstUtils } from '@hydranium/langium';"], LINKING_SUITE)
       },
       {
-         path: 'test/validating.test.ts',
+         path: 'server/test/validating.test.ts',
          content: grammarTest(
             composition,
             VALIDATING_HEADER,
@@ -1743,6 +1873,167 @@ export function buildInitTemplates(composition: InitComposition): InitFile[] {
             VALIDATING_SUITE
          )
       },
-      { path: 'test/serialization.test.ts', content: serializationTest(composition) }
+      { path: 'server/test/serialization.test.ts', content: serializationTest(composition) }
+   ];
+}
+
+/**
+ * The protocol member's `package.json`.
+ *
+ * Its `build` runs the server's `generate` first, because the server writes
+ * this package's `generated-hydranium/` modules from the grammar: a runner that
+ * builds in dependency order reaches this package before the server, and would
+ * otherwise compile modules that do not exist yet. A full build therefore
+ * generates twice; the second pass rewrites nothing.
+ */
+function protocolPackageJson(composition: InitComposition): string {
+   const member = forMember(composition, 'protocol');
+   const dependencies: Record<string, string> = {};
+   for (const head of composition.heads) {
+      Object.assign(dependencies, PROTOCOL_THIRD_PARTY_DEPENDENCIES[head]);
+   }
+   const dependencyLines =
+      Object.keys(dependencies).length === 0 ? '' : `  "dependencies": {\n${sortedBlock(dependencies, '    ')}\n  },\n`;
+   return `{
+  "name": "${memberPackageName(composition, 'protocol')}",
+  "version": "0.0.0",
+${composition.packaging.private ? '  "private": true,\n' : ''}  "description": "What the ${composition.name} language server and its clients share: language ids, wire types and diagram ids.",
+  "license": "UNLICENSED",
+  "author": "",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "scripts": {
+    "build": "npm --prefix ../server run generate && tsc -b",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+${lintScript(member, 'src')}    "watch": "tsc -b --watch"
+  },
+${dependencyLines}  "devDependencies": {
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
+`;
+}
+
+/** The protocol member's root entry, one re-export per module. */
+function protocolIndexFile(composition: InitComposition): string {
+   const modules = [
+      './generated-hydranium/languages.js',
+      './generated-hydranium/transfer-model.js',
+      ...(portCommandNames(composition).length ? ['./head-ports.js'] : []),
+      ...composition.grammars.filter(grammar => grammar.diagram).map(grammar => `./${grammar.grammarId}-diagram-types.js`)
+   ];
+   const text = `// What the __NAME__ server and its clients both import. A client depends on
+// this package instead of the server, so it never installs Langium to reach a
+// constant or a wire type.
+//
+// The server's \`generate\` writes \`generated-hydranium/\` from the grammar;
+// commit those modules with the grammar change that produced them.
+
+${modules.map(module => `export * from '${module}';`).join('\n')}
+`;
+   return project(text, composition);
+}
+
+/** The protocol member's README. */
+function protocolReadme(composition: InitComposition): string {
+   const lines = [
+      `# ${memberPackageName(composition, 'protocol')}`,
+      '',
+      'What the __NAME__ language server and its clients both import, so a client',
+      'never depends on the server or installs Langium.',
+      '',
+      '- `src/generated-hydranium/languages.ts` — each language id and its file extensions',
+      '- `src/generated-hydranium/transfer-model.ts` — the wire types of the model, references as plain strings',
+      ...(portCommandNames(composition).length ? ['- `src/head-ports.ts` — the LSP requests a host sends to find the socket heads'] : []),
+      ...composition.grammars
+         .filter(grammar => grammar.diagram)
+         .map(grammar => `- \`src/${grammar.grammarId}-diagram-types.ts\` — the \`${grammar.grammar}\` diagram's type ids`),
+      '',
+      "The server's `npm run generate` writes `src/generated-hydranium/` from the",
+      'grammar, and `npm run build` here runs it first. Commit the generated',
+      'modules with the grammar change that produced them.',
+      ''
+   ];
+   return project(lines.join('\n'), composition);
+}
+
+/** The protocol member: everything the server and its clients both import. */
+function protocolFiles(composition: InitComposition): InitFile[] {
+   return [
+      { path: 'protocol/package.json', content: protocolPackageJson(composition) },
+      { path: 'protocol/tsconfig.json', content: tsconfigJson(forMember(composition, 'protocol'), PROTOCOL_COMPILER_OPTIONS, '["src"]') },
+      ignoreFile('protocol'),
+      { path: 'protocol/README.md', content: protocolReadme(composition) },
+      { path: 'protocol/src/index.ts', content: protocolIndexFile(composition) },
+      ...(portCommandNames(composition).length ? [{ path: 'protocol/src/head-ports.ts', content: headPortsFile(composition) }] : []),
+      ...composition.grammars
+         .filter(grammar => grammar.diagram)
+         .map(grammar => grammarTemplate('protocol/src/__GRAMMAR_ID__-diagram-types.ts', composition, grammar))
+   ];
+}
+
+/**
+ * The starter model files every host and the CLI open, two per language: one
+ * declaring nodes, one referencing a node in the other file.
+ *
+ * Named by extension alone, since `init` refuses two grammars sharing one.
+ */
+function workspaceFiles(composition: InitComposition): InitFile[] {
+   return composition.grammars.flatMap(grammar => [
+      grammarTemplate('workspace/nodes.__EXTENSION__', composition, grammar),
+      grammarTemplate('workspace/references.__EXTENSION__', composition, grammar)
+   ]);
+}
+
+/**
+ * A standalone project's root: the members as npm workspaces.
+ *
+ * Always private: it is never published, whatever `--public` makes of the
+ * members. npm runs a script across the members in the order listed here, not
+ * by their dependencies; listing protocol first is safe because its `build`
+ * runs the server's `generate` before compiling.
+ */
+function rootFiles(composition: InitComposition): InitFile[] {
+   const content = `{
+  "name": "${composition.projectId}-root",
+  "version": "0.0.0",
+  "private": true,
+  "workspaces": [
+    "protocol",
+    "server"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "clean": "npm run clean --workspaces --if-present",
+    "test": "npm test --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
+`;
+   return [{ path: 'package.json', content }, ignoreFile('')];
+}
+
+/**
+ * Every file the scaffold emits, fully rendered, at its path in the project
+ * directory. A workspace member's project gets no root of its own: it joins the
+ * surrounding workspace, whose manifest `init` prints the changes for.
+ */
+export function buildInitTemplates(composition: InitComposition): InitFile[] {
+   return [
+      ...(composition.packaging.workspace === undefined ? rootFiles(composition) : []),
+      ...protocolFiles(composition),
+      ...serverFiles(composition),
+      ...workspaceFiles(composition)
    ];
 }

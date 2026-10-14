@@ -149,6 +149,16 @@ describe('resolveInitComposition', () => {
       ).toThrow(/claimed by both 'Domain' and 'Process'/);
    });
 
+   it('rejects two extensions that differ only in case', () => {
+      // Each names a starter file, and those are one file on a case-insensitive file system.
+      expect(() =>
+         resolveInitComposition('OrderFlow', [
+            { name: 'Domain', extensions: ['Flow'] },
+            { name: 'Process', extensions: ['flow'] }
+         ])
+      ).toThrow(/claimed by both 'Domain' and 'Process'/);
+   });
+
    it('rejects two grammars sharing a language id', () => {
       expect(() =>
          resolveInitComposition('OrderFlow', [
@@ -158,8 +168,12 @@ describe('resolveInitComposition', () => {
       ).toThrow(/Duplicate language id/);
    });
 
-   it('rejects an empty extension', () => {
-      expect(() => resolveInitComposition('Bookstore', [{ name: 'Bookstore', extensions: ['.'] }])).toThrow(/cannot be empty/);
+   it.each(['.', 'x/../../../escape', 'a\\b', "it's"])('rejects the extension %j', extension => {
+      expect(() => resolveInitComposition('Bookstore', [{ name: 'Bookstore', extensions: [extension] }])).toThrow(/Invalid extension/);
+   });
+
+   it.each(['', 'My-Lang', 'my.lang', "it's"])('rejects the language id %j', languageId => {
+      expect(() => resolveInitComposition('Bookstore', [{ name: 'Bookstore', languageId }])).toThrow(/Invalid --language-id/);
    });
 });
 
@@ -223,29 +237,30 @@ describe('planInitFiles with heads', () => {
 
    it('emits only the LSP head for --heads lsp', () => {
       const files = filesFor(['lsp']);
-      const main = contentOf(files, 'src/main.ts');
+      const main = contentOf(files, 'server/src/main.ts');
       expect(main).toContain('startLanguageServer(shared)');
       expect(main).not.toContain('DataServer');
       expect(main).not.toContain('startGlspServer');
-      // No transfer-root import either, since nothing consumes it.
-      expect(main).not.toContain('generated-hydranium/transfer-model.js');
-      expect(files.map(file => file.path).filter(path => path.startsWith('src/glsp/'))).toEqual([]);
+      // No import from protocol either: no transfer root, since nothing
+      // consumes one, and no port command, since no socket head publishes one.
+      expect(main).not.toContain("from 'bookstore-protocol'");
+      expect(files.map(file => file.path).filter(path => path.startsWith('server/src/glsp/'))).toEqual([]);
       // The stdio data entry follows the head, not the project: with no data
       // head there is nothing for `hydranium-cli query` to talk to and the file
       // would not compile, since it names a transfer root the scaffold omits.
-      expect(contentOf(files, 'src/data-server-main.ts')).toBeUndefined();
-      expect(contentOf(files, 'package.json')).not.toContain('data-server-main');
+      expect(contentOf(files, 'server/src/data-server-main.ts')).toBeUndefined();
+      expect(contentOf(files, 'server/package.json')).not.toContain('data-server-main');
    });
 
    it('emits the stdio data entry, and a bin key for it, with the data head', () => {
       // The only command line that reaches a scaffolded project's data head:
       // `main.ts` gives stdio to LSP and publishes the data head's socket port
       // over the LSP connection, which no `--server` client can ask for.
-      const entry = contentOf(filesFor(['lsp', 'data']), 'src/data-server-main.ts');
+      const entry = contentOf(filesFor(['lsp', 'data']), 'server/src/data-server-main.ts');
       expect(entry).toContain("import { NodeFileSystem, startStdioServer } from '@hydranium/core/node';");
       expect(entry).toContain('new DataServer<BookstoreModel>(connection, shared)');
       expect(entry).toContain('workspace: process.argv[2] ?? process.cwd()');
-      expect(contentOf(filesFor(['lsp', 'data']), 'package.json')).toContain('"bookstore-data-server": "lib/data-server-main.js"');
+      expect(contentOf(filesFor(['lsp', 'data']), 'server/package.json')).toContain('"bookstore-data-server": "lib/data-server-main.js"');
    });
 
    /**
@@ -263,12 +278,12 @@ describe('planInitFiles with heads', () => {
     */
    it('starts every bin target on a shebang line', () => {
       const files = filesFor(['lsp', 'data', 'glsp']);
-      const manifest = JSON.parse(contentOf(files, 'package.json') ?? '{}') as { bin?: Record<string, string> };
+      const manifest = JSON.parse(contentOf(files, 'server/package.json') ?? '{}') as { bin?: Record<string, string> };
       const sources = Object.values(manifest.bin ?? {})
-         .map(target => target.replace(/^lib\//, 'src/').replace(/\.js$/, '.ts'))
+         .map(target => target.replace(/^lib\//, 'server/src/').replace(/\.js$/, '.ts'))
          .sort();
 
-      expect(sources).toEqual(['src/data-server-main.ts', 'src/main.ts']);
+      expect(sources).toEqual(['server/src/data-server-main.ts', 'server/src/main.ts']);
       for (const source of sources) {
          expect(contentOf(files, source)?.split('\n')[0], source).toBe('#!/usr/bin/env node');
       }
@@ -280,12 +295,12 @@ describe('planInitFiles with heads', () => {
       // The framework pins are named without their VERSION here: it is derived
       // from the CLI's own manifest, so a literal would fail on the first
       // release. The golden tier asserts that derivation.
-      const lspOnly = contentOf(filesFor(['lsp']), 'package.json');
+      const lspOnly = contentOf(filesFor(['lsp']), 'server/package.json');
       expect(lspOnly).toContain('"@hydranium/core":');
       expect(lspOnly).not.toContain('@hydranium/data-server');
       expect(lspOnly).not.toContain('@eclipse-glsp/server');
 
-      const allHeads = contentOf(filesFor(['lsp', 'data', 'glsp']), 'package.json');
+      const allHeads = contentOf(filesFor(['lsp', 'data', 'glsp']), 'server/package.json');
       expect(allHeads).toContain('"@hydranium/data-server":');
       expect(allHeads).toContain('"@eclipse-glsp/graph": "2.7.0"');
       expect(allHeads).toContain('"@eclipse-glsp/server": "2.7.0"');
@@ -297,17 +312,18 @@ describe('planInitFiles with heads', () => {
 
    it('emits the diagram file set and wires it into main for the glsp head', () => {
       const files = filesFor(['lsp', 'data', 'glsp']);
-      expect(files.map(file => file.path).filter(path => path.startsWith('src/glsp/'))).toEqual([
-         'src/glsp/bookstore/types.ts',
-         'src/glsp/bookstore/state.ts',
-         'src/glsp/bookstore/storage.ts',
-         'src/glsp/bookstore/submission-handler.ts',
-         'src/glsp/bookstore/gmodel-factory.ts',
-         'src/glsp/bookstore/diagram-configuration.ts',
-         'src/glsp/bookstore/create-node-operation-handler.ts',
-         'src/glsp/bookstore/diagram-module.ts'
+      expect(files.map(file => file.path).filter(path => path.startsWith('server/src/glsp/'))).toEqual([
+         'server/src/glsp/bookstore/state.ts',
+         'server/src/glsp/bookstore/storage.ts',
+         'server/src/glsp/bookstore/submission-handler.ts',
+         'server/src/glsp/bookstore/gmodel-factory.ts',
+         'server/src/glsp/bookstore/diagram-configuration.ts',
+         'server/src/glsp/bookstore/create-node-operation-handler.ts',
+         'server/src/glsp/bookstore/diagram-module.ts'
       ]);
-      const main = contentOf(files, 'src/main.ts') ?? '';
+      // The ids live in protocol, where a client reaches them without the server.
+      expect(contentOf(files, 'protocol/src/bookstore-diagram-types.ts')).toContain('export type BookstoreElementType =');
+      const main = contentOf(files, 'server/src/main.ts') ?? '';
       // `reflect-metadata` first: inversify reads decorator metadata at module
       // scope, so a later import is too late. Compare import STATEMENTS rather
       // than searching for the word, which also appears in the header prose.
@@ -315,28 +331,30 @@ describe('planInitFiles with heads', () => {
       expect(imports[0]).toBe("import 'reflect-metadata';");
       expect(main).toContain('.configureDiagramModule(new BookstoreDiagramModule())');
       expect(main).toContain('BOOKSTORE_GLSP_PORT_COMMAND');
-      expect(contentOf(files, 'src/head-ports.ts')).toContain("export const BOOKSTORE_GLSP_PORT_COMMAND = 'bookstore/glsp/port';");
+      expect(contentOf(files, 'protocol/src/head-ports.ts')).toContain("export const BOOKSTORE_GLSP_PORT_COMMAND = 'bookstore/glsp/port';");
    });
 
    it('binds the diagram type and the full-text state in the diagram module', () => {
       const files = filesFor(['lsp', 'glsp']);
-      const module = contentOf(files, 'src/glsp/bookstore/diagram-module.ts');
+      const module = contentOf(files, 'server/src/glsp/bookstore/diagram-module.ts');
       expect(module).toContain('readonly diagramType = BOOKSTORE_DIAGRAM_TYPE;');
-      expect(contentOf(files, 'src/glsp/bookstore/state.ts')).toContain(
+      expect(contentOf(files, 'server/src/glsp/bookstore/state.ts')).toContain(
          'export class BookstoreGlspState extends FullTextHydraniumGlspState<BookstoreModel> {}'
       );
-      // The diagram type equals the language id, so the two cannot drift.
-      expect(contentOf(files, 'src/glsp/bookstore/types.ts')).toContain("export const BOOKSTORE_DIAGRAM_TYPE = 'bookstore';");
+      // The diagram type is read from the language id, so the two cannot drift.
+      expect(contentOf(files, 'protocol/src/bookstore-diagram-types.ts')).toContain(
+         'export const BOOKSTORE_DIAGRAM_TYPE = BOOKSTORE_LANGUAGE.languageId;'
+      );
    });
 
    it('emits a diagram only for the marked grammar', () => {
       const files = planInitFiles(
          resolveInitComposition('OrderFlow', [{ name: 'Domain' }, { name: 'Process', diagram: true }], ['lsp', 'data', 'glsp'])
       );
-      const glspPaths = files.map(file => file.path).filter(path => path.startsWith('src/glsp/'));
-      expect(glspPaths.every(path => path.startsWith('src/glsp/process/'))).toBe(true);
-      expect(glspPaths).toHaveLength(8);
-      expect(contentOf(files, 'src/main.ts')).toContain('.configureDiagramModule(new ProcessDiagramModule())');
+      const glspPaths = files.map(file => file.path).filter(path => path.startsWith('server/src/glsp/'));
+      expect(glspPaths.every(path => path.startsWith('server/src/glsp/process/'))).toBe(true);
+      expect(glspPaths).toHaveLength(7);
+      expect(contentOf(files, 'server/src/main.ts')).toContain('.configureDiagramModule(new ProcessDiagramModule())');
    });
 
    it('leaves no unsubstituted token in any emitted head combination', () => {
@@ -356,27 +374,36 @@ describe('planInitFiles', () => {
       expect(files.map(file => file.path).sort()).toEqual(
          [
             '.gitignore',
-            'README.md',
-            'langium-config.json',
             'package.json',
-            'src/data-server-main.ts',
-            'src/grammar/bookstore.langium',
-            'src/head-ports.ts',
-            'src/index.ts',
-            'src/language-server/ast.ts',
-            'src/language-server/bookstore-module.ts',
-            'src/language-server/bookstore-serializer.ts',
-            'src/main.ts',
-            'src/services.ts',
-            'test/linking.test.ts',
-            'test/parsing.test.ts',
-            'test/serialization.test.ts',
-            'test/services.test.ts',
-            'test/tsconfig.json',
-            'test/validating.test.ts',
-            'tsconfig.json',
-            'tsconfig.test.json',
-            'vitest.config.ts'
+            'protocol/.gitignore',
+            'protocol/README.md',
+            'protocol/package.json',
+            'protocol/src/head-ports.ts',
+            'protocol/src/index.ts',
+            'protocol/tsconfig.json',
+            'server/.gitignore',
+            'server/README.md',
+            'server/langium-config.json',
+            'server/package.json',
+            'server/src/data-server-main.ts',
+            'server/src/grammar/bookstore.langium',
+            'server/src/index.ts',
+            'server/src/language-server/ast.ts',
+            'server/src/language-server/bookstore-module.ts',
+            'server/src/language-server/bookstore-serializer.ts',
+            'server/src/main.ts',
+            'server/src/node/services.ts',
+            'server/test/linking.test.ts',
+            'server/test/parsing.test.ts',
+            'server/test/serialization.test.ts',
+            'server/test/services.test.ts',
+            'server/test/tsconfig.json',
+            'server/test/validating.test.ts',
+            'server/tsconfig.json',
+            'server/tsconfig.test.json',
+            'server/vitest.config.ts',
+            'workspace/nodes.bookstore',
+            'workspace/references.bookstore'
          ].sort()
       );
    });
@@ -388,34 +415,34 @@ describe('planInitFiles', () => {
    });
 
    it('substitutes the name into the module, config, and grammar content', () => {
-      expect(byPath('src/language-server/bookstore-module.ts')?.content).toContain('export function createBookstoreServices(');
-      expect(byPath('src/language-server/bookstore-module.ts')?.content).toContain('BookstoreGeneratedModule');
-      expect(byPath('langium-config.json')?.content).toContain('"projectName": "Bookstore"');
-      expect(byPath('langium-config.json')?.content).toContain('".bookstore"');
-      expect(byPath('src/grammar/bookstore.langium')?.content).toContain('grammar Bookstore');
+      expect(byPath('server/src/language-server/bookstore-module.ts')?.content).toContain('export function createBookstoreServices(');
+      expect(byPath('server/src/language-server/bookstore-module.ts')?.content).toContain('BookstoreGeneratedModule');
+      expect(byPath('server/langium-config.json')?.content).toContain('"projectName": "Bookstore"');
+      expect(byPath('server/langium-config.json')?.content).toContain('".bookstore"');
+      expect(byPath('server/src/grammar/bookstore.langium')?.content).toContain('grammar Bookstore');
    });
 
    it('gives the lone grammar its own prefixed rules and inline terminals', () => {
-      const grammar = byPath('src/grammar/bookstore.langium')?.content;
+      const grammar = byPath('server/src/grammar/bookstore.langium')?.content;
       expect(grammar).toContain('entry BookstoreModel:');
       expect(grammar).toContain('(nodes+=BookstoreNode)*;');
       expect(grammar).toContain('BookstoreNode:');
       // No fragment to import when there is nothing to share it with.
       expect(grammar).toContain('terminal ID:');
       expect(grammar).not.toContain("import './common'");
-      expect(byPath('src/grammar/common.langium')).toBeUndefined();
+      expect(byPath('server/src/grammar/common.langium')).toBeUndefined();
    });
 
    it('points services.js at the substituted module filename', () => {
-      expect(byPath('src/services.ts')?.content).toContain("from './language-server/bookstore-module.js'");
+      expect(byPath('server/src/node/services.ts')?.content).toContain("from '../language-server/bookstore-module.js'");
    });
 
    it('makes the package entry the barrel, not the server launcher', () => {
       // `main.ts` opens an LSP connection at module scope, so pointing `main`
       // at it would start a server as an import side effect.
-      expect(byPath('package.json')?.content).toContain('"main": "lib/index.js"');
-      expect(byPath('package.json')?.content).toContain('"bookstore": "lib/main.js"');
-      expect(byPath('src/index.ts')?.content).not.toContain('./main.js');
+      expect(byPath('server/package.json')?.content).toContain('"main": "lib/index.js"');
+      expect(byPath('server/package.json')?.content).toContain('"bookstore": "lib/main.js"');
+      expect(byPath('server/src/index.ts')?.content).not.toContain('./main.js');
    });
 
    /**
@@ -431,7 +458,7 @@ describe('planInitFiles', () => {
    it('emits its manifest keys in the order the formatter canonicalises to', () => {
       const manifest =
          planInitFiles(resolveInitComposition('Bookstore', undefined, undefined, { private: true })).find(
-            file => file.path === 'package.json'
+            file => file.path === 'server/package.json'
          )?.content ?? '';
 
       expect(Object.keys(JSON.parse(manifest) as Record<string, unknown>)).toEqual([
@@ -447,6 +474,7 @@ describe('planInitFiles', () => {
          'type',
          'main',
          'types',
+         'exports',
          'scripts',
          'dependencies',
          'devDependencies',
@@ -459,24 +487,24 @@ describe('planInitFiles', () => {
       // this scaffold emits with `lib/` in it: npm force-includes `main` and
       // omits everything else beneath it, so the `bin` target is absent from the
       // tarball while the publish reports success.
-      const manifest = JSON.parse(byPath('package.json')?.content ?? '{}') as { files?: string[]; bin?: Record<string, string> };
+      const manifest = JSON.parse(byPath('server/package.json')?.content ?? '{}') as { files?: string[]; bin?: Record<string, string> };
       const targets = Object.values(manifest.bin ?? {});
       const covered = targets.filter(target => (manifest.files ?? []).includes(target.split('/')[0]));
 
-      expect(byPath('.gitignore')?.content).toContain('lib/');
+      expect(byPath('server/.gitignore')?.content).toContain('lib/');
       // Named as a set rather than counted, so it cannot pass on an empty `bin`.
       expect(covered).toEqual(targets);
       expect(targets.length).toBeGreaterThan(0);
    });
 
    it('scaffolds a runnable test setup, not just source', () => {
-      expect(byPath('package.json')?.content).toContain('"test": "npm run typecheck:test && vitest run"');
-      expect(byPath('test/services.test.ts')?.content).toContain("from '../src/services.js'");
-      expect(byPath('vitest.config.ts')?.content).toContain("include: ['test/**/*.{test,spec}.ts']");
+      expect(byPath('server/package.json')?.content).toContain('"test": "npm run typecheck:test && vitest run"');
+      expect(byPath('server/test/services.test.ts')?.content).toContain("from '../src/node/services.js'");
+      expect(byPath('server/vitest.config.ts')?.content).toContain("include: ['test/**/*.{test,spec}.ts']");
    });
 
    it('types the single-grammar data head with that grammar’s transfer root', () => {
-      expect(byPath('src/main.ts')?.content).toContain('new DataServer<BookstoreModel>(dataConnection, shared)');
+      expect(byPath('server/src/main.ts')?.content).toContain('new DataServer<BookstoreModel>(dataConnection, shared)');
    });
 
    it('separates the shared and per-language generated symbols by name role', () => {
@@ -484,7 +512,7 @@ describe('planInitFiles', () => {
       // The DI module is PROJECT-level — it composes every language and exports
       // `create<Name>Services` — so its filename follows the project id, not the
       // routing key, which now carries a grammar suffix.
-      const module = split.find(file => file.path === 'src/language-server/order-flow-module.ts')?.content;
+      const module = split.find(file => file.path === 'server/src/language-server/order-flow-module.ts')?.content;
 
       // `projectName` drives the shared module, the grammar declaration the
       // per-language one. Conflating them only works while they are equal.
@@ -494,7 +522,7 @@ describe('planInitFiles', () => {
       expect(module).toContain('return { shared, Domain: language };');
       // The grammar file follows the GRAMMAR, so a second grammar lands beside
       // it rather than needing the first one renamed.
-      expect(split.find(file => file.path === 'src/grammar/domain.langium')?.content).toMatch(/^grammar Domain\n/);
+      expect(split.find(file => file.path === 'server/src/grammar/domain.langium')?.content).toMatch(/^grammar Domain\n/);
    });
 
    it('keys the data-server port command by the project, not the language', () => {
@@ -502,20 +530,22 @@ describe('planInitFiles', () => {
 
       // One data server per process serves every registered grammar, so a
       // language-derived name would tie a project endpoint to the first grammar.
-      const headPorts = split.find(file => file.path === 'src/head-ports.ts')?.content;
+      const headPorts = split.find(file => file.path === 'protocol/src/head-ports.ts')?.content;
       expect(headPorts).toContain("ORDER_FLOW_DATA_SERVER_PORT_COMMAND = 'order-flow/data-server/port'");
 
-      // The literal lives ONLY there: `main.ts` is an executable entry, so a
-      // constant declared in it is unreachable to the host that must name it.
+      // The literal lives ONLY there, in the package a host imports without the
+      // server: `main.ts` is an executable entry, so a constant declared in it
+      // is unreachable to the host that must name it.
       expect(headPorts).toContain('export const');
-      expect(split.find(file => file.path === 'src/main.ts')?.content).not.toContain("'order-flow/data-server/port'");
-      expect(split.find(file => file.path === 'src/index.ts')?.content).toContain("export * from './head-ports.js'");
+      expect(split.find(file => file.path === 'server/src/main.ts')?.content).not.toContain("'order-flow/data-server/port'");
+      expect(split.find(file => file.path === 'protocol/src/index.ts')?.content).toContain("export * from './head-ports.js'");
+      expect(split.find(file => file.path === 'server/src/index.ts')?.content).not.toContain('head-ports');
    });
 
    it('asks langium-cli for a TextMate grammar, and gitignores the output', () => {
-      expect(byPath('langium-config.json')?.content).toContain('"out": "syntaxes/bookstore.tmLanguage.json"');
-      expect(byPath('.gitignore')?.content).toContain('syntaxes/');
-      expect(byPath('package.json')?.content).toContain('rimraf lib syntaxes');
+      expect(byPath('server/langium-config.json')?.content).toContain('"out": "syntaxes/bookstore.tmLanguage.json"');
+      expect(byPath('server/.gitignore')?.content).toContain('syntaxes/');
+      expect(byPath('server/package.json')?.content).toContain('rimraf lib syntaxes');
    });
 
    it('opens every .ts file with a line-comment run rather than a block comment', () => {
@@ -525,6 +555,69 @@ describe('planInitFiles', () => {
       const sources = files.filter(file => file.path.endsWith('.ts'));
       expect(sources.length).toBeGreaterThan(0);
       expect(sources.filter(file => file.content.startsWith('/*')).map(file => file.path)).toEqual([]);
+   });
+});
+
+describe('planInitFiles project members', () => {
+   const filesFor = (heads?: readonly InitHead[]): InitFile[] => planInitFiles(resolveInitComposition('Bookstore', undefined, heads));
+   const contentOf = (files: readonly InitFile[], path: string): string => files.find(file => file.path === path)?.content ?? '';
+   const manifestOf = (files: readonly InitFile[], path: string): Record<string, unknown> =>
+      JSON.parse(contentOf(files, path)) as Record<string, unknown>;
+
+   it('gives a standalone project a private root listing its packages', () => {
+      const root = manifestOf(filesFor(), 'package.json');
+      expect(root).toMatchObject({ name: 'bookstore-root', private: true, workspaces: ['protocol', 'server'] });
+      expect(contentOf(filesFor(), '.gitignore')).toBe('node_modules/\n');
+   });
+
+   it('keeps the server root free of the Node-only services, behind ./node', () => {
+      const files = filesFor();
+      expect(manifestOf(files, 'server/package.json').exports).toEqual({
+         '.': { types: './lib/index.d.ts', default: './lib/index.js' },
+         './node': { types: './lib/node/services.d.ts', default: './lib/node/services.js' },
+         // A host spawning the server resolves `<server>/lib/main.js`.
+         './lib/*': './lib/*',
+         './package.json': './package.json'
+      });
+      expect(contentOf(files, 'server/src/index.ts')).not.toContain('services');
+   });
+
+   it('pins the protocol member exactly, so the workspace links it rather than fetching it', () => {
+      const dependencies = manifestOf(filesFor(), 'server/package.json').dependencies as Record<string, string>;
+      expect(dependencies['bookstore-protocol']).toBe('0.0.0');
+   });
+
+   it('generates into protocol and builds it through the server’s project reference', () => {
+      const files = filesFor();
+      const scripts = manifestOf(files, 'server/package.json').scripts as Record<string, string>;
+      expect(scripts.build).toBe('npm run generate && tsc -b');
+      expect(scripts['generate:transfer-model']).toContain('--out-file ../protocol/src/generated-hydranium/transfer-model.ts');
+      expect(scripts['generate:transfer-model']).toContain('--languages-file ../protocol/src/generated-hydranium/languages.ts');
+      // Run from the project root, where a bare `npm run` reaches the root manifest.
+      expect(scripts['generate:transfer-model']).toContain('Run: npm --prefix server run generate:transfer-model');
+   });
+
+   it('runs the server’s generate before compiling protocol, so a dependency-ordered runner finds the generated modules', () => {
+      const scripts = manifestOf(filesFor(), 'protocol/package.json').scripts as Record<string, string>;
+      expect(scripts.build).toBe('npm --prefix ../server run generate && tsc -b');
+   });
+
+   it('gives protocol a GLSP dependency only with the glsp head', () => {
+      expect(manifestOf(filesFor(['lsp', 'data']), 'protocol/package.json').dependencies).toBeUndefined();
+      expect(manifestOf(filesFor(['lsp', 'glsp']), 'protocol/package.json').dependencies).toEqual({ '@eclipse-glsp/protocol': '2.7.0' });
+   });
+
+   it('re-exports the generated modules from protocol, which init itself does not write', () => {
+      const files = filesFor();
+      expect(contentOf(files, 'protocol/src/index.ts')).toContain("export * from './generated-hydranium/transfer-model.js';");
+      expect(files.filter(file => file.path.includes('generated-hydranium'))).toEqual([]);
+   });
+
+   it('writes two starter files per language, the second referencing the first', () => {
+      const files = filesFor();
+      expect(contentOf(files, 'workspace/nodes.bookstore')).toContain('node Second -> First');
+      expect(contentOf(files, 'workspace/references.bookstore')).toContain('node Third -> Second');
+      expect(contentOf(files, 'workspace/references.bookstore')).toContain('nodes.bookstore');
    });
 });
 
@@ -538,18 +631,18 @@ describe('planInitFiles with several grammars', () => {
    const byPath = (path: string): string | undefined => files.find(file => file.path === path)?.content;
 
    it('emits one grammar file per grammar plus the shared fragment', () => {
-      expect(files.map(file => file.path).filter(path => path.startsWith('src/grammar/'))).toEqual([
-         'src/grammar/common.langium',
-         'src/grammar/domain.langium',
-         'src/grammar/process.langium',
-         'src/grammar/layout.langium'
+      expect(files.map(file => file.path).filter(path => path.startsWith('server/src/grammar/'))).toEqual([
+         'server/src/grammar/common.langium',
+         'server/src/grammar/domain.langium',
+         'server/src/grammar/process.langium',
+         'server/src/grammar/layout.langium'
       ]);
    });
 
    it('moves the terminals into the fragment and imports it from each grammar', () => {
-      expect(byPath('src/grammar/common.langium')).toContain('terminal ID:');
+      expect(byPath('server/src/grammar/common.langium')).toContain('terminal ID:');
       for (const grammarId of ['domain', 'process', 'layout']) {
-         const grammar = byPath(`src/grammar/${grammarId}.langium`);
+         const grammar = byPath(`server/src/grammar/${grammarId}.langium`);
          expect(grammar, grammarId).toContain("import './common'");
          // Declaring them again in each grammar is what the fragment exists to
          // avoid — the token sets would drift apart.
@@ -558,13 +651,13 @@ describe('planInitFiles with several grammars', () => {
    });
 
    it('gives each grammar its own entry rule so the combined ast.ts has no collision', () => {
-      expect(byPath('src/grammar/domain.langium')).toContain('entry DomainModel:');
-      expect(byPath('src/grammar/process.langium')).toContain('entry ProcessModel:');
-      expect(byPath('src/grammar/layout.langium')).toContain('entry LayoutModel:');
+      expect(byPath('server/src/grammar/domain.langium')).toContain('entry DomainModel:');
+      expect(byPath('server/src/grammar/process.langium')).toContain('entry ProcessModel:');
+      expect(byPath('server/src/grammar/layout.langium')).toContain('entry LayoutModel:');
    });
 
    it('registers every language in one langium-config, with its own extension', () => {
-      const config = byPath('langium-config.json');
+      const config = byPath('server/langium-config.json');
       expect(config).toContain('"id": "order-flow-domain"');
       expect(config).toContain('"id": "order-flow-process"');
       expect(config).toContain('"id": "order-flow-layout"');
@@ -574,7 +667,7 @@ describe('planInitFiles with several grammars', () => {
    });
 
    it('composes the further grammars through additionalLanguages', () => {
-      const module = byPath('src/language-server/order-flow-module.ts');
+      const module = byPath('server/src/language-server/order-flow-module.ts');
       expect(module).toContain('generated: DomainGeneratedModule');
       // Each further grammar carries its OWN adopter module. Without it
       // `additionalLanguages` falls back to the primary's, which would bind the
@@ -587,17 +680,15 @@ describe('planInitFiles with several grammars', () => {
    it('binds lsp.configurationRoot explicitly rather than taking registration order', () => {
       // The framework warns when several languages are registered and the root
       // is left to default, because the default is the first registered id.
-      const module = byPath('src/language-server/order-flow-module.ts');
+      const module = byPath('server/src/language-server/order-flow-module.ts');
       expect(module).toContain("export const ORDER_FLOW_CONFIGURATION_ROOT = 'order-flow';");
       expect(module).toContain('configurationRoot: () => ORDER_FLOW_CONFIGURATION_ROOT');
    });
 
    it('types the data head with the union of every transfer root', () => {
       // One data server per process serves every grammar.
-      expect(byPath('src/main.ts')).toContain('new DataServer<DomainModel | LayoutModel | ProcessModel>(dataConnection, shared)');
-      expect(byPath('src/main.ts')).toContain(
-         "import type { DomainModel, LayoutModel, ProcessModel } from './language-server/generated-hydranium/transfer-model.js';"
-      );
+      expect(byPath('server/src/main.ts')).toContain('new DataServer<DomainModel | LayoutModel | ProcessModel>(dataConnection, shared)');
+      expect(byPath('server/src/main.ts')).toContain("import type { DomainModel, LayoutModel, ProcessModel } from 'order-flow-protocol';");
    });
 
    it('leaves the diagnostics provider to the platform default', () => {
@@ -605,12 +696,12 @@ describe('planInitFiles with several grammars', () => {
       // no wiring, because the default is selected by the data-server package's
       // `browser` field. Asserted as an ABSENCE so the scaffold cannot quietly
       // regrow a line every adopter would have to understand and none needs.
-      expect(byPath('src/main.ts')).not.toContain('nodeDataServerDiagnostics');
-      expect(byPath('src/main.ts')).not.toContain('diagnostics:');
+      expect(byPath('server/src/main.ts')).not.toContain('nodeDataServerDiagnostics');
+      expect(byPath('server/src/main.ts')).not.toContain('diagnostics:');
    });
 
    it('asserts every registered language in the scaffolded test', () => {
-      const test = byPath('test/services.test.ts');
+      const test = byPath('server/test/services.test.ts');
       expect(test).toContain('registers all 3 languages');
       expect(test).toContain("toEqual(['order-flow-domain', 'order-flow-process', 'order-flow-layout'])");
       expect(test).toContain("toEqual(['.domain', '.process', '.layout'])");
@@ -635,18 +726,18 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      expect(captured?.files).toHaveLength(22);
+      expect(captured?.files).toHaveLength(31);
       // `path.join`, not a literal: the target is produced by `path.resolve`,
       // which emits the platform separator, so a hardcoded `/` asserts nothing
       // on Windows beyond the separator itself.
       expect(captured?.targetDir.endsWith(path.join('out', 'bookstore'))).toBe(true);
       const output = lines.join('');
-      expect(output).toContain('Scaffolded Bookstore (22 files, heads: lsp,data, 1 grammar(s): Bookstore)');
+      expect(output).toContain('Scaffolded Bookstore (31 files, heads: lsp,data, 1 grammar(s): Bookstore)');
       expect(output).toContain('npm run build');
       expect(output).toContain('npm test');
       // `npx`, not a bare invocation: the scaffold installs `@hydranium/cli` as a
       // devDependency, so a bare command resolves only with a global install.
-      expect(output).toContain('  npx hydranium-cli reflect --services ./lib/services.js\n');
+      expect(output).toContain('  npx hydranium-cli reflect --services ./server/lib/node/services.js\n');
       expect(output).toContain('no license header');
    });
 
@@ -662,10 +753,10 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      // 22 single-grammar files + two further grammars, their two serializers and
-      // the shared fragment.
-      expect(captured?.files).toHaveLength(27);
-      expect(lines.join('')).toContain('Scaffolded OrderFlow (27 files, heads: lsp,data, 3 grammar(s): Domain, Process, Layout)');
+      // 31 single-grammar files + two further grammars, their two serializers,
+      // the shared fragment and two starter files each.
+      expect(captured?.files).toHaveLength(40);
+      expect(lines.join('')).toContain('Scaffolded OrderFlow (40 files, heads: lsp,data, 3 grammar(s): Domain, Process, Layout)');
    });
 
    it('names the diagram grammar and the head set for a three-head scaffold', () => {
@@ -681,10 +772,11 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      // 27 multi-grammar files + the nine for the one diagram.
-      expect(captured?.files).toHaveLength(36);
+      // 40 multi-grammar files + the nine for the one diagram: seven in the
+      // server, its test, and its ids in protocol.
+      expect(captured?.files).toHaveLength(49);
       expect(lines.join('')).toContain(
-         'Scaffolded OrderFlow (36 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
+         'Scaffolded OrderFlow (49 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
       );
    });
 });
@@ -717,7 +809,7 @@ describe('planInitFiles with detected workspace facts', () => {
       // substring: a wrapped and an unwrapped import contain the same symbols,
       // so any `toContain` over them passes in both states.
       const importLines = (files: readonly InitFile[]): number =>
-         contentOf(files, 'src/glsp/bookstore/diagram-module.ts')
+         contentOf(files, 'server/src/glsp/bookstore/diagram-module.ts')
             .split('\n')
             .filter(line => line.startsWith('import') || line.startsWith('   ') || line.startsWith('} from')).length;
 
@@ -727,28 +819,39 @@ describe('planInitFiles with detected workspace facts', () => {
    it('falls back to the scaffold budget when the workspace pins no width', () => {
       // Byte-identical to an explicit 120, which is what "falls back" has to
       // mean; asserting merely that it renders would pass at any width.
-      expect(contentOf(plan({}), 'src/main.ts')).toBe(contentOf(plan({ printWidth: 120 }), 'src/main.ts'));
+      const main = contentOf(plan({}), 'server/src/main.ts');
+      expect(main).not.toBe('');
+      expect(main).toBe(contentOf(plan({ printWidth: 120 }), 'server/src/main.ts'));
    });
 
-   it('emits the Oxlint command in a migrated workspace', () => {
-      expect(contentOf(plan({ oxlintConfig: 'oxlint.config.cjs' }), 'package.json')).toContain(
-         '"lint": "oxlint --report-unused-disable-directives --format stylish --config ../../oxlint.config.cjs src test --max-warnings 0"'
+   it('emits the Oxlint command in a migrated workspace, from each member one level below the project', () => {
+      const files = plan({ oxlintConfig: 'oxlint.config.cjs' });
+      expect(contentOf(files, 'server/package.json')).toContain(
+         '"lint": "oxlint --report-unused-disable-directives --format stylish --config ../../../oxlint.config.cjs src test --max-warnings 0"'
+      );
+      expect(contentOf(files, 'protocol/package.json')).toContain(
+         '"lint": "oxlint --report-unused-disable-directives --format stylish --config ../../../oxlint.config.cjs src --max-warnings 0"'
       );
    });
 
    it('emits a lint script only where the workspace has an eslint config', () => {
-      expect(contentOf(plan({ eslintConfig: 'eslint.config.js' }), 'package.json')).toContain('"lint": "eslint src test --max-warnings 0"');
-      expect(contentOf(plan({}), 'package.json')).not.toContain('"lint"');
+      expect(contentOf(plan({ eslintConfig: 'eslint.config.js' }), 'server/package.json')).toContain(
+         '"lint": "eslint src test --max-warnings 0"'
+      );
+      const unlinted = plan({});
+      expect(contentOf(unlinted, 'server/package.json')).toContain('"scripts"');
+      expect(contentOf(unlinted, 'server/package.json')).not.toContain('"lint"');
+      expect(contentOf(unlinted, 'protocol/package.json')).not.toContain('"lint"');
    });
 
    const vitestOf = (files: readonly InitFile[]): string | undefined =>
-      (JSON.parse(contentOf(files, 'package.json')) as { devDependencies: Record<string, string> }).devDependencies.vitest;
+      (JSON.parse(contentOf(files, 'server/package.json')) as { devDependencies: Record<string, string> }).devDependencies.vitest;
 
    /** npm before 11.6 crashes on vitest 4.1's peer set during the first install. */
    it('holds vitest below 4.1 in a standalone project', () => {
       const standalone = planInitFiles(resolveInitComposition('Bookstore', undefined, ['lsp']));
       expect(vitestOf(standalone)).toBe('~4.0.18');
-      expect(contentOf(standalone, 'README.md')).toContain('`vitest` is held below 4.1');
+      expect(contentOf(standalone, 'server/README.md')).toContain('`vitest` is held below 4.1');
       expect(vitestOf(plan({}))).toBe('~4.0.18');
    });
 
@@ -773,7 +876,7 @@ describe('planInitFiles with detected workspace facts', () => {
    ])('emits vitest for a root declaring npm %s and init running under npm %s as %s', (packageManagerNpm, npmVersion, expected) => {
       const files = plan({ packageManagerNpm, npmVersion });
       expect(vitestOf(files)).toBe(expected);
-      expect(contentOf(files, 'README.md').includes('`vitest` is held below 4.1')).toBe(expected === '~4.0.18');
+      expect(contentOf(files, 'server/README.md').includes('`vitest` is held below 4.1')).toBe(expected === '~4.0.18');
    });
 
    it('inherits every option tsc reads case-insensitively, spelled in lowercase', () => {
@@ -787,7 +890,7 @@ describe('planInitFiles with detected workspace facts', () => {
             }
          })
       );
-      const options = Object.keys((JSON.parse(contentOf(files, 'tsconfig.json')) as { compilerOptions: object }).compilerOptions);
+      const options = Object.keys((JSON.parse(contentOf(files, 'server/tsconfig.json')) as { compilerOptions: object }).compilerOptions);
       expect(options.filter(option => ['target', 'lib', 'module', 'moduleResolution'].includes(option))).toEqual([]);
    });
 });
@@ -816,9 +919,9 @@ describe('runInit --monorepo into a yo langium root', () => {
    }
 
    it('inherits the options the root supplies, whatever case it spells them in', () => {
-      expect(scaffold().files.find(file => file.path === 'tsconfig.json')?.content).toBe(
+      expect(scaffold().files.find(file => file.path === 'server/tsconfig.json')?.content).toBe(
          `{
-  "extends": "../../tsconfig.json",
+  "extends": "../../../tsconfig.json",
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "lib",
@@ -829,20 +932,22 @@ describe('runInit --monorepo into a yo langium root', () => {
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true
   },
-  "include": ["src", "src/**/*.json"]
+  "include": ["src", "src/**/*.json"],
+  "references": [{ "path": "../protocol" }]
 }
 `
       );
    });
 
-   it('names the entry an enumerated workspaces list needs', () => {
-      expect(scaffold().output).toContain('"packages/my-lang"');
+   it('names an entry per package for an enumerated workspaces list', () => {
+      expect(scaffold().output).toContain('Add these to "workspaces"');
+      expect(scaffold().output).toContain('    "packages/my-lang/protocol",\n    "packages/my-lang/server"\n');
    });
 
    // The fixture's language package declares `langium ~4.4.0`, which an installed yo root holds at the top.
    it('names the exact pins the root has to declare to keep the shared copies at the top', () => {
       expect(scaffold().output).toContain(
-         "package.json, so another member's version of one cannot displace the copy this package shares with the framework:\n" +
+         "package.json, so another member's version of one cannot displace the copy these packages share with the framework:\n" +
             '    "langium": "4.3.1",\n' +
             '    "vscode-jsonrpc": "9.0.0",\n' +
             '    "vscode-languageserver": "10.0.1",\n' +
@@ -850,9 +955,11 @@ describe('runInit --monorepo into a yo langium root', () => {
       );
    });
 
-   it('adds the GLSP pins for the GLSP head, but no range', () => {
+   it('adds the GLSP pins for the GLSP head, the protocol member’s included, but no range', () => {
       const { output } = scaffold(['lsp', 'glsp']);
-      expect(output).toContain('    "@eclipse-glsp/graph": "2.7.0",\n    "@eclipse-glsp/server": "2.7.0",\n    "langium": "4.3.1",\n');
+      expect(output).toContain(
+         '    "@eclipse-glsp/graph": "2.7.0",\n    "@eclipse-glsp/protocol": "2.7.0",\n    "@eclipse-glsp/server": "2.7.0",\n    "langium": "4.3.1",\n'
+      );
       expect(output).not.toContain('inversify');
    });
 });
@@ -923,10 +1030,10 @@ describe('runInit --monorepo', () => {
     * A base config that happened to supply everything would show only the first.
     */
    it('extends the base config and keeps only the options it does not inherit', () => {
-      const tsconfig = contentOf(scaffold().files, 'tsconfig.json');
+      const tsconfig = contentOf(scaffold().files, 'server/tsconfig.json');
       expect(tsconfig).toBe(
          `{
-  "extends": "../../tsconfig.base.json",
+  "extends": "../../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "lib",
@@ -941,7 +1048,8 @@ describe('runInit --monorepo', () => {
     "emitDecoratorMetadata": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src", "src/**/*.json"]
+  "include": ["src", "src/**/*.json"],
+  "references": [{ "path": "../protocol" }]
 }
 `
       );
@@ -960,7 +1068,7 @@ describe('runInit --monorepo', () => {
    ])("takes the vitest range from the root's packageManager and the npm user agent %s", (userAgent, expected) => {
       vi.stubEnv('npm_config_user_agent', userAgent);
       try {
-         expect(contentOf(scaffold().files, 'package.json')).toContain('"vitest": "~4.0.18"');
+         expect(contentOf(scaffold().files, 'server/package.json')).toContain('"vitest": "~4.0.18"');
 
          const rootManifest = path.join(ROOT, 'package.json');
          const declaringNpm: Record<string, JsonValue> = {
@@ -978,7 +1086,7 @@ describe('runInit --monorepo', () => {
                captured = files;
             }
          });
-         expect(contentOf(captured, 'package.json')).toContain(`"vitest": "${expected}"`);
+         expect(contentOf(captured, 'server/package.json')).toContain(`"vitest": "${expected}"`);
       } finally {
          vi.unstubAllEnvs();
       }
@@ -986,18 +1094,22 @@ describe('runInit --monorepo', () => {
 
    it('writes the .gitignore a standalone project gets, whatever the root ignores', () => {
       const { files } = scaffold();
-      // Same file count as a standalone single-grammar scaffold.
-      expect(files).toHaveLength(22);
+      // A standalone scaffold's files, less the root it has no use for here.
+      expect(files).toHaveLength(29);
+      expect(contentOf(files, 'package.json')).toBeUndefined();
       const standalone = planInitFiles(resolveInitComposition('Bookstore', undefined, ['lsp']));
-      expect(contentOf(files, '.gitignore')).toBe(contentOf(standalone, '.gitignore'));
+      expect(contentOf(files, 'server/.gitignore')).toBe(contentOf(standalone, 'server/.gitignore'));
    });
 
-   it('scopes the package name and addresses itself by --prefix', () => {
-      const packageJson = contentOf(scaffold({ scope: '@acme' }).files, 'package.json');
-      expect(packageJson).toContain('"name": "@acme/bookstore"');
+   it('scopes every package name and addresses the server by --prefix', () => {
+      const { files } = scaffold({ scope: '@acme' });
+      const server = contentOf(files, 'server/package.json');
+      expect(server).toContain('"name": "@acme/bookstore-server"');
+      expect(server).toContain('"@acme/bookstore-protocol": "0.0.0"');
+      expect(contentOf(files, 'protocol/package.json')).toContain('"name": "@acme/bookstore-protocol"');
       // A workspace member's scripts get run from the repo root, where a bare
       // `npm run` would reach the ROOT manifest.
-      expect(packageJson).toContain('Run: npm --prefix packages/bookstore run generate:transfer-model');
+      expect(server).toContain('Run: npm --prefix packages/bookstore/server run generate:transfer-model');
    });
 
    /**
@@ -1006,14 +1118,19 @@ describe('runInit --monorepo', () => {
     * a public registry. Asserted in both directions because either alone passes
     * with the substitution stuck at one value.
     */
-   it('withholds publication by default and releases it only for --public', () => {
-      const byDefault = contentOf(scaffold().files, 'package.json');
-      expect(byDefault).toContain('"name": "bookstore"');
-      expect(byDefault).toContain('"private": true');
-      expect(byDefault).toContain('"license": "UNLICENSED"');
+   it('withholds publication by default and releases it only for --public, for every package', () => {
+      // Both or neither: a published server depending on an unpublished
+      // protocol member installs nowhere.
+      for (const member of ['server', 'protocol']) {
+         const byDefault = contentOf(scaffold().files, `${member}/package.json`);
+         expect(byDefault, member).toContain(`"name": "bookstore-${member}"`);
+         expect(byDefault, member).toContain('"private": true');
+         expect(byDefault, member).toContain('"license": "UNLICENSED"');
 
-      const published = contentOf(scaffold({ public: true }).files, 'package.json');
-      expect(published).not.toContain('"private"');
+         const published = contentOf(scaffold({ public: true }).files, `${member}/package.json`);
+         expect(published, member).toContain(`"name": "bookstore-${member}"`);
+         expect(published, member).not.toContain('"private"');
+      }
    });
 
    /**
@@ -1023,29 +1140,41 @@ describe('runInit --monorepo', () => {
     */
    it('suggests the siblings’ scope rather than adopting it', () => {
       const { files, output } = scaffold();
-      expect(contentOf(files, 'package.json')).toContain('"name": "bookstore"');
+      expect(contentOf(files, 'server/package.json')).toContain('"name": "bookstore-server"');
       expect(output).toContain('pass --scope @acme to match them');
    });
 
-   it('says the target is already covered, and still asks the root for its pins', () => {
-      const { output } = scaffold();
-      expect(output).toContain('Already covered by the "packages/*" workspaces entry.\n  Add these to "devDependencies"');
-      expect(output).not.toMatch(/no root manifest change/);
-   });
-
-   it('prints the workspaces entry to add when no glob reaches the target', () => {
+   it('says each package is already covered, and still asks the root for its pins', () => {
+      const rootManifest = path.join(ROOT, 'package.json');
+      const nested: Record<string, JsonValue> = { ...TREE, [rootManifest]: { name: 'repo-root', workspaces: ['packages/*/*'] } };
       const lines: string[] = [];
       runInit({
-         targetDir: path.join(ROOT, 'examples/bookstore'),
+         targetDir: TARGET,
          name: 'Bookstore',
          monorepo: true,
-         probe,
+         probe: { ...probe, readJson: filePath => nested[filePath] },
          write: line => lines.push(line),
          __writeFilesForTest: () => undefined
       });
       const output = lines.join('');
-      expect(output).toContain('Add this to "workspaces"');
-      expect(output).toContain('"examples/bookstore"');
+      expect(output).toContain(
+         '  packages/bookstore/protocol is already covered by the "packages/*/*" workspaces entry.\n' +
+            '  packages/bookstore/server is already covered by the "packages/*/*" workspaces entry.\n' +
+            '  Add these to "devDependencies"'
+      );
+      expect(output).not.toContain('to "workspaces"');
+   });
+
+   it('prints an entry per package when no glob reaches one level below the target', () => {
+      // `packages/*` reaches the project directory, which holds no package.
+      expect(scaffold().output).toContain('Add these to "workspaces"');
+      expect(scaffold().output).toContain('    "packages/bookstore/protocol",\n    "packages/bookstore/server"\n');
+   });
+
+   it('runs the next steps from the workspace root, naming the server by --prefix', () => {
+      const { output } = scaffold();
+      expect(output).toContain(`  cd ${ROOT}\n  npm install\n  npm --prefix packages/bookstore/server run build`);
+      expect(output).toContain('npx hydranium-cli reflect --services ./packages/bookstore/server/lib/node/services.js\n');
    });
 
    it('refuses --monorepo outside a workspace instead of quietly scaffolding standalone', () => {

@@ -7,6 +7,7 @@
   "license": "MIT",
   "workspaces": [
     "packages/*",
+    "examples/bookstore/protocol",
     "examples/bookstore/server",
     "examples/order-flow/browser",
     "examples/order-flow/client",

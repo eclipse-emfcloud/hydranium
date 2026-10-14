@@ -7,11 +7,12 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-// The starter create-node handler, run the way a client runs it: an in-process
-// GLSP server opens a document, a create-node operation adds a node, and an undo
-// and a redo take it out and put it back. Every step must keep the nodes the
-// document already had, and its comments: the diagram writes the document from
-// its AST, which carries none.
+// The starter diagram, run the way a client runs it: an in-process GLSP server
+// opens a document. A create-node operation adds a node, and an undo and a redo
+// take it out and put it back; every step must keep the nodes the document
+// already had, and its comments, since the diagram writes the document from its
+// AST, which carries none. A reference into another document draws no edge,
+// since the graph holds no node for its target.
 
 import 'reflect-metadata';
 import { type Action, CreateNodeOperation, RedoAction, ServerModule, SetDirtyStateAction, UndoAction } from '@eclipse-glsp/server';
@@ -20,11 +21,11 @@ import { makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/tes
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import { waitFor } from '@hydranium/protocol/testing';
+import { BOOKSTORE_DIAGRAM_TYPE, BOOKSTORE_NODE_TYPE } from '@hydranium/bookstore-protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BookstoreDiagramModule } from '../src/glsp/bookstore/diagram-module.js';
 import type { BookstoreGlspState } from '../src/glsp/bookstore/state.js';
-import { BOOKSTORE_DIAGRAM_TYPE, BOOKSTORE_NODE_TYPE } from '../src/glsp/bookstore/types.js';
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 let workspace: ScratchWorkspace | undefined;
 let diagram: GlspHarness<BookstoreGlspState> | undefined;
@@ -73,5 +74,25 @@ describe('Bookstore diagram', () => {
          undone: original,
          redone: `${original}\nnode Node`
       });
+   });
+
+   it('draws no edge for a reference that resolves into another document', async () => {
+      workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
+      workspace.write('declaring.bookstore', 'node second');
+      const file = workspace.write('referencing.bookstore', 'node first -> second');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      diagram = makeGlspHarness<BookstoreGlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
+         diagramType: BOOKSTORE_DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      await diagram.start();
+      await diagram.openDocument(file);
+
+      // The reference resolves, so the missing edge is the document rule and
+      // not a dangling reference.
+      expect(diagram.state.sourceRoot?.nodes[0].target?.ref?.name).toBe('second');
+      expect(diagram.state.root.children.map(child => child.type)).toEqual([BOOKSTORE_NODE_TYPE]);
    });
 });

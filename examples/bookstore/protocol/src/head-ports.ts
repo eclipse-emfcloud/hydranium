@@ -13,11 +13,10 @@
 // process serves every registered grammar, so a language-derived name would tie
 // a project-level endpoint to whichever grammar was scaffolded first.
 //
-// They live here rather than in `main.ts` because a host shell has to name the
-// same string to reach the head, and `main.ts` is an executable entry — nothing
-// can import from it. A shell that retypes the literal gets no error when it
-// drifts: the framework's port poll retries indefinitely by default. Import
-// these instead, and assert any host-side copy against them.
+// The server publishes them and a host shell has to name the same string to
+// reach the head; both import them from here. A shell that retypes the literal
+// gets no error when it drifts: the framework's port poll retries indefinitely
+// by default.
 
 /** LSP request the host queries to discover the data-server socket port. */
 export const BOOKSTORE_DATA_SERVER_PORT_COMMAND = 'bookstore/data-server/port';

@@ -46,8 +46,8 @@
  *
  * The two also differ in what a green verdict MEANS. `order-flow` is adapted
  * almost everywhere, so its value is that each divergence stays deliberate;
- * `bookstore` is `identical` everywhere but one file, so its value is that the
- * default scaffold is checked against a project that is really built, tested and
+ * `bookstore` is `identical` everywhere, so its value is that the default
+ * scaffold is checked against a project that is really built, tested and
  * linted in CI. That second claim is the one that decays if `bookstore` grows
  * hand-written additions — an adapted provenance target pins nothing.
  *
@@ -209,6 +209,23 @@ const ORDER_FLOW_INVOCATION: Invocation = {
  * flips, re-read the diff rather than the reason.
  */
 const ORDER_FLOW_MANIFEST: Manifest = {
+   // The shared package. What differs is the example's: its package metadata
+   // and GLSP dependency, a second port command for its hand-added GLSP head,
+   // and the diagram ids of its reconciling diagram.
+   'protocol/package.json': { verdict: 'adapted', reason: "the example's own name and metadata, and the GLSP head's dependency" },
+   'protocol/tsconfig.json': { verdict: 'identical', reason: 'the scaffold derives the extends and the pruned option set' },
+   'protocol/.gitignore': { verdict: 'dropped', reason: "the repo root's rules cover this example's lib/" },
+   'protocol/README.md': { verdict: 'adapted', reason: "rewritten as the example's map" },
+   'protocol/src/index.ts': { verdict: 'adapted', reason: "re-exports the example's diagram ids too" },
+   'protocol/src/head-ports.ts': { verdict: 'adapted', reason: 'adds the port command of the hand-added GLSP head' },
+   // The example's workspace holds real models over the three grammars, which
+   // its tests and every host open, in place of the starter files.
+   'workspace/nodes.domain': { verdict: 'dropped', reason: 'the workspace holds the real models instead' },
+   'workspace/references.domain': { verdict: 'dropped', reason: 'the workspace holds the real models instead' },
+   'workspace/nodes.process': { verdict: 'dropped', reason: 'the workspace holds the real models instead' },
+   'workspace/references.process': { verdict: 'dropped', reason: 'the workspace holds the real models instead' },
+   'workspace/nodes.layout': { verdict: 'dropped', reason: 'the workspace holds the real models instead' },
+   'workspace/references.layout': { verdict: 'dropped', reason: 'the workspace holds the real models instead' },
    // `--monorepo` derives the `--prefix` in the regen command. Everything else
    // that differs is either example-specific or a consequence of the hand-added
    // GLSP head, and there is a lot of it: the descriptive `example-` package
@@ -221,51 +238,68 @@ const ORDER_FLOW_MANIFEST: Manifest = {
    // reconciling diagram needs, and loosened `langium` / `langium-cli` ranges.
    // `"private": true` is NOT in that list: it is the scaffold's default, so the
    // example carrying it is derivation rather than adaptation.
-   'package.json': {
+   'server/package.json': {
       verdict: 'adapted',
       reason: "the example's own name and metadata, a second bin, extra scripts, and the GLSP head's dependencies"
    },
    // The repo root's rules cover this example's `lib/` and `syntaxes/`, so the
    // scaffold's `.gitignore` is recorded as dropped rather than added; the root
    // patterns have to stay, since they are what covers this example.
-   '.gitignore': { verdict: 'dropped', reason: "the repo root's rules cover this example's lib/ and syntaxes/" },
+   'server/.gitignore': { verdict: 'dropped', reason: "the repo root's rules cover this example's lib/ and syntaxes/" },
    // The recorded invocation emits exactly the three language entries, ids,
    // extensions and TextMate paths the example has — the gate's strongest claim.
-   'langium-config.json': { verdict: 'identical', reason: 'the scaffold emits all three language entries' },
-   // `--monorepo` derives the `extends` and the pruned option set; the example
-   // adds a project reference to the protocol member, so `tsc -b` rebuilds it
-   // after `generate` rewrites its sources.
-   'tsconfig.json': { verdict: 'adapted', reason: 'references the protocol member, which the build regenerates and rebuilds' },
-   'tsconfig.test.json': { verdict: 'identical', reason: 'the scaffold emits isolatedModules too' },
-   'test/tsconfig.json': { verdict: 'adapted', reason: 'carries the comment its sibling packages carry' },
-   'vitest.config.ts': { verdict: 'adapted', reason: "uses the repo's shared vitest config" },
-   'README.md': { verdict: 'adapted', reason: "rewritten as the example's map" },
+   'server/langium-config.json': { verdict: 'identical', reason: 'the scaffold emits all three language entries' },
+   // `--monorepo` derives the `extends` and the pruned option set, and the
+   // scaffold references the protocol member as the example does.
+   'server/tsconfig.json': { verdict: 'identical', reason: 'the derived extends and options, and the reference to protocol' },
+   'server/tsconfig.test.json': { verdict: 'identical', reason: 'the scaffold emits isolatedModules too' },
+   'server/test/tsconfig.json': { verdict: 'adapted', reason: 'carries the comment its sibling packages carry' },
+   'server/vitest.config.ts': { verdict: 'adapted', reason: "uses the repo's shared vitest config" },
+   'server/README.md': { verdict: 'adapted', reason: "rewritten as the example's map" },
    // The scaffold emits these paths itself, so each entry is a plain 'adapted'.
-   'src/grammar/domain.langium': { verdict: 'adapted', reason: 'the real grammar, replacing the starter one' },
-   'src/grammar/process.langium': { verdict: 'adapted', reason: 'the real grammar, replacing the starter one' },
-   'src/grammar/layout.langium': { verdict: 'adapted', reason: 'the real grammar, replacing the starter one' },
+   'server/src/grammar/domain.langium': { verdict: 'adapted', reason: 'the real grammar, replacing the starter one' },
+   'server/src/grammar/process.langium': { verdict: 'adapted', reason: 'the real grammar, replacing the starter one' },
+   'server/src/grammar/layout.langium': { verdict: 'adapted', reason: 'the real grammar, replacing the starter one' },
    // The THINNEST 'adapted' in either manifest, and worth knowing as such: the
    // example's token set is exactly the scaffold's four, so what differs is the
    // prose comment and the `ML_COMMENT` / `SL_COMMENT` order. The grammars' own
    // terminals live with them — `NUMBER` is declared in `layout.langium`. A
    // comment tidy here therefore flips the verdict, which is the gate working
    // rather than a false alarm, but only if this line says what the diff is.
-   'src/grammar/common.langium': { verdict: 'adapted', reason: 'a fragment-specific comment, and the two comment terminals reordered' },
-   'src/language-server/order-flow-module.ts': { verdict: 'adapted', reason: 'composes every language of the project' },
-   'src/language-server/ast.ts': { verdict: 'adapted', reason: 'adds the cross-grammar computed-property augmentations' },
+   'server/src/grammar/common.langium': {
+      verdict: 'adapted',
+      reason: 'a fragment-specific comment, and the two comment terminals reordered'
+   },
+   'server/src/language-server/order-flow-module.ts': { verdict: 'adapted', reason: 'composes every language of the project' },
+   'server/src/language-server/ast.ts': { verdict: 'adapted', reason: 'adds the cross-grammar computed-property augmentations' },
    // The scaffold emits these three paths and the example has all three at
    // exactly them, so each entry is a plain 'adapted' over the real syntax.
-   'src/language-server/domain-serializer.ts': { verdict: 'adapted', reason: "emits the real grammar's syntax, not the starter one" },
-   'src/language-server/process-serializer.ts': { verdict: 'adapted', reason: "emits the real grammar's syntax, not the starter one" },
-   'src/language-server/layout-serializer.ts': { verdict: 'adapted', reason: "emits the real grammar's syntax, not the starter one" },
-   'src/index.ts': { verdict: 'adapted', reason: "widened to the example's own surface" },
-   'src/services.ts': { verdict: 'identical', reason: 'the contract is language-count-agnostic' },
+   'server/src/language-server/domain-serializer.ts': {
+      verdict: 'adapted',
+      reason: "emits the real grammar's syntax, not the starter one"
+   },
+   'server/src/language-server/process-serializer.ts': {
+      verdict: 'adapted',
+      reason: "emits the real grammar's syntax, not the starter one"
+   },
+   'server/src/language-server/layout-serializer.ts': {
+      verdict: 'adapted',
+      reason: "emits the real grammar's syntax, not the starter one"
+   },
+   'server/src/index.ts': { verdict: 'adapted', reason: "widened to the example's own surface" },
+   // At the package root rather than behind `./node`: the example's tooling,
+   // tests and docs name `lib/services.js`.
+   'server/src/node/services.ts': {
+      verdict: 'replaced',
+      by: 'server/src/services.ts',
+      reason: 'kept at the root path its tooling and docs name'
+   },
    // The difference is the GLSP head: `init` can scaffold one, but on the
    // FULL-TEXT strategy, and this example's diagram is the reconciling
    // multi-document one — a different set of classes, not a customisation of
    // the scaffolded set. So the recorded invocation stays at the default heads,
    // and the GLSP template path is pinned by the `bookstore` target instead.
-   'src/main.ts': {
+   'server/src/main.ts': {
       verdict: 'adapted',
       reason:
          'adds the GLSP head, which this example wires on the reconciling strategy, and imports the port commands and transfer types from the protocol member'
@@ -275,42 +309,44 @@ const ORDER_FLOW_MANIFEST: Manifest = {
    // reason one data server carries every registered language, and the import
    // itself, which reads the protocol member. A template cannot say the first,
    // and it is the sentence the example exists to make.
-   'src/data-server-main.ts': {
+   'server/src/data-server-main.ts': {
       verdict: 'adapted',
       reason: "the transfer-import comment naming this project's third grammar, and the transfer types read from the protocol member"
    },
-   'src/head-ports.ts': { verdict: 'dropped', reason: 'moved to the protocol member, which every host imports instead of the server' },
    // NOT "the scaffolded test asserts one language" — rendered at THIS
    // three-grammar invocation it already asserts all three, being deliberately
    // grammar-agnostic. What the successor adds is the multi-grammar composition
    // itself: shared-tier identity, per-extension routing, per-language
    // serializers, the scope-provider overrides and the explicit
    // `lsp.configurationRoot` — none of which a one-language scaffold has to say.
-   'test/services.test.ts': {
+   'server/test/services.test.ts': {
       verdict: 'replaced',
-      by: 'test/composition.test.ts',
+      by: 'server/test/composition.test.ts',
       reason: 'widened from "the languages are registered" to what composing several of them into one shared tier means'
    },
    // The scaffolded round-trip covers one grammar per suite over the starter
    // syntax; the successor covers three real ones, and its golden sibling pins
    // the emitted text of a whole workspace rather than of one parsed string.
-   'test/serialization.test.ts': {
+   'server/test/serialization.test.ts': {
       verdict: 'replaced',
-      by: 'test/serializer.test.ts',
+      by: 'server/test/serializer.test.ts',
       reason: 'widened to the three real grammars, with a workspace-wide golden beside it'
    },
    // This example asserts all three tiers, but over the real grammars and from
    // suites organised by SUBJECT rather than by tier — the scaffold's split is
    // for a reader with one grammar and no tests yet.
-   'test/parsing.test.ts': { verdict: 'dropped', reason: 'the real grammars are parsed by every suite that loads the workspace fixture' },
-   'test/linking.test.ts': {
+   'server/test/parsing.test.ts': {
+      verdict: 'dropped',
+      reason: 'the real grammars are parsed by every suite that loads the workspace fixture'
+   },
+   'server/test/linking.test.ts': {
       verdict: 'replaced',
-      by: 'test/project-visibility.test.ts',
+      by: 'server/test/project-visibility.test.ts',
       reason: 'widened from "a reference resolves" to which tier exports it and who can see it across projects'
    },
-   'test/validating.test.ts': {
+   'server/test/validating.test.ts': {
       verdict: 'replaced',
-      by: 'test/process-transition-rules.test.ts',
+      by: 'server/test/process-transition-rules.test.ts',
       reason: 'the example binds real checks, so it asserts those rather than the framework linker diagnostics'
    }
 };
@@ -325,6 +361,10 @@ const ORDER_FLOW_MANIFEST: Manifest = {
  * marks the lone grammar when the head set includes `glsp`, so re-deriving the
  * composition here reproduces it without the flag.
  *
+ * `--scope @hydranium` is what lets every package name be the scaffold's own:
+ * the in-repo `example-` prefix other examples carry is a convention no check
+ * enforces, and taking the emitted name instead leaves no file to adapt.
+ *
  * `"private": true` is likewise not a field: the scaffold emits it unless
  * `--public` asks otherwise, so the example carries it by derivation.
  */
@@ -332,107 +372,112 @@ const BOOKSTORE_INVOCATION: Invocation = {
    name: 'Bookstore',
    grammars: [{ name: 'Bookstore' }],
    heads: ['lsp', 'data', 'glsp'],
-   monorepo: true
+   monorepo: true,
+   scope: '@hydranium'
 };
 
 /**
  * Per-emitted-path provenance for `bookstore`.
  *
- * Everything is `identical` but one file, and that is the point of the example
- * rather than an accident of its youth: it exists to be REGENERABLE from one
- * `init` invocation plus its grammar, so any second `adapted` line here is a
- * reason to reconsider the addition, not a line to add.
+ * Everything is `identical`, and that is the point of the example rather than
+ * an accident of its youth: it exists to be REGENERABLE from one `init`
+ * invocation plus its grammar, so any `adapted` line here is a reason to
+ * reconsider the addition, not a line to add.
  */
 const BOOKSTORE_MANIFEST: Manifest = {
-   // The ONE thing an in-repo example cannot take verbatim: sibling examples are
-   // `@hydranium/example-<example>-<host>` and the scaffold emits a bare project
-   // id, which no detection can supply because it encodes a convention rather
-   // than a fact about the tree. The `lint` script used to be the second entry
-   // here and is now emitted, the scaffold having learnt to read the root eslint
-   // config — the manifest shrinking is the gate reporting a template gain.
-   // Naming that one field is what keeps every other field compared: an
-   // `adapted` entry with no `exempt` list waives the whole file, and a package
-   // manifest is where a template gain goes unnoticed longest.
-   'package.json': { verdict: 'adapted', exempt: ['name'], reason: 'the in-repo example package name' },
+   'protocol/package.json': { verdict: 'identical', reason: 'the scaffold names it under the recorded scope' },
+   'protocol/tsconfig.json': { verdict: 'identical', reason: 'the scaffold derives the extends and the pruned option set' },
+   // The repo root covers `lib/` too; the overlap is inert, git ignore rules being additive.
+   'protocol/.gitignore': { verdict: 'identical', reason: "the scaffold's ignore file, which a member writes too" },
+   'protocol/README.md': { verdict: 'identical', reason: 'the scaffold README for the shared package' },
+   'protocol/src/index.ts': { verdict: 'identical', reason: 'the scaffolded barrel' },
+   'protocol/src/head-ports.ts': { verdict: 'identical', reason: 'both socket-head port commands, as emitted' },
+   'protocol/src/bookstore-diagram-types.ts': { verdict: 'identical', reason: 'the emitted diagram type ids' },
+   'server/package.json': { verdict: 'identical', reason: 'the scaffold names it under the recorded scope' },
    // The scaffold's rules. This repo's root covers them all too, so bookstore is
    // ignored twice; the overlap is inert (git ignore rules are additive) and the
    // root patterns have to stay for `order-flow`, which has no `.gitignore` of
    // its own.
-   '.gitignore': { verdict: 'identical', reason: "the scaffold's ignore file, which a member writes too" },
-   'langium-config.json': { verdict: 'identical', reason: 'one language, derived from --name' },
-   'tsconfig.json': { verdict: 'identical', reason: 'the scaffold derives the extends and the pruned option set' },
-   'tsconfig.test.json': { verdict: 'identical', reason: 'the scaffold emits isolatedModules too' },
-   'test/tsconfig.json': { verdict: 'identical', reason: 'the test tree owning its files, as emitted' },
+   'server/.gitignore': { verdict: 'identical', reason: "the scaffold's ignore file, which a member writes too" },
+   'server/langium-config.json': { verdict: 'identical', reason: 'one language, derived from --name' },
+   'server/tsconfig.json': { verdict: 'identical', reason: 'the scaffold derives the extends, the pruned option set and the reference' },
+   'server/tsconfig.test.json': { verdict: 'identical', reason: 'the scaffold emits isolatedModules too' },
+   'server/test/tsconfig.json': { verdict: 'identical', reason: 'the test tree owning its files, as emitted' },
    // Deliberately NOT switched to the repo's shared vitest helper, unlike
    // order-flow's: a provenance target that has been adapted pins nothing, and
    // this is the only target pinning the scaffold's own self-contained config.
-   'vitest.config.ts': { verdict: 'identical', reason: "the scaffold's own config, kept rather than shared" },
-   'README.md': { verdict: 'identical', reason: 'the scaffold README, with the example prose in examples/bookstore/README.md' },
-   'src/grammar/bookstore.langium': { verdict: 'identical', reason: 'the starter grammar, which is what this example is' },
-   'src/language-server/bookstore-module.ts': { verdict: 'identical', reason: 'the single-grammar composition, unmodified' },
-   'src/language-server/ast.ts': { verdict: 'identical', reason: 'no AST augmentation — the framework defaults are the point' },
-   'src/language-server/bookstore-serializer.ts': {
+   'server/vitest.config.ts': { verdict: 'identical', reason: "the scaffold's own config, kept rather than shared" },
+   'server/README.md': { verdict: 'identical', reason: 'the scaffold README, with the example prose in examples/bookstore/README.md' },
+   'server/src/grammar/bookstore.langium': { verdict: 'identical', reason: 'the starter grammar, which is what this example is' },
+   'server/src/language-server/bookstore-module.ts': { verdict: 'identical', reason: 'the single-grammar composition, unmodified' },
+   'server/src/language-server/ast.ts': { verdict: 'identical', reason: 'no AST augmentation — the framework defaults are the point' },
+   'server/src/language-server/bookstore-serializer.ts': {
       verdict: 'identical',
       reason: 'the emitted concrete-syntax emitter for the starter grammar'
    },
-   'src/index.ts': { verdict: 'identical', reason: 'the scaffolded public surface' },
-   'src/services.ts': { verdict: 'identical', reason: 'the contract is language-count-agnostic' },
-   'src/main.ts': { verdict: 'identical', reason: 'all three heads in one process, as emitted' },
+   'server/src/index.ts': { verdict: 'identical', reason: 'the scaffolded public surface' },
+   'server/src/node/services.ts': { verdict: 'identical', reason: 'the contract is language-count-agnostic' },
+   'server/src/main.ts': { verdict: 'identical', reason: 'all three heads in one process, as emitted' },
    // The only in-repo target pinning this entry as EMITTED rather than adapted,
    // which is what makes it evidence that a scaffolded project can be reached by
    // the data-server subcommands of `hydranium-cli` with no hand edits.
-   'src/data-server-main.ts': { verdict: 'identical', reason: 'the stdio data head the CLI subcommands spawn, as emitted' },
-   'src/head-ports.ts': { verdict: 'identical', reason: 'both socket-head port commands, as emitted' },
+   'server/src/data-server-main.ts': { verdict: 'identical', reason: 'the stdio data head the CLI subcommands spawn, as emitted' },
    // The diagram files, the starter operation handler and the test that runs it.
    // These are the reason this target exists: nothing else in the repo executes them.
-   'src/glsp/bookstore/types.ts': { verdict: 'identical', reason: 'the emitted diagram type ids' },
-   'src/glsp/bookstore/state.ts': { verdict: 'identical', reason: 'the emitted full-text state' },
-   'src/glsp/bookstore/storage.ts': { verdict: 'identical', reason: 'the emitted storage subclass' },
-   'src/glsp/bookstore/submission-handler.ts': { verdict: 'identical', reason: 'the emitted submission handler' },
-   'src/glsp/bookstore/gmodel-factory.ts': { verdict: 'identical', reason: 'the emitted AST→GModel walk' },
-   'src/glsp/bookstore/diagram-configuration.ts': { verdict: 'identical', reason: 'the emitted type hints' },
-   'src/glsp/bookstore/create-node-operation-handler.ts': { verdict: 'identical', reason: 'the emitted starter operation handler' },
-   'src/glsp/bookstore/diagram-module.ts': { verdict: 'identical', reason: 'the emitted diagram DI wiring' },
-   'test/bookstore-diagram.test.ts': {
+   'server/src/glsp/bookstore/state.ts': { verdict: 'identical', reason: 'the emitted full-text state' },
+   'server/src/glsp/bookstore/storage.ts': { verdict: 'identical', reason: 'the emitted storage subclass' },
+   'server/src/glsp/bookstore/submission-handler.ts': { verdict: 'identical', reason: 'the emitted submission handler' },
+   'server/src/glsp/bookstore/gmodel-factory.ts': { verdict: 'identical', reason: 'the emitted AST→GModel walk' },
+   'server/src/glsp/bookstore/diagram-configuration.ts': { verdict: 'identical', reason: 'the emitted type hints' },
+   'server/src/glsp/bookstore/create-node-operation-handler.ts': { verdict: 'identical', reason: 'the emitted starter operation handler' },
+   'server/src/glsp/bookstore/diagram-module.ts': { verdict: 'identical', reason: 'the emitted diagram DI wiring' },
+   'server/test/bookstore-diagram.test.ts': {
       verdict: 'identical',
       reason: 'the scaffolded diagram test, which runs the starter operation handler through an in-process GLSP server'
    },
-   'test/services.test.ts': { verdict: 'identical', reason: 'the scaffolded composition test, which is the one this example needs' },
+   'server/test/services.test.ts': { verdict: 'identical', reason: 'the scaffolded composition test, which is the one this example needs' },
    // The only tier in this repo that runs a SCAFFOLDED serializer against a real
    // parse rather than a golden or a typecheck.
-   'test/serialization.test.ts': { verdict: 'identical', reason: 'the scaffolded round-trip test, over the grammar it was emitted from' },
+   'server/test/serialization.test.ts': {
+      verdict: 'identical',
+      reason: 'the scaffolded round-trip test, over the grammar it was emitted from'
+   },
    // The three tiers `generator-langium` also scaffolds. Together with the two
    // above, this is the only place a SCAFFOLDED language is really parsed,
    // linked and validated rather than golden-compared or typechecked.
-   'test/parsing.test.ts': { verdict: 'identical', reason: 'the scaffolded parse tier, over the starter rules' },
-   'test/linking.test.ts': { verdict: 'identical', reason: 'the scaffolded link tier, including the cross-document half' },
-   'test/validating.test.ts': {
+   'server/test/parsing.test.ts': { verdict: 'identical', reason: 'the scaffolded parse tier, over the starter rules' },
+   'server/test/linking.test.ts': { verdict: 'identical', reason: 'the scaffolded link tier, including the cross-document half' },
+   'server/test/validating.test.ts': {
       verdict: 'identical',
       reason: "the scaffolded validation tier, over the framework's own linker diagnostics"
-   }
+   },
+   'workspace/nodes.bookstore': { verdict: 'identical', reason: 'the starter model every host and the CLI open' },
+   'workspace/references.bookstore': { verdict: 'identical', reason: 'the starter model referencing the other file' }
 };
 
 /**
  * The examples whose `init` provenance is checked, and the invocation each
  * records.
  *
- * `table` is the document a failure sends the reader to, and it is NOT always
- * the scaffolded package: bookstore's own README is the scaffold's, unedited
- * (that is the point of it), so its provenance table lives one directory up.
- * Naming it per target rather than deriving it from `dir` is what keeps the
- * failure message from pointing at a file with no table in it.
+ * `dir` is the project directory `init` was pointed at, which holds one
+ * package per member; the manifest keys carry the member's directory.
+ *
+ * `table` is the document a failure sends the reader to, and it is not derived
+ * from `dir`: bookstore's member READMEs are the scaffold's, unedited (that is
+ * the point of it), so its provenance table lives in the project's own README,
+ * while order-flow keeps its table beside its server.
  */
 const TARGETS: ProvenanceTarget[] = [
    {
       label: 'order-flow',
-      dir: 'examples/order-flow/server',
+      dir: 'examples/order-flow',
       table: 'examples/order-flow/server/README.md',
       invocation: ORDER_FLOW_INVOCATION,
       manifest: ORDER_FLOW_MANIFEST
    },
    {
       label: 'bookstore',
-      dir: 'examples/bookstore/server',
+      dir: 'examples/bookstore',
       table: 'examples/bookstore/README.md',
       invocation: BOOKSTORE_INVOCATION,
       manifest: BOOKSTORE_MANIFEST
@@ -545,6 +590,7 @@ function writeTarget(init: InitModule, target: ScaffoldTarget): string[] {
       // `header + content` would bury it on line 10 and leave the linked binary
       // being read by the shell.
       const emitted = splitShebang(content);
+      mkdirSync(dirname(absolute), { recursive: true });
       writeFileSync(absolute, emitted.shebang + header + emitted.body);
       written.push(file.path);
    }
@@ -740,6 +786,13 @@ const SCAFFOLD_PIN_SOURCES: Record<string, PinSource> = {
    // the framework as a transitive of `server` — and the GLSP packages ship as
    // one release line, so `server` is the version it has to track.
    '@eclipse-glsp/graph': { file: 'packages/glsp-server/package.json', path: ['devDependencies', '@eclipse-glsp/server'], rule: 'exact' },
+   // The protocol member's, for the diagram ids: the same release line, and the
+   // framework reaches it through `server`'s re-exports.
+   '@eclipse-glsp/protocol': {
+      file: 'packages/glsp-server/package.json',
+      path: ['devDependencies', '@eclipse-glsp/server'],
+      rule: 'exact'
+   },
    'reflect-metadata': { file: 'packages/glsp-server/package.json', path: ['devDependencies', 'reflect-metadata'], rule: 'tilde' },
    // Ranged rather than pinned on purpose: `@eclipse-glsp/server` sets the floor
    // through its own peer requirement, so a scaffold pinning the framework's
@@ -906,20 +959,42 @@ function comparePins(emitted: Record<string, string | undefined>, sources: Recor
 }
 
 /**
- * Every version the scaffold emits, at the head set that carries all of them.
- * Placed as a member of this repository under {@link DECLARED_NPM}: a
- * standalone scaffold holds `vitest` below the version the root declares, for
- * an npm older than the root's.
+ * Every version the scaffold emits, across its packages, at the head set that
+ * carries all of them. Placed as a member of this repository under
+ * {@link DECLARED_NPM}: a standalone scaffold holds `vitest` below the version
+ * the root declares, for an npm older than the root's.
+ *
+ * A package's pin on a sibling package is left out: it names a version of the
+ * scaffold's own, which no manifest of this repo could declare.
  */
 function emittedPins(init: InitModule): Record<string, string> {
    const packaging = init.resolveInitPackaging(join(REPO_ROOT, 'examples/pin-probe'), { monorepo: true, npmVersion: DECLARED_NPM });
    const composition = init.resolveInitComposition('PinProbe', undefined, ['lsp', 'data', 'glsp'], packaging);
-   const content = init.planInitFiles(composition).find(file => file.path === 'package.json')?.content;
-   if (content === undefined) {
-      throw new Error('the scaffold emitted no package.json, so its pins cannot be checked');
+   const manifests = init
+      .planInitFiles(composition)
+      .filter(file => file.path.endsWith('/package.json'))
+      .map(
+         file =>
+            JSON.parse(file.content) as { name: string; dependencies?: Record<string, string>; devDependencies?: Record<string, string> }
+      );
+   if (manifests.length === 0) {
+      throw new Error('the scaffold emitted no package manifest, so its pins cannot be checked');
    }
-   const manifest = JSON.parse(content) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-   return { ...manifest.dependencies, ...manifest.devDependencies };
+   const siblings = new Set(manifests.map(manifest => manifest.name));
+   const pins: Record<string, string> = {};
+   for (const manifest of manifests) {
+      for (const [name, pin] of Object.entries({ ...manifest.dependencies, ...manifest.devDependencies })) {
+         if (siblings.has(name)) {
+            continue;
+         }
+         // One record for every manifest, so a pin two members disagree on would otherwise keep only the last.
+         if (pins[name] !== undefined && pins[name] !== pin) {
+            throw new Error(`the scaffold pins ${name} at both ${pins[name]} and ${pin}; its manifests must agree`);
+         }
+         pins[name] = pin;
+      }
+   }
+   return pins;
 }
 
 /**
@@ -1079,14 +1154,14 @@ function selfTestWriteRestriction(init: InitModule): string[] {
    // exact shape so the fixture exercises the real slice rather than a near-miss.
    const paddedHeader = header.split('\n').slice(0, 5).concat([' *', ' *', ' */', '']).join('\n');
 
-   const identicalPath = join('src', 'language-server', 'bookstore-serializer.ts');
-   const headeredPath = join('src', 'language-server', 'ast.ts');
+   const identicalPath = join('server', 'src', 'language-server', 'bookstore-serializer.ts');
+   const headeredPath = join('server', 'src', 'language-server', 'ast.ts');
    // The emitted `bin` entry, which is the one file that carries a shebang.
-   const shebangPath = join('src', 'main.ts');
-   const adaptedPath = 'package.json';
+   const shebangPath = join('server', 'src', 'main.ts');
+   const adaptedPath = 'server/package.json';
 
    rmSync(dir, { recursive: true, force: true });
-   mkdirSync(join(dir, 'src', 'language-server'), { recursive: true });
+   mkdirSync(join(dir, 'server', 'src', 'language-server'), { recursive: true });
    writeFileSync(join(dir, identicalPath), SENTINEL);
    writeFileSync(join(dir, headeredPath), paddedHeader + SENTINEL);
    writeFileSync(join(dir, shebangPath), paddedHeader + SENTINEL);

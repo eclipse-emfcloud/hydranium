@@ -71,26 +71,26 @@ generated separately, is in
 It starts from one `init` invocation:
 
 ```bash
-hydranium-cli init examples/order-flow/server --name OrderFlow \
+hydranium-cli init examples/order-flow --name OrderFlow \
   --grammar Domain --grammar Process --grammar Layout --monorepo
 ```
 
 `--name` names the project and its shared tier; each `--grammar` adds one
 language, and its id, extension, grammar file and entry rule follow from the
-names. `--monorepo` makes `tsconfig.json` extend the root config that carries
-`compilerOptions` and addresses the package by `--prefix` in the regen
-command. The GLSP head is left out on purpose: `init` scaffolds the full-text
-diagram strategy, and this example runs the reconciling multi-document one, a
-different set of classes.
+names. `--monorepo` makes each package's `tsconfig.json` extend the root config
+that carries `compilerOptions` and addresses this package by `--prefix` in the
+regen command. The GLSP head is left out on purpose: `init` scaffolds the
+full-text diagram strategy, and this example runs the reconciling
+multi-document one, a different set of classes.
 
-What happened to each file `init` emits:
+What happened to each file `init` emits, here and in the protocol package:
 
 | Verdict | Files |
 | --- | --- |
-| identical | `langium-config.json`, `tsconfig.test.json`, `src/services.ts` |
-| adapted | `package.json`, `tsconfig.json` (references the protocol member), `vitest.config.ts`, `test/tsconfig.json` (adds the comment), `README.md`, `src/index.ts`, `src/main.ts` (adds the GLSP head), `src/data-server-main.ts`, the four `src/grammar/*.langium`, `order-flow-module.ts`, `ast.ts` and the three serializers |
-| replaced | the scaffolded `services`, `serialization`, `linking` and `validating` tests, by `composition`, `serializer`, `project-visibility` and `process-transition-rules` |
-| dropped | `.gitignore` (the repo root's rules cover `lib/` and `syntaxes/`), `test/parsing.test.ts`, `src/head-ports.ts` (moved to `order-flow-protocol`) |
+| identical | `langium-config.json`, `tsconfig.json`, `tsconfig.test.json`, and the protocol package's `tsconfig.json` |
+| adapted | `package.json`, `vitest.config.ts`, `test/tsconfig.json` (adds the comment), `README.md`, `src/index.ts`, `src/main.ts` (adds the GLSP head), `src/data-server-main.ts`, the four `src/grammar/*.langium`, `order-flow-module.ts`, `ast.ts` and the three serializers; in the protocol package, `package.json`, `README.md`, `src/index.ts` and `src/head-ports.ts` (adds the GLSP port command) |
+| replaced | `src/node/services.ts`, by `src/services.ts` (the path the example's tooling names); the scaffolded `services`, `serialization`, `linking` and `validating` tests, by `composition`, `serializer`, `project-visibility` and `process-transition-rules` |
+| dropped | `.gitignore` and the protocol package's (the repo root's rules cover `lib/` and `syntaxes/`), `test/parsing.test.ts`, the starter `workspace/` files (the workspace holds the real models) |
 | hand-written | everything else in `src/`, `scripts/` and `test/`, including the whole GLSP head |
 | generated, committed | `src/language-server/generated/**`, `src/language-server/generated-hydranium/**`, and the protocol package's `generated-hydranium/**` |
 

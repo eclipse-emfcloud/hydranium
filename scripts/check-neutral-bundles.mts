@@ -222,6 +222,20 @@ const TARGETS = [
       name: 'order-flow-protocol',
       entry: 'examples/order-flow/protocol/lib/index.js',
       resolvePackages: []
+   },
+   // What `init` emits, as the bookstore holds it: the server's root, which a
+   // browser worker imports to host the heads, and its protocol package. The
+   // server root reaches GLSP through its diagram module, so it resolves
+   // `@eclipse-glsp/server` for the reason the framework's GLSP entry does.
+   {
+      name: 'bookstore-server',
+      entry: 'examples/bookstore/server/lib/index.js',
+      resolvePackages: ['@eclipse-glsp/server']
+   },
+   {
+      name: 'bookstore-protocol',
+      entry: 'examples/bookstore/protocol/lib/index.js',
+      resolvePackages: []
    }
 ];
 

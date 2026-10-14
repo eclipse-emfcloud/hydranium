@@ -18,7 +18,7 @@ import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 import { AstUtils } from '@hydranium/langium';
 import type { BookstoreModel } from '../src/language-server/ast.js';
-import { createServices } from '../src/services.js';
+import { createServices } from '../src/node/services.js';
 
 describe('Bookstore linking', () => {
    it('resolves a reference within one document', async () => {

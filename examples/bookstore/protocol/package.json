@@ -1,0 +1,31 @@
+{
+  "name": "@hydranium/bookstore-protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "What the Bookstore language server and its clients share: language ids, wire types and diagram ids.",
+  "license": "UNLICENSED",
+  "author": "",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "scripts": {
+    "build": "npm --prefix ../server run generate && tsc -b",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "lint": "oxlint --report-unused-disable-directives --format stylish --config ../../../oxlint.config.cjs src --max-warnings 0",
+    "watch": "tsc -b --watch"
+  },
+  "dependencies": {
+    "@eclipse-glsp/protocol": "2.7.0"
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
