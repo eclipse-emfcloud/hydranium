@@ -38,6 +38,7 @@ import {
    GLSPActionDispatcher,
    GLSPHiddenBoundsUpdater,
    initializeDiagramContainer,
+   RankedSelectMouseListener,
    StatusOverlay,
    TYPES
 } from '@eclipse-glsp/client';
@@ -87,6 +88,7 @@ function makeContainer(): Container {
       DiagramLoader,
       GLSPHiddenBoundsUpdater,
       StatusOverlay,
+      RankedSelectMouseListener,
       TYPES.ILogger,
       TheiaGLSPMessageService
    ];

@@ -14,6 +14,7 @@ import {
    GLSPActionDispatcher,
    GLSPHiddenBoundsUpdater,
    initializeDiagramContainer,
+   RankedSelectMouseListener,
    StatusOverlay,
    TYPES
 } from '@eclipse-glsp/client';
@@ -25,6 +26,7 @@ import { HydraniumGlspActionDispatcher } from '../src/action-dispatcher';
 import { HydraniumDiagramLoader } from '../src/diagram-loader';
 import { createGlspClientModule } from '../src/glsp-client-module';
 import { HydraniumHiddenBoundsUpdater } from '../src/hidden-bounds-updater';
+import { HydraniumSelectMouseListener } from '../src/select-mouse-listener';
 import { SprottyLoggerAdapter } from '../src/sprotty-logger-adapter';
 import { HydraniumStatusOverlay } from '../src/status-overlay';
 import { HydraniumClientTypes } from '../src/types';
@@ -59,6 +61,7 @@ describe('createGlspClientModule in a GLSP container', () => {
       expect(container.get(DiagramLoader)).toBeInstanceOf(HydraniumDiagramLoader);
       expect(container.get(GLSPHiddenBoundsUpdater)).toBeInstanceOf(HydraniumHiddenBoundsUpdater);
       expect(container.get(StatusOverlay)).toBeInstanceOf(HydraniumStatusOverlay);
+      expect(container.get(RankedSelectMouseListener)).toBeInstanceOf(HydraniumSelectMouseListener);
       expect(container.get(TYPES.ILogger)).toBeInstanceOf(SprottyLoggerAdapter);
    });
 

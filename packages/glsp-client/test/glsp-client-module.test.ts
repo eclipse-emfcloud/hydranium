@@ -8,7 +8,14 @@
  ********************************************************************************/
 
 import 'reflect-metadata';
-import { DiagramLoader, GLSPActionDispatcher, GLSPHiddenBoundsUpdater, StatusOverlay, TYPES } from '@eclipse-glsp/client';
+import {
+   DiagramLoader,
+   GLSPActionDispatcher,
+   GLSPHiddenBoundsUpdater,
+   RankedSelectMouseListener,
+   StatusOverlay,
+   TYPES
+} from '@eclipse-glsp/client';
 import { ConsoleLogger, DefaultTracer, type Logger, NoopLogger, SystemClock } from '@hydranium/protocol';
 import { makeFakeClock } from '@hydranium/protocol/testing';
 import { Container, type interfaces } from 'inversify';
@@ -17,6 +24,7 @@ import { HydraniumGlspActionDispatcher } from '../src/action-dispatcher';
 import { HydraniumDiagramLoader } from '../src/diagram-loader';
 import { createGlspClientModule, type GlspClientModuleOptions } from '../src/glsp-client-module';
 import { HydraniumHiddenBoundsUpdater } from '../src/hidden-bounds-updater';
+import { HydraniumSelectMouseListener } from '../src/select-mouse-listener';
 import { SprottyLoggerAdapter } from '../src/sprotty-logger-adapter';
 import { HydraniumStatusOverlay } from '../src/status-overlay';
 import { HydraniumClientTypes } from '../src/types';
@@ -29,6 +37,7 @@ const GLSP_DEFAULT_TOKENS: interfaces.ServiceIdentifier<unknown>[] = [
    DiagramLoader,
    GLSPHiddenBoundsUpdater,
    StatusOverlay,
+   RankedSelectMouseListener,
    TYPES.ILogger
 ];
 
@@ -86,6 +95,13 @@ describe('createGlspClientModule', () => {
 
    it('rebinds StatusOverlay to the one that keeps its element on the page', () => {
       expect(record().find('rebind', StatusOverlay)?.chain).toEqual([`to(<${HydraniumStatusOverlay.name}>)`, 'inSingletonScope()']);
+   });
+
+   it('rebinds RankedSelectMouseListener to the one whose plain click replaces a pending selection', () => {
+      expect(record().find('rebind', RankedSelectMouseListener)?.chain).toEqual([
+         `to(<${HydraniumSelectMouseListener.name}>)`,
+         'inSingletonScope()'
+      ]);
    });
 
    it("rebinds sprotty's logger to the adapter over the host's logger", () => {
