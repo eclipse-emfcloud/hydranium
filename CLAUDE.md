@@ -16,6 +16,9 @@ commands. Building a language on the framework is the other direction:
 - [Testing](docs/contributing/testing.md): the layers, which one a change
   needs, and the traps that make a test pass without proving anything. Read
   "A control that refuses to redden" before trusting a new test.
+- [The pull request template](.github/pull_request_template.md): what a
+  pull request body carries. `gh pr create` with `--body`, `--body-file` or
+  `--fill` never shows it, so read it before writing one.
 - Use the Node version `.nvmrc` names and the npm version the root
   `packageManager` field names; nothing selects that npm for you
   ([Development setup](docs/CONTRIBUTING.md#development-setup)).
