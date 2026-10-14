@@ -133,6 +133,12 @@ tiers in the table above. You control which projects a project can see through
 the `dependencies` your `ProjectManager` declares; dependencies of dependencies
 count too.
 
+The filter runs only once your `ProjectManager` reports more than one
+project. The default, `SingleProjectManager`, puts the whole workspace in one
+synthetic project, so until you bind your own, every reference sees the whole
+global index and the `project` and `public` tiers restrict nothing. A test of
+your visibility rules needs a workspace with at least two projects.
+
 order-flow changes visibility without touching this filter, and you usually
 can too: its folder-based `ProjectManager` declares each project's
 dependencies, Seam 1 exports the symbol at the `public` tier, and the default
