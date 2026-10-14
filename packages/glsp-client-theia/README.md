@@ -54,9 +54,10 @@ them, one frontend and backend pair per diagram.
   `createGlspClientTheiaModule` from its `configureContainer`, not from the
   frontend module: called earlier, GLSP's own bindings silently replace its
   rebinds. It binds `@hydranium/glsp-client`'s classes over the Output
-  channel, so you call nothing from that package yourself. Set
-  `propagateMarkersToProblemsView` to `false` when the LSP head already
-  reports the same problems.
+  channel; your host-neutral diagram module still calls
+  `configureHydraniumModelElements` from that package and names
+  `HydraniumGEdge` for its edge types. Set `propagateMarkersToProblemsView`
+  to `false` when the LSP head already reports the same problems.
 - One frontend module calls `bindEditorDiskSync` from
   `@hydranium/client-theia`, since a diagram save writes a file an editor can
   have open.

@@ -64,9 +64,9 @@ class OrderFlowDiagramStarter extends GLSPStarter {
     * module follows them, since it replaces tokens they bind, and the diagram
     * definition is appended LAST by
     * {@link initializeOrderFlowProcessDiagramContainer}. That order is not a
-    * preference: sprotty's model and view registries throw on a duplicate key,
-    * so whichever module registers an element type first wins by throwing at the
-    * second, and the diagram definition has to be the one holding the keys.
+    * preference: GLSP's model and view registries give an element type to
+    * whichever module registered it last, and the diagram definition has to be
+    * the one holding the keys.
     */
    createContainer(...containerConfiguration: ContainerConfiguration): Container {
       return initializeOrderFlowProcessDiagramContainer(new Container(), ...containerConfiguration, hydraniumModule);

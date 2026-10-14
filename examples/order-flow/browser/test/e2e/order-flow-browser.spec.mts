@@ -424,13 +424,15 @@ test.describe('order-flow in a web worker', () => {
       }
 
       // **And the viewport is a NUMBER**, which names the cause rather than
-      // catching it. sprotty's own spelling for "fit everything" — an empty id
-      // list, what `Ctrl+Shift+F` sends — resolves the element set by falling
-      // back to every bounds-aware element in the index and yields
-      // `translate(NaN,NaN)` over this model. Measured as a control, that state
-      // culls every shape, so the page reports `nothing drawn after 15s` and the
-      // gate above is what goes red; this line is here so the next reader of
-      // that failure does not have to rediscover why.
+      // catching it. The page fits with an empty id list, sprotty's spelling for
+      // "fit everything" and what `Ctrl+Shift+F` sends, which combines the
+      // bounds of every element, the branch labels on bendpoint-free edges
+      // included. An edge type registered with GLSP's `GEdge` instead of the
+      // framework's gives those labels `NaN` bounds, and the viewport lands at
+      // `translate(NaN,NaN)`. Measured as a control, that state culls every
+      // shape, so the page never reports the model as rendered and the gate
+      // above is what goes red; this line is here so the next reader of that
+      // failure does not have to rediscover why.
       expect(framing.transform).not.toContain('NaN');
    });
 

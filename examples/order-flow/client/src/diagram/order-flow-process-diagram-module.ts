@@ -11,17 +11,16 @@ import {
    type ContainerConfiguration,
    DiamondNodeView,
    GCompartment,
-   GEdge,
    GLabel,
    GLabelView,
    GNode,
    RoundedCornerNodeView,
    StructureCompartmentView,
    ToolPalette,
-   configureDefaultModelElements,
    configureModelElement,
    initializeDiagramContainer
 } from '@eclipse-glsp/client';
+import { HydraniumGEdge, configureHydraniumModelElements } from '@hydranium/glsp-client';
 import { type Container, ContainerModule } from 'inversify';
 import {
    PROCESS_BRANCH_EDGE_TYPE,
@@ -59,7 +58,7 @@ export interface ProcessElementRegistration {
  * GLSP's defaults cover the rest of the tree — the task and gateway name
  * labels and the branch label are plain `DefaultTypes.LABEL`, and the graph
  * root is `DefaultTypes.GRAPH`, all registered by
- * `configureDefaultModelElements`.
+ * `configureHydraniumModelElements`.
  */
 export const PROCESS_ELEMENT_REGISTRATIONS: Readonly<Record<ProcessElementType, ProcessElementRegistration>> = {
    [PROCESS_TASK_NODE_TYPE]: { model: GNode, view: RoundedCornerNodeView },
@@ -72,14 +71,16 @@ export const PROCESS_ELEMENT_REGISTRATIONS: Readonly<Record<ProcessElementType, 
    [PROCESS_EFFECT_TYPE]: { model: GLabel, view: GLabelView },
    // Both connection types are directed, so both are drawn with an arrowhead;
    // what tells them apart is the stylesheet, keyed on the `transition` /
-   // `branch` subtype class.
-   [PROCESS_TRANSITION_EDGE_TYPE]: { model: GEdge, view: ProcessEdgeView },
-   [PROCESS_BRANCH_EDGE_TYPE]: { model: GEdge, view: ProcessEdgeView }
+   // `branch` subtype class. The framework's edge rather than `GEdge`, so a
+   // branch label has finite bounds and fit-to-screen keeps the canvas.
+   [PROCESS_TRANSITION_EDGE_TYPE]: { model: HydraniumGEdge, view: ProcessEdgeView },
+   [PROCESS_BRANCH_EDGE_TYPE]: { model: HydraniumGEdge, view: ProcessEdgeView }
 };
 
 /**
- * The `.process` diagram definition: GLSP's default model elements plus one
- * model/view registration per element type the server stamps.
+ * The `.process` diagram definition: GLSP's default model elements, the edge
+ * being the framework's, plus one model/view registration per element type
+ * the server stamps.
  *
  * **Host-agnostic on purpose.** It binds nothing a host owns — no logger, no
  * connector, no message service — so the same module is loaded by the Theia
@@ -101,7 +102,7 @@ export const PROCESS_ELEMENT_REGISTRATIONS: Readonly<Record<ProcessElementType, 
  */
 export const orderFlowProcessDiagramModule = new ContainerModule((bind, unbind, isBound, rebind) => {
    const context = { bind, unbind, isBound, rebind };
-   configureDefaultModelElements(context);
+   configureHydraniumModelElements(context);
    for (const [elementTypeId, registration] of Object.entries(PROCESS_ELEMENT_REGISTRATIONS)) {
       configureModelElement(context, elementTypeId, registration.model, registration.view);
    }
@@ -112,15 +113,13 @@ export const orderFlowProcessDiagramModule = new ContainerModule((bind, unbind, 
  * Build a `.process` diagram container. The host's own modules go through
  * `containerConfiguration`; the diagram definition is appended LAST.
  *
- * **A host cannot replace a model class or view by contributing the same
- * element type id, in either order.** sprotty's model and view registries are
- * exact-key maps whose `register` THROWS — `Key is already registered: <id>.
- * Use \`overrideModelElement\` instead.` (`sprotty/lib/utils/registry.js`) — so
- * ordering never picks a winner. A host that needs to swap one calls sprotty's
- * `overrideModelElement` — or `configureView` with `isOverride` for the view
- * alone — from a module applied to the container AFTER this function returns,
- * since the diagram definition is appended last and would otherwise be the one
- * throwing.
+ * **A host replaces a model class or view with `overrideModelElement`, or
+ * `configureView` with `isOverride` for the view alone, from a module applied
+ * to the container AFTER this function returns.** A second plain registration
+ * of an element type id is no replacement: GLSP's model and view registries
+ * give the id to whichever registration came last, with a console message,
+ * and the diagram definition is appended last. An override
+ * before the definition throws, since its id is not registered yet.
  */
 export function initializeOrderFlowProcessDiagramContainer(
    container: Container,
