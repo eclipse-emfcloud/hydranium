@@ -55,7 +55,8 @@
  */
 
 import * as path from 'node:path';
-import { DEFAULT_INIT_HEADS, INIT_HEADS, type InitHead, isNonEmptyDir, kebab } from './init.js';
+import { DEFAULT_INIT_HEADS, INIT_HEADS, type InitHead, isNonEmptyDir } from './init.js';
+import { kebab } from './kebab.js';
 import { InitWizardCancelled, OPTIONAL_HEAD_CHOICES, type PromptPort } from './init-prompt.js';
 import { type WorkspaceDetection } from './init-workspace.js';
 

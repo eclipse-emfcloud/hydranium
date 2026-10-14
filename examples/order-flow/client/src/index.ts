@@ -14,7 +14,7 @@
  * supplies the transport; nothing here imports a host package, which is what
  * lets one diagram implementation be mounted by Theia, VS Code and a browser
  * app. The contract with `order-flow-server` is the diagram type and the
- * element type ids in `./diagram/order-flow-process-diagram-types`.
+ * element type ids, which both import from `order-flow-protocol`.
  *
  * The two heads reach their transport differently, and the asymmetry is the
  * reason only one of them needs a port. The **diagram** needs none: GLSP's
@@ -37,6 +37,5 @@
 export * from './data/order-flow-messenger-channel';
 export * from './data/order-flow-properties-model';
 export * from './diagram/order-flow-process-diagram-module';
-export * from './diagram/order-flow-process-diagram-types';
 export * from './properties/properties-form';
 export * from './properties/properties-messages';

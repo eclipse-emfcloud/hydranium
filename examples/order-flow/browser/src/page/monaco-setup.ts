@@ -30,13 +30,14 @@
  * for that incomplete composition.
  */
 
+import { ALL_LANGUAGES } from '@hydranium/example-order-flow-protocol';
 import * as monaco from 'monaco-editor-core';
 
 /**
  * The three order-flow languages, with the extensions their files carry.
  *
- * The ids are Langium's, from `order-flow-server`'s `langium-config.json`, and
- * they must match: the `languageId` on `didOpen` is what the server routes the
+ * Taken from `order-flow-protocol`, which the server generates from its
+ * grammars: the `languageId` on `didOpen` is what the server routes the
  * document to a grammar by, so a plausible-looking `order-flow` for all three
  * would parse a `.layout` file with whichever grammar answered first.
  *
@@ -45,11 +46,10 @@ import * as monaco from 'monaco-editor-core';
  * semantic-token provider, so there is no second definition of the language to
  * drift from the real one.
  */
-export const ORDER_FLOW_LANGUAGES: readonly monaco.languages.ILanguageExtensionPoint[] = [
-   { id: 'order-flow-domain', extensions: ['.domain'] },
-   { id: 'order-flow-process', extensions: ['.process'] },
-   { id: 'order-flow-layout', extensions: ['.layout'] }
-];
+export const ORDER_FLOW_LANGUAGES: readonly monaco.languages.ILanguageExtensionPoint[] = ALL_LANGUAGES.map(language => ({
+   id: language.languageId,
+   extensions: [...language.fileExtensions]
+}));
 
 /**
  * Monaco's own worker bundle, substituted at build time from the same constant

@@ -30,6 +30,7 @@ export const GENERATE_TRANSFER_MODEL_FLAGS: readonly string[] = [
    '--augmentation-file',
    '--out-file',
    '--ast-builder-file',
+   '--languages-file',
    '--element-type-name',
    '--terminals-name',
    '--terminals-source-name',
@@ -74,6 +75,9 @@ export const GENERATE_TRANSFER_MODEL_HELP: readonly string[] = [
    '                                spanning all of them. Omit if nothing constructs',
    '                                AST nodes. Same restriction as --out-file: keep it',
    "                                out of langium-cli's own `out` directory.",
+   "  --languages-file <path>       Also emit each grammar's language id and file",
+   '                                extensions here, read from the module.ts beside',
+   '                                --ast-file, for a package without Langium.',
    '  --element-type-name <name>    Base element type name in output. Default: TransferElement.',
    '  --terminals-name <name>       Terminals const name in output. Default: ModelTerminals.',
    '  --terminals-source-name <n>   Source-side terminals variable name. Default: <LanguageId>Terminals.',
@@ -129,6 +133,9 @@ export function parseGenerateOptions(args: string[], onError: UsageError = exitW
             break;
          case '--ast-builder-file':
             flags.astBuilderFile = next();
+            break;
+         case '--languages-file':
+            flags.languagesFile = next();
             break;
          case '--element-type-name':
             flags.elementTypeName = next();

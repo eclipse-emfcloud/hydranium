@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from '@hydranium/example-order-flow-server/lib/head-ports.js';
+import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from '@hydranium/example-order-flow-protocol';
 import { describe, expect, it } from 'vitest';
 import { ORDER_FLOW_HOST_PORT_COMMANDS } from '../src/common/order-flow-diagram-language';
 

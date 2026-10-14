@@ -57,7 +57,8 @@ lists each command's flags.
 - **Grammar and workspace.** Boot your built head to reflect its grammar, lint
   it, write a model reference, validate a workspace, or count its AST nodes.
 - **Codegen.** `generate-transfer-model` turns the AST into a transfer model,
-  once or on watch.
+  once or on watch, and can also write each grammar's language id and
+  extensions for a package your clients share without Langium.
 - **Memory.** Measure a workspace's model-store memory, and analyze a heap
   snapshot.
 - **Data server.** Spawn your data head and list projects, or query, create,

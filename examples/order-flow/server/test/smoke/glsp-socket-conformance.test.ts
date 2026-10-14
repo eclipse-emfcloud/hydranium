@@ -45,9 +45,8 @@ import { tick } from '@hydranium/protocol/testing';
 import { readFileSync } from 'node:fs';
 import { DidOpenTextDocumentNotification } from 'vscode-languageserver-protocol/node';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '../../src/glsp/order-flow-process-diagram-types.js';
+import { ORDER_FLOW_GLSP_PORT_COMMAND, PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
 import { ProcessLanguageMetaData } from '../../src/language-server/generated/module.js';
-import { ORDER_FLOW_GLSP_PORT_COMMAND } from '../../src/head-ports.js';
 import { WORKSPACE_FILES, WORKSPACE_ROOT } from '../order-flow-harness.js';
 import { SPAWN_TIMEOUT_MS, type SpawnedOrderFlowServer, startSpawnedOrderFlowServer } from './spawned-order-flow-server.js';
 

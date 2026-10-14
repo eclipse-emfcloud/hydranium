@@ -556,6 +556,20 @@ jobs:
         if: env.PROSE_ONLY_LEG != 'true'
         run: npm run build:all
 
+      # Generated sources are committed and `build:all` regenerates them, so a
+      # tree the build changed holds a generated file nobody regenerated. One
+      # leg, the one that runs every gate target.
+      - name: Generated sources are committed
+        if: env.PROSE_ONLY_LEG != 'true' && matrix.os == 'ubuntu-22.04'
+        run: |
+          changed=$(git status --porcelain --untracked-files=all)
+          if [ -n "$changed" ]; then
+            echo "::error::The build changed the tree. Run \`npm run build:all\` and commit the result."
+            echo "$changed"
+            git diff
+            exit 1
+          fi
+
       # The gate that decides the job. It runs from the repository root and
       # covers every workspace, because the per-package scripts this fans out to
       # are the same ones a developer runs.

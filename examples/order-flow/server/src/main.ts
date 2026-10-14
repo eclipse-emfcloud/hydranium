@@ -40,13 +40,13 @@ import { describeErrorWithStack } from '@hydranium/protocol';
 import { startLanguageServer, withHydraniumLspFeatures } from '@hydranium/core/lsp';
 import { ProposedFeatures, createConnection } from 'vscode-languageserver/node';
 import { OrderFlowProcessDiagramModule } from './glsp/order-flow-process-diagram-module.js';
-import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from './head-ports.js';
+import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from '@hydranium/example-order-flow-protocol';
 // The TRANSFER roots, not the AST ones. The data head serialises to the
 // persisted shape, where `Reference<T>` is `string`; the AST's is a Langium
 // reference object with `.ref` / `.$refText`. Both satisfy `TransferElement`
 // structurally, so naming the AST types here compiles fine and silently tells
 // every typed client that `subject` is a resolvable object rather than a name.
-import type { DomainModel, LayoutModel, ProcessModel } from './language-server/generated-hydranium/transfer-model.js';
+import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
 import { createOrderFlowServices } from './language-server/order-flow-module.js';
 
 const connection = createConnection(withHydraniumLspFeatures(ProposedFeatures.all));

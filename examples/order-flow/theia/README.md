@@ -50,7 +50,7 @@ extension cannot import from a VS Code extension package without dragging
 Get one wrong and nothing errors:
 `AbstractSocketForwardingConnectionHandler` defaults `findPortAttempts` to `-1`
 and retries forever. `test/order-flow-host-port-commands.test.ts` pins the
-naming rule against the server's own request ids, which it _can_ import.
+naming rule against the LSP request ids in `order-flow-protocol`.
 
 ## Translations
 

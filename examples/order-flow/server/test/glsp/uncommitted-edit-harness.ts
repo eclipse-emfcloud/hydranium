@@ -58,7 +58,7 @@ import { afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 import { OrderFlowCommand } from '../../src/glsp/order-flow-command.js';
 import type { OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
-import { PROCESS_TASK_NODE_TYPE } from '../../src/glsp/order-flow-process-diagram-types.js';
+import { PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
 import type { LayoutModel, ProcessModel } from '../../src/language-server/ast.js';
 import { makeScratchWorkspaceHarness, type OrderFlowHarness, WORKSPACE_FILES } from '../order-flow-harness.js';
 

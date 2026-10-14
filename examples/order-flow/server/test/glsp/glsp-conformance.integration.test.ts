@@ -95,7 +95,7 @@ import { afterAll } from 'vitest';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { UNPOSITIONED_ROW_HEIGHT } from '../../src/glsp/order-flow-process-gmodel-factory.js';
-import { PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '../../src/glsp/order-flow-process-diagram-types.js';
+import { PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
 import { makeScratchWorkspaceHarness, WORKSPACE_FILES } from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';

@@ -45,7 +45,7 @@ import {
    TextDocumentSaveReason,
    WillSaveTextDocumentWaitUntilRequest
 } from 'vscode-languageserver-protocol';
-import type { DomainModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
+import type { DomainModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
 import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
 import { WORKSPACE_ROOT } from './order-flow-harness.js';
 

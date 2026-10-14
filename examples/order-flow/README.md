@@ -41,6 +41,7 @@ cross-grammar reference chain they exist for.
 | Validation | [process-validation.ts](server/src/language-server/process-validation.ts), [layout-validation.ts](server/src/language-server/layout-validation.ts) | [Add a validation check](../../docs/guides/add-validation-check.md) |
 | Serialization | [domain-serializer.ts](server/src/language-server/domain-serializer.ts), [process-serializer.ts](server/src/language-server/process-serializer.ts), [layout-serializer.ts](server/src/language-server/layout-serializer.ts) | |
 | Built-in types | [order-flow-stdlib.ts](server/src/language-server/order-flow-stdlib.ts) | [Ship a standard library](../../docs/guides/ship-a-standard-library.md) |
+| Shared with clients: language ids, port commands, diagram ids, transfer model | [protocol/](protocol/README.md) | |
 | Diagram, server side | [server/src/glsp/](server/src/glsp/), operation handlers in [server/src/glsp/handler/](server/src/glsp/handler/) | [Make a diagram editable](../../docs/guides/editable-diagram.md) |
 | Diagram, client side | [client/src/diagram/](client/src/diagram/) | |
 | Properties view | [client/src/data/](client/src/data/), [client/src/properties/](client/src/properties/), [theia/src/browser/order-flow-properties-widget.ts](theia/src/browser/order-flow-properties-widget.ts) | [Connect a data client](../../docs/guides/connect-a-data-client.md) |

@@ -27,15 +27,10 @@
  * produce an order-flow file extension before anything happens.
  */
 
-/**
- * File extensions the order-flow language server owns.
- *
- * Restated here because the browser cannot import the server package. A unit
- * test in this package asserts the list against the generated
- * `*LanguageMetaData.fileExtensions` of every order-flow grammar, so adding a
- * grammar to the server cannot leave the panel silently declining its files.
- */
-export const ORDER_FLOW_FILE_EXTENSIONS = ['.domain', '.layout', '.process'] as const;
+import { ALL_LANGUAGES } from '@hydranium/example-order-flow-protocol';
+
+/** File extensions the order-flow language server owns, one list per grammar. */
+export const ORDER_FLOW_FILE_EXTENSIONS: readonly string[] = ALL_LANGUAGES.flatMap(language => language.fileExtensions);
 
 /** Anything that can hand back its own resource URI — Theia's `Navigatable`. */
 interface NavigatableLike {

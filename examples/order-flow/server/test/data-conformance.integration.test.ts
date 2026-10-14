@@ -80,7 +80,7 @@ import { DataServer } from '@hydranium/data-server';
 import { makeDataServerHarness } from '@hydranium/data-server/testing';
 import { afterAll } from 'vitest';
 import { DomainLanguageMetaData, LayoutLanguageMetaData, ProcessLanguageMetaData } from '../src/language-server/generated/module.js';
-import type { DomainModel, LayoutModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
+import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
 import type { OrderFlowOptions } from '../src/language-server/order-flow-module.js';
 import { makeScratchWorkspaceHarness, type OrderFlowHarness } from './order-flow-harness.js';
 

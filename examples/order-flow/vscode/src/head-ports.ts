@@ -12,17 +12,13 @@
  *
  * Both ports are ephemeral and published as LSP requests, so the host asks the
  * running language client for them rather than reading configuration. The
- * request names are imported from the server package, never restated here: a
+ * request names are imported from the protocol package, never restated here: a
  * retyped literal still compiles, the server never answers a request it does not
  * publish, and the failure surfaces as an exhausted poll rather than at build
  * time.
- *
- * Importing them across the module-system boundary works: this package is
- * CommonJS and the server is ESM, and Node 22's `require(esm)` resolves it —
- * verified by running the emitted output, not only by compiling it.
  */
 
-import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from '@hydranium/example-order-flow-server';
+import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from '@hydranium/example-order-flow-protocol';
 import type { LanguageClient } from 'vscode-languageclient/node';
 
 /** The LSP request each socket head answers with its listening port. */

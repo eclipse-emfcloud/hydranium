@@ -61,7 +61,7 @@ import { URI } from '@hydranium/langium';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
-import { PROCESS_TASK_NODE_TYPE } from '../../src/glsp/order-flow-process-diagram-types.js';
+import { PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
 import { type ProcessModel, isRead, isTask } from '../../src/language-server/ast.js';
 import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from '../order-flow-harness.js';
 

@@ -39,7 +39,7 @@ import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
-import { PROCESS_TRANSITION_EDGE_TYPE } from '../../src/glsp/order-flow-process-diagram-types.js';
+import { PROCESS_TRANSITION_EDGE_TYPE } from '@hydranium/example-order-flow-protocol';
 import type { ProcessModel } from '../../src/language-server/ast.js';
 import { makeScratchWorkspaceHarness } from '../order-flow-harness.js';
 

@@ -23,7 +23,7 @@ import {
    PROCESS_GATEWAY_NODE_TYPE,
    PROCESS_TASK_NODE_TYPE,
    PROCESS_TRANSITION_EDGE_TYPE
-} from './order-flow-process-diagram-types.js';
+} from '@hydranium/example-order-flow-protocol';
 
 /**
  * Diagram configuration for the editable `.process` diagram.

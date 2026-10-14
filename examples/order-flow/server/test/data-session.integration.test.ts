@@ -58,7 +58,7 @@ import { Emitter, type Event } from 'vscode-jsonrpc';
 import { type CancellationToken, FileChangeType } from 'vscode-languageserver';
 import { existsSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { DomainModel } from '../src/language-server/generated-hydranium/transfer-model.js';
+import type { DomainModel } from '@hydranium/example-order-flow-protocol';
 import { makeScratchWorkspaceHarness, makeServices, type OrderFlowHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
 
 const FILE = 'wire-session.domain';

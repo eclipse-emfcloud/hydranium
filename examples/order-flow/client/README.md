@@ -20,8 +20,8 @@ order-flow-theia / order-flow-vscode / order-flow-browser   thin shells
 Three shells mount this package — `order-flow-theia`, `order-flow-vscode` and
 `order-flow-browser` — which is the claim the split exists to make. Theia and
 VS Code mount both halves, the diagram definition and the properties form,
-verbatim; the browser shell mounts the diagram half — the module, the type ids
-and the stylesheet — which is what shows the definition surviving a host with no
+verbatim; the browser shell mounts the diagram half — the module and the
+stylesheet — which is what shows the definition surviving a host with no
 extension model and no widget framework under it.
 
 The two heads reach their transport differently, and only one of them needs a
@@ -42,10 +42,6 @@ look Theia-only.
 
 ## What is here
 
-- [`src/diagram/order-flow-process-diagram-types.ts`](src/diagram/order-flow-process-diagram-types.ts)
-  — the client half of the `.process` contract: diagram type, element type ids,
-  file extension. Kept off `@eclipse-glsp/client` (it uses
-  `@eclipse-glsp/protocol`) so the contract test runs headless.
 - [`src/diagram/order-flow-process-diagram-module.ts`](src/diagram/order-flow-process-diagram-module.ts)
   — the diagram definition: GLSP's default model elements plus one model/view
   registration per element type the server stamps, and
@@ -114,15 +110,15 @@ follows the document as it changes. A host renders `fields` and calls
 <!-- snippet-preamble
 import { DataConnectionWithEvents, type DataPort } from '@hydranium/protocol';
 import { OrderFlowPropertiesModel, type PropertyField } from '@hydranium/example-order-flow-client';
-import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model.js';
+import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
 declare const port: DataPort;
 declare const uri: string;
 declare const render: (fields: readonly PropertyField[]) => void;
 -->
 
 ```ts
-// The union of every grammar's transfer root, from the server's generated
-// transfer model — the same union `main.ts` hands the data server.
+// The union of every grammar's transfer root, from the generated transfer
+// model — the same union the server's `main.ts` hands the data server.
 type OrderFlowTransferRoot = DomainModel | LayoutModel | ProcessModel;
 
 const connection = new DataConnectionWithEvents<OrderFlowTransferRoot>(port);
@@ -163,9 +159,10 @@ returns a status rather than `void`:
 
 ## The contract with the server
 
-`test/process-diagram-contract.test.ts` asserts every duplicated value against
-`order-flow-server`'s own constants. Drift is silent in both directions — an
-unknown element type id renders a `MissingView` placeholder with nothing but a
-browser-console warning, and an unknown diagram type makes GLSP drop the request
-— so an empty canvas with no server-side error is the failure this test exists
-to prevent.
+The diagram type and the element type ids come from
+[`order-flow-protocol`](../protocol/), which the server imports too, so there
+is one copy to drift from. The registration table in the diagram module is
+keyed by the protocol's element-type union, so an id without a model class and
+a view does not compile. Both failures would otherwise be silent: an unknown
+element type id renders a `MissingView` placeholder with only a browser-console
+warning, and an unknown diagram type makes GLSP drop the request.

@@ -19,11 +19,11 @@
   "types": "lib/index.d.ts",
   "scripts": {
     "bench": "vitest bench --run",
-    "build": "npm run generate && tsc",
+    "build": "npm run generate && tsc -b",
     "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium tsconfig.tsbuildinfo",
     "generate": "npm run langium:generate && npm run generate:transfer-model",
     "generate:large-workspace": "node scripts/generate-large-workspace.mts",
-    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file src/language-server/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --element-type-name OrderFlowElement --terminals-name OrderFlowTerminals --regen-command \"Run: npm --prefix examples/order-flow/server run generate:transfer-model\"",
+    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file ../protocol/src/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --languages-file ../protocol/src/generated-hydranium/languages.ts --element-type-name OrderFlowElement --terminals-name OrderFlowTerminals --regen-command \"Run: npm --prefix examples/order-flow/server run generate:transfer-model\"",
     "langium:generate": "langium generate",
     "langium:watch": "langium generate --watch",
     "lint": "oxlint --format stylish --config ../../../oxlint.config.cjs src test --max-warnings 0",
@@ -31,13 +31,14 @@
     "start": "node lib/main.js --stdio",
     "test": "npm run typecheck:test && vitest run",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
-    "watch": "concurrently --kill-others --names \"langium,tsc\" --prefix-colors \"green,blue\" \"npm run langium:watch\" \"tsc --watch --preserveWatchOutput\""
+    "watch": "concurrently --kill-others --names \"langium,transfer,tsc\" --prefix-colors \"green,yellow,blue\" \"npm run langium:watch\" \"npm run generate:transfer-model -- --watch\" \"tsc -b --watch --preserveWatchOutput\""
   },
   "dependencies": {
     "@eclipse-glsp/graph": "2.7.0",
     "@eclipse-glsp/server": "2.7.0",
     "@hydranium/core": "^1.0.0-next",
     "@hydranium/data-server": "^1.0.0-next",
+    "@hydranium/example-order-flow-protocol": "0.0.0",
     "@hydranium/glsp-server": "^1.0.0-next",
     "@hydranium/langium": "^1.0.0-next",
     "@hydranium/protocol": "^1.0.0-next",

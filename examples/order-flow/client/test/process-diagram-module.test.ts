@@ -10,8 +10,11 @@
 import { createDiagramOptionsModule, DefaultTypes, type GEdge, type SModelRegistry, TYPES } from '@eclipse-glsp/client';
 import { Container } from 'inversify';
 import { describe, expect, it } from 'vitest';
-import { initializeOrderFlowProcessDiagramContainer } from '../src/diagram/order-flow-process-diagram-module';
-import { PROCESS_BRANCH_EDGE_TYPE, PROCESS_TRANSITION_EDGE_TYPE } from '../src/diagram/order-flow-process-diagram-types';
+import {
+   initializeOrderFlowProcessDiagramContainer,
+   PROCESS_ELEMENT_REGISTRATIONS
+} from '../src/diagram/order-flow-process-diagram-module';
+import * as orderFlowProtocol from '@hydranium/example-order-flow-protocol';
 
 /**
  * Built through the container, as a host builds it, so what is asserted is the
@@ -28,9 +31,19 @@ function buildEdge(type: string): GEdge {
 }
 
 describe('.process diagram module', () => {
+   it('registers every element type id the protocol declares, and no other', () => {
+      // The table is keyed by the protocol's tuple, so the compiler holds it to
+      // the tuple; nothing holds the tuple to the ids beside it. An id the
+      // server stamps but the tuple omits compiles and renders `MissingView`.
+      const declared = Object.entries(orderFlowProtocol)
+         .filter(([name]) => /^PROCESS_\w+_TYPE$/.test(name) && name !== 'PROCESS_DIAGRAM_TYPE')
+         .map(([, value]) => value);
+      expect(Object.keys(PROCESS_ELEMENT_REGISTRATIONS).sort()).toEqual([...declared].sort());
+   });
+
    // A branch label sits on an edge with no bendpoints; GLSP's own edge
    // transforms it through `NaN` there, and fit-to-screen blanks the canvas.
-   it.each([PROCESS_TRANSITION_EDGE_TYPE, PROCESS_BRANCH_EDGE_TYPE, DefaultTypes.EDGE])(
+   it.each([orderFlowProtocol.PROCESS_TRANSITION_EDGE_TYPE, orderFlowProtocol.PROCESS_BRANCH_EDGE_TYPE, DefaultTypes.EDGE])(
       'builds `%s` so a label on it keeps finite bounds without bendpoints',
       type => {
          expect(buildEdge(type).localToParent({ x: 1, y: 2 })).toEqual({ x: 1, y: 2, width: -1, height: -1 });

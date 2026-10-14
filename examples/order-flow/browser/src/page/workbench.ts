@@ -63,12 +63,7 @@ import {
    type WorkerErrorMessage,
    describeError
 } from '@hydranium/protocol';
-import {
-   type DomainModel,
-   isLayoutModel,
-   type LayoutModel,
-   type ProcessModel
-} from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
+import { type DomainModel, isLayoutModel, type LayoutModel, type ProcessModel } from '@hydranium/example-order-flow-protocol';
 import {
    isWorkspaceReadyMessage,
    isWorkspaceResetMessage,

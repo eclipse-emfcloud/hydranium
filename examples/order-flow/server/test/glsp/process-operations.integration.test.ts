@@ -51,7 +51,7 @@ import {
    PROCESS_GATEWAY_NODE_TYPE,
    PROCESS_TASK_NODE_TYPE,
    PROCESS_TRANSITION_EDGE_TYPE
-} from '../../src/glsp/order-flow-process-diagram-types.js';
+} from '@hydranium/example-order-flow-protocol';
 import { type Gateway, type ProcessModel, isGateway, isTask } from '../../src/language-server/ast.js';
 import { makeScratchWorkspaceHarness } from '../order-flow-harness.js';
 

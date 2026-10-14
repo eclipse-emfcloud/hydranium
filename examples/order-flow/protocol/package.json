@@ -1,0 +1,35 @@
+{
+  "name": "@hydranium/example-order-flow-protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "What the order-flow server and its clients share: the language ids and extensions, the socket heads' port commands, the `.process` diagram ids and the generated transfer model.",
+  "homepage": "https://github.com/eclipse-emfcloud/hydranium",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/eclipse-emfcloud/hydranium.git",
+    "directory": "examples/order-flow/protocol"
+  },
+  "files": [
+    "lib",
+    "src"
+  ],
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "lint": "oxlint --format stylish --config ../../../oxlint.config.cjs src --max-warnings 0",
+    "watch": "tsc --watch --preserveWatchOutput"
+  },
+  "dependencies": {
+    "@eclipse-glsp/protocol": "2.7.0"
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

@@ -51,11 +51,7 @@ import { createOrderFlowServices, type OrderFlowSharedServices } from '@hydraniu
 import { OrderFlowProcessDiagramModule } from '@hydranium/example-order-flow-server/lib/glsp/order-flow-process-diagram-module';
 import { GlspClientLogger, HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { startGlspServerInWorker } from '@hydranium/glsp-server/browser';
-import type {
-   DomainModel,
-   LayoutModel,
-   ProcessModel
-} from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
+import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
 import { URI } from '@hydranium/langium';
 import { LatencyCollector } from '@hydranium/protocol';
 import { ORDER_FLOW_WORKSPACE_SEED } from '../generated/workspace-seed.js';

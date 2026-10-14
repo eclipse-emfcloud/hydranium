@@ -32,7 +32,7 @@
  */
 
 import { GlspEditorProvider, type GlspVscodeConnector } from '@eclipse-glsp/vscode-integration';
-import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-types';
+import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-protocol';
 import * as vscode from 'vscode';
 
 /** The custom-editor view type, matched by the `contributes.customEditors` entry. */

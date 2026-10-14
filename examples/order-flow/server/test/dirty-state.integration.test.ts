@@ -19,7 +19,7 @@ import { type DataClientProtocol, textHash } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { DomainModel } from '../src/language-server/generated-hydranium/transfer-model.js';
+import type { DomainModel } from '@hydranium/example-order-flow-protocol';
 import { makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
 
 const FILE = 'wire-dirty.domain';

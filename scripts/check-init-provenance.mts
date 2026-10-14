@@ -232,11 +232,10 @@ const ORDER_FLOW_MANIFEST: Manifest = {
    // The recorded invocation emits exactly the three language entries, ids,
    // extensions and TextMate paths the example has — the gate's strongest claim.
    'langium-config.json': { verdict: 'identical', reason: 'the scaffold emits all three language entries' },
-   // `--monorepo` derives this one in full: the `extends` target is found by
-   // looking for the root tsconfig that carries `compilerOptions` (the repo
-   // root's is a solution file), and the options are pruned to those the base
-   // does not already supply with the same value.
-   'tsconfig.json': { verdict: 'identical', reason: 'the scaffold derives the extends and the pruned option set' },
+   // `--monorepo` derives the `extends` and the pruned option set; the example
+   // adds a project reference to the protocol member, so `tsc -b` rebuilds it
+   // after `generate` rewrites its sources.
+   'tsconfig.json': { verdict: 'adapted', reason: 'references the protocol member, which the build regenerates and rebuilds' },
    'tsconfig.test.json': { verdict: 'identical', reason: 'the scaffold emits isolatedModules too' },
    'test/tsconfig.json': { verdict: 'adapted', reason: 'carries the comment its sibling packages carry' },
    'vitest.config.ts': { verdict: 'adapted', reason: "uses the repo's shared vitest config" },
@@ -266,13 +265,21 @@ const ORDER_FLOW_MANIFEST: Manifest = {
    // multi-document one — a different set of classes, not a customisation of
    // the scaffolded set. So the recorded invocation stays at the default heads,
    // and the GLSP template path is pinned by the `bookstore` target instead.
-   'src/main.ts': { verdict: 'adapted', reason: 'adds the GLSP head, which this example wires on the reconciling strategy' },
+   'src/main.ts': {
+      verdict: 'adapted',
+      reason:
+         'adds the GLSP head, which this example wires on the reconciling strategy, and imports the port commands and transfer types from the protocol member'
+   },
    // Was hand-written until `init` learnt to emit it; what still differs is the
    // three-grammar comment on the transfer import, which names `.layout` as the
-   // reason one data server carries every registered language. A template cannot
-   // say that, and it is the sentence the example exists to make.
-   'src/data-server-main.ts': { verdict: 'adapted', reason: "the transfer-import comment naming this project's third grammar" },
-   'src/head-ports.ts': { verdict: 'adapted', reason: 'adds the GLSP command, which the default head set does not emit' },
+   // reason one data server carries every registered language, and the import
+   // itself, which reads the protocol member. A template cannot say the first,
+   // and it is the sentence the example exists to make.
+   'src/data-server-main.ts': {
+      verdict: 'adapted',
+      reason: "the transfer-import comment naming this project's third grammar, and the transfer types read from the protocol member"
+   },
+   'src/head-ports.ts': { verdict: 'dropped', reason: 'moved to the protocol member, which every host imports instead of the server' },
    // NOT "the scaffolded test asserts one language" — rendered at THIS
    // three-grammar invocation it already asserts all three, being deliberately
    // grammar-agnostic. What the successor adds is the multi-grammar composition
