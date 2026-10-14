@@ -133,7 +133,8 @@ the workspace folder name. Copy that file's shape rather than its contents.
 If you bind integrity in your own language: the service's default `'silent'`
 sync mode writes its repairs to closed files on disk, through the serializer.
 Comments and the file's ending survive through the `trivia` preservers; the
-hand-formatting around them does not. Pass an explicit `syncMode` if that is
+hand-formatting around them does not. The first such write is logged at
+`info`, naming the file and the option. Pass an explicit `syncMode` if that is
 not what you want. The tests here work on temp-directory copies of their
 fixtures for the same reason.
 

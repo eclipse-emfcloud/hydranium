@@ -58,7 +58,8 @@ export namespace IntegrityPhase {
  *    text the correction was computed from and the text store still holds the
  *    correction. Otherwise — the holder has unsaved edits, disk changed behind
  *    the server, or disk cannot be read — the correction waits in the text
- *    store for the next save.
+ *    store for the next save. A server's first write, whichever language
+ *    makes it, is logged at `info`, naming the file and the `syncMode` option.
  * - `editor`: leave disk alone and stage the correction; the next open of the
  *    file takes it over the disk text, and an editor shows it as an unsaved
  *    change. Until then no editor sees it. A file held only through the data

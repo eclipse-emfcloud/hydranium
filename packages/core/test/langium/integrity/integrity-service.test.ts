@@ -28,6 +28,7 @@ import type { ServerLanguageServices } from '../../../src/langium/language-modul
 import type { ServerSharedServices } from '../../../src/langium/module.js';
 import { IntegrityPhase, type IntegrityRule, type IntegritySyncMode } from '../../../src/langium/integrity/integrity-rule.js';
 import {
+   type CapturedLine,
    makeCapturingLogger,
    makeCapturingTracer,
    makeFakeAstNode,
@@ -518,6 +519,8 @@ class RecordingFileSystemProvider {
    readonly writes: { uri: string; content: string }[] = [];
    /** What `readFile` answers, by URI; a URI missing here reads as a missing file. */
    readonly onDisk = new Map<string, string>();
+   /** Whether `writeFile` rejects, as a full disk or a revoked permission does. */
+   failWrites = false;
    /** Runs while a read is pending, before it answers. */
    duringRead: () => void = () => undefined;
    /** Whether a disk-queue task is running; set by the harness's queue double. */
@@ -537,6 +540,9 @@ class RecordingFileSystemProvider {
    writeFile(uri: { toString(): string } | string, content: string): Promise<void> {
       if (!this.inDiskQueue()) {
          this.outsideDiskQueue.push(`write ${uri.toString()}`);
+      }
+      if (this.failWrites) {
+         return Promise.reject(new Error(`cannot write: ${uri.toString()}`));
       }
       this.writes.push({ uri: uri.toString(), content });
       return Promise.resolve();
@@ -563,6 +569,10 @@ interface CorrectionsHarness {
    diskTasks: string[];
    /** What the service reported to `VersionSyncService.modelProduced`, in order. */
    produced: { uri: string; text: string | undefined }[];
+   /** Every line the service logged. */
+   lines: CapturedLine[];
+   /** The services the probe was built with, for a second language on the same server. */
+   services: ServerLanguageServices;
 }
 
 function makeCorrectionsProbe(
@@ -574,12 +584,14 @@ function makeCorrectionsProbe(
    const builderCalls = { reparse: [] as string[], reparseAndRelink: [] as string[] };
    const diskTasks: string[] = [];
    const produced: CorrectionsHarness['produced'] = [];
+   const { tracer, lines } = makeCapturingTracer();
    let runningDiskTasks = 0;
    fileSystemProvider.inDiskQueue = () => runningDiskTasks > 0;
    const syncMode = typeof options === 'string' ? options : options.syncMode;
    const onReparse = typeof options === 'string' ? undefined : options.onReparse;
    const services = makeIntegrityServices({
       shared: {
+         Tracer: tracer,
          workspace: {
             TextDocuments: textDocuments,
             FileSystemProvider: fileSystemProvider,
@@ -619,7 +631,7 @@ function makeCorrectionsProbe(
       serializer: { Serializer: { serializeAst: () => serializeResult } }
    });
    const probe = new CorrectionsProbe(services, syncMode ? { syncMode } : {});
-   return { probe, textDocuments, fileSystemProvider, builderCalls, diskTasks, produced };
+   return { probe, textDocuments, fileSystemProvider, builderCalls, diskTasks, produced, lines, services };
 }
 
 /** A `LangiumDocument` carrying real text plus a mutable parse-result value. */
@@ -1179,6 +1191,99 @@ describe('IntegrityService corrections sync isolating the open-file branch', () 
       await probe.syncCorrectionsNow(TextDocument.create('file:///missing.fake', 'fake', 5, 'corrected'), 'saved');
 
       expect(fileSystemProvider.writes).toEqual([]);
+   });
+});
+
+describe('IntegrityService reporting a silent write-back', () => {
+   const infoLines = (lines: CapturedLine[]): string[] => lines.filter(line => line.level === 'info').map(line => line.message);
+
+   it('logs the first write of a closed file at info, naming the file and the sync mode, and no later write', async () => {
+      const { probe, lines } = makeCorrectionsProbe('silent');
+
+      await probe.syncCorrectionsNow(TextDocument.create('file:///first.fake', 'fake', 3, 'corrected'));
+      await probe.syncCorrectionsNow(TextDocument.create('file:///second.fake', 'fake', 3, 'corrected'));
+
+      const info = infoLines(lines);
+      expect(info).toHaveLength(1);
+      expect(info[0]).toContain('file:///first.fake');
+      expect(info[0]).toContain('syncMode');
+   });
+
+   it('logs once for a server whose two languages both write, since they hold the same shared services', async () => {
+      const { probe, services, lines } = makeCorrectionsProbe('silent');
+      const otherLanguage = new CorrectionsProbe({ ...services }, { syncMode: 'silent' });
+
+      await probe.syncCorrectionsNow(TextDocument.create('file:///first.fake', 'fake', 3, 'corrected'));
+      await otherLanguage.syncCorrectionsNow(TextDocument.create('file:///second.other', 'other', 3, 'corrected'));
+
+      expect(infoLines(lines)).toHaveLength(1);
+   });
+
+   it('keeps the once-guard for a subclass that overrides only the reported line', async () => {
+      const { services } = makeCorrectionsProbe('silent');
+      const reported: string[] = [];
+      class Reworded extends CorrectionsProbe {
+         protected override reportSilentWrite(uri: string): void {
+            reported.push(uri);
+         }
+      }
+      const probe = new Reworded(services, { syncMode: 'silent' });
+
+      await probe.syncCorrectionsNow(TextDocument.create('file:///first.fake', 'fake', 3, 'corrected'));
+      await probe.syncCorrectionsNow(TextDocument.create('file:///second.fake', 'fake', 3, 'corrected'));
+
+      expect(reported).toEqual(['file:///first.fake']);
+   });
+
+   it('logs again for a second server, which holds shared services of its own', async () => {
+      const first = makeCorrectionsProbe('silent');
+      const second = makeCorrectionsProbe('silent');
+
+      await first.probe.syncCorrectionsNow(TextDocument.create('file:///first.fake', 'fake', 3, 'corrected'));
+      await second.probe.syncCorrectionsNow(TextDocument.create('file:///second.fake', 'fake', 3, 'corrected'));
+
+      expect(infoLines(first.lines)).toHaveLength(1);
+      expect(infoLines(second.lines)).toHaveLength(1);
+   });
+
+   it('logs the first write of a held file, not a skipped one, and counts it for closed files too', async () => {
+      const { probe, textDocuments, fileSystemProvider, lines } = makeCorrectionsProbe('silent');
+      textDocuments.openInOtherClient = true;
+      fileSystemProvider.onDisk.set('file:///held.fake', 'saved');
+      const td = TextDocument.create('file:///held.fake', 'fake', 5, 'corrected');
+      textDocuments.held.set('file:///held.fake', td);
+
+      await probe.syncCorrectionsNow(td, 'unsaved');
+      expect(infoLines(lines)).toEqual([]);
+      await probe.syncCorrectionsNow(td, 'saved');
+      textDocuments.openInOtherClient = false;
+      await probe.syncCorrectionsNow(TextDocument.create('file:///closed.fake', 'fake', 3, 'corrected'));
+
+      const info = infoLines(lines);
+      expect(info).toHaveLength(1);
+      expect(info[0]).toContain('file:///held.fake');
+   });
+
+   it('logs nothing for a write that fails, and reports the next write that succeeds', async () => {
+      const { probe, fileSystemProvider, lines } = makeCorrectionsProbe('silent');
+      fileSystemProvider.failWrites = true;
+
+      await expect(probe.syncCorrectionsNow(TextDocument.create('file:///failed.fake', 'fake', 3, 'corrected'))).rejects.toThrow();
+      expect(infoLines(lines)).toEqual([]);
+      fileSystemProvider.failWrites = false;
+      await probe.syncCorrectionsNow(TextDocument.create('file:///written.fake', 'fake', 3, 'corrected'));
+
+      const info = infoLines(lines);
+      expect(info).toHaveLength(1);
+      expect(info[0]).toContain('file:///written.fake');
+   });
+
+   it('logs nothing in editor mode, which stages instead of writing', async () => {
+      const { probe, lines } = makeCorrectionsProbe('editor');
+
+      await probe.syncCorrectionsNow(TextDocument.create('file:///closed.fake', 'fake', 3, 'corrected'));
+
+      expect(infoLines(lines)).toEqual([]);
    });
 });
 
