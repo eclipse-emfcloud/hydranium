@@ -12,7 +12,10 @@
 // constant or a wire type.
 //
 // The server's `generate` writes `generated-hydranium/` from the grammar;
-// commit those modules with the grammar change that produced them.
+// commit those modules with the grammar change that produced them. An interface
+// narrowed here hides the generated constant of the same name; re-export that
+// constant beside it, and declare the type map under its own name with the
+// narrowed entry, or the builder and the GLSP state keep the generated one.
 
 export * from './generated-hydranium/languages.js';
 export * from './generated-hydranium/transfer-model.js';

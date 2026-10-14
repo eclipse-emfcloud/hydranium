@@ -91,9 +91,9 @@ import { HydraniumGlspRecordingCommand, ReconcilingTransferHydraniumGlspState } 
 import type { AstNode } from '@hydranium/langium';
 import type { TransferElement } from '@hydranium/protocol';
 type AppNode = AstNode & { name: string };
-type AppRoot = AstNode & { nodes: AppNode[] };
+type AppRoot = AstNode & { readonly $type: 'AppRoot'; nodes: AppNode[] };
 type AppSourceModel = TransferElement & { nodes: AppNode[] };
-class AppGlspState extends ReconcilingTransferHydraniumGlspState<AppRoot, AppSourceModel> {}
+class AppGlspState extends ReconcilingTransferHydraniumGlspState<AppRoot, { AppRoot: AppSourceModel }> {}
 declare const appState: AppGlspState;
 declare const createAppNode: (operation: CreateNodeOperation) => AppNode;
 -->

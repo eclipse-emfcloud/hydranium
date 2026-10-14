@@ -61,7 +61,8 @@ lists each command's flags.
   it, write a model reference, validate a workspace, or count its AST nodes.
 - **Codegen.** `generate-transfer-model` turns the AST into a transfer model,
   once or on watch, and can also write each grammar's language id and
-  extensions for a package your clients share without Langium.
+  extensions for a package your clients share without Langium, and a
+  `transferNode` builder for your tests.
 - **Memory.** Measure a workspace's model-store memory, and analyze a heap
   snapshot.
 - **Data server.** Spawn your data head and list projects, or query, create,
@@ -87,6 +88,25 @@ hydranium-cli projects --server "node ./server/lib/data-server-main.js ./workspa
 workspace has one writer. Writing in a workspace an editor has open makes two
 writers, and one write is lost: an editor that holds a deleted file can save it
 back.
+
+`generate-transfer-model` emits a constant under each type's name, as Langium
+does for the AST. If the module that re-exports the generated model narrows an
+interface, its declaration hides the generated constant of the same name, so
+re-export that constant beside it. The generated `<LanguageId>TransferTypes`
+map still names the generated interface, so declare the map under its own
+name too, and `transferNode` builds the narrowed type. That reaches only the
+type's own entry: a property or a union that holds the type, here a
+`Declaration`, still names the generated interface.
+
+```ts
+import * as generated from './generated-hydranium/transfer-model.js';
+export * from './generated-hydranium/transfer-model.js';
+export interface Entity extends generated.Entity {
+   name: `${string}Entity`;
+}
+export const Entity = generated.Entity;
+export type OrderFlowTransferTypes = Omit<generated.OrderFlowTransferTypes, 'Entity'> & { Entity: Entity };
+```
 
 Commands that spawn a child give it a heap ceiling; set
 `HYDRANIUM_CLI_MAX_OLD_SPACE_MB` to state your own in MiB.

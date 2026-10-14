@@ -29,10 +29,10 @@ export interface TransferElement {
  * declared wire shape — or fall back to the structural base
  * {@link TransferElement} when no entry is declared.
  *
- * Adopters declare the overlay by interface merging or by generating an
- * interface keyed on those `$type` strings. Types not in the overlay resolve to
- * `TransferElement` — the framework default behaves correctly without an
- * overlay (no autocomplete, but no compile error either).
+ * The transfer-model generator emits the overlay as `<LanguageId>TransferTypes`;
+ * an encoder that relabels a type overrides that entry. Types not in the
+ * overlay resolve to `TransferElement` — the framework default behaves
+ * correctly without an overlay (no autocomplete, but no compile error either).
  *
  * The lookup is compile-time only; no runtime cost.
  */

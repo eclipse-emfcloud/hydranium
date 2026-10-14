@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { emitAstBuilder } from './generate-ast-builder.js';
 import { emitLanguages } from './generate-languages.js';
+import { emitTransferBuilder } from './generate-transfer-builder.js';
 import {
    type Node,
    type ObjectLiteralExpression,
@@ -47,6 +48,21 @@ export interface GenerateTransferModelOptions {
     * and not the other has the two disagreeing about the same grammar.
     */
    astBuilderFile?: string;
+   /**
+    * Destination for a generated test module binding `makeTransferNodeBuilder`
+    * from `@hydranium/protocol/testing` to the transfer model, as `transferNode`,
+    * the way {@link astBuilderFile} binds `astNode`. Belongs in a test tree:
+    * production code has no use for a builder that fills grammar defaults.
+    *
+    * When it sits in another package than {@link outFile}, it imports the model
+    * by that package's name, so the package's main entry must re-export the
+    * generated model, and with it each type's constant: an interface the entry
+    * narrows hides the generated constant of the same name unless the entry
+    * re-exports that constant too, and the builder keeps the generated
+    * interface unless the entry declares `<LanguageId>TransferTypes` with the
+    * narrowed entry.
+    */
+   transferBuilderFile?: string;
    /**
     * Destination for a generated module stating each grammar's language id and
     * file extensions, read from the `module.ts` beside {@link astFile}. Lets a
@@ -95,6 +111,15 @@ interface AugmentedProperty {
 
 interface ReflectionEntry {
    superTypes: string[];
+   properties: ReflectionProperty[];
+}
+
+/** One grammar property of a reflection entry; `defaultValue` keeps the source text of the literal. */
+interface ReflectionProperty {
+   name: string;
+   defaultValue?: string;
+   optional: boolean;
+   referenceType?: string;
 }
 
 const DEFAULT_ELEMENT_TYPE_NAME = 'TransferElement';
@@ -246,7 +271,6 @@ export function generateTransferModel(options: GenerateTransferModelOptions): vo
    // 7. Classify interfaces: abstract (union $type) vs concrete (literal $type).
    const interfaceNames: string[] = [];
    const abstractTypes = new Set<string>();
-   const concreteTypes = new Set<string>();
 
    for (const name of Object.keys(reflectionTypes)) {
       const iface = astInterfaces.get(name);
@@ -258,8 +282,6 @@ export function generateTransferModel(options: GenerateTransferModelOptions): vo
       const typeText = iface.getProperty('$type')?.getTypeNode()?.getText() ?? '';
       if (typeText.includes('|')) {
          abstractTypes.add(name);
-      } else {
-         concreteTypes.add(name);
       }
    }
 
@@ -301,12 +323,13 @@ export function generateTransferModel(options: GenerateTransferModelOptions): vo
    out.push('}');
    out.push('');
 
-   // Type constants for concrete types.
+   // Langium's per-type constant under the same name, for every reflection type
+   // the model emits, abstract ones and unions included.
+   const reflectedTypes = Object.keys(reflectionTypes).filter(name => astInterfaces.has(name) || typeAliasNames.has(name));
    out.push('// --- Type Constants ---');
-   for (const name of sorted) {
-      if (concreteTypes.has(name)) {
-         out.push(`export const ${name}Type = '${name}';`);
-      }
+   for (const name of reflectedTypes) {
+      const keys = reflectionTypes[name].properties.map(property => `${property.name}: '${property.name}'`);
+      out.push(`export const ${name} = { ${[`$type: '${name}'`, ...keys].join(', ')} } as const;`);
    }
    out.push('');
 
@@ -348,7 +371,7 @@ export function generateTransferModel(options: GenerateTransferModelOptions): vo
          const typeValue = iface.getProperty('$type')?.getTypeNode()?.getText() ?? `'${name}'`;
          out.push(`   readonly $type: ${typeValue};`);
       } else {
-         out.push(`   readonly $type: typeof ${name}Type;`);
+         out.push(`   readonly $type: '${name}';`);
       }
 
       const emitted = new Set<string>(['$type']);
@@ -410,7 +433,7 @@ export function generateTransferModel(options: GenerateTransferModelOptions): vo
          const checks = members.map(m => `item.$type === '${m}'`).join(' || ');
          out.push(`   return is${elementTypeName}(item) && (${checks});`);
       } else {
-         out.push(`   return is${elementTypeName}(item) && item.$type === ${name}Type;`);
+         out.push(`   return is${elementTypeName}(item) && item.$type === '${name}';`);
       }
       out.push('}');
       out.push('');
@@ -435,6 +458,9 @@ export function generateTransferModel(options: GenerateTransferModelOptions): vo
          out.push('');
       }
    }
+
+   out.push(...renderTypeMap(languageId, reflectedTypes));
+   out.push(...renderReflection(languageId, elementTypeName, reflectedTypes, reflectionTypes));
 
    // Coverage check: warn on reflection types not emitted.
    const processedSet = new Set(sorted);
@@ -466,10 +492,106 @@ export function generateTransferModel(options: GenerateTransferModelOptions): vo
       }
    }
 
+   if (options.transferBuilderFile !== undefined) {
+      emitTransferBuilder({ outFile: options.transferBuilderFile, transferModelFile: options.outFile, languageId, regenCommand });
+   }
+
    if (options.languagesFile !== undefined) {
       const moduleSource = project.addSourceFileAtPath(languagesModuleFile(options));
       emitLanguages(moduleSource, { outFile: options.languagesFile, regenCommand });
    }
+}
+
+/**
+ * `<LanguageId>TransferTypes`, each `$type` to its interface, so an encoder or a
+ * builder can type a node by the grammar the way Langium's `<LanguageId>AstType`
+ * does on the AST side.
+ */
+function renderTypeMap(languageId: string, types: readonly string[]): string[] {
+   return ['// --- Type Map ---', `export type ${languageId}TransferTypes = {`, ...types.map(name => `   ${name}: ${name};`), '};', ''];
+}
+
+/**
+ * `<LanguageId>TransferReflection`, the grammar metadata with the method names
+ * Langium's `AstReflection` uses. A plain object with no framework import, so
+ * the file stays self-contained, and nothing references it but its importers:
+ * the `is` guards test `$type` directly, so a guard never pulls it in. `types`
+ * keeps its literal type, which is how the transfer-node builder tells which
+ * fields the grammar defaults.
+ */
+function renderReflection(
+   languageId: string,
+   elementTypeName: string,
+   types: readonly string[],
+   reflectionTypes: Record<string, ReflectionEntry>
+): string[] {
+   const metaData = `${languageId}TransferTypeMetaData`;
+   // Index signatures, not `Readonly<Record<…>>`: a grammar type may be named
+   // `Record` or `Readonly`, which Langium does not reserve as it does `Object`.
+   const out = [
+      '// --- Reflection ---',
+      `export interface ${metaData} {`,
+      '   readonly name: string;',
+      '   readonly properties: {',
+      '      readonly [name: string]: { readonly name: string; readonly defaultValue?: unknown; readonly optional?: boolean; readonly referenceType?: string };',
+      '   };',
+      '   readonly superTypes: readonly string[];',
+      '}',
+      '',
+      `export const ${languageId}TransferReflection = {`,
+      '   types: {'
+   ];
+   for (const name of types) {
+      const { properties, superTypes } = reflectionTypes[name];
+      const propertyEntries = properties.map(property => {
+         const fields = [`name: '${property.name}'`];
+         if (property.defaultValue !== undefined) {
+            fields.push(`defaultValue: ${property.defaultValue}`);
+         }
+         if (property.optional) {
+            fields.push('optional: true');
+         }
+         if (property.referenceType !== undefined) {
+            fields.push(`referenceType: '${property.referenceType}'`);
+         }
+         return `${property.name}: { ${fields.join(', ')} }`;
+      });
+      const supers = superTypes.map(superType => `'${superType}'`).join(', ');
+      const propertiesText = propertyEntries.length > 0 ? `{ ${propertyEntries.join(', ')} }` : '{}';
+      out.push(`      ${name}: { name: '${name}', properties: ${propertiesText}, superTypes: [${supers}] },`);
+   }
+   out.push(
+      `   } as const satisfies { readonly [type: string]: ${metaData} },`,
+      '',
+      '   getAllTypes(): string[] {',
+      '      return Object.keys(this.types);',
+      '   },',
+      '',
+      // An own-property check, not `types[type] ?? …`: a name the object
+      // prototype carries, `toString` say, would read the inherited member and
+      // make `isSubtype` throw. `hasOwnProperty.call` rather than `Object.hasOwn`
+      // because the adopter's protocol package may target a lib without it.
+      `   getTypeMetaData(type: string): ${metaData} {`,
+      '      return Object.prototype.hasOwnProperty.call(this.types, type)',
+      `         ? (this.types as { readonly [type: string]: ${metaData} })[type]`,
+      '         : { name: type, properties: {}, superTypes: [] };',
+      '   },',
+      '',
+      '   isSubtype(subtype: string, supertype: string): boolean {',
+      '      return subtype === supertype || this.getTypeMetaData(subtype).superTypes.some(type => this.isSubtype(type, supertype));',
+      '   },',
+      '',
+      '   getAllSubTypes(type: string): string[] {',
+      '      return this.getAllTypes().filter(candidate => this.isSubtype(candidate, type));',
+      '   },',
+      '',
+      '   isInstance(item: unknown, type: string): boolean {',
+      `      return is${elementTypeName}(item) && this.isSubtype(item.$type, type);`,
+      '   }',
+      '};',
+      ''
+   );
+   return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -510,10 +632,11 @@ function findAstReflectionClass(source: SourceFile): ClassDeclaration {
 }
 
 /**
- * Extract `superTypes` for each entry of the reflection class's `types` property
- * initializer. We rely on the Langium convention that `X.$type === 'X'`, so a
- * supertype expression resolves to the literal type-name string by stripping
- * `.$type`.
+ * Extract `superTypes` and the grammar properties for each entry of the
+ * reflection class's `types` property initializer. We rely on the Langium
+ * convention that `X.$type === 'X'` and `X.p === 'p'`, so a type expression
+ * resolves to the literal type-name string by stripping `.$type`, and a
+ * property's name is its key.
  */
 function parseReflectionTypes(reflectionClass: ClassDeclaration): Record<string, ReflectionEntry> {
    const result: Record<string, ReflectionEntry> = {};
@@ -535,27 +658,33 @@ function parseReflectionTypes(reflectionClass: ClassDeclaration): Record<string,
       const value = entry.getLastChildByKind(SyntaxKind.ObjectLiteralExpression);
       const supersProp = value?.getProperty('superTypes');
       const supersInit = supersProp?.getFirstChildByKind(SyntaxKind.ArrayLiteralExpression);
-      const superTypes: string[] = [];
-      if (supersInit) {
-         for (const element of supersInit.getElements()) {
-            const text = element.getText();
-            const dotMatch = /^([A-Za-z_$][\w$]*)\.\$type$/.exec(text);
-            if (dotMatch) {
-               superTypes.push(dotMatch[1]);
-               continue;
-            }
-            // Bare identifier or quoted string fall-back.
-            const stringMatch = /^['"](.+)['"]$/.exec(text);
-            if (stringMatch) {
-               superTypes.push(stringMatch[1]);
-            } else {
-               superTypes.push(text);
-            }
-         }
-      }
-      result[name] = { superTypes };
+      const superTypes = supersInit?.getElements().map(element => typeNameOf(element.getText())) ?? [];
+      result[name] = { superTypes, properties: parseReflectionProperties(value) };
    }
    return result;
+}
+
+function parseReflectionProperties(entry: ObjectLiteralExpression | undefined): ReflectionProperty[] {
+   const propertiesInit = entry?.getProperty('properties')?.getFirstChildByKind(SyntaxKind.ObjectLiteralExpression);
+   const properties: ReflectionProperty[] = [];
+   for (const property of propertiesInit?.getChildrenOfKind(SyntaxKind.PropertyAssignment) ?? []) {
+      const meta = property.getInitializerIfKind(SyntaxKind.ObjectLiteralExpression);
+      const field = (key: string): string | undefined =>
+         meta?.getProperty(key)?.asKind(SyntaxKind.PropertyAssignment)?.getInitializer()?.getText();
+      const referenceType = field('referenceType');
+      properties.push({
+         name: property.getName(),
+         defaultValue: field('defaultValue'),
+         optional: field('optional') === 'true',
+         referenceType: referenceType === undefined ? undefined : typeNameOf(referenceType)
+      });
+   }
+   return properties;
+}
+
+/** `X.$type` or a quoted `'X'` to `X`; any other text passes through. */
+function typeNameOf(text: string): string {
+   return /^([A-Za-z_$][\w$]*)\.\$type$/.exec(text)?.[1] ?? /^['"](.+)['"]$/.exec(text)?.[1] ?? text;
 }
 
 /**

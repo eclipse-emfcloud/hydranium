@@ -36,9 +36,11 @@ import {
    type TriviaRegistry
 } from '@hydranium/core';
 import { type AstNode, URI } from '@hydranium/langium';
+import { type ProcessModel as TransferProcessModel, Task } from '@hydranium/example-order-flow-protocol';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { makeScratchWorkspaceHarness, makeServices, type OrderFlowHarness } from './order-flow-harness.js';
+import { transferNode } from './generated-hydranium/transfer-builder.js';
 import { type OrderFlowServices } from '../src/language-server/order-flow-module.js';
 import { type ProcessModel } from '../src/language-server/ast.js';
 import { OrderFlowCommentPreserver } from '../src/language-server/order-flow-trivia.js';
@@ -512,10 +514,10 @@ describe('trivia preservation', () => {
       const document = harness.shared.workspace.LangiumDocumentFactory.fromString(source, uri);
       const trivia = harness.process.trivia.TriviaService.extract(document);
       const transfer = harness.shared.model.TransferEncoder.toTransfer(document.parseResult.value, 'grammar');
-      const nodes = (transfer as unknown as { nodes: Array<{ name: string }> }).nodes;
+      const nodes = (transfer as TransferProcessModel).nodes;
       nodes[0].name = 'Pick';
       nodes[1].name = 'Pay';
-      nodes.push({ $type: 'Task', effects: [], name: 'Ship' } as never);
+      nodes.push(transferNode(Task, { name: 'Ship' }));
       const serialized = await harness.process.serializer.Serializer.serializeTransfer(transfer);
 
       expect(harness.process.trivia.TriviaService.apply(serialized, trivia, uri)).not.toContain('//');
@@ -534,9 +536,9 @@ describe('trivia preservation', () => {
       const document = harness.shared.workspace.LangiumDocumentFactory.fromString(source, uri);
       const trivia = harness.process.trivia.TriviaService.extract(document);
       const transfer = harness.shared.model.TransferEncoder.toTransfer(document.parseResult.value, 'grammar');
-      const nodes = (transfer as unknown as { nodes: Array<{ name: string }> }).nodes;
+      const nodes = (transfer as TransferProcessModel).nodes;
       nodes[0].name = 'Charge';
-      nodes.unshift({ $type: 'Task', name: 'Pay', effects: [] } as never);
+      nodes.unshift(transferNode(Task, { name: 'Pay' }));
       const serialized = await harness.process.serializer.Serializer.serializeTransfer(transfer);
 
       expect(harness.process.trivia.TriviaService.apply(serialized, trivia, uri)).toContain('   // about Pay\n   task Pay');

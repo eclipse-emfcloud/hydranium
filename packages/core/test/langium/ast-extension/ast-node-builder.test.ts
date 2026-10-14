@@ -9,7 +9,7 @@
 
 import { describe, expect, test } from 'vitest';
 import { AbstractAstReflection, type AstNode, type TypeMetaData } from '@hydranium/langium';
-import { buildAstNode, makeAstNodeBuilder } from '../../../src/langium/ast-extension/ast-node-builder.js';
+import { type AstTypeConstant, buildAstNode, makeAstNodeBuilder } from '../../../src/langium/ast-extension/ast-node-builder.js';
 
 /**
  * Minimal stand-ins for the per-type interface + per-type constant pair that
@@ -65,6 +65,21 @@ interface FakeSeeded extends AstNode {
 }
 const FakeSeeded = { $type: 'FakeSeeded', id: 'id', modes: 'modes' } as const;
 
+type FakeEither = FakeRoot | FakeLeaf;
+const FakeEither = { $type: 'FakeEither' } as const;
+
+/** A concrete type with a subtype: Langium lists the type's own name in its `$type` union. */
+interface FakeBase extends AstNode {
+   readonly $type: 'FakeBase' | 'FakeDerived';
+   label: string;
+}
+const FakeBase = { $type: 'FakeBase', label: 'label' } as const;
+
+interface FakeDerived extends FakeBase {
+   readonly $type: 'FakeDerived';
+}
+const FakeDerived = { $type: 'FakeDerived', label: 'label' } as const;
+
 /**
  * Per-grammar $type → interface registry — Langium emits this as
  * `<LanguageName>AstType` next to the reflection for every grammar. The
@@ -77,6 +92,9 @@ type FakeAstType = {
    FakeLeaf: FakeLeaf;
    FakeFlag: FakeFlag;
    FakeSeeded: FakeSeeded;
+   FakeEither: FakeEither;
+   FakeBase: FakeBase;
+   FakeDerived: FakeDerived;
 };
 
 /**
@@ -233,11 +251,32 @@ describe('makeAstNodeBuilder', () => {
       expect(Object.keys(node).sort()).toEqual(['$type', 'value']);
    });
 
-   test('lets the constant drive $type, so extras cannot accidentally rebind it', () => {
-      // The extras object can technically clobber $type, but the typed-init
-      // signature does not include it, so the typed surface stays clean.
-      const node = astNode(FakeLeaf, { value: 1 });
-      expect(node.$type).toBe(FakeLeaf.$type);
+   test("keeps the constant's $type when a spread init or the extras carry another", () => {
+      // Only a literal written in the call has its extra properties rejected,
+      // so a spread of another node reaches the init with its own $type.
+      const other = { $type: 'FakeRoot', value: 1 };
+
+      expect(astNode(FakeLeaf, other).$type).toBe('FakeLeaf');
+      expect(astNode(FakeLeaf, { value: 1 }, { $type: 'FakeRoot' }).$type).toBe('FakeLeaf');
+   });
+
+   test('keeps a grammar default the init or the extras name as undefined', () => {
+      expect(astNode(FakeRoot, { name: 'root', children: undefined }).children).toEqual([]);
+      expect(astNode(FakeRoot, { name: 'root' }, { tags: undefined }).tags).toEqual([]);
+   });
+
+   test('refuses a constant whose $type no node carries or is not one type name', () => {
+      const selected: AstTypeConstant<'FakeRoot' | 'FakeLeaf'> = FakeRoot;
+
+      // @ts-expect-error `FakeEither` names no node's `$type`.
+      astNode(FakeEither, {});
+      // @ts-expect-error either type could be built, so neither's required fields would be checked.
+      astNode(selected, {});
+   });
+
+   test('builds a concrete type that has subtypes, whose $type lists its own name', () => {
+      expect(astNode(FakeBase, { label: 'a' }).$type).toBe('FakeBase');
+      expect(astNode(FakeDerived, { label: 'a' }).$type).toBe('FakeDerived');
    });
 
    test('infers the return type from TMap without an explicit generic', () => {
@@ -313,6 +352,13 @@ describe('buildAstNode', () => {
    test('init overrides the declared defaults', () => {
       const seeded = buildAstNode(reflection, 'FakeSeeded', { modes: ['execute'] });
       expect((seeded as unknown as { modes: string[] }).modes).toEqual(['execute']);
+   });
+
+   test('keeps a grammar default the init names as undefined, and writes any other undefined', () => {
+      const root = buildAstNode<FakeRoot>(reflection, 'FakeRoot', { children: undefined, $containerIndex: undefined });
+
+      expect(root.children).toEqual([]);
+      expect(Object.keys(root)).toContain('$containerIndex');
    });
 
    test('carries the Langium plumbing fields an init supplies', () => {

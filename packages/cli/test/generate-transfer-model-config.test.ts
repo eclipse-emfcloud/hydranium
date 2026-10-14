@@ -53,6 +53,7 @@ describe('mergeTransferModelOptions', () => {
          augmentationFile: '/b.ts',
          outFile: '/c.ts',
          astBuilderFile: '/d.ts',
+         transferBuilderFile: '/f.ts',
          languagesFile: '/e.ts',
          elementTypeName: 'Element',
          terminalsName: 'Terminals',

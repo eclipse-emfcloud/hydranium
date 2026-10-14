@@ -198,6 +198,7 @@ describe('the emitted scaffold compiles', () => {
                augmentationFile: path.join(server, 'src/language-server/ast.ts'),
                outFile: path.join(protocol, 'src/generated-hydranium/transfer-model.ts'),
                languagesFile: path.join(protocol, 'src/generated-hydranium/languages.ts'),
+               transferBuilderFile: path.join(server, 'test/generated-hydranium/transfer-builder.ts'),
                elementTypeName: `${name}Element`,
                terminalsName: `${name}Terminals`
             });

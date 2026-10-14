@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import type { AstNode, AstReflection } from '@hydranium/langium';
+import type { ConcreteTypeName, SingleTypeName } from '@hydranium/protocol';
 
 /**
  * Shape of the per-type constants Langium emits alongside each
@@ -55,14 +56,18 @@ export type AstNodeInit<T extends AstNode> = Omit<T, keyof AstNode | ArrayKeys<T
  * the AST interface from a constant's `$type` literal alone, so call sites do
  * not have to write the type name twice.
  *
+ * The constant must name one type its own `$type` lists: a union's or an
+ * abstract type's constant, or one typed by a union of type names, would let
+ * an incomplete node through.
+ *
  * @param typeConstant the per-type constant Langium emits (drives `$type`).
  * @param init typed fields — TS enforces mandatory non-array fields here.
  * @param extras explicitly-unchecked escape hatch for properties not declared
  *               on the AST interface. Use sparingly; lives in a separate
  *               argument so typos can't silently pass into the typed slot.
  */
-export type AstNodeBuilder<TMap> = <TType extends string & keyof TMap>(
-   typeConstant: AstTypeConstant<TType>,
+export type AstNodeBuilder<TMap> = <TType extends ConcreteTypeName<TMap>>(
+   typeConstant: AstTypeConstant<TType> & SingleTypeName<TType>,
    init: AstNodeInit<Extract<TMap[TType], AstNode>>,
    extras?: Record<string, unknown>
 ) => Extract<TMap[TType], AstNode>;
@@ -94,18 +99,21 @@ export type AstNodeBuilder<TMap> = <TType extends string & keyof TMap>(
  * rather than a way to drop fields from the typed call site.
  */
 export function makeAstNodeBuilder<TMap>(reflection: AstReflection): AstNodeBuilder<TMap> {
-   return function astNode<TType extends string & keyof TMap>(
-      typeConstant: AstTypeConstant<TType>,
+   return function astNode<TType extends ConcreteTypeName<TMap>>(
+      typeConstant: AstTypeConstant<TType> & SingleTypeName<TType>,
       init: AstNodeInit<Extract<TMap[TType], AstNode>>,
       extras?: Record<string, unknown>
    ): Extract<TMap[TType], AstNode> {
       const result = withTypeDefaults(reflection, typeConstant.$type);
-      Object.assign(result, init);
+      assignOverDefaults(result, init);
       if (extras) {
          // Extras win over init: this is the explicit escape hatch, so when a
          // call site uses it, treat that as deliberate override intent.
-         Object.assign(result, extras);
+         assignOverDefaults(result, extras);
       }
+      // Last, so neither can rebind it: `AstNodeInit` keeps out only a `$type`
+      // written in the call, and a spread of another node carries its own.
+      result.$type = typeConstant.$type;
       return result as unknown as Extract<TMap[TType], AstNode>;
    };
 }
@@ -127,12 +135,12 @@ export function makeAstNodeBuilder<TMap>(reflection: AstReflection): AstNodeBuil
  * permissive lookup into a throw at a call site that can only guess.
  *
  * **The `type` argument is authoritative: `init` cannot rebind `$type`.** The
- * typed builder gets this for free — `AstNodeInit` omits `$type`, so a call site
- * cannot reach it — but here `init` is loosely typed, and the case that needs
- * the guarantee is RETYPING: a caller spreading an existing node to produce one
- * of a different type (`{ ...source }`) carries the SOURCE's `$type` in, which
- * would silently win over the type actually requested and hand back a node of
- * the wrong type with no error anywhere.
+ * typed builder holds the same rule, since its init type keeps out only a
+ * `$type` written in the call. The case that needs the guarantee is RETYPING:
+ * a caller spreading an existing node to produce one of a different type
+ * (`{ ...source }`) carries the SOURCE's `$type` in, which would silently win
+ * over the type actually requested and hand back a node of the wrong type with
+ * no error anywhere.
  */
 export function buildAstNode<TAst extends AstNode = AstNode>(
    reflection: AstReflection,
@@ -141,7 +149,7 @@ export function buildAstNode<TAst extends AstNode = AstNode>(
 ): TAst {
    const result = withTypeDefaults(reflection, type);
    if (init) {
-      Object.assign(result, init);
+      assignOverDefaults(result, init);
       result.$type = type;
    }
    return result as unknown as TAst;
@@ -166,4 +174,18 @@ function withTypeDefaults(reflection: AstReflection, type: string): Record<strin
       }
    }
    return result;
+}
+
+/**
+ * `Object.assign`, except that an `undefined` does not replace a value already
+ * there: an optional field the caller names as `undefined` keeps its grammar
+ * default, where a plain assign would leave a node typed complete without it.
+ * Any other `undefined` is written, so the key stays present.
+ */
+function assignOverDefaults(target: Record<string, unknown>, source: object): void {
+   for (const [key, value] of Object.entries(source)) {
+      if (value !== undefined || !Object.hasOwn(target, key)) {
+         target[key] = value;
+      }
+   }
 }

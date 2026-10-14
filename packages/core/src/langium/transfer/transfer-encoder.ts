@@ -142,8 +142,8 @@ export interface TransferEncoder<TDiagnostic extends TransferDiagnostic = Transf
  *   resolving each AST type to its declared wire shape. Default is
  *   `Record<string, TransferElement>`, which collapses every encoded node
  *   to the structural base — adequate for adopters without a generated
- *   overlay; richer adopters declare typed maps for autocomplete on the
- *   encoder's return types.
+ *   overlay; an adopter passes the generated `<LanguageId>TransferTypes` to
+ *   type the encoder's returns by the grammar.
  * - `TDiagnostic` — wire-diagnostic shape produced by
  *   {@link toTransferDiagnostic}. Constrained to extend
  *   {@link TransferDiagnostic} so the framework default (which constructs a

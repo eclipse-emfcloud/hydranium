@@ -308,9 +308,13 @@ describe('hydranium-cli binary against a real three-grammar head', () => {
          // One generated file spans all three grammars, because the Langium AST
          // it reads is the shared one: the three entry types, and a terminal
          // (`NUMBER`) plus keywords only the layout grammar declares.
-         expect(emitted).toContain("export const DomainModelType = 'DomainModel';");
-         expect(emitted).toContain("export const ProcessModelType = 'ProcessModel';");
-         expect(emitted).toContain("export const LayoutModelType = 'LayoutModel';");
+         expect(emitted).toContain(
+            "export const DomainModel = { $type: 'DomainModel', declarations: 'declarations', project: 'project' } as const;"
+         );
+         expect(emitted).toContain(
+            "export const ProcessModel = { $type: 'ProcessModel', name: 'name', nodes: 'nodes', subject: 'subject', transitions: 'transitions' } as const;"
+         );
+         expect(emitted).toContain("export const LayoutModel = { $type: 'LayoutModel', nodes: 'nodes' } as const;");
          expect(emitted).toContain('export const OrderFlowTerminals = {');
          expect(emitted).toContain('NUMBER:');
          expect(emitted).toContain("'layout'");
