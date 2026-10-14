@@ -30,6 +30,9 @@
 **/syntaxes
 examples/*/theia-app/plugins
 
+# `init`'s templates are formatted as the scaffold emits them, at its own width.
+packages/cli/templates
+
 # Throwaway probe scripts. A hand-written investigation left in the tree is not
 # source and should not be able to redden `format:check`, which is the LAST
 # clause of the chain and so reports after every other gate has already run.

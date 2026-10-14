@@ -30,7 +30,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -161,9 +161,9 @@ function hasHeader(file: string): boolean {
 const HEADER_EXTENSIONS = ['.ts', '.tsx', '.mts', '.mjs', '.cjs', '.js', '.css'];
 
 /**
- * Paths deliberately exempt from `--check-all`. Each is generated or
- * tool-local, so a header would either be wiped on the next run or ship
- * nowhere:
+ * Paths deliberately exempt from the header, under `--check-all` or named.
+ * Each but the templates is generated or tool-local, so a header would either
+ * be wiped on the next run or ship nowhere:
  *
  * - `**\/generated/` — langium-cli output, rewritten by every codegen run.
  * - `**\/generated-hydranium/` — `hydranium-cli` output (the transfer model, and
@@ -178,11 +178,13 @@ const HEADER_EXTENSIONS = ['.ts', '.tsx', '.mts', '.mjs', '.cjs', '.js', '.css']
  *   prompts before taking anything unexpected with it.
  * - `esbuild.mjs` — Theia app scaffolding; deleting it and re-running
  *   `theia build` regenerates it.
+ * - `packages/cli/templates/` — the files `init` emits, which carry no header
+ *   because the scaffold cannot know the adopter's license.
  *
  * `.langium` grammars are absent from {@link HEADER_EXTENSIONS} for the same
  * reason: they carry no header today.
  */
-const HEADER_EXEMPT = [/(^|\/)generated\//, /(^|\/)generated-hydranium\//, /(^|\/)esbuild\.mjs$/];
+const HEADER_EXEMPT = [/(^|\/)generated\//, /(^|\/)generated-hydranium\//, /(^|\/)esbuild\.mjs$/, /^packages\/cli\/templates\//];
 
 /**
  * Every source file the header gate covers: tracked files plus new untracked
@@ -227,6 +229,12 @@ function main() {
       } catch {
          console.error(`Not found: ${file}`);
          exitCode = 1;
+         continue;
+      }
+      // Named files too, so the new-file step cannot stamp a header onto an
+      // `init` template, which would then reach every adopter's project.
+      if (HEADER_EXEMPT.some(pattern => pattern.test(relative(REPO_ROOT, file).replaceAll('\\', '/')))) {
+         console.log(`exempt: ${file}`);
          continue;
       }
 

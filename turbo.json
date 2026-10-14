@@ -50,6 +50,8 @@
       "inputs": [
         "src/**/*",
         "test/**/*",
+        // The CLI's `init` templates, which its tests render.
+        "templates/**/*",
         "vitest.config.ts",
         "jest.config.cjs",
         "tsconfig.test.json",

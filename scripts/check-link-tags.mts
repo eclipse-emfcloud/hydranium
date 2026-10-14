@@ -38,11 +38,13 @@
  *   family — as this repo's own audit tooling does — needs to name it, and an
  *   empty tag renders nothing in any case. The target is what makes it a claim
  *   about a symbol.
- * - **Text inside a template literal is not a comment.** The `init` scaffold
- *   emits `//` prose runs into the files it writes, so a tag in one of those
- *   would render as literal text in the ADOPTER's file — but no parser sees a
- *   comment there, and the emission is byte-compared against its provenance
- *   target instead, which is the check that owns that text.
+ * - **Text inside a template literal is not a comment.** The files `init`
+ *   computes carry `//` prose runs, so a tag in one of those would render as
+ *   literal text in the ADOPTER's file — but no parser sees a comment there,
+ *   and the emission is byte-compared against its provenance target instead,
+ *   which is the check that owns that text. Its fixed files under `templates/`
+ *   ship verbatim, so their comments are checked like any other and their
+ *   strings, or the whole text of one that is not TypeScript, for docs pages.
  *
  * ## No pointer that rots
  *
@@ -214,9 +216,14 @@ function listDocsPageNames(): string[] {
    ];
 }
 
-/** Source that ships in a package, whose strings reach an adopter's terminal. */
+/** Source that ships in a package, whose strings reach an adopter's terminal or, from a template, their project. */
 function isShippedSource(file: string): boolean {
-   return /^packages\/[^/]+\/src\//.test(file);
+   return /^packages\/[^/]+\/(src|templates)\//.test(file);
+}
+
+/** A file `init` copies into an adopter's project; all of its text ships, comments and code alike. */
+function isTemplate(file: string): boolean {
+   return /^packages\/[^/]+\/templates\//.test(file);
 }
 
 /**
@@ -287,6 +294,16 @@ export function docsPointersInStrings(fileName: string, text: string): { line: n
    };
    walk(sourceFile);
    return hits;
+}
+
+/** Docs pointers anywhere in a template that is not TypeScript, which no parser here reads. */
+export function docsPointersInTemplate(fileName: string, text: string): { line: number; matches: string[] }[] {
+   if (!isTemplate(fileName) || SOURCE_EXTENSIONS.some(extension => fileName.endsWith(extension))) return [];
+   return text.split('\n').flatMap((line, index) => {
+      DOCS_RULE.pattern.lastIndex = 0;
+      const matches = [...new Set([...line.matchAll(DOCS_RULE.pattern)].map(match => match[0]))];
+      return matches.length > 0 ? [{ line: index + 1, matches }] : [];
+   });
 }
 
 /**
@@ -489,6 +506,34 @@ const STRING_SELF_TESTS = [
       flagged: false,
       file: 'packages/core/test/probe.test.ts',
       source: "export const expected = 'docs/adopting/requirements.md';\n"
+   },
+   {
+      name: 'a docs path in a string of a TypeScript template is flagged',
+      flagged: true,
+      file: 'packages/cli/templates/server/src/probe.ts',
+      source: "export const help = 'see docs/adopting/requirements.md';\n"
+   }
+];
+
+/** The template half of the docs rule: a non-TypeScript template's whole text, and the same text elsewhere. */
+const TEMPLATE_SELF_TESTS = [
+   {
+      name: 'a docs path in a grammar template comment is flagged',
+      flagged: true,
+      file: 'packages/cli/templates/server/src/grammar/probe.langium',
+      source: '// See docs/adopting/requirements.md.\nhidden terminal WS: /\\s+/;\n'
+   },
+   {
+      name: 'a docs path in an extension-less template is flagged',
+      flagged: true,
+      file: 'packages/cli/templates/server/gitignore',
+      source: '# see docs/adopting/requirements.md\nlib/\n'
+   },
+   {
+      name: 'a docs path in a grammar outside the templates is not shipped, not flagged',
+      flagged: false,
+      file: 'examples/bookstore/server/src/grammar/probe.langium',
+      source: '// See docs/adopting/requirements.md.\n'
    }
 ];
 
@@ -522,6 +567,15 @@ function runSelfTests() {
       broken = true;
       console.error(`✗ SELF-TEST FAILED: ${probe.name} — got ${hits.length} hit(s)`);
    }
+   for (const probe of TEMPLATE_SELF_TESTS) {
+      const hits = docsPointersInTemplate(probe.file, probe.source);
+      if (hits.length > 0 === probe.flagged) {
+         console.log(`✓ self-test: ${probe.name}`);
+         continue;
+      }
+      broken = true;
+      console.error(`✗ SELF-TEST FAILED: ${probe.name} — got ${hits.length} hit(s)`);
+   }
    const uncovered = POINTER_RULES.map(rule => rule.id).filter(id => !POINTER_SELF_TESTS.some(probe => probe.rule === id));
    if (uncovered.length > 0) {
       broken = true;
@@ -530,23 +584,21 @@ function runSelfTests() {
    return broken;
 }
 
-/** Tracked and new-but-untracked sources, so a bad comment is caught before it is committed. */
-function listSources() {
+/** Tracked and new-but-untracked files, so a bad comment is caught before it is committed. */
+function listFiles() {
    const stdout = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
       cwd: REPO_ROOT,
       encoding: 'utf-8',
       maxBuffer: 64 * 1024 * 1024
    });
-   return stdout
-      .split('\0')
-      .filter(Boolean)
-      .filter(file => SOURCE_EXTENSIONS.some(extension => file.endsWith(extension)));
+   return stdout.split('\0').filter(Boolean);
 }
 
 let failed = runSelfTests();
 console.log('');
 
-const sources = listSources();
+const files = listFiles();
+const sources = files.filter(file => SOURCE_EXTENSIONS.some(extension => file.endsWith(extension)));
 // A file set that has collapsed to nothing reports universal cleanliness, and
 // `git ls-files` answers with an empty list rather than an error when run
 // outside a work tree.
@@ -560,6 +612,13 @@ if (sources.length === 0) {
 const pointerScoped = sources.filter(isPointerScoped);
 if (pointerScoped.length === 0) {
    console.error('✗ SELF-TEST FAILED: the pointer rules reached no source file — the scope predicate excludes everything');
+   process.exit(1);
+}
+
+// An empty template set passes as silently as an empty source set.
+const templates = files.filter(isTemplate);
+if (templates.length === 0) {
+   console.error('✗ SELF-TEST FAILED: no init template was enumerated — the template scan checked nothing');
    process.exit(1);
 }
 
@@ -590,9 +649,24 @@ for (const file of sources) {
    }
 }
 
+for (const file of templates) {
+   let text;
+   try {
+      text = readFileSync(resolve(REPO_ROOT, file), 'utf-8');
+   } catch {
+      continue;
+   }
+   for (const hit of docsPointersInTemplate(file, text)) {
+      failed = true;
+      offences++;
+      console.error(`✗ ${file}:${hit.line}: docs-reference in a template (${hit.matches.join(', ')}) — ${DOCS_RULE.remedy}`);
+   }
+}
+
 if (!failed) {
    console.log(`✓ no {@link} in a // comment across ${sources.length} source file(s)`);
    console.log(`✓ no rotting pointer in a comment across ${pointerScoped.length} in-scope source file(s)`);
+   console.log(`✓ no docs pointer across ${templates.length} init template(s)`);
    process.exit(0);
 }
 if (offences > 0) {
