@@ -181,6 +181,12 @@ gets a token: a diagram's language is its document's, and
 `modelState.<role>For(node)` keeps nodes from other documents on their own
 grammar.
 
+**A diagram module extends `AbstractHydraniumGlspDiagramModule`**, never
+GLSP's `DiagramModule` or `GModelDiagramModule` directly: the plain bases
+compile and run without the status bindings and the transactional operation
+and undo handlers. Enforced by the ast-grep rule `glsp-diagram-module-base`
+over framework and example source.
+
 **Chainable interface methods return `this`**, because returning the interface
 drops the implementation type and the next call in the chain fails to compile.
 
