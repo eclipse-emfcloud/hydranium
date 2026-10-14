@@ -29,9 +29,9 @@
  * **The class on each element is the type id's SUBTYPE, and nothing sets it.**
  * sprotty's `CssClassPostprocessor` appends the part of the model type after the
  * colon on top of whatever `cssClasses` the server sent, so `node:task` styles as
- * `.task` with no server-side `addCssClass` anywhere. That makes the ids in
- * `order-flow-process-diagram-types.ts` load-bearing for this stylesheet as well
- * as for the view registry.
+ * `.task` with no server-side `addCssClass` anywhere. That makes the element
+ * type ids in `order-flow-protocol` load-bearing for this stylesheet as well as
+ * for the view registry.
  *
  * The selector shape is `.task > .sprotty-node`, not `.sprotty-node.task`: the
  * subtype lands on the element's outer `<g>`, while the drawn shape is the

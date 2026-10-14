@@ -10,6 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { emitAstBuilder } from './generate-ast-builder.js';
+import { emitLanguages } from './generate-languages.js';
 import {
    type Node,
    type ObjectLiteralExpression,
@@ -46,6 +47,13 @@ export interface GenerateTransferModelOptions {
     * and not the other has the two disagreeing about the same grammar.
     */
    astBuilderFile?: string;
+   /**
+    * Destination for a generated module stating each grammar's language id and
+    * file extensions, read from the `module.ts` beside {@link astFile}. Lets a
+    * package without Langium, such as one shared with clients, name the ids
+    * without copying them by hand.
+    */
+   languagesFile?: string;
    /** Name used for the base element type in the output. Defaults to `TransferElement`. */
    elementTypeName?: string;
    /** Name used for the terminal-patterns const in the output. Defaults to `ModelTerminals`. */
@@ -99,11 +107,21 @@ const DEFAULT_REGEN_COMMAND = 'Run the hydranium-cli generate-transfer-model com
  */
 const NAMESPACED_TERMINALS_NAME = 'Terminals';
 
+/** How often `--watch` polls its input files. */
+const WATCH_POLL_INTERVAL_MS = 250;
+
 /**
- * Generate once, then re-generate whenever the AST or augmentation file changes,
+ * Generate once, then re-generate whenever an input file changes (the AST, the
+ * augmentation file, and `module.ts` when a languages file is written),
  * until `signal` aborts (the CLI wires this to SIGINT). Regeneration is debounced
  * so an editor's multi-event save fires a single run, and a generation error is
  * logged without tearing down the watch. Resolves when the signal aborts.
+ *
+ * Polled by path rather than watched through OS events: langium-cli removes
+ * its output directory and writes the files back, which an event watch, Node's
+ * and chokidar's alike, stops hearing after the first run. A run that finds an
+ * input missing is skipped, since the file's return is a change of its own, so
+ * nothing generates from a half-written output.
  */
 export function watchTransferModel(options: GenerateTransferModelOptions, context: { signal: AbortSignal }): Promise<void> {
    const runSafely = (): void => {
@@ -114,23 +132,42 @@ export function watchTransferModel(options: GenerateTransferModelOptions, contex
       }
    };
    runSafely();
-   console.log(`Watching ${options.astFile} and ${options.augmentationFile} for changes. Press Ctrl-C to stop.`);
+   // A grammar's language id and extensions reach only `module.ts`, so the
+   // languages module would go stale without it.
+   const watched = [
+      options.astFile,
+      options.augmentationFile,
+      ...(options.languagesFile !== undefined ? [languagesModuleFile(options)] : [])
+   ];
 
    let timer: NodeJS.Timeout | undefined;
-   const scheduleRerun = (): void => {
+   const rerun = (): void => {
+      if (watched.every(file => fs.existsSync(file))) {
+         runSafely();
+      }
+   };
+   // The poll reports every stat it takes; a replaced file has a new inode, a
+   // rewritten one a new mtime, a removed or returning one zeroed stats.
+   const onPoll = (current: fs.Stats, previous: fs.Stats): void => {
+      if (current.ino === previous.ino && current.mtimeMs === previous.mtimeMs && current.size === previous.size) {
+         return;
+      }
       if (timer) {
          clearTimeout(timer);
       }
-      timer = setTimeout(runSafely, 150);
+      timer = setTimeout(rerun, 150);
    };
-   const watchers = [options.astFile, options.augmentationFile].map(file => fs.watch(file, scheduleRerun));
+   for (const file of watched) {
+      fs.watchFile(file, { interval: WATCH_POLL_INTERVAL_MS }, onPoll);
+   }
+   console.log(`Watching ${watched.join(', ')} for changes. Press Ctrl-C to stop.`);
 
    return new Promise<void>(resolve => {
       context.signal.addEventListener(
          'abort',
          () => {
-            for (const watcher of watchers) {
-               watcher.close();
+            for (const file of watched) {
+               fs.unwatchFile(file, onPoll);
             }
             if (timer) {
                clearTimeout(timer);
@@ -140,6 +177,11 @@ export function watchTransferModel(options: GenerateTransferModelOptions, contex
          { once: true }
       );
    });
+}
+
+/** The langium-cli `module.ts` beside the AST file, which the languages module is read from. */
+function languagesModuleFile(options: GenerateTransferModelOptions): string {
+   return path.join(path.dirname(options.astFile), 'module.ts');
 }
 
 /** Run the transfer-model generator. */
@@ -422,6 +464,11 @@ export function generateTransferModel(options: GenerateTransferModelOptions): vo
       if (!emitted) {
          console.warn(`Warning: no '${languageId}AstType' alias in ${options.astFile}; skipping the AST builder.`);
       }
+   }
+
+   if (options.languagesFile !== undefined) {
+      const moduleSource = project.addSourceFileAtPath(languagesModuleFile(options));
+      emitLanguages(moduleSource, { outFile: options.languagesFile, regenCommand });
    }
 }
 

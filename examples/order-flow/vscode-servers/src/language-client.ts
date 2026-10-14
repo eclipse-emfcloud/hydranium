@@ -7,11 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-// The leaf, NOT the barrel: this file is CommonJS and the server ESM, so the
-// imported graph lands in the host's `require.cache`, and the barrel's reaches a
-// JSON module Node caches with no `id`. Theia's plugin host scrubs that cache by
-// reading `id`, so the barrel breaks activation for every later plugin.
-import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from '@hydranium/example-order-flow-server/lib/head-ports.js';
+import { ALL_LANGUAGES, ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from '@hydranium/example-order-flow-protocol';
 import type { ExtensionContext } from 'vscode';
 import { commands, workspace } from 'vscode';
 import { LanguageClient, type LanguageClientOptions, type ServerOptions, TransportKind } from 'vscode-languageclient/node';
@@ -29,8 +25,6 @@ import { LanguageClient, type LanguageClientOptions, type ServerOptions, Transpo
  * grammars, because a VS Code extension has to be self-sufficient in its own
  * host; only the runtime launch is shared.
  */
-
-const LANGUAGE_IDS = ['order-flow-domain', 'order-flow-process', 'order-flow-layout'] as const;
 
 /** The client's name, which is also the Output channel `vscode-languageclient`
  *  creates. Theia-side integrations name that channel by this exact string. */
@@ -86,9 +80,9 @@ export async function startOrderFlowLanguageClient(context: ExtensionContext): P
    };
 
    const clientOptions: LanguageClientOptions = {
-      documentSelector: LANGUAGE_IDS.map(language => ({ scheme: 'file', language })),
+      documentSelector: ALL_LANGUAGES.map(({ languageId }) => ({ scheme: 'file', language: languageId })),
       synchronize: {
-         fileEvents: workspace.createFileSystemWatcher('**/*.{domain,process,layout}')
+         fileEvents: workspace.createFileSystemWatcher(`**/*{${ALL_LANGUAGES.flatMap(language => language.fileExtensions).join(',')}}`)
       }
    };
 

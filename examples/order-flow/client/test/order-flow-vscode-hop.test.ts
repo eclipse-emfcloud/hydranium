@@ -80,7 +80,7 @@ import {
    openSocketTransport,
    startSocketDataServer
 } from './testing/socket-data-server';
-import type { ProcessModel } from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
+import type { ProcessModel } from '@hydranium/example-order-flow-protocol';
 import { thirdPartyWrite as writeAsThirdParty } from './testing/third-party-write.js';
 
 const WORKSPACE_ROOT = path.resolve(__dirname, '../../workspace');

@@ -32,7 +32,7 @@ import { DataServer } from '@hydranium/data-server';
 // The TRANSFER roots, not the AST ones — same reasoning as `main.ts`. All
 // THREE grammars, because one data server per process serves every registered
 // language and `.layout` is one of them.
-import type { DomainModel, LayoutModel, ProcessModel } from './language-server/generated-hydranium/transfer-model.js';
+import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
 import { createOrderFlowServices } from './language-server/order-flow-module.js';
 
 const { shared } = createOrderFlowServices({ ...NodeFileSystem });

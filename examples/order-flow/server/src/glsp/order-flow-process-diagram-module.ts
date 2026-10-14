@@ -42,7 +42,7 @@ import { OrderFlowGlspIndex } from './order-flow-glsp-index.js';
 import { OrderFlowGlspState } from './order-flow-glsp-state.js';
 import { OrderFlowGlspStorage } from './order-flow-glsp-storage.js';
 import { OrderFlowProcessDiagramConfiguration } from './order-flow-process-diagram-configuration.js';
-import { PROCESS_DIAGRAM_TYPE } from './order-flow-process-diagram-types.js';
+import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-protocol';
 import { OrderFlowProcessGModelFactory } from './order-flow-process-gmodel-factory.js';
 import { OrderFlowSubmissionHandler } from './order-flow-submission-handler.js';
 import { OrderFlowToolPaletteItemProvider } from './order-flow-tool-palette-item-provider.js';

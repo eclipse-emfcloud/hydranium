@@ -19,7 +19,6 @@
  * subpath, keeping the production barrel test-free.
  */
 
-export * from './head-ports.js';
 export * from './language-server/ast.js';
 export * from './language-server/domain-serializer.js';
 export * from './language-server/layout-scope-provider.js';

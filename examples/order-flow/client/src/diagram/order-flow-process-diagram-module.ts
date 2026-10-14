@@ -30,7 +30,7 @@ import {
    PROCESS_TASK_NODE_TYPE,
    PROCESS_TRANSITION_EDGE_TYPE,
    type ProcessElementType
-} from './order-flow-process-diagram-types';
+} from '@hydranium/example-order-flow-protocol';
 import { ProcessGatewayNode } from './order-flow-process-model';
 import { OrderFlowProcessToolPalette } from './order-flow-process-tool-palette';
 import { ProcessEdgeView } from './order-flow-process-views';

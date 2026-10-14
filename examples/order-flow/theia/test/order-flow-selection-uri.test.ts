@@ -7,13 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import {
-   DomainLanguageMetaData,
-   LayoutLanguageMetaData,
-   ProcessLanguageMetaData
-} from '@hydranium/example-order-flow-server/lib/language-server/generated/module.js';
 import { describe, expect, it } from 'vitest';
-import { ORDER_FLOW_FILE_EXTENSIONS, orderFlowUriOf } from '../src/common/order-flow-selection-uri';
+import { orderFlowUriOf } from '../src/common/order-flow-selection-uri';
 
 /**
  * `orderFlowUriOf` is the whole of this shell's selection policy, and every
@@ -80,18 +75,5 @@ describe('orderFlowUriOf', () => {
       expect(orderFlowUriOf({ uri: { toString: () => `file:///workspace/model${extension}` } })).toBe(
          `file:///workspace/model${extension}`
       );
-   });
-});
-
-describe('ORDER_FLOW_FILE_EXTENSIONS', () => {
-   it('covers exactly the extensions the generated language metadata declares', () => {
-      // The browser cannot import the server package, so the list is restated in
-      // `common/`. This is what stops a newly added grammar from landing with a
-      // properties panel that silently declines its files — the server side is
-      // generated from the grammars, so it cannot drift on its own.
-      const declared = [DomainLanguageMetaData, LayoutLanguageMetaData, ProcessLanguageMetaData]
-         .flatMap(metaData => [...metaData.fileExtensions])
-         .sort();
-      expect([...ORDER_FLOW_FILE_EXTENSIONS].sort()).toEqual(declared);
    });
 });

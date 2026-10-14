@@ -67,10 +67,7 @@ import { afterAll, bench, describe } from 'vitest';
 import { type OrderFlowGlspState } from '../src/glsp/order-flow-glsp-state.js';
 import { OrderFlowProcessDiagramModule } from '../src/glsp/order-flow-process-diagram-module.js';
 import type { DomainModel, ProcessModel } from '../src/language-server/ast.js';
-import type {
-   DomainModel as TransferDomainModel,
-   ProcessModel as TransferProcessModel
-} from '../src/language-server/generated-hydranium/transfer-model.js';
+import type { DomainModel as TransferDomainModel, ProcessModel as TransferProcessModel } from '@hydranium/example-order-flow-protocol';
 import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
 import { generateLargeWorkspace } from '../src/testing/large-workspace.js';
 import { WORKSPACE_ROOT } from './order-flow-harness.js';

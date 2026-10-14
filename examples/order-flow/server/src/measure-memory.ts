@@ -27,6 +27,7 @@
  */
 
 import { measureModelMemory } from '@hydranium/core/node';
+import { DOMAIN_LANGUAGE } from '@hydranium/example-order-flow-protocol';
 import { createServices } from './services.js';
 
 const args = process.argv.slice(2);
@@ -46,7 +47,7 @@ void measureModelMemory({
    // fans out across all three languages. Churning `.process` would exercise
    // only its own document plus the layout overlay, and churning `.layout`
    // nothing but itself — each a weaker signal for the same cost.
-   churnDocSuffix: '.domain',
+   churnDocSuffix: DOMAIN_LANGUAGE.fileExtensions[0],
    writeSnapshot: args.includes('--snapshot'),
    log: line => console.log(line)
 })

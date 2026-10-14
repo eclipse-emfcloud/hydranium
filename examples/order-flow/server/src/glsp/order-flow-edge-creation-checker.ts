@@ -12,7 +12,7 @@ import { inject, injectable } from 'inversify';
 import { isFlowNode } from '../language-server/ast.js';
 import { canAddTransition } from '../language-server/process-transition-rules.js';
 import { type OrderFlowGlspState } from './order-flow-glsp-state.js';
-import { PROCESS_TRANSITION_EDGE_TYPE } from './order-flow-process-diagram-types.js';
+import { PROCESS_TRANSITION_EDGE_TYPE } from '@hydranium/example-order-flow-protocol';
 
 /**
  * Live feedback while an edge is being drawn: which elements may start one, and

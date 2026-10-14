@@ -4,5 +4,6 @@
     "rootDir": "src",
     "outDir": "lib"
   },
-  "include": ["src", "src/**/*.json"]
+  "include": ["src", "src/**/*.json"],
+  "references": [{ "path": "../protocol" }]
 }

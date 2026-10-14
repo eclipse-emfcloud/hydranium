@@ -13,7 +13,7 @@ import { type Entity, type Field, Read, type Task, isEntity, isTask } from '../.
 import { processNode } from '../../language-server/order-flow-ast-builder.js';
 import { OrderFlowCommand } from '../order-flow-command.js';
 import { type OrderFlowGlspState } from '../order-flow-glsp-state.js';
-import { PROCESS_EFFECT_TYPE } from '../order-flow-process-diagram-types.js';
+import { PROCESS_EFFECT_TYPE } from '@hydranium/example-order-flow-protocol';
 import { appendChild } from '@hydranium/core';
 
 /**

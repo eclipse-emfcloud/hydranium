@@ -10,6 +10,7 @@
     "examples/bookstore/server",
     "examples/order-flow/browser",
     "examples/order-flow/client",
+    "examples/order-flow/protocol",
     "examples/order-flow/server",
     "examples/order-flow/theia",
     "examples/order-flow/theia-app",

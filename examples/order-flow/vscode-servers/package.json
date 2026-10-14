@@ -24,6 +24,7 @@
     "watch": "tsc --watch --preserveWatchOutput"
   },
   "dependencies": {
+    "@hydranium/example-order-flow-protocol": "0.0.0",
     "@hydranium/example-order-flow-server": "0.0.0",
     "vscode-languageclient": "^9.0.1"
   },

@@ -66,11 +66,11 @@ import { ErrorCodes } from 'vscode-jsonrpc';
 import { Diagnostic, type PublishDiagnosticsParams } from 'vscode-languageserver-protocol';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import { PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '../src/glsp/order-flow-process-diagram-types.js';
+import { PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
 import { type OrderFlowGlspState } from '../src/glsp/order-flow-glsp-state.js';
 import { OrderFlowProcessDiagramModule } from '../src/glsp/order-flow-process-diagram-module.js';
 import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
-import type { DomainModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
+import type { DomainModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
 import { REBUILD_TIMEOUT_MS, WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';

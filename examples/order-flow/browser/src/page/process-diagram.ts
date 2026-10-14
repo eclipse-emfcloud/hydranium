@@ -26,7 +26,7 @@
 import { EditorContextService, GEdge, type GParentElement, GNode } from '@eclipse-glsp/client';
 import { HydraniumGlspClient, mountGlspDiagram } from '@hydranium/glsp-client';
 import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
-import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-types';
+import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-protocol';
 import type { Container } from 'inversify';
 import { describeError, type Logger, sendByMethodName, SystemClock } from '@hydranium/protocol';
 import type { MessageConnection } from 'vscode-jsonrpc/browser';

@@ -10,6 +10,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { buildInitTemplates, readFrameworkVersion, workspaceRootPins } from './init-templates.js';
+import { kebab } from './kebab.js';
 import { createNodeWorkspaceProbe, detectWorkspace, parseNpmVersion, type JsonValue, type WorkspaceProbe } from './init-workspace.js';
 
 /**
@@ -246,11 +247,6 @@ export interface InitCommandOptions {
    readonly probe?: WorkspaceProbe;
    /** Test-only: capture the planned files instead of writing to disk. */
    readonly __writeFilesForTest?: (targetDir: string, files: readonly InitFile[]) => void;
-}
-
-/** Kebab-case a PascalCase/camelCase name. */
-export function kebab(name: string): string {
-   return name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
 }
 
 /** True for a PascalCase identifier legal as a generated TypeScript symbol prefix. */

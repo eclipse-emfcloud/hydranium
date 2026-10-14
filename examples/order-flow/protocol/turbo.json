@@ -1,0 +1,13 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // `src/generated-hydranium/` is written by the server's `generate`, and the
+    // server depends on this package, so `^build` cannot order the two. Without
+    // this edge a package reading only this one compiles against the previous
+    // grammar after a grammar change.
+    "build": {
+      "dependsOn": ["^build", "@hydranium/example-order-flow-server#generate"]
+    }
+  }
+}

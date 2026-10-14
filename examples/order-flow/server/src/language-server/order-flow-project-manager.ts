@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { AbstractProjectManager } from '@hydranium/core';
+import { DOMAIN_LANGUAGE } from '@hydranium/example-order-flow-protocol';
 import { type Project, UNQUALIFIED_PROJECT_REFERENCE } from '@hydranium/protocol';
 import type { LangiumDocument, URI } from '@hydranium/langium';
 import { isDomainModel } from './ast.js';
@@ -57,7 +58,7 @@ import { isDomainModel } from './ast.js';
 export class OrderFlowProjectManager extends AbstractProjectManager<Project> {
    override isProjectDescriptor(uri: URI | string): boolean {
       const path = typeof uri === 'string' ? uri : uri.path;
-      return path.endsWith('.domain');
+      return DOMAIN_LANGUAGE.fileExtensions.some(extension => path.endsWith(extension));
    }
 
    protected override async parseProjectDescriptor(uri: URI, document: LangiumDocument): Promise<Project | undefined> {

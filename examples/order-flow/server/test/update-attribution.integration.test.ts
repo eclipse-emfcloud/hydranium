@@ -27,7 +27,7 @@ import { makeDataServerHarness } from '@hydranium/data-server/testing';
 import { type AstNode, Deferred, DocumentState, URI } from '@hydranium/langium';
 import { waitFor } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { DomainModel } from '../src/language-server/generated-hydranium/transfer-model.js';
+import type { DomainModel } from '@hydranium/example-order-flow-protocol';
 import {
    REBUILD_TIMEOUT_MS,
    makeScratchWorkspaceHarness,

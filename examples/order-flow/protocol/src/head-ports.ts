@@ -8,15 +8,15 @@
  ********************************************************************************/
 
 /**
- * The LSP requests a host queries to discover this server's two socket heads.
+ * The LSP requests a host queries to discover the server's two socket heads.
  *
  * Both are **project-keyed, not language-keyed**: one data server and one GLSP
  * server per process serve every registered grammar, so a language-derived name
  * would tie a project-level endpoint to whichever grammar was scaffolded first.
  *
- * They live here rather than in `main.ts` because a host shell has to name the
- * same string to reach the head, and `main.ts` is an executable entry — nothing
- * can import from it. A shell that retypes the literal gets no error when it
+ * They live in this package because the server's `main.ts` publishes them and a
+ * host shell has to name the same string to reach the head, without depending
+ * on the server. A shell that retypes the literal gets no error when it
  * drifts: `AbstractSocketForwardingConnectionHandler` polls with `findPortAttempts = -1`
  * by default, so a wrong command retries forever rather than failing. Import
  * these instead, and assert any host-side copy against them.

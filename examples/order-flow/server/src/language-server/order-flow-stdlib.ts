@@ -14,6 +14,7 @@ import {
    virtualUri
 } from '@hydranium/core';
 import type { LangiumDocumentFactory } from '@hydranium/langium';
+import { DOMAIN_LANGUAGE } from '@hydranium/example-order-flow-protocol';
 
 /**
  * URI of the `order-flow` stdlib virtual document. Adopter code that needs to
@@ -25,7 +26,7 @@ import type { LangiumDocumentFactory } from '@hydranium/langium';
  * document to its language by **file extension**; a bare `virtual:order-flow-builtin`
  * would resolve to no language and fail the build.
  */
-export const ORDER_FLOW_STDLIB_URI = virtualUri('order-flow-builtin', 'primitives.domain');
+export const ORDER_FLOW_STDLIB_URI = virtualUri('order-flow-builtin', `primitives${DOMAIN_LANGUAGE.fileExtensions[0]}`);
 
 /**
  * The stdlib, written in the language's **own concrete syntax** and parsed by

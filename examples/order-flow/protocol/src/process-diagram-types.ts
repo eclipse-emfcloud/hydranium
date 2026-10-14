@@ -7,20 +7,18 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { DefaultTypes } from '@eclipse-glsp/server';
+import { DefaultTypes } from '@eclipse-glsp/protocol';
 
 /**
- * The GLSP diagram-type and element-type ids for the `.process` diagram.
+ * The GLSP diagram-type and element-type ids for the `.process` diagram, which
+ * the server stamps onto the GModel and every client registers.
  *
- * **This module is the authoritative half of a client/server contract.** Every
- * id here has to be registered on the client too — sprotty's registries are
- * exact-key maps with no prefix fallback, so an id the client does not know
- * yields a generic `SChildElementImpl` (none of a node's features) rendered by
+ * Declared once, here, for both ends. A drift between them fails silently:
+ * sprotty's registries are exact-key maps with no prefix fallback, so an id the
+ * client does not know yields a generic `SChildElementImpl` rendered by
  * `MissingView`, with only a `no registered view for type '…'` warning in the
- * browser console. Nothing fails server-side, which is why the drift is
- * asserted in `examples/order-flow/client`'s test rather than left to review.
- * The ids are still namespaced under the GLSP defaults (`node:` / `edge:`) so
- * a reader can tell a node id from an edge id at a glance.
+ * browser console. The ids are namespaced under the GLSP defaults (`node:` /
+ * `edge:`) so a reader can tell a node id from an edge id at a glance.
  *
  * `.process` is the GLSP-primary grammar of the three: a flow's topology is
  * invisible in text and obvious in a diagram, which is the asymmetry the
@@ -30,9 +28,8 @@ import { DefaultTypes } from '@eclipse-glsp/server';
 
 /**
  * The GLSP diagram type — the string GLSP routes every per-diagram-type
- * request by, bound on `OrderFlowProcessDiagramModule.diagramType` and
- * mirrored by the client's `PROCESS_DIAGRAM_TYPE`. A mismatch silently drops
- * the request rather than reporting an unknown diagram type.
+ * request by, bound on `OrderFlowProcessDiagramModule.diagramType`. A mismatch
+ * silently drops the request rather than reporting an unknown diagram type.
  */
 export const PROCESS_DIAGRAM_TYPE = 'order-flow-process';
 
@@ -64,3 +61,24 @@ export const PROCESS_TRANSITION_EDGE_TYPE = `${DefaultTypes.EDGE}:transition`;
  * as connections.
  */
 export const PROCESS_BRANCH_EDGE_TYPE = `${DefaultTypes.EDGE}:branch`;
+
+/**
+ * Every element type id the server's GModel factory stamps.
+ *
+ * Declared as a tuple so {@link ProcessElementType} is a union of the ids
+ * rather than `string`: the client's registration table is keyed by that
+ * union, so an id in the tuple without a model class and a view does not
+ * compile. Nothing in the compiler holds the tuple to the constants above; a
+ * client test does.
+ */
+export const PROCESS_ELEMENT_TYPES = [
+   PROCESS_TASK_NODE_TYPE,
+   PROCESS_GATEWAY_NODE_TYPE,
+   PROCESS_EFFECT_COMPARTMENT_TYPE,
+   PROCESS_EFFECT_TYPE,
+   PROCESS_TRANSITION_EDGE_TYPE,
+   PROCESS_BRANCH_EDGE_TYPE
+] as const;
+
+/** One of the element type ids in {@link PROCESS_ELEMENT_TYPES}. */
+export type ProcessElementType = (typeof PROCESS_ELEMENT_TYPES)[number];

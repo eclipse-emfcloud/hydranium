@@ -63,7 +63,7 @@ generated separately, is in
 | Hover and highlighting | [`order-flow-hover.ts`](src/language-server/order-flow-hover.ts), [`order-flow-semantic-tokens.ts`](src/language-server/order-flow-semantic-tokens.ts) |
 | Translations | [`src/messages/`](src/messages), [`src/nls/`](src/nls), [`order-flow-message-renderer.ts`](src/language-server/order-flow-message-renderer.ts) |
 | Diagram (`.process` with `.layout` as secondary) | [`src/glsp/`](src/glsp), operation handlers in [`src/glsp/handler/`](src/glsp/handler) |
-| Head entry points | [`main.ts`](src/main.ts), [`data-server-main.ts`](src/data-server-main.ts), [`head-ports.ts`](src/head-ports.ts) |
+| Head entry points | [`main.ts`](src/main.ts), [`data-server-main.ts`](src/data-server-main.ts); the port commands, ids and transfer model hosts share are in [`order-flow-protocol`](../protocol/) |
 | Perf fixture and memory measurement | [`src/testing/large-workspace.ts`](src/testing/large-workspace.ts), [`measure-memory.ts`](src/measure-memory.ts) |
 
 ## How this directory was built
@@ -87,12 +87,12 @@ What happened to each file `init` emits:
 
 | Verdict | Files |
 | --- | --- |
-| identical | `langium-config.json`, `tsconfig.json`, `tsconfig.test.json`, `src/services.ts` |
-| adapted | `package.json`, `vitest.config.ts`, `test/tsconfig.json` (adds the comment), `README.md`, `src/index.ts`, `src/main.ts` (adds the GLSP head), `src/data-server-main.ts`, `src/head-ports.ts`, the four `src/grammar/*.langium`, `order-flow-module.ts`, `ast.ts` and the three serializers |
+| identical | `langium-config.json`, `tsconfig.test.json`, `src/services.ts` |
+| adapted | `package.json`, `tsconfig.json` (references the protocol member), `vitest.config.ts`, `test/tsconfig.json` (adds the comment), `README.md`, `src/index.ts`, `src/main.ts` (adds the GLSP head), `src/data-server-main.ts`, the four `src/grammar/*.langium`, `order-flow-module.ts`, `ast.ts` and the three serializers |
 | replaced | the scaffolded `services`, `serialization`, `linking` and `validating` tests, by `composition`, `serializer`, `project-visibility` and `process-transition-rules` |
-| dropped | `.gitignore` (the repo root's rules cover `lib/` and `syntaxes/`), `test/parsing.test.ts` |
+| dropped | `.gitignore` (the repo root's rules cover `lib/` and `syntaxes/`), `test/parsing.test.ts`, `src/head-ports.ts` (moved to `order-flow-protocol`) |
 | hand-written | everything else in `src/`, `scripts/` and `test/`, including the whole GLSP head |
-| generated, committed | `src/language-server/generated/**`, `src/language-server/generated-hydranium/**` |
+| generated, committed | `src/language-server/generated/**`, `src/language-server/generated-hydranium/**`, and the protocol package's `generated-hydranium/**` |
 
 `scripts/check-init-provenance.mts` re-runs the invocation and holds every
 emitted file to its verdict; its manifest carries the reason for each one. The

@@ -41,7 +41,7 @@ import {
 import { tick, waitFor } from '@hydranium/protocol/testing';
 import { type CancellationToken, CancellationTokenSource } from 'vscode-languageserver';
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest';
-import type { DomainModel } from '../src/language-server/generated-hydranium/transfer-model.js';
+import type { DomainModel } from '@hydranium/example-order-flow-protocol';
 import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
 import { makeScratchWorkspaceHarness, makeServices, type OrderFlowHarness, WORKSPACE_ROOT } from './order-flow-harness.js';
 const FILE = 'read-version-stamp.domain';

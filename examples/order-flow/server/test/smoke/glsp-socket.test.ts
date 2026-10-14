@@ -55,8 +55,7 @@ import { sendByMethodName } from '@hydranium/protocol';
 import * as net from 'node:net';
 import { StreamMessageReader, StreamMessageWriter, createMessageConnection, type MessageConnection } from 'vscode-jsonrpc/node';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '../../src/glsp/order-flow-process-diagram-types.js';
-import { ORDER_FLOW_GLSP_PORT_COMMAND } from '../../src/head-ports.js';
+import { ORDER_FLOW_GLSP_PORT_COMMAND, PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
 import { WORKSPACE_FILES, WORKSPACE_ROOT } from '../order-flow-harness.js';
 import { SPAWN_TIMEOUT_MS, type SpawnedOrderFlowServer, startSpawnedOrderFlowServer } from './spawned-order-flow-server.js';
 

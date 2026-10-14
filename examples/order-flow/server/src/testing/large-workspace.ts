@@ -54,6 +54,7 @@
  */
 
 import { GENERATED_WORKSPACE_MARKER, makeGeneratedWorkspace } from '@hydranium/core/testing/node';
+import { ALL_LANGUAGES } from '@hydranium/example-order-flow-protocol';
 
 /**
  * Default corpus size: 15 projects × (1 descriptor + 21 member `.domain` +
@@ -417,7 +418,10 @@ export function generateLargeWorkspace(options: LargeWorkspaceOptions): LargeWor
    // Two independent counts of the same writes must agree. They can only differ
    // if a model file was emitted under an extension this tally does not name,
    // which is the shape a new grammar arrives in.
-   const modelFiles = (generated.files['.domain'] ?? 0) + (generated.files['.process'] ?? 0) + (generated.files['.layout'] ?? 0);
+   const modelFiles = ALL_LANGUAGES.flatMap(language => language.fileExtensions).reduce(
+      (sum, extension) => sum + (generated.files[extension] ?? 0),
+      0
+   );
    if (modelFiles !== files.total) {
       throw new Error(`Generated ${modelFiles} model files but tallied ${files.total}; a file was emitted under an unexpected extension.`);
    }

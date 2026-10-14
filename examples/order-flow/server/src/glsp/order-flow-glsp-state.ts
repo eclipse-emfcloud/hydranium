@@ -15,7 +15,7 @@ import { injectable } from 'inversify';
 import { LayoutModel, type ProcessModel, isLayoutModel } from '../language-server/ast.js';
 import { layoutNode } from '../language-server/order-flow-ast-builder.js';
 import { layoutUriFor } from '../language-server/layout-file.js';
-import type { ProcessModel as TransferProcessModel } from '../language-server/generated-hydranium/transfer-model.js';
+import type { ProcessModel as TransferProcessModel } from '@hydranium/example-order-flow-protocol';
 import type { OrderFlowGlspIndex } from './order-flow-glsp-index.js';
 
 /**

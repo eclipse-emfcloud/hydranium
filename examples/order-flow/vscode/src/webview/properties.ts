@@ -34,11 +34,7 @@ import {
 } from '../properties-panel-protocol';
 import { describeFailure, PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
 import { WebviewDataPort } from './properties-data-port';
-import type {
-   DomainModel,
-   LayoutModel,
-   ProcessModel
-} from '@hydranium/example-order-flow-server/lib/language-server/generated-hydranium/transfer-model';
+import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
 import {
    createWebviewSideChannel,
    type WebviewMessengerLike

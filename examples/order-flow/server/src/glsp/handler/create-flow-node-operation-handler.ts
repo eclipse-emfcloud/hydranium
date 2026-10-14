@@ -24,7 +24,7 @@ import { DiagramNode, FlowNode, Gateway, Task } from '../../language-server/gene
 import { layoutNode, processNode } from '../../language-server/order-flow-ast-builder.js';
 import { OrderFlowCommand } from '../order-flow-command.js';
 import { type OrderFlowGlspState } from '../order-flow-glsp-state.js';
-import { PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '../order-flow-process-diagram-types.js';
+import { PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
 import { GATEWAY_LAYOUT_OPTIONS, NODE_LAYOUT_OPTIONS } from '../order-flow-process-gmodel-factory.js';
 import { appendChild } from '@hydranium/core';
 

@@ -13,7 +13,7 @@ import { describeError } from '@hydranium/protocol';
 import type { GenerateTransferModelOptions } from './generate-transfer-model.js';
 
 /** Path-valued option keys — resolved relative to a config/langium-config file's directory. */
-const PATH_KEYS = ['astFile', 'augmentationFile', 'outFile', 'astBuilderFile'] as const;
+const PATH_KEYS = ['astFile', 'augmentationFile', 'outFile', 'astBuilderFile', 'languagesFile'] as const;
 
 /** Resolve `value` against `baseDir` when it is relative; absolute paths pass through. */
 function resolveAgainst(baseDir: string, value: string): string {
@@ -45,6 +45,7 @@ export function loadTransferModelConfig(configPath: string): Partial<GenerateTra
       'augmentationFile',
       'outFile',
       'astBuilderFile',
+      'languagesFile',
       'elementTypeName',
       'terminalsName',
       'terminalsSourceName',
@@ -121,6 +122,7 @@ export function mergeTransferModelOptions(...sources: Array<Partial<GenerateTran
       augmentationFile: augmentationFile!,
       outFile: outFile!,
       astBuilderFile: pick('astBuilderFile'),
+      languagesFile: pick('languagesFile'),
       elementTypeName: pick('elementTypeName'),
       terminalsName: pick('terminalsName'),
       terminalsSourceName: pick('terminalsSourceName'),

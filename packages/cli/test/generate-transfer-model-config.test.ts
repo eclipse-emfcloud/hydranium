@@ -15,6 +15,7 @@ import {
    loadTransferModelConfig,
    mergeTransferModelOptions
 } from '../src/commands/generate-transfer-model-config.js';
+import type { GenerateTransferModelOptions } from '../src/commands/generate-transfer-model.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/generate-transfer-model/', import.meta.url));
 
@@ -42,6 +43,25 @@ describe('mergeTransferModelOptions', () => {
          outFile: '/c.ts'
       });
       expect(result).toMatchObject({ astFile: '/a.ts', augmentationFile: '/b.ts', outFile: '/c.ts' });
+   });
+
+   it('carries every option through, not only the required ones', () => {
+      // Typed `Required<…>` so a new option fails to compile here until it is
+      // listed, and the merge, which picks keys one by one, is held to it.
+      const every: Required<GenerateTransferModelOptions> = {
+         astFile: '/a.ts',
+         augmentationFile: '/b.ts',
+         outFile: '/c.ts',
+         astBuilderFile: '/d.ts',
+         languagesFile: '/e.ts',
+         elementTypeName: 'Element',
+         terminalsName: 'Terminals',
+         terminalsSourceName: 'SourceTerminals',
+         skipTypeAliases: ['Alias'],
+         skipTerminals: ['WS'],
+         regenCommand: 'Run: regen'
+      };
+      expect(mergeTransferModelOptions(every)).toEqual(every);
    });
 });
 

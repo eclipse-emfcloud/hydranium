@@ -1,0 +1,24 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // Run before the protocol member builds, which compiles what this writes.
+    // Uncached: part of the output lands in that member, outside this package,
+    // where a cache replay would not restore it. The inputs still matter twice:
+    // the protocol member's build key includes this task's hash, so a grammar
+    // edit misses its cache before anything is rewritten, and CI's change
+    // classifier reads every task's hashed files, where the default set would
+    // count this package's README as a build input. List every file the
+    // generators read.
+    "generate": {
+      "dependsOn": ["@hydranium/cli#build"],
+      "inputs": [
+        "src/grammar/**",
+        "src/language-server/ast.ts",
+        "langium-config.json",
+        "package.json"
+      ],
+      "cache": false
+    }
+  }
+}

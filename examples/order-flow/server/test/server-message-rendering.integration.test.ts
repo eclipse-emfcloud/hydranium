@@ -82,7 +82,7 @@ import { ProcessLanguageMetaData } from '../src/language-server/generated/module
 import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
 import { OrderFlowMessageRenderer } from '../src/language-server/order-flow-message-renderer.js';
 import { SELF_TRANSITION } from '../src/messages/index.js';
-import type { DomainModel, ProcessModel } from '../src/language-server/generated-hydranium/transfer-model.js';
+import type { DomainModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
 import { WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
 
 /** The two transfer roots this suite may open. */

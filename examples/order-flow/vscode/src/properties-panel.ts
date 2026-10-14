@@ -48,6 +48,7 @@ import {
    ORDER_FLOW_PANEL_SET_DOCUMENT,
    type OrderFlowPanelDocument
 } from './properties-panel-protocol';
+import { ALL_LANGUAGES } from '@hydranium/example-order-flow-protocol';
 import { renderFrameworkMessage, type MessageRelay } from '@hydranium/protocol';
 import * as vscode from 'vscode';
 // Type-only: the panel receives the shell's messenger instead of constructing
@@ -69,7 +70,7 @@ const _glspMessengerIsAMessenger: (messenger: GlspMessenger) => Messenger = mess
 void _glspMessengerIsAMessenger;
 
 /** The language ids whose documents this panel can present. */
-const ORDER_FLOW_LANGUAGES = new Set(['order-flow-domain', 'order-flow-process', 'order-flow-layout']);
+const ORDER_FLOW_LANGUAGES: ReadonlySet<string> = new Set(ALL_LANGUAGES.map(language => language.languageId));
 
 /** What {@link OrderFlowPropertiesPanel.open} needs from the extension. */
 export interface OrderFlowPropertiesPanelOptions {

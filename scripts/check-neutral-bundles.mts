@@ -215,6 +215,13 @@ const TARGETS = [
       name: 'order-flow-client (messenger channel)',
       entry: 'examples/order-flow/client/lib/data/order-flow-messenger-channel.js',
       resolvePackages: []
+   },
+   // What the server shares with every client, through its barrel: no tier of
+   // it renders, so it holds no DOM either.
+   {
+      name: 'order-flow-protocol',
+      entry: 'examples/order-flow/protocol/lib/index.js',
+      resolvePackages: []
    }
 ];
 
