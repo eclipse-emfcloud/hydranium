@@ -26,6 +26,8 @@ const PROCESS_EDITOR = '#process-editor';
 
 const PROCESS_PANE = '#process-pane';
 
+const DIAGRAM = '#order-flow-process-diagram';
+
 /** How far a gesture drags, upward, so the page would scroll DOWN. */
 const DRAG_BY = -250;
 
@@ -102,6 +104,37 @@ test.describe('the workbench in one column', () => {
 
       await expect(pane).toHaveAttribute('data-collapsed', '');
       await expect(pane).not.toHaveAttribute('data-entered', '');
+   });
+
+   test('a palette element follows the pointer after a region above the diagram folds', async ({ page }) => {
+      // The fold moves the diagram up the page without resizing it, and GLSP
+      // places the element through the canvas corner it last measured, so a
+      // stale corner puts it the fold's height off the pointer. Tall enough to
+      // show the header and the diagram at once, since a scroll re-measures the
+      // canvas by itself and would hide the fold.
+      await page.setViewportSize({ width: page.viewportSize()?.width ?? 600, height: 1400 });
+      const head = page.locator('#document-panel .panel-head');
+      await head.tap();
+      await expect(head).toHaveAttribute('aria-expanded', 'false');
+      const shield = page.locator('#diagram-pane .editor-shield');
+      await shield.tap();
+      await page.locator(`${DIAGRAM} .tool-button`, { hasText: 'Gateway' }).click();
+
+      const mount = page.locator(DIAGRAM);
+      const box = await mount.boundingBox();
+      if (box === null) {
+         throw new Error('No bounding box for the diagram');
+      }
+      const pointer = { x: box.x + box.width * 0.35, y: box.y + box.height * 0.8 };
+      await page.mouse.move(pointer.x - 20, pointer.y - 20);
+      await page.mouse.move(pointer.x, pointer.y, { steps: 5 });
+
+      expect(await page.evaluate(() => window.scrollY)).toBe(0);
+      const ghost = await page.locator(`${DIAGRAM} .ghost-element`).first().boundingBox();
+      if (ghost === null) {
+         throw new Error('No ghost element under the pointer');
+      }
+      expect(Math.abs(ghost.y + ghost.height / 2 - pointer.y)).toBeLessThan(5);
    });
 
    test('the status strip stays at the foot with every region collapsed', async ({ page }) => {

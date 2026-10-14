@@ -8,8 +8,9 @@ VS Code webview, or a plain browser page. It builds on `@eclipse-glsp/client`.
 
 ## What it gives you
 
-- Load failures reported through your logger and shown on the diagram's
-  status overlay, instead of vanishing as an uncaught rejection.
+- Load failures reported through your logger and, unless the action
+  dispatcher itself failed, on the diagram's status overlay, instead of
+  vanishing as an uncaught rejection.
 - Action traffic and bounds measurements in your log, so a slow diagram names
   its cost.
 - Edge routes repaired before they go to the server while sprotty has not
@@ -22,6 +23,10 @@ VS Code webview, or a plain browser page. It builds on `@eclipse-glsp/client`.
   pending, so two quick clicks on different elements leave only the second
   selected.
 - One binder that mounts all of it in a diagram container.
+- For a plain page, one call that builds the container, loads the model and
+  supplies what a shell would: framing, canvas bounds that follow the
+  element's size and position, touch input, and a context menu GLSP stops
+  warning about.
 
 ## Install
 
@@ -71,16 +76,56 @@ without bendpoints `NaN` bounds, and a fit to screen over such a label blanks
 the canvas. The class is fixed per registered type, so a type registered with
 `GEdge` keeps the defect.
 
+In a plain page, call `mountGlspDiagram` instead of building the container
+yourself. It takes the element, your `HydraniumGlspClient` over the head's
+connection, and your diagram module's initializer in GLSP's own shape, and it
+calls `createGlspClientModule` for you:
+
+<!-- snippet-preamble
+import type { GlspDiagramMountOptions } from '@hydranium/glsp-client';
+import type { Logger } from '@hydranium/protocol';
+import type { MessageConnection } from 'vscode-jsonrpc';
+declare const connection: MessageConnection;
+declare const logger: Logger;
+declare const initializeMyDiagramContainer: GlspDiagramMountOptions['initializeDiagramContainer'];
+-->
+
+```ts
+import { HydraniumGlspClient, mountGlspDiagram } from '@hydranium/glsp-client';
+import { sendByMethodName } from '@hydranium/protocol';
+
+const glspClient = new HydraniumGlspClient({ id: 'my-app', connectionProvider: sendByMethodName(connection) });
+const diagram = await mountGlspDiagram({
+   mount: document.getElementById('my-diagram')!,
+   diagramType: 'my-diagram',
+   sourceUri: 'file:///workspace/my.model',
+   glspClient,
+   initializeDiagramContainer: initializeMyDiagramContainer,
+   logger
+});
+```
+
+Wrap the connection with `sendByMethodName`: GLSP's client sends message
+types built by its own copy of `vscode-jsonrpc`, which another copy rejects.
+One client serves every diagram on the page, each mounted as its own session.
+The element's `id` is the diagram's `clientId`, so it needs one; give it a
+height, `position: relative` so the palette stays on it, `touch-action: none`
+for touch, and size its `<svg>` to it, or sprotty draws into 300×150. The
+first render replaces the element with sprotty's own under the same id, so
+keep no reference to it and find it by id when you need it. A failed load
+resolves the mount; read `diagram.loadOutcome` to report it, since the status
+overlay cannot show a failure of the action dispatcher itself.
+
 For a browser page, see *Host in a browser* in
 [Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## Entry points
 
-| Subpath      | Use it for                                        | Runs in         |
-| ------------ | ------------------------------------------------- | --------------- |
-| `.`          | The classes, the binder and the DI tokens         | browser         |
-| `./messages` | The codes of the messages this package raises     | browser-neutral |
-| `./testing`  | A binding recorder for testing your modules       | browser-neutral |
+| Subpath      | Use it for                                                | Runs in         |
+| ------------ | --------------------------------------------------------- | --------------- |
+| `.`          | The classes, the binder, the DI tokens and the page mount | browser         |
+| `./messages` | The codes of the messages this package raises             | browser-neutral |
+| `./testing`  | A binding recorder for testing your modules               | browser-neutral |
 
 The root loads `@eclipse-glsp/client`, whose graph imports stylesheets, so
 your bundler needs a CSS loader. The subpaths need a TypeScript

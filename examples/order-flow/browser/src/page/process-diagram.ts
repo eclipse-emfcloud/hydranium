@@ -14,45 +14,23 @@
  * The diagram DEFINITION is not here. It is
  * `@hydranium/example-order-flow-client`'s, the same module the Theia and
  * VS Code shells mount — which is the point of the slice: what a browser host
- * supplies is the transport and the container's host modules, and nothing about
- * the diagram itself.
+ * supplies is the transport and the page's element, and nothing about the
+ * diagram itself. `mountGlspDiagram` from `@hydranium/glsp-client` supplies
+ * what a shell would: GLSP's standalone modules, the framework's binder,
+ * framing, resize tracking and touch input.
  *
- * # What replaces the shell
- *
- * A Theia or VS Code integration contributes a `GLSPClient` and a widget. Here
- * `STANDALONE_MODULE_CONFIG` supplies GLSP's own plain-webapp modules, the
- * framework's `createGlspClientModule` binds its classes over the page's
- * logger, and the client is built by hand over the head's connection — one
- * line, because `HydraniumGlspClient` takes any `ConnectionProvider` and the
- * connection `@hydranium/client-browser` hands out over the GLSP port is one,
- * wrapped with `sendByMethodName`.
- *
- * Upstream's `GLSPWebWorkerProvider` looks like the piece for this and is not:
- * it constructs the worker itself, which would be a second worker with a second
- * Langium store, and reads the worker object rather than a port.
+ * What is left here is this page's own: the client over the head's connection,
+ * and the report line that counts what the GLSP head sent.
  */
 
-import {
-   DiagramLoader,
-   EditorContextService,
-   FitToScreenAction,
-   GEdge,
-   type GParentElement,
-   GNode,
-   InitializeCanvasBoundsAction,
-   type GLSPActionDispatcher,
-   type IDiagramOptions,
-   STANDALONE_MODULE_CONFIG,
-   TYPES,
-   createDiagramOptionsModule
-} from '@eclipse-glsp/client';
-import { createGlspClientModule, HydraniumGlspClient } from '@hydranium/glsp-client';
+import { EditorContextService, GEdge, type GParentElement, GNode } from '@eclipse-glsp/client';
+import { HydraniumGlspClient, mountGlspDiagram } from '@hydranium/glsp-client';
 import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
 import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-types';
-import { Container, ContainerModule } from 'inversify';
-import { type Logger, sendByMethodName, SystemClock } from '@hydranium/protocol';
+import type { Container } from 'inversify';
+import { describeError, type Logger, sendByMethodName, SystemClock } from '@hydranium/protocol';
 import type { MessageConnection } from 'vscode-jsonrpc/browser';
-import { enableTouchDragging } from './touch-input.js';
+import { requireElement } from './dom.js';
 // LAST, so esbuild emits these rules after `@eclipse-glsp/client`'s and they win
 // on equal specificity — the same ordering the VS Code diagram bundle depends
 // on. The sheet is the diagram's own, shared with every host; the page supplies
@@ -60,21 +38,16 @@ import { enableTouchDragging } from './touch-input.js';
 import '@hydranium/example-order-flow-client/style/diagram.css';
 
 /**
- * The id of the element sprotty renders into.
- *
- * One constant, not two: `configureDiagramOptions` derives `ViewerOptions.baseDiv`
- * from `clientId`, so the document's element id and the GLSP client session id
- * are the same string whether or not anyone intended that. Spelling it once is
- * what stops a rename of the div from producing an empty page with no error —
- * sprotty logs a missing base div and carries on.
+ * The id of the element sprotty renders into, which the mount also uses as the
+ * GLSP client session's id.
  */
 export const PROCESS_DIAGRAM_ELEMENT_ID = 'order-flow-process-diagram';
 
 /**
  * How long to wait for the graph before saying that nothing is coming.
  *
- * `DiagramLoader.load` resolving means the server answered `RequestModelAction`;
- * it does not mean anything was drawn. A model whose element types have no view
+ * A loaded outcome means the server answered `RequestModelAction`; it does not
+ * mean anything was drawn. A model whose element types have no view
  * registration renders as nothing at all — sprotty's fallback is a featureless
  * element and `MissingView` — so the absence has to be looked for rather than
  * waited out. Generous, like the diagnostics deadline: this reports a fact, it
@@ -83,28 +56,11 @@ export const PROCESS_DIAGRAM_ELEMENT_ID = 'order-flow-process-diagram';
 const RENDER_DEADLINE_MS = 15_000;
 
 /**
- * The one host service a plain page has to say it does not provide.
+ * Mount the diagram and report what ended up on the page.
  *
- * GLSP's context-menu module resolves `TYPES.IContextMenuService` through a
- * provider that falls back to a no-op AND warns on the console every time a
- * container is built. Binding the no-op explicitly says the same thing without
- * the warning, and that matters more here than it looks: the browser console is
- * this host's only log — the worker posts its failures there and the language
- * server's lines arrive over the LSP channel — so a recurring warning that means
- * nothing trains the reader to ignore the place real failures appear.
- *
- * A page could instead bind a real menu; there is nothing to put in one yet.
- */
-const noContextMenuModule = new ContainerModule(bind => {
-   bind(TYPES.IContextMenuService).toConstantValue({ show: () => undefined });
-});
-
-/**
- * Build the GLSP client, the diagram container and load the model.
- *
- * Resolves with a one-line report of what ended up on the page — the same shape
- * as the data head's line, so the three heads read as three answers about one
- * store rather than as three unrelated widgets.
+ * Resolves with a one-line report of the same shape as the data head's line, so
+ * the three heads read as three answers about one store rather than as three
+ * unrelated widgets.
  *
  * The logger carries the framework's client classes under a tag of the page's
  * own, so a load failure the page itself reports does not read as a line the
@@ -121,40 +77,25 @@ export async function mountProcessDiagram(
    // copy of `vscode-jsonrpc`, which this connection's copy rejects unless they
    // go by method name.
    const glspClient = new HydraniumGlspClient({ id: PROCESS_DIAGRAM_ELEMENT_ID, connectionProvider: sendByMethodName(connection) });
-
-   const diagramOptions: IDiagramOptions = {
-      clientId: PROCESS_DIAGRAM_ELEMENT_ID,
+   const { container, loadOutcome } = await mountGlspDiagram({
+      mount: requireElement(PROCESS_DIAGRAM_ELEMENT_ID),
       diagramType: PROCESS_DIAGRAM_TYPE,
-      glspClientProvider: async () => glspClient,
-      sourceUri
-   };
-
-   // The framework's classes replace tokens GLSP's default modules bind, so
-   // this module goes after `STANDALONE_MODULE_CONFIG`. The diagram definition
-   // is appended LAST by `initializeOrderFlowProcessDiagramContainer`, after
-   // the host's modules — GLSP's model and view registries give an element
-   // type to whichever module registered it last, so the definition's
-   // registrations are the ones that hold.
-   const hydraniumModule = new ContainerModule((bind, unbind, isBound, rebind) => {
-      createGlspClientModule({ bind, unbind, isBound, rebind }, { logger });
+      sourceUri,
+      glspClient,
+      initializeDiagramContainer: initializeOrderFlowProcessDiagramContainer,
+      logger
    });
-   const container = initializeOrderFlowProcessDiagramContainer(
-      new Container(),
-      createDiagramOptionsModule(diagramOptions),
-      STANDALONE_MODULE_CONFIG,
-      noContextMenuModule,
-      hydraniumModule
-   );
-
-   await container.get(DiagramLoader).load();
-   // Framed BEFORE the shapes are counted, so the report this resolves with is
-   // the only signal a caller needs: everything observable about the diagram —
-   // the elements in the DOM and the viewport they are drawn in — is settled by
-   // the time the line appears. Counting first would leave a window in which the
-   // nodes are on the page at the load-time viewport and the fit is still
-   // pending, and a pointer gesture started in it is measured against one
-   // viewport and applied in another.
-   await frameDiagram(container);
+   // Reported here and not left to the poll, which would wait out its deadline
+   // and then blame an unregistered element type; when the dispatcher is what
+   // failed, this line is the only report the page shows.
+   if (loadOutcome.status === 'failed') {
+      return `failed: ${describeError(loadOutcome.error)}`;
+   }
+   // The mount resolves once the model is framed, so the report this resolves
+   // with is the only signal a caller needs: everything observable about the
+   // diagram — the elements in the DOM and the viewport they are drawn in — is
+   // settled by the time the line appears.
+   //
    // The DOM is consulted ONCE, here, and for a different question than the
    // report answers: whether anything was drawn at all. That failure — a model
    // whose element types have no view registration — is invisible in the model,
@@ -163,7 +104,6 @@ export async function mountProcessDiagram(
    const report = (await waitForAnyRenderedShape())
       ? describeGraph(countGraph(container.get(EditorContextService).modelRoot))
       : nothingDrawnReport();
-   trackCanvasSize(container);
    trackGraphCount(container, onReport);
    return report;
 }
@@ -224,97 +164,6 @@ function countGraph(root: Readonly<GParentElement>): { nodes: number; edges: num
 function trackGraphCount(container: Container, onReport: (report: string) => void): void {
    const editorContext = container.get(EditorContextService);
    editorContext.onModelRootChanged(root => onReport(describeGraph(countGraph(root))));
-}
-
-/**
- * Keep sprotty's idea of its canvas in step with the element it draws into.
- *
- * **sprotty updates its canvas bounds on `window.resize` and on nothing else** —
- * `Viewer.onWindowResize` is the only producer of `InitializeCanvasBoundsAction`
- * after the initial load. A page whose diagram sits in a pane the reader can drag
- * therefore has to tell it, and the failure if it does not is the culling one
- * again rather than a stale number: `ShapeView.isVisible` tests each element
- * against the canvas the model believes it has, so widening the pane leaves the
- * new space empty while narrowing it makes shapes vanish that are plainly on
- * screen. Both read as a server sending a partial model.
- *
- * A `ResizeObserver` rather than a callback from the divider code, so a size
- * change from any cause is covered — the window, a divider, or the reader zooming
- * the browser. GLSP's own standalone example makes the same accommodation for its
- * resizable app card.
- *
- * The bounds are read in PAGE coordinates, matching what `Viewer` computes:
- * sprotty maps pointer positions through them, so a viewport-relative rect would
- * offset every click by the page's scroll.
- */
-function trackCanvasSize(container: Container): void {
-   const mount = document.getElementById(PROCESS_DIAGRAM_ELEMENT_ID);
-   if (mount === null) {
-      return;
-   }
-   // Beside the canvas-bounds observer rather than in the page's own wiring:
-   // both are accommodations the diagram client needs from whatever hosts it,
-   // and a host that forgets either gets a canvas that silently ignores input.
-   enableTouchDragging(mount);
-   const dispatcher = container.get<GLSPActionDispatcher>(TYPES.IActionDispatcher);
-   // Skipped for a zero box, which is what an element hidden by a divider dragged
-   // to its limit reports: a canvas of zero culls the whole model, and the next
-   // real size would have to arrive before anything came back.
-   new ResizeObserver(() => {
-      const box = mount.getBoundingClientRect();
-      if (box.width === 0 || box.height === 0) {
-         return;
-      }
-      void dispatcher.dispatch(
-         InitializeCanvasBoundsAction.create({
-            x: box.left + window.scrollX,
-            y: box.top + window.scrollY,
-            width: box.width,
-            height: box.height
-         })
-      );
-   }).observe(mount);
-}
-
-/**
- * How much canvas to leave around the model, in model units before the zoom.
- *
- * Enough that the outermost node's border is not the edge of the pane, and no
- * more: this padding is subtracted from the space the fit has to work with, so a
- * generous value buys white space by shrinking the diagram.
- */
-const FIT_PADDING = 24;
-
-/**
- * Frame the loaded model in its canvas.
- *
- * **A page has to do this itself, and nothing upstream does it for it.** sprotty
- * leaves the viewport at `scale(1) translate(0,0)` after a load, which anchors
- * the model at the canvas's top-left corner — so a model wider than the pane is
- * cut off at the right edge with no indication that anything is missing, and one
- * narrower than it sits in a corner with the rest of the canvas empty. A shell
- * frames its diagram widget on open; this is the equivalent, and it is why the
- * `.layout` fixture can place nodes by RANK rather than by what happens to fit in
- * a pane of one particular width.
- *
- * `maxZoom: 1` so this only ever zooms OUT. Without it a small model is
- * magnified to fill the canvas, which makes a two-node diagram render at four
- * times the size of a ten-node one and turns the zoom level into a function of
- * how much is on screen.
- *
- * The bounds it measures come from the hidden rendering pass inside `load`, so
- * there is nothing further to wait for — a fit dispatched before that pass has
- * nothing to measure and silently leaves the viewport where it was.
- *
- * An empty id list is sprotty's spelling for "fit everything", the same fit
- * `Ctrl+Shift+F` sends: it combines the bounds of every element in the index,
- * edge labels included, so it relies on the diagram module registering its
- * edges with the framework's edge. GLSP's own gives such a label `NaN` bounds,
- * and the viewport lands at `translate(NaN,NaN)`, which culls every shape.
- */
-async function frameDiagram(container: Container): Promise<void> {
-   const dispatcher = container.get<GLSPActionDispatcher>(TYPES.IActionDispatcher);
-   await dispatcher.dispatch(FitToScreenAction.create([], { padding: FIT_PADDING, maxZoom: 1, animate: false }));
 }
 
 /**

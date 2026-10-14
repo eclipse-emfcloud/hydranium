@@ -2360,7 +2360,7 @@ async function tokenSpansOnLine(page: Page, editorId: string, text: string): Pro
  * press is measured against the load-time viewport and the release against the
  * fitted one, and the operation goes out with a delta that matches neither.
  *
- * The GLSP category is the right gate because `mountProcessDiagram` frames the
+ * The GLSP category is the right gate because the mount frames the
  * model before it counts the shapes, so the report appearing means both are done. The
  * symptom without this is a drag that lands at the wrong coordinates
  * intermittently, which reads as a flaky write path.
