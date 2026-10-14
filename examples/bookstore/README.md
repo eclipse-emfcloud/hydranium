@@ -1,19 +1,22 @@
 # bookstore
 
 Exactly what `hydranium-cli init` scaffolds, checked in and built by CI: one
-grammar, three heads, a graphical editor, no host application, and no adopter
+grammar, three heads, a graphical editor, a browser page, and no adopter
 overrides. Read it beside your own scaffold.
 
 ```
-protocol/    what the server and its clients both import: ids, port
-             commands, diagram ids and the generated transfer model
-server/      the grammar, the language and its heads, plus the generated
-             tree its own `build` writes
-workspace/   the two starter `.bookstore` files it is exercised against
+protocol/       what the server and its clients both import: ids, port
+                commands, diagram ids and the generated transfer model
+server/         the grammar, the language and its heads, plus the generated
+                tree its own `build` writes
+client/         the diagram's client side, which every host mounts
+host-browser/   a page running every head in a web worker, and its smoke test
+workspace/      the two starter `.bookstore` files it is exercised against
 ```
 
 Each package's README is the scaffold's own:
-[server](server/README.md) and [protocol](protocol/README.md).
+[server](server/README.md), [protocol](protocol/README.md),
+[client](client/README.md) and [host-browser](host-browser/README.md).
 
 It was created by exactly this; the few files it holds that `init` does not
 write are named under "Changing this example":
@@ -21,7 +24,7 @@ write are named under "Changing this example":
 ```bash
 npx hydranium-cli init examples/bookstore \
    --name Bookstore --heads lsp,data,glsp --grammar Bookstore --diagram \
-   --scope @hydranium --monorepo
+   --hosts browser --scope @hydranium --monorepo
 ```
 
 ## Running it
@@ -39,6 +42,16 @@ npx hydranium-cli validate     --services examples/bookstore/server/lib/node/ser
 npx hydranium-cli projects --server \
    "node ./examples/bookstore/server/lib/data-server-main.js ./examples/bookstore/workspace"
 ```
+
+In a browser, after `npm run build:all`:
+
+```bash
+npm --prefix examples/bookstore/host-browser start      # open the URL it prints
+npm --prefix examples/bookstore/host-browser run test:e2e
+```
+
+CI runs that smoke test in its Chromium job. It loads the page, checks what
+each head shows, and saves an edit that has to survive a reload.
 
 The server's `build` runs `generate` first, which writes the protocol
 package's `src/generated-hydranium/` from the grammar, then compiles both.
@@ -104,8 +117,9 @@ them the scaffold's own. That includes `server/vitest.config.ts`, which keeps
 the scaffold's own config rather than the repo's shared helper.
 
 The files `init` does not emit are the generated trees each `build` writes and
-the two `turbo.json` files, which order the protocol package's build after
-the server's `generate` in this repo's task runner.
+the three `turbo.json` files. Two order the protocol package's build after the
+server's `generate` in this repo's task runner; the browser host's adds
+`../workspace`, which its bundle reads, to its build inputs.
 
 Anything else `init` does not emit belongs in
 [order-flow](../order-flow/README.md), or teach `init` to emit it. The package

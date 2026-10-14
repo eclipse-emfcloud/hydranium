@@ -215,18 +215,24 @@ npm exec -w @hydranium/core -- vitest                               # watch
 
 ### End-to-end (L5)
 
-There is one Playwright suite per host: the Theia app
+Order-flow has one Playwright suite per host: the Theia app
 ([README](../../examples/order-flow/theia-app/README.md)), the browser page
 ([README](../../examples/order-flow/browser/README.md)) and the VS Code
 extension ([README](../../examples/order-flow/vscode/README.md)), which adds an
 extension-host tier on `@vscode/test-cli` for what the extension API can see.
-Each README owns its commands. No suite is wired to `test`, so `npm run check`
-never depends on a downloaded browser or editor binary. Three traps:
+The bookstore's browser host
+([README](../../examples/bookstore/host-browser/README.md)) carries the smoke
+test `init --hosts browser` emits. Each README owns its commands. No suite is
+wired to `test`, so `npm run check` never depends on a downloaded browser or
+editor binary. Three traps:
 
 - The Theia app's `test:e2e` and `test:e2e:headed` skip every `@restart` spec,
   so running only those never executes them; `test:e2e:restart` does.
-- `reuseExistingServer` is on outside CI, so a stray process on the port gets
-  tested instead of yours; a suspiciously fast pass is the tell.
+- Order-flow's browser suite and the Theia app's main tiers set
+  `reuseExistingServer` outside CI, so a stray process on the port gets tested
+  instead of yours; a suspiciously fast pass is the tell. The Theia reconnect
+  tier and the bookstore's suite never reuse one, so a stray process fails them
+  instead.
 - Every tier runs **built** code, the web servers their bundles and the VS Code
   tiers the extension's `out/`, so framework changes need `npm run build:all`
   first or you test stale code.
@@ -243,9 +249,11 @@ install. `HYDRANIUM_KEEP_PACKED_CONSUMER=1` keeps the disposable project.
   changing package exports, peers, or server bootstrap.
 - `check:init-scaffold` scaffolds with the packed `@hydranium/cli`, as an
   adopter's `npx` does, in each supported shape, then builds, tests and drives
-  every head. It shows what an adopter's first install meets, which the
-  hand-assembled bookstore consumer cannot. CI runs it as its own job on every
-  pull request that changes more than prose.
+  every head; a shape with a browser host also runs its smoke test, in the
+  Chromium the scaffold's own Playwright downloads, which needs that browser's
+  system libraries installed. It shows what an adopter's first install meets,
+  which the hand-assembled bookstore consumer cannot. CI runs it as its own job
+  on every pull request that changes more than prose.
 - `check:published-baseline` runs the consumer smoke against the published
   prerelease. The consumer is this tree's bookstore server, so an example
   already using an unpublished API fails it with no published package at fault.

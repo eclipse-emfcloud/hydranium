@@ -55,7 +55,8 @@
  */
 
 import * as path from 'node:path';
-import { DEFAULT_INIT_HEADS, INIT_HEADS, type InitHead, isNonEmptyDir, isUsableExtension, memberPlacements } from './init.js';
+import { DEFAULT_INIT_HEADS, INIT_HEADS, type InitHead, initMembers, isNonEmptyDir, isUsableExtension, memberPlacements } from './init.js';
+import { INIT_HOSTS, type InitHost, requiredHeads } from './init-hosts.js';
 import { kebab } from './kebab.js';
 import { HEAD_CHOICES, InitWizardCancelled, type PromptPort } from './init-prompt.js';
 import { type WorkspaceDetection } from './init-workspace.js';
@@ -78,6 +79,8 @@ export interface InitAnswers {
    readonly name: string;
    /** The protocol heads to start. */
    readonly heads: readonly InitHead[];
+   /** The host applications to emit around the server. */
+   readonly hosts: readonly InitHost[];
    /** The grammars, in the order they were given. */
    readonly grammars: readonly InitGrammarAnswer[];
    /** Scaffold into a non-empty directory anyway. */
@@ -117,6 +120,9 @@ export function composeInitArgv(answers: InitAnswers): string[] {
    const argv = [answers.targetDir, '--name', answers.name];
    if (answers.heads.join(',') !== DEFAULT_INIT_HEADS.join(',')) {
       argv.push('--heads', answers.heads.join(','));
+   }
+   if (answers.hosts.length > 0) {
+      argv.push('--hosts', answers.hosts.join(','));
    }
    const several = answers.grammars.length > 1;
    for (const grammar of answers.grammars) {
@@ -205,6 +211,25 @@ async function askHeads(prompt: PromptPort): Promise<InitHead[]> {
    return INIT_HEADS.filter(head => chosen.includes(head));
 }
 
+/** What the wizard asks about each host. */
+const HOST_QUESTIONS: Record<InitHost, string> = {
+   browser: 'Add a browser host (every head in a web worker, no backend)?'
+};
+
+/**
+ * Ask for each host the head set can run, one yes/no each. A host whose
+ * required heads are off is not offered: `init` would refuse it.
+ */
+async function askHosts(prompt: PromptPort, heads: readonly InitHead[]): Promise<InitHost[]> {
+   const hosts: InitHost[] = [];
+   for (const host of INIT_HOSTS.filter(candidate => requiredHeads(candidate).every(head => heads.includes(head)))) {
+      if (await prompt.confirm({ message: HOST_QUESTIONS[host], initialValue: false })) {
+         hosts.push(host);
+      }
+   }
+   return hosts;
+}
+
 /**
  * Mark the grammar a scaffolded diagram edits.
  *
@@ -252,12 +277,14 @@ async function confirmOccupiedTarget(prompt: PromptPort, targetDir: string, isOc
 /** Ask the workspace questions, or answer them "no" when there is no workspace to join. */
 async function askWorkspaceMembership(
    prompt: PromptPort,
-   detection: WorkspaceDetection | undefined
+   detection: WorkspaceDetection | undefined,
+   heads: readonly InitHead[],
+   hosts: readonly InitHost[]
 ): Promise<{ monorepo: boolean; scope?: string }> {
    if (detection === undefined) {
       return { monorepo: false };
    }
-   const uncovered = memberPlacements(detection).filter(placement => placement.coveredBy === undefined);
+   const uncovered = memberPlacements(detection, initMembers(heads, hosts)).filter(placement => placement.coveredBy === undefined);
    const covered =
       uncovered.length === 0
          ? 'Its packages are already covered by the workspaces entries.'
@@ -300,9 +327,11 @@ async function askWorkspaceMembership(
  */
 async function askPackaging(
    prompt: PromptPort,
-   detection: WorkspaceDetection | undefined
+   detection: WorkspaceDetection | undefined,
+   heads: readonly InitHead[],
+   hosts: readonly InitHost[]
 ): Promise<{ monorepo: boolean; scope?: string; public: boolean }> {
-   const membership = await askWorkspaceMembership(prompt, detection);
+   const membership = await askWorkspaceMembership(prompt, detection, heads, hosts);
    const isPublic = await prompt.confirm({ message: 'Publishable to npm (the manifest says UNLICENSED)?', initialValue: false });
    return { ...membership, public: isPublic };
 }
@@ -343,6 +372,7 @@ export async function runInitWizard(
    });
 
    const heads = await askHeads(prompt);
+   const hosts = await askHosts(prompt, heads);
 
    // One grammar at a time, each with its own settings, then an explicit "add
    // another" — so the single-grammar case costs two keystrokes and the
@@ -358,9 +388,9 @@ export async function runInitWizard(
    } while (await prompt.confirm({ message: 'Add another grammar?', initialValue: false }));
 
    const withDiagram = await askDiagramGrammar(prompt, heads, grammars);
-   const packaging = await askPackaging(prompt, detect(targetDir));
+   const packaging = await askPackaging(prompt, detect(targetDir), heads, hosts);
 
-   const argv = composeInitArgv({ targetDir, name, heads, grammars: withDiagram, force, ...packaging });
+   const argv = composeInitArgv({ targetDir, name, heads, hosts, grammars: withDiagram, force, ...packaging });
    // Echoed as the LAST thing before the scaffold runs, because it is the
    // artefact the session produces: everything above is how it was reached.
    prompt.outro(formatCommand(argv));

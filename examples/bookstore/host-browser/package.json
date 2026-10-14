@@ -1,0 +1,44 @@
+{
+  "name": "@hydranium/bookstore-host-browser",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Bookstore in a browser page, with every head in a web worker and no backend.",
+  "license": "UNLICENSED",
+  "author": "",
+  "type": "module",
+  "scripts": {
+    "build": "npm run typecheck && node esbuild.mjs",
+    "clean": "rimraf out test-results playwright-report",
+    "lint": "oxlint --report-unused-disable-directives --format stylish --config ../../../oxlint.config.cjs src test --max-warnings 0",
+    "start": "node esbuild.mjs --serve",
+    "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
+    "test:e2e:install": "playwright install chromium",
+    "typecheck": "tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.page.json && tsc --noEmit -p tsconfig.e2e.json"
+  },
+  "dependencies": {
+    "@eclipse-glsp/server": "2.7.0",
+    "@hydranium/bookstore-client": "0.0.0",
+    "@hydranium/bookstore-protocol": "0.0.0",
+    "@hydranium/bookstore-server": "0.0.0",
+    "@hydranium/client-browser": "^1.0.0-next",
+    "@hydranium/core": "^1.0.0-next",
+    "@hydranium/data-server": "^1.0.0-next",
+    "@hydranium/glsp-client": "^1.0.0-next",
+    "@hydranium/glsp-server": "^1.0.0-next",
+    "@hydranium/protocol": "^1.0.0-next",
+    "monaco-editor-core": "0.56.0",
+    "reflect-metadata": "~0.2.2",
+    "vscode-jsonrpc": "9.0.0",
+    "vscode-languageserver-protocol": "3.18.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

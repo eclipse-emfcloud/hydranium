@@ -18,7 +18,8 @@
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { type InitFile, type InitHead, planInitFiles, resolveInitComposition, runInit } from '../src/commands/init.js';
+import { type InitFile, type InitHead, type InitPackaging, planInitFiles, resolveInitComposition, runInit } from '../src/commands/init.js';
+import type { InitHost } from '../src/commands/init-hosts.js';
 import { createNodeWorkspaceProbe, type JsonValue, type WorkspaceProbe } from '../src/commands/init-workspace.js';
 
 describe('resolveInitComposition', () => {
@@ -30,6 +31,7 @@ describe('resolveInitComposition', () => {
          name: 'Bookstore',
          projectId: 'bookstore',
          heads: ['lsp', 'data'],
+         hosts: [],
          grammars: [
             {
                grammar: 'Bookstore',
@@ -605,7 +607,8 @@ describe('planInitFiles project members', () => {
 
    it('gives a standalone project a private root listing its packages', () => {
       const root = manifestOf(filesFor(), 'package.json');
-      expect(root).toMatchObject({ name: 'bookstore-root', private: true, workspaces: ['protocol', 'server'] });
+      expect(root).toMatchObject({ name: 'bookstore-root', private: true });
+      expect(root.workspaces).toEqual(['protocol', 'server']);
       expect(contentOf(filesFor(), '.gitignore')).toBe('node_modules/\n');
    });
 
@@ -812,11 +815,146 @@ describe('runInit', () => {
          }
       });
       // 40 multi-grammar files + the nine for the one diagram: seven in the
-      // server, its test, and its ids in protocol.
-      expect(captured?.files).toHaveLength(49);
+      // server, its test, and its ids in protocol; + the client package's six.
+      expect(captured?.files).toHaveLength(55);
       expect(lines.join('')).toContain(
-         'Scaffolded OrderFlow (49 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
+         'Scaffolded OrderFlow (55 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
       );
+   });
+});
+
+describe('planInitFiles with hosts', () => {
+   const filesFor = (heads: readonly InitHead[], hosts: readonly InitHost[] = ['browser'], packaging?: InitPackaging): InitFile[] =>
+      planInitFiles(resolveInitComposition('Bookstore', undefined, heads, packaging, hosts));
+   const contentOf = (files: readonly InitFile[], path: string): string | undefined => files.find(file => file.path === path)?.content;
+   const pathsUnder = (files: readonly InitFile[], directory: string): string[] =>
+      files.filter(file => file.path.startsWith(`${directory}/`)).map(file => file.path.slice(directory.length + 1));
+
+   it('refuses a browser host without the LSP head, through which the page saves', () => {
+      expect(() => resolveInitComposition('Bookstore', undefined, ['data', 'glsp'], undefined, ['browser'])).toThrow(
+         "--hosts browser needs the 'lsp' head, but the head set is 'data,glsp'."
+      );
+   });
+
+   it('rejects an unknown host and drops a repeated one', () => {
+      expect(() => resolveInitComposition('Bookstore', undefined, ['lsp'], undefined, ['theia' as InitHost])).toThrow(/Unknown host/);
+      expect(resolveInitComposition('Bookstore', undefined, ['lsp'], undefined, ['browser', 'browser']).hosts).toEqual(['browser']);
+   });
+
+   it('emits the client package with the glsp head, with or without a host', () => {
+      expect(pathsUnder(filesFor(['lsp', 'glsp'], []), 'client')).toEqual([
+         'package.json',
+         'tsconfig.json',
+         '.gitignore',
+         'README.md',
+         'src/index.ts',
+         'src/bookstore-diagram-module.ts'
+      ]);
+      expect(pathsUnder(filesFor(['lsp', 'data']), 'client')).toEqual([]);
+   });
+
+   it('lists the packages in the standalone root in build order, the host last', () => {
+      const root = JSON.parse(contentOf(filesFor(['lsp', 'data', 'glsp']), 'package.json') ?? '{}') as { workspaces: string[] };
+      expect(root.workspaces).toEqual(['protocol', 'server', 'client', 'host-browser']);
+   });
+
+   it('pins the copies every member shares at the standalone root, so no range takes the top of the tree', () => {
+      const root = JSON.parse(contentOf(filesFor(['lsp']), 'package.json') ?? '{}') as { devDependencies: Record<string, string> };
+      expect(root.devDependencies).toEqual({
+         langium: '4.3.1',
+         'monaco-editor-core': '0.56.0',
+         'vscode-jsonrpc': '9.0.0',
+         'vscode-languageserver': '10.0.1',
+         'vscode-languageserver-protocol': '3.18.1'
+      });
+   });
+
+   it('keeps the client registration table keyed by the protocol ids, behind the names every host mounts', () => {
+      const module = contentOf(filesFor(['lsp', 'glsp']), 'client/src/bookstore-diagram-module.ts') ?? '';
+      expect(module).toContain(
+         'export const BOOKSTORE_ELEMENT_REGISTRATIONS: Readonly<Record<BookstoreElementType, BookstoreElementRegistration>> = {'
+      );
+      expect(module).toContain('export const bookstoreDiagramModule = new ContainerModule(');
+      expect(module).toContain('export function initializeBookstoreDiagramContainer(');
+   });
+
+   it('emits only the LSP part of the page for --heads lsp', () => {
+      const files = filesFor(['lsp']);
+      const host = pathsUnder(files, 'host-browser');
+      expect(host).toContain('src/editor.ts');
+      expect(host).not.toContain('src/data-status.ts');
+      expect(host).not.toContain('src/diagram.ts');
+      const page = contentOf(files, 'host-browser/src/page.ts') ?? '';
+      expect(page).toContain('await startEditor(heads);');
+      expect(page).not.toMatch(/showDataStatus|mountDiagram|WORKSPACE_ROOT_URI/);
+      const worker = contentOf(files, 'host-browser/src/worker.ts') ?? '';
+      expect(worker).toContain('return shared;');
+      expect(worker).not.toMatch(/DataServer|ServerModule|reflect-metadata/);
+   });
+
+   it('runs each head’s part of the page, in order, with every head', () => {
+      const files = filesFor(['lsp', 'data', 'glsp']);
+      expect(pathsUnder(files, 'host-browser')).toEqual(expect.arrayContaining(['src/data-status.ts', 'src/diagram.ts']));
+      const page = contentOf(files, 'host-browser/src/page.ts') ?? '';
+      const calls = ['await startEditor(heads);', 'await showDataStatus(heads.data,', 'await mountDiagram(heads.glsp,'];
+      expect(calls.map(call => page.indexOf(call))).toEqual([...calls.map(call => page.indexOf(call))].sort((left, right) => left - right));
+      expect(calls.every(call => page.includes(call))).toBe(true);
+      const worker = contentOf(files, 'host-browser/src/worker.ts') ?? '';
+      // Before any module carrying a decorator is evaluated.
+      expect(worker.indexOf("import 'reflect-metadata';")).toBeLessThan(worker.indexOf("from '@hydranium/glsp-server'"));
+      expect(worker).toContain('new ServerModule().configureDiagramModule(new BookstoreDiagramModule())');
+      expect(worker).toContain(
+         'startDataServerInWorker(ports.data, shared, connection => new DataServer<BookstoreModel>(connection, shared));'
+      );
+   });
+
+   it('asserts in the smoke test what each head shows', () => {
+      const all = contentOf(filesFor(['lsp', 'data', 'glsp']), 'host-browser/test/smoke.spec.mts') ?? '';
+      expect(all).toContain("toHaveText('data head: nodes.bookstore holds a BookstoreModel')");
+      expect(all).toContain("page.locator('#diagram .sprotty-node')).toHaveCount(2)");
+      const lspOnly = contentOf(filesFor(['lsp']), 'host-browser/test/smoke.spec.mts') ?? '';
+      expect(lspOnly).not.toMatch(/data-status|sprotty-node/);
+   });
+
+   it('keeps the host private under --public, which publishes the libraries', () => {
+      const files = filesFor(['lsp', 'glsp'], ['browser'], { private: false });
+      expect(JSON.parse(contentOf(files, 'host-browser/package.json') ?? '{}')).toMatchObject({ private: true });
+      expect(JSON.parse(contentOf(files, 'client/package.json') ?? '{}')).not.toHaveProperty('private');
+   });
+
+   it('leaves no unsubstituted token in any host combination', () => {
+      // The constants `esbuild.mjs` defines, which the bundles read, look like tokens and are not.
+      const token = /__(?!(?:WORKSPACE_SEED|DIRECTORY_KEY|WORKER_BUNDLE_URL|MONACO_WORKER_BUNDLE_URL)__)[A-Z_]+__/;
+      for (const heads of [['lsp'], ['lsp', 'data'], ['lsp', 'glsp'], ['lsp', 'data', 'glsp']] as InitHead[][]) {
+         for (const file of filesFor(heads)) {
+            expect(file.content, `${heads.join(',')} ${file.path} still has a token`).not.toMatch(token);
+         }
+      }
+      const several = planInitFiles(
+         resolveInitComposition('OrderFlow', [{ name: 'Domain' }, { name: 'Process', diagram: true }], ['lsp', 'data', 'glsp'], undefined, [
+            'browser'
+         ])
+      );
+      for (const file of several) {
+         expect(file.content, `${file.path} still has a token`).not.toMatch(token);
+      }
+      expect(several.find(file => file.path === 'host-browser/src/page.ts')?.content).toContain('/nodes.process`, logger);');
+   });
+
+   it('prints how to serve and test the browser host', () => {
+      const lines: string[] = [];
+      runInit({
+         targetDir: 'out/bookstore',
+         name: 'Bookstore',
+         heads: ['lsp', 'data', 'glsp'],
+         hosts: ['browser'],
+         write: line => lines.push(line),
+         __writeFilesForTest: () => undefined
+      });
+      const output = lines.join('');
+      expect(output).toContain('heads: lsp,data,glsp, hosts: browser,');
+      expect(output).toContain('npm --prefix host-browser start');
+      expect(output).toContain('npm --prefix host-browser run test:e2e');
    });
 });
 
@@ -994,10 +1132,11 @@ describe('runInit --monorepo into a yo langium root', () => {
       );
    });
 
-   it('adds the GLSP pins for the GLSP head, the protocol member’s included, but no range', () => {
+   it('adds the GLSP pins for the GLSP head, the protocol and client members’ included, but no range', () => {
       const { output } = scaffold(['lsp', 'glsp']);
       expect(output).toContain(
-         '    "@eclipse-glsp/graph": "2.7.0",\n    "@eclipse-glsp/protocol": "2.7.0",\n    "@eclipse-glsp/server": "2.7.0",\n    "langium": "4.3.1",\n'
+         '    "@eclipse-glsp/client": "2.7.0",\n    "@eclipse-glsp/graph": "2.7.0",\n    "@eclipse-glsp/protocol": "2.7.0",\n' +
+            '    "@eclipse-glsp/server": "2.7.0",\n    "@vscode/codicons": "0.0.45",\n    "langium": "4.3.1",\n'
       );
       expect(output).not.toContain('inversify');
    });
@@ -1035,7 +1174,10 @@ describe('runInit --monorepo', () => {
    };
 
    /** Scaffold into the fake workspace and return the emitted files plus the printed output. */
-   function scaffold(options: { scope?: string; public?: boolean } = {}): { files: readonly InitFile[]; output: string } {
+   function scaffold(options: { scope?: string; public?: boolean; heads?: InitHead[]; hosts?: InitHost[] } = {}): {
+      files: readonly InitFile[];
+      output: string;
+   } {
       const lines: string[] = [];
       let captured: readonly InitFile[] = [];
       runInit({
@@ -1056,6 +1198,18 @@ describe('runInit --monorepo', () => {
    function contentOf(files: readonly InitFile[], filePath: string): string | undefined {
       return files.find(file => file.path === filePath)?.content;
    }
+
+   it('prints a build for each member the server’s build does not reach', () => {
+      const { output } = scaffold({ heads: ['lsp', 'data', 'glsp'], hosts: ['browser'] });
+      const builds = output.split('\n').filter(line => line.includes(' run build'));
+      expect(builds.map(line => line.trim().split(/\s+/)[2])).toEqual([
+         'packages/bookstore/server',
+         'packages/bookstore/client',
+         'packages/bookstore/host-browser'
+      ]);
+      // Before the host is served, which bundles the client's build.
+      expect(output.indexOf('packages/bookstore/host-browser run build')).toBeLessThan(output.indexOf('host-browser start'));
+   });
 
    /**
     * The load-bearing assertion, and the reason the fake base is DELIBERATELY

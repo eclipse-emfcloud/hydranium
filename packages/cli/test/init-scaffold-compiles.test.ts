@@ -48,6 +48,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { generateTransferModel } from '../src/commands/generate-transfer-model.js';
 import { type InitGrammarSpec, type InitHead, runInit } from '../src/commands/init.js';
+import type { InitHost } from '../src/commands/init-hosts.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -59,18 +60,22 @@ interface CompileCase {
    readonly label: string;
    readonly name: string;
    readonly heads?: readonly InitHead[];
+   readonly hosts?: readonly InitHost[];
    readonly grammars?: readonly InitGrammarSpec[];
 }
 
 const CASES: readonly CompileCase[] = [
    { label: 'the single-grammar default', name: 'Bookshelf', grammars: [{ name: 'Bookshelf', extensions: ['book'] }] },
-   // The largest emission: further files the other shapes never reach.
-   { label: 'the GLSP head', name: 'Shelf', heads: ['lsp', 'data', 'glsp'] },
-   // The only shape emitting common.langium and the additionalLanguages wiring.
+   // The largest emission: further files the other shapes never reach, the
+   // client package, and a browser host running every head.
+   { label: 'the GLSP head', name: 'Shelf', heads: ['lsp', 'data', 'glsp'], hosts: ['browser'] },
+   // The only shape emitting common.langium and the additionalLanguages wiring,
+   // and a browser host with no diagram.
    {
       label: 'three grammars',
       name: 'Depot',
-      grammars: [{ name: 'Domain' }, { name: 'Process' }, { name: 'Layout' }]
+      grammars: [{ name: 'Domain' }, { name: 'Process' }, { name: 'Layout' }],
+      hosts: ['browser']
    },
    // The only main.ts that brings the workspace up itself and prints its ports.
    { label: 'no LSP head', name: 'Rack', heads: ['data', 'glsp'] }
@@ -138,7 +143,7 @@ function runTool(targetDir: string, packageName: string, command: string, args: 
 describe('the emitted scaffold compiles', () => {
    it.each(CASES.map(entry => [entry.label, entry] as const))(
       'generates and type-checks %s',
-      async (_label, { name, heads, grammars }) => {
+      async (_label, { name, heads, hosts, grammars }) => {
          const targetDir = path.join(PACKAGE_ROOT, `out/scaffold-compiles-${name.toLowerCase()}`);
          try {
             fs.rmSync(targetDir, { recursive: true, force: true });
@@ -149,6 +154,7 @@ describe('the emitted scaffold compiles', () => {
                targetDir,
                name,
                heads,
+               hosts,
                grammars,
                monorepo: true,
                scope: '@hydranium',
@@ -174,10 +180,16 @@ describe('the emitted scaffold compiles', () => {
                expect(JSON.parse(fs.readFileSync(base, 'utf-8'))).toHaveProperty('compilerOptions');
             }
 
-            const protocolName = (JSON.parse(fs.readFileSync(path.join(protocol, 'package.json'), 'utf-8')) as { name: string }).name;
-            const link = path.join(server, 'node_modules', protocolName);
-            fs.mkdirSync(path.dirname(link), { recursive: true });
-            fs.symlinkSync(protocol, link, 'dir');
+            const client = path.join(targetDir, 'client');
+            const host = path.join(targetDir, 'host-browser');
+            /** Link `member` where `from` resolves it by name, as the scaffold's workspace would. */
+            const link = (from: string, member: string): void => {
+               const memberName = (JSON.parse(fs.readFileSync(path.join(member, 'package.json'), 'utf-8')) as { name: string }).name;
+               const target = path.join(from, 'node_modules', memberName);
+               fs.mkdirSync(path.dirname(target), { recursive: true });
+               fs.symlinkSync(member, target, 'dir');
+            };
+            link(server, protocol);
 
             // Both halves of the emitted `generate` script, in its order.
             runTool(server, 'langium-cli', 'langium', ['generate', '--file', path.join(server, 'langium-config.json')]);
@@ -206,6 +218,32 @@ describe('the emitted scaffold compiles', () => {
             expect(diagramTests.length > 0).toBe(heads?.includes('glsp') ?? false);
             for (const diagramTest of diagramTests) {
                expect(() => runTool(server, 'vitest', 'vitest', ['run', `test/${diagramTest}`])).not.toThrow();
+            }
+
+            // The client compiles beside the server; it requires the ES protocol
+            // member from CommonJS, which only `tsc` reading it can vouch for.
+            expect(fs.existsSync(client)).toBe(heads?.includes('glsp') ?? false);
+            if (fs.existsSync(client)) {
+               link(client, protocol);
+               expect(() => runTool(client, 'typescript', 'tsc', ['-b', path.join(client, 'tsconfig.json')])).not.toThrow();
+            }
+
+            // The emitted host `build`: both halves and the smoke tier type-check,
+            // and esbuild bundles at `platform: 'browser'`, which refuses any Node
+            // import the worker reaches.
+            expect(fs.existsSync(host)).toBe(hosts?.includes('browser') ?? false);
+            if (fs.existsSync(host)) {
+               for (const member of [protocol, server, ...(fs.existsSync(client) ? [client] : [])]) {
+                  link(host, member);
+               }
+               for (const project of ['tsconfig.worker.json', 'tsconfig.page.json', 'tsconfig.e2e.json']) {
+                  expect(() => runTool(host, 'typescript', 'tsc', ['--noEmit', '-p', path.join(host, project)])).not.toThrow();
+               }
+               // A failure's message carries esbuild's own report, from stderr.
+               execFileSync(process.execPath, ['esbuild.mjs'], { cwd: host, stdio: 'pipe' });
+               expect(fs.readdirSync(path.join(host, 'out')).sort()).toEqual(
+                  expect.arrayContaining(['monaco-editor-worker.js', 'page.css', 'page.js', 'worker.js'])
+               );
             }
 
             // Without an LSP head only main.ts names the workspace and reports

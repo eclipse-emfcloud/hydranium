@@ -50,6 +50,9 @@ const SCAFFOLD_NPM = '10.9.2';
  */
 const TYPESCRIPT_FLOOR = '5.4.5';
 
+/** The client member's floor: it is CommonJS and requires the ES protocol, which TypeScript allows from 5.8. */
+const CLIENT_TYPESCRIPT_FLOOR = '5.8.3';
+
 /** A scaffold smoke starts a server and makes a handful of requests; one that hangs fails at this. */
 const SMOKE_TIMEOUT_MS = 2 * 60_000;
 
@@ -80,7 +83,15 @@ const exampleProtocol = join(root, 'examples/bookstore/protocol');
 const scratch = mkdtempSync(join(tmpdir(), 'hydranium-packed-consumer-'));
 const tarballs = join(scratch, 'tarballs');
 const consumer = join(scratch, 'consumer');
-const packageDirs = ['langium', 'protocol', 'core', 'data-server', 'glsp-server', ...(initScaffold ? ['cli'] : [])];
+const packageDirs = [
+   'langium',
+   'protocol',
+   'core',
+   'data-server',
+   'glsp-server',
+   // The client package and the browser host's page need these.
+   ...(initScaffold ? ['cli', 'client-browser', 'glsp-client'] : [])
+];
 const env = { ...process.env, npm_config_workspaces: 'false' };
 
 interface InstalledManifest {
@@ -357,10 +368,12 @@ interface ScaffoldShape {
    readonly vitest: string;
    /** `--grammar` arguments; the smoke drives the first, so it keeps the `my-lang` language id. */
    readonly grammars?: readonly string[];
+   /** `--hosts`; a browser host is built and its smoke test run in Chromium. */
+   readonly hosts?: string;
 }
 
 const SCAFFOLD_SHAPES: readonly ScaffoldShape[] = [
-   { label: 'standalone, all heads', heads: 'lsp,data,glsp', production: true, vitest: '~4.0.18' },
+   { label: 'standalone, all heads', heads: 'lsp,data,glsp', hosts: 'browser', production: true, vitest: '~4.0.18' },
    {
       label: 'standalone, LSP and data, two grammars',
       heads: 'lsp,data',
@@ -368,8 +381,8 @@ const SCAFFOLD_SHAPES: readonly ScaffoldShape[] = [
       vitest: '~4.0.18'
    },
    { label: 'standalone, LSP and GLSP', heads: 'lsp,glsp', vitest: '~4.0.18' },
-   { label: 'standalone, LSP only', heads: 'lsp', vitest: '~4.0.18' },
-   { label: 'workspace member, all heads', heads: 'lsp,data,glsp', monorepo: true, vitest: '~4.0.18' },
+   { label: 'standalone, LSP only', heads: 'lsp', hosts: 'browser', vitest: '~4.0.18' },
+   { label: 'workspace member, all heads', heads: 'lsp,data,glsp', hosts: 'browser', monorepo: true, vitest: '~4.0.18' },
    { label: 'workspace member under its root npm, LSP only', heads: 'lsp', monorepo: true, npm: WORKSPACE_NPM, vitest: '^4.0.0' },
    // npm 11.6 or later, because the root's own `vitest` 4.1 crashes an earlier one.
    {
@@ -417,7 +430,17 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
    // the smoke starts, as a path in the workspace and on disk.
    const member = projectPath === undefined ? 'server' : `${projectPath}/server`;
    const server = join(installRoot, member);
-   const init = [cli, 'init', project, '--name', 'MyLang', '--heads', shape.heads, ...(shape.grammars ?? [])];
+   const init = [
+      cli,
+      'init',
+      project,
+      '--name',
+      'MyLang',
+      '--heads',
+      shape.heads,
+      ...(shape.hosts === undefined ? [] : ['--hosts', shape.hosts]),
+      ...(shape.grammars ?? [])
+   ];
    // Every shape is a workspace, a standalone one rooted at the project: it has
    // to see its members, which the inherited setting would hide, and npm
    // refuses it for any script run inside a member.
@@ -456,14 +479,26 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
    const vitest = (JSON.parse(readFileSync(join(server, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string> })
       .devDependencies?.vitest;
    if (vitest !== shape.vitest) throw new Error(`${shape.label}: init emitted vitest ${vitest}, expected ${shape.vitest}`);
-   const repointed = repointFramework(join(server, 'package.json'), candidates);
+   // Every member declaring a framework package, so none of them fetches it from the registry.
+   const members = ['server', 'client', 'host-browser']
+      .map(name => (projectPath === undefined ? name : `${projectPath}/${name}`))
+      .filter(path => existsSync(join(installRoot, path, 'package.json')));
+   const repointedBy = new Map(members.map(path => [path, repointFramework(join(installRoot, path, 'package.json'), candidates)]));
+   const repointed = new Map([...repointedBy.values()].flatMap(map => [...map]));
    cpSync(join(root, 'scripts/fixtures/packed-consumer/scaffold-smoke.mjs'), join(server, 'scaffold-smoke.mjs'));
    writeFileSync(join(server, 'test/decorated.test.ts'), DECORATED_TEST);
 
    shapeInstall('install');
-   assertInstalledFrom(repointed, installRoot, member);
+   for (const [path, packages] of repointedBy) {
+      assertInstalledFrom(packages, installRoot, path);
+   }
    for (const name of candidates.keys()) {
-      if (!repointed.has(name) && [installRoot, project, server].some(directory => existsSync(join(directory, 'node_modules', name)))) {
+      if (
+         !repointed.has(name) &&
+         [installRoot, project, ...members.map(path => join(installRoot, path))].some(directory =>
+            existsSync(join(directory, 'node_modules', name))
+         )
+      ) {
          throw new Error(`${shape.label}: installed ${name}, which the scaffold does not declare`);
       }
    }
@@ -481,13 +516,32 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
    // which an adopter runs; a workspace member's project has no root of its own.
    const scriptsDir = shape.monorepo ? server : project;
    run(`${shape.label}: build`, 'npm', ['run', 'build'], scriptsDir, installEnv);
-   run(
-      `${shape.label}: compile with TypeScript ${TYPESCRIPT_FLOOR}`,
-      'npx',
-      ['--yes', '-p', `typescript@${TYPESCRIPT_FLOOR}`, 'tsc', '--noEmit', '-p', 'tsconfig.json'],
-      server,
-      installEnv
-   );
+   // A member's build reaches no sibling but protocol, so `init` prints a build
+   // for each further member, which an adopter follows.
+   if (shape.monorepo) {
+      for (const path of members.filter(path => !path.endsWith('/server'))) {
+         run(`${shape.label}: build ${path}`, 'npm', ['run', 'build'], join(installRoot, path), installEnv);
+      }
+   }
+   // Every project of every member, each at the floor adopters are told it compiles from.
+   const floorCompiles: ReadonlyArray<readonly [string, string, string]> = [
+      ['protocol', 'tsconfig.json', TYPESCRIPT_FLOOR],
+      ['server', 'tsconfig.json', TYPESCRIPT_FLOOR],
+      ['client', 'tsconfig.json', CLIENT_TYPESCRIPT_FLOOR],
+      ...['worker', 'page', 'e2e'].map(name => ['host-browser', `tsconfig.${name}.json`, TYPESCRIPT_FLOOR] as const)
+   ];
+   for (const [name, tsconfig, version] of floorCompiles) {
+      const directory = join(installRoot, projectPath === undefined ? name : `${projectPath}/${name}`);
+      if (existsSync(join(directory, tsconfig))) {
+         run(
+            `${shape.label}: compile ${name}/${tsconfig} with TypeScript ${version}`,
+            'npx',
+            ['--yes', '-p', `typescript@${version}`, 'tsc', '--noEmit', '-p', tsconfig],
+            directory,
+            installEnv
+         );
+      }
+   }
    run(`${shape.label}: tests`, 'npm', ['test'], scriptsDir, installEnv);
    // The starter files are the one emission no test reads: they have to parse
    // and link against the starter grammar, the cross-file reference included.
@@ -499,6 +553,12 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
       installEnv
    );
    run(`${shape.label}: smoke`, 'node', ['scaffold-smoke.mjs', shape.heads], server, env, SMOKE_TIMEOUT_MS);
+   if (shape.hosts?.split(',').includes('browser')) {
+      // The scaffold's own Playwright, whose range resolves its own Chromium.
+      const host = join(project, 'host-browser');
+      run(`${shape.label}: browser install`, 'npm', ['run', 'test:e2e:install'], host, installEnv);
+      run(`${shape.label}: browser smoke`, 'npm', ['run', 'test:e2e'], host, installEnv);
+   }
    if (shape.production) {
       rmSync(join(installRoot, 'node_modules'), { recursive: true, force: true });
       shapeInstall('production install', ['ci', '--omit=dev', '--no-audit', '--no-fund']);

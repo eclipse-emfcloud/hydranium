@@ -40,6 +40,7 @@ const ANSWERS: ReadonlyArray<{ label: string; answers: InitAnswers }> = [
          targetDir: './bookstore',
          name: 'Bookstore',
          heads: ['lsp', 'data'],
+         hosts: [],
          grammars: [{ name: 'Bookstore', extension: 'bookstore', diagram: false }],
          force: false,
          monorepo: false,
@@ -52,6 +53,7 @@ const ANSWERS: ReadonlyArray<{ label: string; answers: InitAnswers }> = [
          targetDir: './order-flow',
          name: 'OrderFlow',
          heads: ['lsp', 'data'],
+         hosts: [],
          grammars: [{ name: 'OrderFlow', extension: 'order', diagram: false }],
          force: false,
          monorepo: false,
@@ -64,6 +66,7 @@ const ANSWERS: ReadonlyArray<{ label: string; answers: InitAnswers }> = [
          targetDir: './depot',
          name: 'Depot',
          heads: ['lsp', 'data', 'glsp'],
+         hosts: [],
          grammars: [
             { name: 'Domain', extension: 'domain', diagram: false },
             { name: 'Process', extension: 'flow', diagram: true },
@@ -84,10 +87,24 @@ const ANSWERS: ReadonlyArray<{ label: string; answers: InitAnswers }> = [
          targetDir: './bookstore',
          name: 'Bookstore',
          heads: ['lsp', 'data'],
+         hosts: [],
          grammars: [{ name: 'Bookstore', extension: 'bookstore', diagram: false }],
          force: false,
          monorepo: false,
          public: true
+      }
+   },
+   {
+      label: 'a browser host around every head',
+      answers: {
+         targetDir: './bookstore',
+         name: 'Bookstore',
+         heads: ['lsp', 'data', 'glsp'],
+         hosts: ['browser'],
+         grammars: [{ name: 'Bookstore', extension: 'bookstore', diagram: true }],
+         force: false,
+         monorepo: false,
+         public: false
       }
    },
    {
@@ -96,6 +113,7 @@ const ANSWERS: ReadonlyArray<{ label: string; answers: InitAnswers }> = [
          targetDir: './plain',
          name: 'Plain',
          heads: ['lsp'],
+         hosts: [],
          grammars: [{ name: 'Plain', extension: 'plain', diagram: false }],
          force: false,
          monorepo: false,
@@ -117,8 +135,9 @@ describe('the wizard argv round-trips through the parser', () => {
 
       // The composition is what the scaffolder actually reads, so the claim is
       // only proved once the parsed argv resolves to the answers' own shape.
-      const composition = resolveInitComposition(parsed.name as string, parsed.grammars, parsed.heads);
+      const composition = resolveInitComposition(parsed.name as string, parsed.grammars, parsed.heads, undefined, parsed.hosts);
       expect(composition.heads).toEqual(answers.heads);
+      expect(composition.hosts).toEqual(answers.hosts);
       expect(composition.grammars.map(grammar => grammar.grammar)).toEqual(answers.grammars.map(grammar => grammar.name));
       expect(composition.grammars.map(grammar => grammar.extensions[0])).toEqual(answers.grammars.map(grammar => grammar.extension));
       expect(composition.grammars.map(grammar => grammar.diagram)).toEqual(answers.grammars.map(grammar => grammar.diagram));
@@ -177,7 +196,9 @@ describe('INIT_HELP', () => {
          // supplied for the ones that take them; the point is only that the
          // parser has a case for the flag at all.
          const args =
-            flag === '--name' || flag === '--heads' || flag === '--scope' ? ['./x', flag, 'V'] : ['./x', '--grammar', 'G', flag, 'V'];
+            flag === '--name' || flag === '--heads' || flag === '--hosts' || flag === '--scope'
+               ? ['./x', flag, 'V']
+               : ['./x', '--grammar', 'G', flag, 'V'];
          expect(() => parse(args), `${flag} is documented but not accepted`).not.toThrow(/Unknown option/);
       }
    });

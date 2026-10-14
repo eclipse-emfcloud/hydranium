@@ -4,6 +4,9 @@ Use this when your language should run in a plain web page, with no backend:
 every head in a web worker, the editors and the diagram in the page. The
 [order-flow browser example](../../examples/order-flow/browser/README.md) does
 everything below with all three heads; each step names the file to look at.
+`init --hosts browser` scaffolds a smaller page doing the same for your own
+language, which [bookstore's](../../examples/bookstore/host-browser/README.md)
+shows as emitted.
 
 Heads: LSP · data · GLSP
 
@@ -22,9 +25,10 @@ one workspace.
    imports it for a seam a browser never calls. Alias nothing else. A real Node
    import anywhere then fails your build, which is the check you want, rather
    than failing at runtime in a worker with no console. If you mount a diagram,
-   add `loader: { '.ttf': 'dataurl' }` for GLSP's font. If you minify, keep
-   class names (`keepNames`): the log tags the framework's and sprotty's
-   classes by name.
+   add `loader: { '.ttf': 'dataurl' }` for GLSP's font, and declare
+   `@vscode/codicons`, whose stylesheet GLSP's client imports without
+   declaring the package. If you minify, keep class names (`keepNames`): the
+   log tags the framework's and sprotty's classes by name.
 
 2. **Give every head its own `MessagePort`.** In the page, build the `Worker`
    and hand it to `connectWorkerHeads` from `@hydranium/client-browser`, which
@@ -156,8 +160,8 @@ const fileSystem = persistentFileSystem({
 
 8. **Mount the diagram.** Build `HydraniumGlspClient` from
    `@hydranium/glsp-client` over the GLSP head's connection from
-   `connectWorkerHeads`, wrapped with `sendByMethodName` from
-   `@hydranium/protocol`, and hand it with your diagram module's initializer
+   `connectWorkerHeads`, wrapped with `glspConnection` from
+   `@hydranium/glsp-client`, and hand it with your diagram module's initializer
    and the element to `mountGlspDiagram`. Upstream's `GLSPWebWorkerProvider`
    starts a worker of its own, so it is not the piece to use. The mount adds
    the framework's client module, so a failed load and sprotty's own errors

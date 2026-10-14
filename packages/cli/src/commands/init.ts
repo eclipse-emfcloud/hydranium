@@ -9,6 +9,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { INIT_HOSTS, type InitHost, isInitHost, requiredHeads } from './init-hosts.js';
 import { buildInitTemplates, readFrameworkVersion, workspaceRootPins } from './init-templates.js';
 import { kebab } from './kebab.js';
 import {
@@ -33,14 +34,17 @@ export type InitHead = (typeof INIT_HEADS)[number];
 /** The heads a scaffold emits when `--heads` is not given. */
 export const DEFAULT_INIT_HEADS: readonly InitHead[] = ['lsp', 'data'];
 
-/**
- * The library packages of a scaffolded project, each in the directory of its
- * name, in the order a workspace lists them.
- */
-export const INIT_MEMBERS = ['protocol', 'server'] as const;
+/** One package of a scaffolded project, in the directory of its name — see {@link initMembers}. */
+export type InitMember = 'protocol' | 'server' | 'client' | `host-${InitHost}`;
 
-/** One library member — see {@link INIT_MEMBERS}. */
-export type InitMember = (typeof INIT_MEMBERS)[number];
+/**
+ * The packages a scaffold with these heads and hosts emits, in the order a
+ * workspace lists them. `client` comes with the `glsp` head, which always
+ * brings a diagram, and each host is a package of its own.
+ */
+export function initMembers(heads: readonly InitHead[], hosts: readonly InitHost[]): InitMember[] {
+   return ['protocol', 'server', ...(heads.includes('glsp') ? (['client'] as const) : []), ...hosts.map(host => `host-${host}` as const)];
+}
 
 /** A member's path relative to the workspace root, and the `workspaces` entry already covering it. */
 export interface InitMemberPlacement {
@@ -55,8 +59,8 @@ export interface InitMemberPlacement {
  * package: a root listing its members one by one needs an entry for each,
  * while a `packages/*` glob covers none of them one level deeper.
  */
-export function memberPlacements(detection: WorkspaceDetection): readonly InitMemberPlacement[] {
-   return INIT_MEMBERS.map(member => {
+export function memberPlacements(detection: WorkspaceDetection, members: readonly InitMember[]): readonly InitMemberPlacement[] {
+   return members.map(member => {
       const memberPath = `${detection.targetPath}/${member}`;
       return { path: memberPath, coveredBy: detection.workspaces.find(glob => workspaceGlobCovers(glob, memberPath)) };
    });
@@ -227,6 +231,8 @@ export interface InitComposition {
    readonly projectId: string;
    /** The protocol heads to start, at least one. */
    readonly heads: readonly InitHead[];
+   /** The host applications emitted around the server, each a package of its own. */
+   readonly hosts: readonly InitHost[];
    /** The grammars, in the order given. The first is the configuration root. */
    readonly grammars: readonly InitGrammarNames[];
    /** How the emitted `package.json` presents itself, and where it sits. */
@@ -262,6 +268,8 @@ export interface InitCommandOptions {
    readonly grammars?: readonly InitGrammarSpec[];
    /** The protocol heads to start. Defaults to {@link DEFAULT_INIT_HEADS}. */
    readonly heads?: readonly InitHead[];
+   /** The host applications to emit around the server. Defaults to none. */
+   readonly hosts?: readonly InitHost[];
    /** Scaffold into a non-empty directory anyway. */
    readonly force?: boolean;
    /**
@@ -387,6 +395,21 @@ function resolveHeads(heads: readonly InitHead[] | undefined): readonly InitHead
    return INIT_HEADS.filter(head => resolved.includes(head));
 }
 
+/** Validate the host set against the heads: known names only, and every head a host needs. */
+function resolveHosts(hosts: readonly InitHost[], heads: readonly InitHead[]): readonly InitHost[] {
+   const unknown = hosts.filter(host => !isInitHost(host));
+   if (unknown.length > 0) {
+      throw new Error(`Unknown host(s) '${unknown.join(', ')}': expected one of ${INIT_HOSTS.join(', ')}.`);
+   }
+   for (const host of hosts) {
+      const missing = requiredHeads(host).filter(head => !heads.includes(head));
+      if (missing.length > 0) {
+         throw new Error(`--hosts ${host} needs the '${missing.join(', ')}' head, but the head set is '${heads.join(',')}'.`);
+      }
+   }
+   return INIT_HOSTS.filter(host => hosts.includes(host));
+}
+
 /**
  * Reject the collisions that would otherwise surface as a confusing generator
  * or runtime failure rather than as a bad invocation.
@@ -441,7 +464,8 @@ export function resolveInitComposition(
    name: string,
    grammars: readonly InitGrammarSpec[] = [],
    heads?: readonly InitHead[],
-   packaging: InitPackaging = STANDALONE_PACKAGING
+   packaging: InitPackaging = STANDALONE_PACKAGING,
+   hosts: readonly InitHost[] = []
 ): InitComposition {
    if (!isPascalIdentifier(name)) {
       throw new Error(
@@ -453,11 +477,20 @@ export function resolveInitComposition(
       throw new Error(`Invalid --scope '${packaging.scope}': an npm scope starts with '@', e.g. '@acme'.`);
    }
    const resolvedHeads = resolveHeads(heads);
+   const resolvedHosts = resolveHosts(hosts, resolvedHeads);
    const specs = grammars.length > 0 ? grammars : [{ name }];
    const diagrams = resolveDiagrams(specs, resolvedHeads);
    const resolved = specs.map((spec, index) => resolveGrammar(spec, projectId, specs.length > 1, diagrams[index]));
    assertNoCollisions(resolved);
-   return { name, projectId, heads: resolvedHeads, grammars: resolved, packaging, frameworkVersion: readFrameworkVersion() };
+   return {
+      name,
+      projectId,
+      heads: resolvedHeads,
+      hosts: resolvedHosts,
+      grammars: resolved,
+      packaging,
+      frameworkVersion: readFrameworkVersion()
+   };
 }
 
 /**
@@ -536,7 +569,13 @@ export function runInit(options: InitCommandOptions): void {
    const write = options.write ?? ((line: string) => process.stdout.write(line));
    const targetDir = path.resolve(options.targetDir);
    const detection = options.monorepo ? detectWorkspace(targetDir, options.probe ?? createNodeWorkspaceProbe()) : undefined;
-   const composition = resolveInitComposition(options.name, options.grammars, options.heads, resolveInitPackaging(targetDir, options));
+   const composition = resolveInitComposition(
+      options.name,
+      options.grammars,
+      options.heads,
+      resolveInitPackaging(targetDir, options),
+      options.hosts
+   );
 
    if (!options.force && isNonEmptyDir(targetDir)) {
       throw new Error(`Target directory '${targetDir}' is not empty. Pass --force to scaffold into it anyway.`);
@@ -556,6 +595,7 @@ export function runInit(options: InitCommandOptions): void {
    const grammarList = composition.grammars.map(grammar => (grammar.diagram ? `${grammar.grammar} (diagram)` : grammar.grammar)).join(', ');
    write(
       `Scaffolded ${composition.name} (${files.length} files, heads: ${composition.heads.join(',')}, ` +
+         (composition.hosts.length > 0 ? `hosts: ${composition.hosts.join(',')}, ` : '') +
          `${composition.grammars.length} grammar(s): ${grammarList}) into ${targetDir}\n`
    );
    if (detection !== undefined) {
@@ -563,8 +603,12 @@ export function runInit(options: InitCommandOptions): void {
       write(`Workspace root: ${detection.rootDir}\n`);
       if (detection.baseTsconfig !== undefined) {
          write(
-            `  Each package's tsconfig.json extends the root's ${path.posix.basename(detection.baseTsconfig)}, minus the options it inherits unchanged.\n`
+            `  Each library package's tsconfig.json extends the root's ${path.posix.basename(detection.baseTsconfig)}, minus the options it inherits unchanged.\n`
          );
+         if (composition.hosts.length > 0) {
+            // A host's projects compile its page, worker and tests apart, each under options of its own.
+            write("  Each host's tsconfigs stand alone.\n");
+         }
       } else {
          write("  No root tsconfig carries compilerOptions, so each package's stands alone.\n");
       }
@@ -579,7 +623,7 @@ export function runInit(options: InitCommandOptions): void {
       // Printed rather than applied: `init` writes inside the target directory
       // and nowhere else, so a scaffold can never surprise-edit a manifest that
       // is under review, mid-rebase, or simply not the caller's to change.
-      const placements = memberPlacements(detection);
+      const placements = memberPlacements(detection, initMembers(composition.heads, composition.hosts));
       const uncovered = placements.filter(placement => placement.coveredBy === undefined);
       if (uncovered.length > 0) {
          write(`  Add ${uncovered.length === 1 ? 'this' : 'these'} to "workspaces" in ${path.join(detection.rootDir, 'package.json')}:\n`);
@@ -588,7 +632,7 @@ export function runInit(options: InitCommandOptions): void {
       for (const placement of placements.filter(candidate => candidate.coveredBy !== undefined)) {
          write(`  ${placement.path} is already covered by the "${placement.coveredBy}" workspaces entry.\n`);
       }
-      const pins = workspaceRootPins(composition.heads).map(([name, version]) => `    "${name}": "${version}"`);
+      const pins = workspaceRootPins(composition).map(([name, version]) => `    "${name}": "${version}"`);
       write(
          `  Add these to "devDependencies" in ${path.join(detection.rootDir, 'package.json')}, so another member's version of one ` +
             `cannot displace the copy these packages share with the framework:\n${pins.join(',\n')}\n`
@@ -611,11 +655,22 @@ export function runInit(options: InitCommandOptions): void {
       write(`  cd ${detection.rootDir}\n`);
       write('  npm install\n');
       write(`  npm --prefix ${server} run build   # langium generate + tsc, protocol included\n`);
+      // The server's build reaches protocol through its project reference and
+      // nothing else, so each further member is built on its own.
+      for (const member of initMembers(composition.heads, composition.hosts).filter(name => name !== 'protocol' && name !== 'server')) {
+         write(`  npm --prefix ${detection.targetPath}/${member} run build\n`);
+      }
       write(`  npm --prefix ${server} test\n`);
    }
    // `npx`, not a bare invocation: `@hydranium/cli` is a devDependency of the
    // scaffold, so the binary is on PATH inside an npm script and nowhere else.
    write(`  npx hydranium-cli reflect --services ./${server}/lib/node/services.js\n`);
+   if (composition.hosts.includes('browser')) {
+      const browser = detection === undefined ? 'host-browser' : `${detection.targetPath}/host-browser`;
+      write(`  npm --prefix ${browser} start   # serve the page at http://localhost:4937, Ctrl+C to stop\n`);
+      // The smoke test serves the page itself, on the same port.
+      write(`  npm --prefix ${browser} run test:e2e:install && npm --prefix ${browser} run test:e2e   # with start stopped\n`);
+   }
    write('\n');
    write('The emitted sources carry no license header — run your own header tool if\n');
    write('your repo gates them. See the README section on that.\n');

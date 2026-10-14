@@ -87,6 +87,9 @@ function scriptedPrompt(answers: readonly Answer[]): ScriptedPrompt {
    };
 }
 
+/** The browser host question's exact message. */
+const BROWSER_HOST = 'Add a browser host (every head in a web worker, no backend)?';
+
 /** The publishability question's exact message, asserted on paths that used not to reach it. */
 const PUBLISHABLE = 'Publishable to npm (the manifest says UNLICENSED)?';
 
@@ -105,6 +108,7 @@ describe('composeInitArgv', () => {
          targetDir: './bookstore',
          name: 'Bookstore',
          heads: ['lsp', 'data'],
+         hosts: [],
          grammars: [{ name: 'Bookstore', extension: 'bookstore', diagram: false }],
          force: false,
          monorepo: false,
@@ -123,6 +127,7 @@ describe('composeInitArgv', () => {
          targetDir: './order-flow',
          name: 'OrderFlow',
          heads: ['lsp', 'data'],
+         hosts: [],
          grammars: [{ name: 'OrderFlow', extension: 'order', diagram: false }],
          force: false,
          monorepo: false,
@@ -142,6 +147,7 @@ describe('composeInitArgv', () => {
          targetDir: './order-flow',
          name: 'OrderFlow',
          heads: ['lsp', 'data', 'glsp'],
+         hosts: [],
          grammars: [
             { name: 'Domain', extension: 'domain', diagram: false },
             { name: 'Process', extension: 'process', diagram: true }
@@ -186,7 +192,7 @@ describe('pascalCase', () => {
 
 describe('runInitWizard', () => {
    it('takes the derived defaults and asks nothing about a workspace when there is none', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], 'Bookstore', 'bookstore', false, false]);
+      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, 'Bookstore', 'bookstore', false, false]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore']);
@@ -205,7 +211,7 @@ describe('runInitWizard', () => {
     * early, and neither of them can be allowed to skip the question with it.
     */
    it('asks about publishability when no workspace was detected at all', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], 'Bookstore', 'bookstore', false, true]);
+      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, 'Bookstore', 'bookstore', false, true]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(prompt.asked).toContain(PUBLISHABLE);
@@ -213,7 +219,7 @@ describe('runInitWizard', () => {
    });
 
    it('asks about publishability when workspace membership was declined', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], 'Bookstore', 'bookstore', false, false, true]);
+      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, 'Bookstore', 'bookstore', false, false, true]);
       const argv = await runInitWizard(prompt, () => DETECTION, { targetDir: './bookstore', isOccupied: () => false });
 
       // The membership question was reached and declined, so the scope question
@@ -226,7 +232,7 @@ describe('runInitWizard', () => {
    });
 
    it('names each package the workspaces entries do not reach', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], 'Bookstore', 'bookstore', false, false, true]);
+      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, 'Bookstore', 'bookstore', false, false, true]);
       await runInitWizard(prompt, () => DETECTION, { targetDir: './bookstore', isOccupied: () => false });
 
       // `packages/*` reaches the project directory, which holds no package.
@@ -239,6 +245,7 @@ describe('runInitWizard', () => {
       const prompt = scriptedPrompt([
          'OrderFlow',
          ['lsp', 'data', 'glsp'],
+         false,
          'Domain',
          'domain',
          true,
@@ -277,7 +284,7 @@ describe('runInitWizard', () => {
     * would offer a choice whose "no" it would then overrule.
     */
    it('does not ask which grammar the diagram edits when there is only one', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'glsp'], 'Bookstore', 'bookstore', false, false]);
+      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'glsp'], false, 'Bookstore', 'bookstore', false, false]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(prompt.asked).not.toContain('Which grammar does the GLSP diagram edit?');
@@ -290,17 +297,65 @@ describe('runInitWizard', () => {
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore', '--heads', 'data,glsp']);
+      // `init` refuses a browser host without the LSP head, so it is not offered.
+      expect(prompt.asked).not.toContain(BROWSER_HOST);
+   });
+
+   it('composes --hosts browser, and names the client and host packages a workspace must list', async () => {
+      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data', 'glsp'], true, 'Bookstore', 'bookstore', false, true, '@acme', false]);
+      const argv = await runInitWizard(prompt, () => DETECTION, { targetDir: './bookstore', isOccupied: () => false });
+
+      expect(prompt.asked).toContain(BROWSER_HOST);
+      expect(argv).toEqual([
+         './bookstore',
+         '--name',
+         'Bookstore',
+         '--heads',
+         'lsp,data,glsp',
+         '--hosts',
+         'browser',
+         '--monorepo',
+         '--scope',
+         '@acme'
+      ]);
+      expect(prompt.notes.join('\n')).toContain(
+         'no entry covering packages/order-flow/protocol, packages/order-flow/server, packages/order-flow/client, packages/order-flow/host-browser'
+      );
    });
 
    it('re-asks a grammar whose extension differs from a claimed one only in case', async () => {
-      const prompt = scriptedPrompt(['OrderFlow', ['lsp', 'data'], 'Domain', 'shared', true, 'Process', 'Shared', 'process', false, false]);
+      const prompt = scriptedPrompt([
+         'OrderFlow',
+         ['lsp', 'data'],
+         false,
+         'Domain',
+         'shared',
+         true,
+         'Process',
+         'Shared',
+         'process',
+         false,
+         false
+      ]);
       await runInitWizard(prompt, () => undefined, { targetDir: './order-flow', isOccupied: () => false });
 
       expect(prompt.rejected).toContain("'.Shared' is already claimed by another grammar.");
    });
 
    it('re-asks a grammar whose extension another grammar already claimed', async () => {
-      const prompt = scriptedPrompt(['OrderFlow', ['lsp', 'data'], 'Domain', 'shared', true, 'Process', 'shared', 'process', false, false]);
+      const prompt = scriptedPrompt([
+         'OrderFlow',
+         ['lsp', 'data'],
+         false,
+         'Domain',
+         'shared',
+         true,
+         'Process',
+         'shared',
+         'process',
+         false,
+         false
+      ]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './order-flow', isOccupied: () => false });
 
       expect(prompt.rejected).toContain("'.shared' is already claimed by another grammar.");
@@ -323,7 +378,7 @@ describe('runInitWizard', () => {
     * collects a whole project description and then refuses.
     */
    it('offers --force as the first question when the target is not empty', async () => {
-      const prompt = scriptedPrompt([true, 'Bookstore', ['lsp', 'data'], 'Bookstore', 'bookstore', false, false]);
+      const prompt = scriptedPrompt([true, 'Bookstore', ['lsp', 'data'], false, 'Bookstore', 'bookstore', false, false]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => true });
 
       expect(prompt.asked[0]).toBe('./bookstore is not empty — scaffold into it anyway?');
@@ -343,14 +398,14 @@ describe('runInitWizard', () => {
    });
 
    it('says nothing about emptiness when the target is empty', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], 'Bookstore', 'bookstore', false, false]);
+      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, 'Bookstore', 'bookstore', false, false]);
       await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(prompt.asked.some(question => question.includes('not empty'))).toBe(false);
    });
 
    it("treats '-' as declining a package scope", async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], 'Bookstore', 'bookstore', false, true, '-', false]);
+      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, 'Bookstore', 'bookstore', false, true, '-', false]);
       const argv = await runInitWizard(prompt, () => DETECTION, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore', '--monorepo']);

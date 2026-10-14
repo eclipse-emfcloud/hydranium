@@ -112,8 +112,9 @@ send by method name, and so does the LSP connection.
 **Remedy:**
 
 - Wrap every connection you hand GLSP with `sendByMethodName` from
-  `@hydranium/protocol`. For the VS Code integration, override its
-  `createConnection`.
+  `@hydranium/protocol`, or for a GLSP client's `connectionProvider` with
+  `glspConnection` from `@hydranium/glsp-client`. For the VS Code integration,
+  override its `createConnection`.
 - Send your own messages by method string, or over a connection wrapped the
   same way.
 - In Theia, make `@hydranium/glsp-client-theia` resolve the top-level copy that

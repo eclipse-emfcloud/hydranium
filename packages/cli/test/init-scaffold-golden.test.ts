@@ -26,6 +26,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { type InitComposition, type InitGrammarSpec, type InitHead, planInitFiles, resolveInitComposition } from '../src/commands/init.js';
+import type { InitHost } from '../src/commands/init-hosts.js';
 
 const SEPARATOR = '='.repeat(78);
 
@@ -44,17 +45,26 @@ const SEPARATOR = '='.repeat(78);
 const FRAMEWORK_VERSION_TOKEN = '__FRAMEWORK_VERSION__';
 
 /** The scaffold as one reviewable document, each file under its path banner. */
-function renderScaffold(name: string, grammars?: readonly InitGrammarSpec[], heads?: readonly InitHead[]): string {
-   const composition: InitComposition = { ...resolveInitComposition(name, grammars, heads), frameworkVersion: FRAMEWORK_VERSION_TOKEN };
+function renderScaffold(
+   name: string,
+   grammars?: readonly InitGrammarSpec[],
+   heads?: readonly InitHead[],
+   hosts?: readonly InitHost[]
+): string {
+   const composition: InitComposition = {
+      ...resolveInitComposition(name, grammars, heads, undefined, hosts),
+      frameworkVersion: FRAMEWORK_VERSION_TOKEN
+   };
    return planInitFiles(composition)
       .map(file => `${SEPARATOR}\n${file.path}\n${SEPARATOR}\n${file.content}`)
       .join('\n');
 }
 
-/** The server's emitted `package.json`, parsed: the member carrying every framework package. */
-function emittedManifest(composition: InitComposition): Record<string, Record<string, string>> {
-   const content = planInitFiles(composition).find(file => file.path === 'server/package.json')?.content ?? '';
-   return JSON.parse(content) as Record<string, Record<string, string>>;
+/** Every emitted member `package.json`, parsed. */
+function emittedManifests(composition: InitComposition): Array<Record<string, Record<string, string>>> {
+   return planInitFiles(composition)
+      .filter(file => file.path.endsWith('/package.json'))
+      .map(file => JSON.parse(file.content) as Record<string, Record<string, string>>);
 }
 
 describe('init scaffold golden', () => {
@@ -74,18 +84,21 @@ describe('init scaffold golden', () => {
    });
 
    /**
-    * The three-head shape, pinned because the GLSP head is the largest thing
-    * `init` emits — DI wiring, type ids, an AST→GModel walk, the starter
-    * operation handler and the test that runs it — and because it is the only
-    * golden where the derived dependency block carries the `@eclipse-glsp/*`
-    * set.
+    * The three-head shape with a browser host, pinned because it is the largest
+    * thing `init` emits — DI wiring, type ids, an AST→GModel walk, the starter
+    * operation handler and the test that runs it, the client package, and the
+    * page and worker around them — and because it is the only golden where the
+    * derived dependency blocks carry the `@eclipse-glsp/*` set.
     *
     * Single-grammar deliberately: with one grammar the diagram is derived rather
     * than marked, which is the shape a new adopter starting from `--heads
-    * lsp,data,glsp` gets.
+    * lsp,data,glsp` gets. What the host leaves out for fewer heads is the unit
+    * tier's to pin.
     */
-   it('renders the pinned three-head scaffold', async () => {
-      await expect(renderScaffold('Bookstore', undefined, ['lsp', 'data', 'glsp'])).toMatchFileSnapshot('fixtures/init-scaffold-glsp.txt');
+   it('renders the pinned three-head scaffold with a browser host', async () => {
+      await expect(renderScaffold('Bookstore', undefined, ['lsp', 'data', 'glsp'], ['browser'])).toMatchFileSnapshot(
+         'fixtures/init-scaffold-glsp.txt'
+      );
    });
 
    /**
@@ -104,17 +117,20 @@ describe('init scaffold golden', () => {
     */
    it('pins every framework dependency at the version of the CLI that emitted it', () => {
       const version = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')) as { version: string }).version;
-      const manifest = emittedManifest(resolveInitComposition('Bookstore', undefined, ['lsp', 'data', 'glsp']));
-      const pins = Object.entries({ ...manifest.dependencies, ...manifest.devDependencies }).filter(([name]) =>
-         name.startsWith('@hydranium/')
-      );
+      const manifests = emittedManifests(resolveInitComposition('Bookstore', undefined, ['lsp', 'data', 'glsp'], undefined, ['browser']));
+      const members = new Set(manifests.map(manifest => String(manifest.name)));
+      const pins = manifests
+         .flatMap(manifest => Object.entries({ ...manifest.dependencies, ...manifest.devDependencies }))
+         .filter(([name]) => name.startsWith('@hydranium/') && !members.has(name));
 
       // Named rather than counted, so the assertion below cannot pass by finding
       // nothing once a head stops contributing a framework package.
-      expect(pins.map(([name]) => name).sort()).toEqual([
+      expect([...new Set(pins.map(([name]) => name))].sort()).toEqual([
          '@hydranium/cli',
+         '@hydranium/client-browser',
          '@hydranium/core',
          '@hydranium/data-server',
+         '@hydranium/glsp-client',
          '@hydranium/glsp-server',
          '@hydranium/langium',
          '@hydranium/protocol'

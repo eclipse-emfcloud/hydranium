@@ -91,10 +91,9 @@ declare const initializeMyDiagramContainer: GlspDiagramMountOptions['initializeD
 -->
 
 ```ts
-import { HydraniumGlspClient, mountGlspDiagram } from '@hydranium/glsp-client';
-import { sendByMethodName } from '@hydranium/protocol';
+import { glspConnection, HydraniumGlspClient, mountGlspDiagram } from '@hydranium/glsp-client';
 
-const glspClient = new HydraniumGlspClient({ id: 'my-app', connectionProvider: sendByMethodName(connection) });
+const glspClient = new HydraniumGlspClient({ id: 'my-app', connectionProvider: glspConnection(connection) });
 const diagram = await mountGlspDiagram({
    mount: document.getElementById('my-diagram')!,
    diagramType: 'my-diagram',
@@ -105,8 +104,10 @@ const diagram = await mountGlspDiagram({
 });
 ```
 
-Wrap the connection with `sendByMethodName`: GLSP's client sends message
-types built by its own copy of `vscode-jsonrpc`, which another copy rejects.
+Wrap the connection with `glspConnection`: GLSP's client sends message types
+built by its own copy of `vscode-jsonrpc`, which another copy rejects, and
+`glspConnection` sends them by method name through `sendByMethodName` from
+`@hydranium/protocol`, typed as the connection GLSP's client takes.
 One client serves every diagram on the page, each mounted as its own session.
 The element's `id` is the diagram's `clientId`, so it needs one; give it a
 height, `position: relative` so the palette stays on it, `touch-action: none`

@@ -68,7 +68,12 @@ const ROT_EXEMPT = new Set(['CODE_OF_CONDUCT.md', 'NOTICE.md']);
  * them to what `init` emits.
  */
 const VERSION_HOME = 'docs/adopting/requirements.md';
-const SCAFFOLD_READMES = new Set(['examples/bookstore/protocol/README.md', 'examples/bookstore/server/README.md']);
+const SCAFFOLD_READMES = new Set([
+   'examples/bookstore/client/README.md',
+   'examples/bookstore/host-browser/README.md',
+   'examples/bookstore/protocol/README.md',
+   'examples/bookstore/server/README.md'
+]);
 
 type Category = 'unreachable' | 'version' | 'date' | 'size' | 'timing' | 'history' | 'line-reference';
 

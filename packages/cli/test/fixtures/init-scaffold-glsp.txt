@@ -7,12 +7,26 @@ package.json
   "private": true,
   "workspaces": [
     "protocol",
-    "server"
+    "server",
+    "client",
+    "host-browser"
   ],
   "scripts": {
     "build": "npm run build --workspaces",
     "clean": "npm run clean --workspaces --if-present",
     "test": "npm test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@eclipse-glsp/client": "2.7.0",
+    "@eclipse-glsp/graph": "2.7.0",
+    "@eclipse-glsp/protocol": "2.7.0",
+    "@eclipse-glsp/server": "2.7.0",
+    "@vscode/codicons": "0.0.45",
+    "langium": "4.3.1",
+    "monaco-editor-core": "0.56.0",
+    "vscode-jsonrpc": "9.0.0",
+    "vscode-languageserver": "10.0.1",
+    "vscode-languageserver-protocol": "3.18.1"
   },
   "engines": {
     "node": ">=22.13"
@@ -948,6 +962,9 @@ server/src/glsp/bookstore/gmodel-factory.ts
 // the language already reports it as a diagnostic. A reference into another
 // document is skipped for the same reason: the graph holds only this
 // document's nodes, so its target has no id here.
+//
+// The starter grammar persists no positions, so the nodes are placed in a row
+// in document order; at the origin each would be drawn over the one before.
 
 import { DefaultTypes, GEdge, GGraph, GLabel, type GModelFactory, GNode, ModelState } from '@eclipse-glsp/server';
 import { AstUtils } from '@hydranium/langium';
@@ -955,6 +972,9 @@ import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_NODE_TYPE } from 'bookstore-protocol';
 import { inject, injectable } from 'inversify';
 import type { BookstoreModel } from '../../language-server/ast.js';
 import type { BookstoreGlspState } from './state.js';
+
+/** The distance between two nodes' left edges in the row. */
+const NODE_SPACING = 160;
 
 @injectable()
 export class BookstoreGModelFactory implements GModelFactory {
@@ -970,12 +990,16 @@ export class BookstoreGModelFactory implements GModelFactory {
    }
 
    protected buildGraph(root: BookstoreModel, graph: GGraph): void {
-      for (const node of root.nodes) {
+      for (const [index, node] of root.nodes.entries()) {
          const id = this.modelState.index.createId(node);
          graph.children.push(
             GNode.builder()
                .id(id)
                .type(BOOKSTORE_NODE_TYPE)
+               .position(index * NODE_SPACING, 0)
+               // Sized by the client around its label, which it lays out.
+               .layout('vbox')
+               .addLayoutOptions({ paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8 })
                .add(GLabel.builder().id(`${id}_name`).text(node.name).type(DefaultTypes.LABEL).build())
                .build()
          );
@@ -1519,6 +1543,891 @@ describe('Bookstore serialization', () => {
 
       expect(await Bookstore.serializer.Serializer.serializeTransfer(model)).toBe(source);
    });
+});
+
+==============================================================================
+client/package.json
+==============================================================================
+{
+  "name": "bookstore-client",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The host-neutral client side of the Bookstore language: what every host of it mounts.",
+  "license": "UNLICENSED",
+  "author": "",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "watch": "tsc -b --watch"
+  },
+  "dependencies": {
+    "@eclipse-glsp/client": "2.7.0",
+    "@hydranium/glsp-client": "^__FRAMEWORK_VERSION__",
+    "@vscode/codicons": "0.0.45",
+    "bookstore-protocol": "0.0.0",
+    "inversify": "^6.1.3"
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
+
+==============================================================================
+client/tsconfig.json
+==============================================================================
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "lib",
+    "strict": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "types": [],
+    "verbatimModuleSyntax": false
+  },
+  "include": ["src"],
+  "references": [{ "path": "../protocol" }]
+}
+
+==============================================================================
+client/.gitignore
+==============================================================================
+node_modules/
+lib/
+*.tsbuildinfo
+
+==============================================================================
+client/README.md
+==============================================================================
+# bookstore-client
+
+The host-neutral client side of the Bookstore language: what every host of it
+mounts, whatever that host is. It reads the element ids from the protocol
+package and never depends on the server.
+
+- `src/bookstore-diagram-module.ts` — the `Bookstore` diagram: a registration per element type, its container module, and `initializeBookstoreDiagramContainer`
+- `src/index.ts` — the package root, re-exporting each module
+
+A host builds a diagram container with the initializer, passing its own
+modules: they go first and the diagram definition last, since GLSP gives an
+element type to whichever module registered it last.
+
+==============================================================================
+client/src/index.ts
+==============================================================================
+// What every host of the Bookstore language mounts.
+
+export * from './bookstore-diagram-module.js';
+
+==============================================================================
+client/src/bookstore-diagram-module.ts
+==============================================================================
+// The client side of the Bookstore diagram: how each element type the server
+// stamps is drawn. It binds nothing a host owns, so every host mounts this one
+// module and adds its own beside it.
+
+import {
+   configureModelElement,
+   type ContainerConfiguration,
+   GEdgeView,
+   GNode,
+   initializeDiagramContainer,
+   RoundedCornerNodeView
+} from '@eclipse-glsp/client';
+import { configureHydraniumModelElements, HydraniumGEdge } from '@hydranium/glsp-client';
+import { type Container, ContainerModule } from 'inversify';
+import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_NODE_TYPE, type BookstoreElementType } from 'bookstore-protocol';
+
+/** The model class and view one element type renders through, as `configureModelElement` takes them. */
+export interface BookstoreElementRegistration {
+   readonly model: Parameters<typeof configureModelElement>[2];
+   readonly view: Parameters<typeof configureModelElement>[3];
+}
+
+/**
+ * One registration per element type the server stamps.
+ *
+ * Keyed by the protocol's union of ids, so an id added there does not compile
+ * until it is drawn here: sprotty renders a type with no registration as
+ * nothing, with only a console warning.
+ */
+export const BOOKSTORE_ELEMENT_REGISTRATIONS: Readonly<Record<BookstoreElementType, BookstoreElementRegistration>> = {
+   [BOOKSTORE_NODE_TYPE]: { model: GNode, view: RoundedCornerNodeView },
+   // The framework's edge rather than `GEdge`: GLSP's gives the labels of an
+   // edge without bendpoints no finite bounds, and fitting the diagram to its
+   // pane then blanks the canvas.
+   [BOOKSTORE_EDGE_TYPE]: { model: HydraniumGEdge, view: GEdgeView }
+};
+
+/** GLSP's default model elements, plus the registrations above. */
+export const bookstoreDiagramModule = new ContainerModule((bind, unbind, isBound, rebind) => {
+   const context = { bind, unbind, isBound, rebind };
+   configureHydraniumModelElements(context);
+   for (const [elementTypeId, registration] of Object.entries(BOOKSTORE_ELEMENT_REGISTRATIONS)) {
+      configureModelElement(context, elementTypeId, registration.model, registration.view);
+   }
+});
+
+/**
+ * Build a Bookstore diagram container: the host's modules first and this
+ * diagram's definition last, since GLSP gives an element type to whichever
+ * module registered it last.
+ */
+export function initializeBookstoreDiagramContainer(container: Container, ...modules: ContainerConfiguration) {
+   return initializeDiagramContainer(container, ...modules, bookstoreDiagramModule);
+}
+
+==============================================================================
+host-browser/package.json
+==============================================================================
+{
+  "name": "bookstore-host-browser",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Bookstore in a browser page, with every head in a web worker and no backend.",
+  "license": "UNLICENSED",
+  "author": "",
+  "type": "module",
+  "scripts": {
+    "build": "npm run typecheck && node esbuild.mjs",
+    "clean": "rimraf out test-results playwright-report",
+    "start": "node esbuild.mjs --serve",
+    "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
+    "test:e2e:install": "playwright install chromium",
+    "typecheck": "tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.page.json && tsc --noEmit -p tsconfig.e2e.json"
+  },
+  "dependencies": {
+    "@eclipse-glsp/server": "2.7.0",
+    "@hydranium/client-browser": "^__FRAMEWORK_VERSION__",
+    "@hydranium/core": "^__FRAMEWORK_VERSION__",
+    "@hydranium/data-server": "^__FRAMEWORK_VERSION__",
+    "@hydranium/glsp-client": "^__FRAMEWORK_VERSION__",
+    "@hydranium/glsp-server": "^__FRAMEWORK_VERSION__",
+    "@hydranium/protocol": "^__FRAMEWORK_VERSION__",
+    "bookstore-client": "0.0.0",
+    "bookstore-protocol": "0.0.0",
+    "bookstore-server": "0.0.0",
+    "monaco-editor-core": "0.56.0",
+    "reflect-metadata": "~0.2.2",
+    "vscode-jsonrpc": "9.0.0",
+    "vscode-languageserver-protocol": "3.18.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
+
+==============================================================================
+host-browser/.gitignore
+==============================================================================
+node_modules/
+out/
+test-results/
+playwright-report/
+
+==============================================================================
+host-browser/README.md
+==============================================================================
+# bookstore-host-browser
+
+Bookstore in a browser page: every head runs in a web worker, with no backend
+and no Node runtime. The page saves through the LSP head, and the worker
+keeps each saved file in IndexedDB, laid over `../workspace` on the next
+load.
+
+```bash
+npm run build              # type-check and bundle into out/
+npm start                  # serve the page at the URL it prints, rebundled on every source change
+npm run test:e2e:install   # download the Chromium the smoke test drives, once
+npm run test:e2e           # the smoke test, which serves the page itself
+```
+
+`PORT` moves the page to another port, for `npm start` and the smoke test alike;
+stop `npm start` before the smoke test, or give one of them another port.
+`npm start` reads `../workspace` once, so restart it after editing a file
+there.
+
+## Layout
+
+- `index.html` — the page, with a pane for each head that stays hidden until its part fills it
+- `esbuild.mjs` — bundles the page, the worker and Monaco’s worker, reading `../workspace` in as the seed
+- `src/worker.ts` — the worker: the heads over one store, seeded and persisted
+- `src/page.ts` — starts the worker and runs the part of the page each head serves
+- `src/editor.ts` — the LSP part: a Monaco editor, the file switch and Save
+- `src/data-status.ts` — the data part: one document read through the data head
+- `src/diagram.ts` — the GLSP part: the `Bookstore` diagram, defined in the client package
+- `src/log.ts` — the status line and the log area
+- `src/workspace.ts` — the workspace root URI both ends name
+- `src/monaco-editor-worker.ts` — Monaco’s own worker, which hosts no head
+- `src/posix-path-shim.ts` — the `path` function the framework imports, for the bundle
+- `test/smoke.spec.mts` — the page loads, each head answers, and a saved edit survives a reload
+
+==============================================================================
+host-browser/index.html
+==============================================================================
+<!doctype html>
+<html lang="en">
+   <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>Bookstore</title>
+      <!-- The stylesheets Monaco and GLSP import, which esbuild writes beside the page bundle. -->
+      <link rel="stylesheet" href="./out/page.css" />
+      <style>
+         html,
+         body {
+            height: 100%;
+            margin: 0;
+         }
+         body {
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr) auto;
+            font-family: system-ui, sans-serif;
+            font-size: 13px;
+         }
+         header,
+         .toolbar {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            padding: 6px 12px;
+         }
+         header {
+            border-bottom: 1px solid #d6d8d9;
+         }
+         h1 {
+            margin: 0;
+            font-size: 15px;
+         }
+         main {
+            display: flex;
+            min-height: 0;
+         }
+         main > section {
+            display: flex;
+            flex: 1 1 0;
+            flex-direction: column;
+            min-width: 0;
+         }
+         main > section[hidden] {
+            display: none;
+         }
+         #editor {
+            flex: 1 1 auto;
+            min-height: 0;
+         }
+         /* The diagram needs a height, `position: relative` for its tool palette, and its `<svg>` sized to it. */
+         #diagram {
+            position: relative;
+            flex: 1 1 auto;
+            min-height: 0;
+            border-left: 1px solid #d6d8d9;
+            touch-action: none;
+         }
+         #diagram svg {
+            width: 100%;
+            height: 100%;
+         }
+         /* The copy sprotty measures shapes in: a zero-sized box whose overflow otherwise covers the page and takes its clicks. */
+         body > .sprotty-hidden {
+            pointer-events: none;
+            overflow: hidden;
+         }
+         /* GLSP's stylesheet leaves shapes at the SVG defaults: a black fill, and no stroke on an edge. */
+         .sprotty-node {
+            fill: #eef3f9;
+            stroke: #4a6fa5;
+         }
+         .sprotty-edge {
+            fill: none;
+            stroke: #4a6fa5;
+         }
+         footer {
+            border-top: 1px solid #d6d8d9;
+         }
+         #data-status {
+            margin: 0;
+            padding: 6px 12px;
+         }
+         #log {
+            height: 120px;
+            margin: 0;
+            padding: 6px 12px;
+            overflow: auto;
+            font-family: ui-monospace, monospace;
+            font-size: 12px;
+         }
+      </style>
+   </head>
+   <body>
+      <header>
+         <h1>Bookstore</h1>
+         <span id="status">starting…</span>
+      </header>
+      <!-- Each pane stays hidden until the page part for its head fills it. -->
+      <main>
+         <section id="editor-pane" hidden>
+            <div class="toolbar">
+               <select id="file" aria-label="File"></select>
+               <button id="save" type="button">Save</button>
+            </div>
+            <div id="editor"></div>
+         </section>
+         <section id="diagram-pane" hidden>
+            <div id="diagram"></div>
+         </section>
+      </main>
+      <footer>
+         <p id="data-status" hidden></p>
+         <pre id="log" aria-label="Log"></pre>
+      </footer>
+      <script src="./out/page.js"></script>
+   </body>
+</html>
+
+==============================================================================
+host-browser/esbuild.mjs
+==============================================================================
+// Bundles the page, the worker hosting the heads and Monaco's own worker into
+// `out/`: once with `npm run build`, and on every change, served, with
+// `npm start`.
+//
+// At `platform: 'browser'` esbuild refuses a `node:*` import rather than
+// shimming it, so a Node import anywhere the worker reaches fails here rather
+// than inside a worker with no console attached.
+
+import { context } from 'esbuild';
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = fileURLToPath(new URL('.', import.meta.url));
+const workspace = fileURLToPath(new URL('../workspace/', import.meta.url));
+
+// The worker's filesystem seed: each file of `../workspace`, keyed by its path
+// below the workspace root. A file saved in the page is kept in IndexedDB and
+// laid over this seed on the next load.
+const seed = Object.fromEntries(
+   readdirSync(workspace, { recursive: true, encoding: 'utf8' })
+      .filter(path => statSync(join(workspace, path)).isFile())
+      .map(path => [path.split('\\').join('/'), readFileSync(join(workspace, path), 'utf8')])
+);
+
+// Names the worker's IndexedDB database after this directory. Every project
+// served on one port shares an origin, and with it the databases, so a name
+// from the project alone lays one project's saved files over another's seed.
+// Moving the directory starts again from the seed.
+const directoryKey = createHash('sha256').update(root).digest('hex').slice(0, 12);
+
+const common = {
+   absWorkingDir: root,
+   outdir: 'out',
+   bundle: true,
+   platform: 'browser',
+   // Classic scripts: the page loads its bundle with a plain `<script>`, and
+   // both workers are classic workers.
+   format: 'iife',
+   target: 'es2022',
+   sourcemap: true,
+   // The framework imports bare `path` so that a browser bundle can point it
+   // at a shim. Relative to `absWorkingDir`.
+   alias: { path: './src/posix-path-shim.ts' },
+   define: {
+      __WORKSPACE_SEED__: JSON.stringify(seed),
+      __DIRECTORY_KEY__: JSON.stringify(directoryKey),
+      __WORKER_BUNDLE_URL__: JSON.stringify('./out/worker.js'),
+      __MONACO_WORKER_BUNDLE_URL__: JSON.stringify('./out/monaco-editor-worker.js')
+   },
+   logLevel: 'info'
+};
+
+const builds = await Promise.all([
+   context({
+      ...common,
+      entryPoints: { page: 'src/page.ts' },
+      // The icon font Monaco and GLSP import, inlined: a `file` loader would
+      // rewrite its URL relative to `out/`, which the page one directory up does
+      // not resolve. The page's alone, so a diagram client import that reaches
+      // the worker fails its bundle.
+      loader: { '.ttf': 'dataurl' }
+   }),
+   context({ ...common, entryPoints: { worker: 'src/worker.ts', 'monaco-editor-worker': 'src/monaco-editor-worker.ts' } })
+]);
+
+if (process.argv.includes('--serve')) {
+   await Promise.all(builds.map(build => build.watch()));
+   // On this machine only: the directory served holds the sources and `node_modules`.
+   const { port } = await builds[0].serve({ host: 'localhost', servedir: root, port: Number(process.env.PORT ?? 4937) });
+   console.log(`Serving http://localhost:${port}`);
+} else {
+   await Promise.all(builds.map(build => build.rebuild()));
+   await Promise.all(builds.map(build => build.dispose()));
+}
+
+==============================================================================
+host-browser/playwright.config.mts
+==============================================================================
+// The smoke tier: Playwright serves the page with `npm start` and drives it in
+// Chromium, which `npm run test:e2e:install` downloads once. `npm start`
+// bundles the page itself but not the packages it imports, so build those
+// first.
+
+import { defineConfig, devices } from '@playwright/test';
+
+/** The port `npm start` serves on; set `PORT` to run beside another server. */
+const PORT = Number(process.env.PORT ?? 4937);
+
+export default defineConfig({
+   testDir: './test',
+   // The first load parses the grammar and builds the workspace in the worker.
+   timeout: 60_000,
+   expect: { timeout: 20_000 },
+   use: { ...devices['Desktop Chrome'], baseURL: `http://localhost:${PORT}` },
+   webServer: {
+      command: 'npm start',
+      url: `http://localhost:${PORT}`,
+      // A server already on the port fails the run rather than being tested in this one's place.
+      reuseExistingServer: false,
+      timeout: 120_000
+   }
+});
+
+==============================================================================
+host-browser/tsconfig.worker.json
+==============================================================================
+// The worker's half: the heads run in a worker, which has no DOM, and the
+// worker and DOM libraries declare conflicting globals, so the page is a
+// project of its own. esbuild emits, so this only type-checks.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "WebWorker"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": []
+  },
+  "files": ["src/worker.ts"]
+}
+
+==============================================================================
+host-browser/tsconfig.page.json
+==============================================================================
+// The page's half, everything in `src` but the worker, with the DOM library.
+// esbuild emits, so this only type-checks.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": []
+  },
+  "include": ["src"],
+  "exclude": ["src/worker.ts"]
+}
+
+==============================================================================
+host-browser/tsconfig.e2e.json
+==============================================================================
+// The smoke tier's half, which runs in Node under Playwright. `test:e2e` passes
+// it with `--tsconfig`, since Playwright otherwise looks for a `tsconfig.json`
+// in the directories above.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["test", "playwright.config.mts"]
+}
+
+==============================================================================
+host-browser/src/worker.ts
+==============================================================================
+// The worker hosting the heads: every head over one store, in the browser and
+// with no backend. The page reaches each head over a `MessagePort` of its own.
+
+// First, before any class carrying a decorator loads: GLSP reads the metadata
+// its decorators emit as each class is defined.
+import 'reflect-metadata';
+import { ServerModule } from '@eclipse-glsp/server/browser.js';
+import { persistentFileSystem } from '@hydranium/core';
+import { hostHeadsInWorker, IndexedDbFileSystemStore, startLanguageServerInWorker } from '@hydranium/core/browser';
+import { DataServer } from '@hydranium/data-server';
+import { startDataServerInWorker } from '@hydranium/data-server/browser';
+import { GlspClientLogger, HydraniumGlspAppModule } from '@hydranium/glsp-server';
+import { startGlspServerInWorker } from '@hydranium/glsp-server/browser';
+import type { BookstoreModel } from 'bookstore-protocol';
+import { BookstoreDiagramModule, createBookstoreServices } from 'bookstore-server';
+import { WORKSPACE_ROOT_URI } from './workspace.js';
+
+/** The files of `../workspace`, read by `esbuild.mjs` and keyed by their path below the root. */
+declare const __WORKSPACE_SEED__: Record<string, string>;
+/** This project's directory, hashed by `esbuild.mjs`, so that no other project on the origin opens its store. */
+declare const __DIRECTORY_KEY__: string;
+
+// A saved file is kept in IndexedDB and laid over the seed on the next load;
+// the heads start once the stored files are restored.
+const store = new IndexedDbFileSystemStore(`bookstore-workspace-${__DIRECTORY_KEY__}`);
+
+hostHeadsInWorker(
+   persistentFileSystem({ store, seed: __WORKSPACE_SEED__, rootUri: WORKSPACE_ROOT_URI }),
+   (ports, fileSystem) => {
+      // The LSP head composes the services, as the Node entry does around stdio.
+      const shared = startLanguageServerInWorker(
+         ports.lsp,
+         connection => createBookstoreServices({ connection, ...fileSystem }).shared
+      );
+      // The data head serves from the LSP head's store, on its own port.
+      startDataServerInWorker(ports.data, shared, connection => new DataServer<BookstoreModel>(connection, shared));
+      const glsp = startGlspServerInWorker({
+         context: ports.glsp,
+         createLogger: caller => new GlspClientLogger(shared, { component: caller }),
+         serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      // The GLSP head reports a failed start through `started`, which the
+      // ready message waits for.
+      return { shared, started: [glsp.started] };
+   },
+   // The ready message then carries the workspace files the page opens.
+   { rootUri: WORKSPACE_ROOT_URI }
+);
+
+==============================================================================
+host-browser/src/page.ts
+==============================================================================
+// The page: it starts the worker, hands each head a channel of its own, and
+// fills the pane of each head the server runs, one after the other.
+
+import { connectWorkerHeads } from '@hydranium/client-browser';
+import { ConsoleLogger, describeError } from '@hydranium/protocol';
+import { showDataStatus } from './data-status.js';
+import { mountDiagram } from './diagram.js';
+import { startEditor } from './editor.js';
+import { appendLog, setStatus } from './log.js';
+import { WORKSPACE_ROOT_URI } from './workspace.js';
+
+/** Where the worker bundle is served, substituted by `esbuild.mjs`. */
+declare const __WORKER_BUNDLE_URL__: string;
+
+async function main(): Promise<void> {
+   // The page's end of each head's connection logs to the browser console.
+   const logger = new ConsoleLogger();
+   const heads = connectWorkerHeads(new Worker(__WORKER_BUNDLE_URL__), { logger });
+   heads.onWorkerError(report => appendLog(`worker error during ${report.phase}: ${report.message}`));
+   setStatus('starting…');
+   await startEditor(heads);
+   await showDataStatus(heads.data, `${WORKSPACE_ROOT_URI}/nodes.bookstore`);
+   await mountDiagram(heads.glsp, `${WORKSPACE_ROOT_URI}/nodes.bookstore`, logger);
+   setStatus('ready');
+}
+
+main().catch((error: unknown) => setStatus(`failed: ${describeError(error)}`));
+
+==============================================================================
+host-browser/src/editor.ts
+==============================================================================
+// The LSP part of the page: one Monaco editor over the LSP head, a switch
+// between the workspace files, and Save. The worker holds the files, so the
+// page saves through the LSP head and the worker writes them to IndexedDB.
+
+import { initializeLanguageClient, type WorkerHeads } from '@hydranium/client-browser';
+import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient } from '@hydranium/client-browser/monaco';
+import { describeError } from '@hydranium/protocol';
+import { ALL_LANGUAGES } from 'bookstore-protocol';
+import { PublishDiagnosticsNotification } from 'vscode-languageserver-protocol';
+import { appendLog, setStatus } from './log.js';
+import { WORKSPACE_ROOT_URI } from './workspace.js';
+
+/** Where Monaco's own worker bundle is served, substituted by `esbuild.mjs`. */
+declare const __MONACO_WORKER_BUNDLE_URL__: string;
+
+// Before any editor exists: Monaco otherwise looks for a worker script no
+// bundle emits, and fails on the first edit.
+self.MonacoEnvironment = { getWorker: () => new Worker(__MONACO_WORKER_BUNDLE_URL__) };
+
+/** Each language as Monaco registers it, from the ids and extensions the server generates. */
+const LANGUAGES = ALL_LANGUAGES.map(language => ({
+   id: language.languageId,
+   extensions: [...language.fileExtensions]
+}));
+
+/** Run the LSP handshake, then show the first workspace file in the editor. */
+export async function startEditor(heads: WorkerHeads): Promise<void> {
+   let client!: MonacoLspClient;
+   await initializeLanguageClient(heads.lsp, {
+      rootUri: WORKSPACE_ROOT_URI,
+      capabilities: MONACO_CLIENT_CAPABILITIES,
+      onLogMessage: params => appendLog(params.message),
+      // Before `initialized`, since the server publishes from then on.
+      beforeInitialized: result => {
+         client = new MonacoLspClient(heads.lsp, result.capabilities, { languages: LANGUAGES });
+         heads.lsp.onNotification(PublishDiagnosticsNotification.type, params => client.applyDiagnostics(params));
+      }
+   });
+
+   // The text comes from the worker rather than the seed, since a saved edit
+   // is laid over the seed there.
+   const { workspace } = await heads.ready;
+   if (workspace === undefined) {
+      throw new Error('the worker sent no workspace files');
+   }
+   // Only the files a language claims: the client refuses to open any other.
+   const paths = Object.keys(workspace.files)
+      .filter(path => LANGUAGES.some(language => language.extensions.some(extension => path.endsWith(extension))))
+      .sort();
+   if (paths.length === 0) {
+      throw new Error('no workspace file has a language extension');
+   }
+   const uriOf = (path: string): string => `${WORKSPACE_ROOT_URI}/${path}`;
+   const modelOf = (path: string) => client.openDocument(uriOf(path), workspace.files[path]);
+
+   const select = document.getElementById('file') as HTMLSelectElement;
+   // The worker keys each file by its encoded path, as in its URI: shown decoded.
+   select.append(...paths.map(path => new Option(decodeURIComponent(path), path)));
+   const editor = client.createEditor(document.getElementById('editor') as HTMLElement, modelOf(paths[0]), {
+      automaticLayout: true,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false
+   });
+   const show = (path: string): void => {
+      select.value = path;
+      editor.setModel(modelOf(path));
+   };
+   select.addEventListener('change', () => show(select.value));
+
+   // Go to definition across files switches the editor to the target file.
+   client.registerEditorOpener((uri, position) => {
+      const path = paths.find(candidate => uriOf(candidate) === uri);
+      if (path === undefined) {
+         return false;
+      }
+      show(path);
+      editor.setPosition(position);
+      editor.revealPositionInCenter(position);
+      return true;
+   });
+
+   const save = (): void => {
+      client.saveAll().then(
+         saved => setStatus(`saved ${saved.length} file(s)`),
+         (error: unknown) => setStatus(`save failed: ${describeError(error)}`)
+      );
+   };
+   (document.getElementById('save') as HTMLButtonElement).addEventListener('click', save);
+   // Ctrl+S (Cmd+S) saves too, in place of the browser's "Save page as".
+   window.addEventListener('keydown', event => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+         event.preventDefault();
+         save();
+      }
+   });
+   // Asks before a reload or a closed tab drops an unsaved edit.
+   window.addEventListener('beforeunload', event => {
+      if (client.dirtyDocuments().length > 0) {
+         event.preventDefault();
+      }
+   });
+   (document.getElementById('editor-pane') as HTMLElement).hidden = false;
+}
+
+==============================================================================
+host-browser/src/data-status.ts
+==============================================================================
+// The data part of the page: one document read through the data head, out of
+// the same store the editor's LSP head serves.
+
+import { DataConnectionWithEvents, type DataPort } from '@hydranium/protocol';
+import type { BookstoreElement } from 'bookstore-protocol';
+
+/** Open `uri` through the data head and say what it holds on the status line below the editor. */
+export async function showDataStatus(port: DataPort, uri: string): Promise<void> {
+   const session = new DataConnectionWithEvents<BookstoreElement>(port).createSession('bookstore-page');
+   const opened = await session.openDocument({ uri });
+   const line = document.getElementById('data-status') as HTMLElement;
+   line.textContent = `data head: ${uri.slice(uri.lastIndexOf('/') + 1)} holds a ${opened.model?.root.$type ?? 'document with no model'}`;
+   line.hidden = false;
+}
+
+==============================================================================
+host-browser/src/diagram.ts
+==============================================================================
+// The GLSP part of the page: the Bookstore diagram of one document, drawn by
+// the client module every host of this project mounts.
+
+import type { WorkerHeads } from '@hydranium/client-browser';
+import { glspConnection, HydraniumGlspClient, mountGlspDiagram } from '@hydranium/glsp-client';
+import { describeError, type Logger } from '@hydranium/protocol';
+import { initializeBookstoreDiagramContainer } from 'bookstore-client';
+import { BOOKSTORE_DIAGRAM_TYPE } from 'bookstore-protocol';
+
+/** Show the diagram of `sourceUri` in the page's diagram pane. */
+export async function mountDiagram(connection: WorkerHeads['glsp'], sourceUri: string, logger: Logger): Promise<void> {
+   // Shown before the mount, which measures the element it draws into.
+   (document.getElementById('diagram-pane') as HTMLElement).hidden = false;
+   const glspClient = new HydraniumGlspClient({ id: 'diagram', connectionProvider: glspConnection(connection) });
+   const { loadOutcome } = await mountGlspDiagram({
+      mount: document.getElementById('diagram') as HTMLElement,
+      diagramType: BOOKSTORE_DIAGRAM_TYPE,
+      sourceUri,
+      glspClient,
+      initializeDiagramContainer: initializeBookstoreDiagramContainer,
+      logger
+   });
+   if (loadOutcome.status === 'failed') {
+      throw new Error(`the diagram did not load: ${describeError(loadOutcome.error)}`);
+   }
+}
+
+==============================================================================
+host-browser/src/log.ts
+==============================================================================
+// The page's status line and log area. A worker has no console anyone reads,
+// so what the server logs and the worker reports is shown here.
+
+/** Replace the one-line status in the title bar. */
+export function setStatus(text: string): void {
+   (document.getElementById('status') as HTMLElement).textContent = text;
+}
+
+/** Add a line to the log area, kept scrolled to its end. */
+export function appendLog(text: string): void {
+   const log = document.getElementById('log') as HTMLElement;
+   log.append(`${text}\n`);
+   log.scrollTop = log.scrollHeight;
+}
+
+==============================================================================
+host-browser/src/workspace.ts
+==============================================================================
+// The workspace root both ends name: the worker seeds its filesystem under it
+// and the page opens documents by URIs below it.
+
+/** The URI of the workspace root, which holds the files of `../workspace`. */
+export const WORKSPACE_ROOT_URI = 'file:///workspace';
+
+==============================================================================
+host-browser/src/monaco-editor-worker.ts
+==============================================================================
+// Monaco's own editor worker, a third worker hosting no head: Monaco runs link
+// detection, diffs and minimal edits there. `monaco-editor-core` ships no
+// entry for it, so this is one: wait for the first message, then start, which
+// replaces this handler with Monaco's own.
+
+import { start } from 'monaco-editor-core/esm/vs/editor/editor.worker.start.js';
+
+self.onmessage = (): void => {
+   start(() => ({}));
+};
+
+==============================================================================
+host-browser/src/monaco-editor-core-worker.d.ts
+==============================================================================
+// `monaco-editor-core` types its editor API only, so the worker entry
+// `monaco-editor-worker.ts` imports is declared here.
+
+declare module 'monaco-editor-core/esm/vs/editor/editor.worker.start.js' {
+   /** Start the editor worker's dispatcher, with `createClient`'s result answering requests of the embedder's own. */
+   export function start(createClient: () => object): void;
+}
+
+==============================================================================
+host-browser/src/posix-path-shim.ts
+==============================================================================
+// The one function of Node's `path` the framework imports, for the bundle to
+// resolve: `esbuild.mjs` points the bare `path` specifier here, while a
+// `node:path` import still fails the bundle. Only a workspace folder given as
+// a filesystem path reaches it, which the page, naming a URI, never does.
+
+/** Resolve `segments` right to left into one absolute path, as `path.posix.resolve` does from `/`. */
+export function resolve(...segments: string[]): string {
+   let resolved = '';
+   for (let i = segments.length - 1; i >= 0 && !resolved.startsWith('/'); i--) {
+      if (segments[i].length > 0) {
+         resolved = resolved.length === 0 ? segments[i] : `${segments[i]}/${resolved}`;
+      }
+   }
+   const parts: string[] = [];
+   for (const part of resolved.split('/')) {
+      if (part === '..') {
+         parts.pop();
+      } else if (part !== '' && part !== '.') {
+         parts.push(part);
+      }
+   }
+   return `/${parts.join('/')}`;
+}
+
+==============================================================================
+host-browser/test/smoke.spec.mts
+==============================================================================
+// The page loads with every head answering, and an edit saved through the
+// LSP head is still there after a reload. Any console error fails it.
+
+import { expect, test } from '@playwright/test';
+
+test('loads every head and keeps a saved edit across a reload', async ({ page }) => {
+   const errors: string[] = [];
+   page.on('pageerror', error => errors.push(error.message));
+   page.on('console', message => {
+      if (message.type() === 'error') {
+         errors.push(message.text());
+      }
+   });
+   const editor = page.locator('#editor .view-lines');
+
+   await page.goto('/');
+   await expect(page.locator('#status')).toHaveText('ready');
+   await expect(editor).toContainText('node First');
+   // The data head reads the document out of the same store.
+   await expect(page.locator('#data-status')).toHaveText('data head: nodes.bookstore holds a BookstoreModel');
+   // The two starter nodes, drawn.
+   await expect(page.locator('#diagram .sprotty-node')).toHaveCount(2);
+
+   await editor.click();
+   await page.keyboard.press('ControlOrMeta+End');
+   await page.keyboard.type('\nnode Added');
+   await page.locator('#save').click();
+   await expect(page.locator('#status')).toHaveText('saved 1 file(s)');
+
+   await page.reload();
+   await expect(page.locator('#status')).toHaveText('ready');
+   await expect(editor).toContainText('node Added');
+   expect(errors).toEqual([]);
 });
 
 ==============================================================================

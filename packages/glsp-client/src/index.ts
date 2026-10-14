@@ -18,6 +18,7 @@ export * from './diagram-loader';
 export * from './diagram-mount';
 export * from './edge';
 export * from './glsp-client';
+export * from './glsp-connection';
 export * from './glsp-client-module';
 export * from './hidden-bounds-updater';
 export * from './select-mouse-listener';

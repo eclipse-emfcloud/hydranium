@@ -666,7 +666,7 @@ jobs:
       matrix:
         include:
           - shard: 1
-            label: browser 1/2, theia
+            label: browser 1/2, bookstore, theia
           - shard: 2
             label: browser 2/2, theia restart+reconnect
     # Skipped in two cases. A dispatch can set `skip_e2e`, because repeating a
@@ -737,12 +737,25 @@ jobs:
       - name: Browser e2e
         run: npm run test:e2e -w @hydranium/example-order-flow-browser -- --shard=${{ matrix.shard }}/2
 
+      # The page `init --hosts browser` emits, as bookstore carries it: one
+      # smoke test, on its own port, on the shard with one Theia tier. The
+      # emitted config names no reporter, so the step adds the ones the other
+      # tiers report with: annotations, the HTML report and the JUnit file the
+      # summary reads. It runs after a failed order-flow tier too, so one
+      # failure does not hide the other's result.
+      - name: Bookstore browser e2e
+        if: ${{ !cancelled() && matrix.shard == 1 }}
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/junit.xml
+        run: npm run test:e2e -w @hydranium/bookstore-host-browser -- --reporter=list,github,html,junit
+
       # The Theia tiers are NOT sharded — they are three separate Playwright
       # invocations for reasons of their own, documented below, so they are
       # dealt out between the shards instead. One here and two on the other
       # keeps the halves within seconds of each other.
       - name: Theia e2e
-        if: matrix.shard == 1
+        if: ${{ !cancelled() && matrix.shard == 1 }}
         run: npm run test:e2e -w @hydranium/example-order-flow-theia-app
 
       # Separated by the suite itself, at one worker: it kills and re-launches
@@ -934,6 +947,11 @@ jobs:
       - name: Install dependencies
         if: steps.node-modules-cache.outputs.cache-hit != 'true'
         run: npm ci --no-fund --no-audit
+
+      # The browser shapes run their smoke test in the Chromium each scaffold's
+      # own Playwright downloads; the libraries it needs are the system's.
+      - name: Install Chromium's system libraries
+        run: npx playwright install-deps chromium
 
       - name: Scaffold, install, build and smoke
         run: npm run check:init-scaffold

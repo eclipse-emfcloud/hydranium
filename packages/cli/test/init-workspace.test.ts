@@ -203,16 +203,18 @@ describe('detectWorkspace', () => {
     */
    it('judges workspaces coverage per package, one level below the project', () => {
       const detection = detectWorkspace(path.join(ROOT, 'packages/new-lang'), fakeProbe(MONOREPO));
-      expect(detection && memberPlacements(detection)).toEqual([
+      expect(detection && memberPlacements(detection, ['protocol', 'server'])).toEqual([
          { path: 'packages/new-lang/protocol', coveredBy: undefined },
          { path: 'packages/new-lang/server', coveredBy: undefined }
       ]);
 
       const nested = { ...MONOREPO, 'package.json': { name: 'hydranium-root', workspaces: ['packages/*/*'] } };
       const covered = detectWorkspace(path.join(ROOT, 'packages/new-lang'), fakeProbe(nested));
-      expect(covered && memberPlacements(covered)).toEqual([
+      expect(covered && memberPlacements(covered, ['protocol', 'server', 'client', 'host-browser'])).toEqual([
          { path: 'packages/new-lang/protocol', coveredBy: 'packages/*/*' },
-         { path: 'packages/new-lang/server', coveredBy: 'packages/*/*' }
+         { path: 'packages/new-lang/server', coveredBy: 'packages/*/*' },
+         { path: 'packages/new-lang/client', coveredBy: 'packages/*/*' },
+         { path: 'packages/new-lang/host-browser', coveredBy: 'packages/*/*' }
       ]);
    });
 

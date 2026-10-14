@@ -24,11 +24,11 @@
  */
 
 import { EditorContextService, GEdge, type GParentElement, GNode } from '@eclipse-glsp/client';
-import { HydraniumGlspClient, mountGlspDiagram } from '@hydranium/glsp-client';
+import { glspConnection, HydraniumGlspClient, mountGlspDiagram } from '@hydranium/glsp-client';
 import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
 import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-protocol';
 import type { Container } from 'inversify';
-import { describeError, type Logger, sendByMethodName, SystemClock } from '@hydranium/protocol';
+import { describeError, type Logger, SystemClock } from '@hydranium/protocol';
 import type { MessageConnection } from 'vscode-jsonrpc/browser';
 import { requireElement } from './dom.js';
 // LAST, so esbuild emits these rules after `@eclipse-glsp/client`'s and they win
@@ -76,7 +76,7 @@ export async function mountProcessDiagram(
    // a second call throws. GLSP's client sends message types built by its own
    // copy of `vscode-jsonrpc`, which this connection's copy rejects unless they
    // go by method name.
-   const glspClient = new HydraniumGlspClient({ id: PROCESS_DIAGRAM_ELEMENT_ID, connectionProvider: sendByMethodName(connection) });
+   const glspClient = new HydraniumGlspClient({ id: PROCESS_DIAGRAM_ELEMENT_ID, connectionProvider: glspConnection(connection) });
    const { container, loadOutcome } = await mountGlspDiagram({
       mount: requireElement(PROCESS_DIAGRAM_ELEMENT_ID),
       diagramType: PROCESS_DIAGRAM_TYPE,
