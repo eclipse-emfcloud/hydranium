@@ -12,6 +12,7 @@ import { createConnection, ProposedFeatures, type Connection } from 'vscode-lang
 import type { ServerSharedServices } from '../langium/module.js';
 import { withHydraniumLspFeatures } from '../lsp/connection-features.js';
 import { lspLatencyOptions } from '../lsp/lsp-latency.js';
+import { listenToSaveTextDocument, withSaveTextDocumentCapability } from '../lsp/save-text-document.js';
 import { startLanguageServer } from '../lsp/start-language-server.js';
 
 export interface WorkerLanguageServerOptions {
@@ -30,6 +31,9 @@ export interface WorkerLanguageServerOptions {
  * listens. The page's end of the port closing ends only this head's
  * connection, not the worker the other heads share, so the language client's
  * documents are closed here, each reverting as its last close does.
+ *
+ * The worker holds the files, so the page cannot write them and `didSave`
+ * reports nothing: the head answers and advertises `SaveTextDocumentRequest`.
  */
 export function startLanguageServerInWorker<TShared extends ServerSharedServices>(
    port: TransferredMessagePort,
@@ -39,12 +43,13 @@ export function startLanguageServerInWorker<TShared extends ServerSharedServices
    // Both ends use `createMessagePortTransport`; see it for why.
    const transport = createMessagePortTransport(port);
    const connection = createConnection(
-      withHydraniumLspFeatures(ProposedFeatures.all),
+      withSaveTextDocumentCapability(withHydraniumLspFeatures(ProposedFeatures.all)),
       transport.reader,
       transport.writer,
       lspLatencyOptions(options.latency)
    );
    const shared = compose(connection);
+   listenToSaveTextDocument(connection, shared);
    startLanguageServer(shared);
    transport.reader.onClose(() => void shared.workspace.TextDocuments.closeLanguageClientDocuments());
    return shared;

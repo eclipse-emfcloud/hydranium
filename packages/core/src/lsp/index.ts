@@ -15,6 +15,7 @@ export * from './semantic-token-provider.js';
 export * from './language-module.js';
 export * from './shared-module.js';
 export * from './hydranium-document-update-handler.js';
+export * from './save-text-document.js';
 
 /**
  * The LSP server entry point, so adopters get a unified import surface for the

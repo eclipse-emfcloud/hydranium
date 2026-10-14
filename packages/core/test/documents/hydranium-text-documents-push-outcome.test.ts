@@ -17,6 +17,7 @@ import {
    TextEdit
 } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
+import { DocumentNotOpenError, isConflictError, STALE_VERSION } from '@hydranium/protocol';
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { DefaultDocumentReleaseHandler } from '../../src/documents/document-release-handler.js';
 import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
@@ -59,6 +60,20 @@ class Editor {
 
    get text(): string | undefined {
       return this.buffer?.getText();
+   }
+
+   get version(): number | undefined {
+      return this.buffer?.version;
+   }
+
+   /** What the save gate makes of a save the editor asks for now: `'held'`, `'conflict'`, or another refusal's text. */
+   get saveVerdict(): string {
+      try {
+         this.docs.assertLanguageClientHolds(this.uri, this.version!);
+         return 'held';
+      } catch (error: unknown) {
+         return isConflictError(error) ? 'conflict' : String(error);
+      }
    }
 
    open(text: string): void {
@@ -148,7 +163,10 @@ function makeStore(uriPolicy: unknown = new DefaultDocumentUriPolicy()): {
    docs: HydraniumTextDocuments<TextDocument>;
    editorAt: (uri: string) => Editor;
    pushes: ApplyWorkspaceEditParams[];
+   /** URIs a delete is under way for, as the document manager reports them. */
+   deleting: Set<string>;
 } {
+   const deleting = new Set<string>();
    const { tracer } = makeCapturingTracer();
    const pushes: ApplyWorkspaceEditParams[] = [];
    const editors = new Map<string, Editor>();
@@ -166,7 +184,8 @@ function makeStore(uriPolicy: unknown = new DefaultDocumentUriPolicy()): {
          DocumentBuilder: makeStubDocumentBuilder(),
          // The revert's fallback build is not under test here.
          VersionSyncService: { requestRecoveryBuild: async () => undefined, onDidRecordModel: () => ({ dispose: () => undefined }) },
-         WorkspaceManager: { workspaceInitialized: Promise.resolve() }
+         WorkspaceManager: { workspaceInitialized: Promise.resolve() },
+         AstDocumentManager: { isDeleting: (uri: string) => deleting.has(uri) }
       }
    } as unknown as ServerSharedServices;
    services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);
@@ -176,7 +195,7 @@ function makeStore(uriPolicy: unknown = new DefaultDocumentUriPolicy()): {
       editors.set(uri, editor);
       return editor;
    };
-   return { docs, editorAt, pushes };
+   return { docs, editorAt, pushes, deleting };
 }
 
 /** How a caller retries a refused push. */
@@ -350,6 +369,7 @@ describe('HydraniumTextDocuments push outcome in every order its reply, echo and
 
             // The store pushes what it holds, as the next settle does.
             const held = editor.text === docs.get(URI)?.getText();
+            expect(editor.saveVerdict).toBe(held ? 'held' : 'conflict');
             const before = pushes.length;
             const settled = sync(docs, docs.get(URI)!.getText());
             while (await editor.hasPush()) {
@@ -364,6 +384,7 @@ describe('HydraniumTextDocuments push outcome in every order its reply, echo and
             }
             editor.type(Range.create(0, 0, 0, 0), 'k');
             expect(docs.get(URI)?.getText()).toBe(editor.text);
+            expect(editor.saveVerdict).toBe('held');
          });
       }
    }
@@ -456,4 +477,108 @@ describe('HydraniumTextDocuments push fanned out to a file open under two URIs',
          }
       });
    }
+});
+
+describe('HydraniumTextDocuments save gate for the editor', () => {
+   /** The refusal `assertLanguageClientHolds` throws, as the fields a client reads. */
+   function refusal(docs: HydraniumTextDocuments<TextDocument>, uri: string, version: number): unknown {
+      try {
+         docs.assertLanguageClientHolds(uri, version);
+         return undefined;
+      } catch (error: unknown) {
+         return isConflictError(error) ? { baseVersion: error.baseVersion, actualVersion: error.actualVersion } : error;
+      }
+   }
+
+   it('holds a reopened document whose store version is not the editor version', () => {
+      const { docs, editorAt } = makeStore();
+      const editor = editorAt(URI);
+      editor.open(DISK);
+      editor.type(Range.create(3, 0, 3, 0), 'l4\n');
+      editor.close();
+      editor.open(TYPED);
+
+      expect({ editor: editor.version, store: docs.version(URI), refusal: refusal(docs, URI, 1) }).toEqual({
+         editor: 1,
+         store: 2,
+         refusal: undefined
+      });
+   });
+
+   it('refuses while a push is in flight, based on the version the editor holds, and holds after its echo', async () => {
+      const { docs, editorAt } = makeStore();
+      const editor = editorAt(URI);
+      editor.open(DISK);
+      editor.type(Range.create(3, 0, 3, 0), 'l4\n');
+      const typed = docs.version(URI);
+      docs.applyContentChange(URI, WRITTEN, 'form-client');
+      const pushed = sync(docs, WRITTEN);
+
+      expect(refusal(docs, URI, editor.version!)).toEqual({ baseVersion: typed, actualVersion: typed + 1 });
+      await editor.answer('apply');
+      await pushed;
+      expect(refusal(docs, URI, editor.version!)).toBeUndefined();
+   });
+
+   it('refuses a version the editor did not declare last', () => {
+      const { docs, editorAt } = makeStore();
+      const editor = editorAt(URI);
+      editor.open(DISK);
+      editor.type(Range.create(3, 0, 3, 0), 'l4\n');
+
+      expect(refusal(docs, URI, 1)).toEqual({ baseVersion: STALE_VERSION, actualVersion: docs.version(URI) });
+   });
+
+   it('holds a buffer that opened on the text another client holds', () => {
+      const { docs, editorAt } = makeStore();
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 1, text: DISK } }, 'form-client');
+      docs.applyContentChange(URI, WRITTEN, 'form-client');
+      editorAt(URI).open(WRITTEN);
+
+      expect(refusal(docs, URI, 1)).toBeUndefined();
+   });
+
+   it('refuses a buffer that opened behind another client, based on no version, until the refresh lands', async () => {
+      const { docs, editorAt } = makeStore();
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 1, text: DISK } }, 'form-client');
+      docs.applyContentChange(URI, WRITTEN, 'form-client');
+      const editor = editorAt(URI);
+      editor.open(DISK);
+
+      expect(refusal(docs, URI, 1)).toEqual({ baseVersion: STALE_VERSION, actualVersion: docs.version(URI) });
+      // The refresh the attach fires, which the model service pushes.
+      const refreshed = sync(docs, WRITTEN);
+      await editor.answer('apply');
+      await refreshed;
+      expect(refusal(docs, URI, editor.version!)).toBeUndefined();
+   });
+
+   it('holds a buffer an adopter baselines at the synced text, and refuses one baselined at other text', () => {
+      const { docs, editorAt } = makeStore();
+      const editor = editorAt(URI);
+      editor.open(DISK);
+      docs.setLanguageClientText(URI, DISK);
+      const atSynced = refusal(docs, URI, 1);
+      docs.setLanguageClientText(URI, TYPED);
+
+      expect({ atSynced, atOther: refusal(docs, URI, 1) }).toEqual({
+         atSynced: undefined,
+         atOther: { baseVersion: STALE_VERSION, actualVersion: docs.version(URI) }
+      });
+   });
+
+   it('refuses a document a delete is under way for, which the save would write back', () => {
+      const { docs, editorAt, deleting } = makeStore();
+      editorAt(URI).open(DISK);
+      deleting.add(URI);
+
+      expect(refusal(docs, URI, 1)).toBeInstanceOf(DocumentNotOpenError);
+   });
+
+   it('refuses a document the editor does not have open', () => {
+      const { docs } = makeStore();
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 1, text: DISK } }, 'form-client');
+
+      expect(refusal(docs, URI, 1)).toBeInstanceOf(DocumentNotOpenError);
+   });
 });

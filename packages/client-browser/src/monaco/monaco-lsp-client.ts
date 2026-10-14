@@ -30,7 +30,14 @@
  *   directly rather than counted here in parallel.
  */
 
-import { type BaseVersion, isResponseError, sendByMethodName, type TextState, textHash } from '@hydranium/protocol';
+import {
+   type BaseVersion,
+   isResponseError,
+   SaveTextDocumentRequest,
+   sendByMethodName,
+   type TextState,
+   textHash
+} from '@hydranium/protocol';
 import * as monaco from 'monaco-editor-core';
 import { ConnectionErrors, type MessageConnection } from 'vscode-jsonrpc/browser';
 import {
@@ -661,6 +668,12 @@ export class MonacoLspClient {
     * need not be the connection's.
     */
    protected readonly connection: MessageConnection;
+   /** Whether the server answers {@link SaveTextDocumentRequest}: only one whose host leaves it the files does. */
+   protected readonly saveAdvertised: boolean;
+   /** Counts the {@link save} calls that sent a request, so their answers can be ordered. */
+   protected saveCount = 0;
+   /** Per URI, the newest {@link save} whose answer marked the document saved. */
+   protected readonly markedSaves = new Map<string, number>();
 
    constructor(
       connection: MessageConnection,
@@ -669,6 +682,7 @@ export class MonacoLspClient {
    ) {
       this.connection = sendByMethodName(connection);
       this.markerOwner = options.markerOwner ?? DEFAULT_MARKER_OWNER;
+      this.saveAdvertised = capabilities.experimental?.[SaveTextDocumentRequest.method] === true;
       // First: it is the one registration on the connection, which throws once
       // closed, and a constructor that throws leaves nothing to dispose.
       this.registerApplyEdit();
@@ -1020,6 +1034,7 @@ export class MonacoLspClient {
       }
       this.models.delete(key);
       this.savedVersions.delete(key);
+      this.markedSaves.delete(key);
       // Cleared whether or not the host disposed the model already: the marker
       // service keys by URI and keeps a disposed `file:` model's markers.
       monaco.editor.setModelMarkers(model, this.markerOwner, []);
@@ -1072,6 +1087,61 @@ export class MonacoLspClient {
          suggest: { ...LSP_EDITOR_OPTIONS.suggest, ...options.suggest },
          model
       });
+   }
+
+   /**
+    * Have the server persist the document at `uri`, in any form, if it is
+    * dirty, and return it, marked saved at the version its text was read at;
+    * nothing for a document that is not dirty. For a host whose files only the
+    * server holds; a server that does not advertise
+    * {@link SaveTextDocumentRequest} makes this throw, sending nothing.
+    *
+    * The request carries the buffer's version and no text: every keystroke
+    * already reached the server as a `didChange` sent before it on the same
+    * connection, so the server persists its own text once it finds the buffer
+    * holds it, and refuses otherwise. A refusal leaves the document dirty.
+    *
+    * An answer marks nothing once a later save of the document has marked it:
+    * a server that coalesces saves answers the earlier one after the later
+    * one it wrote for, and marking it would leave the saved buffer dirty.
+    */
+   async save(uri: string): Promise<EditorDocument | undefined> {
+      this.assertSaveAdvertised();
+      const document = this.dirtyDocument(uri);
+      if (document === undefined) {
+         return undefined;
+      }
+      const ticket = ++this.saveCount;
+      await this.connection.sendRequest(SaveTextDocumentRequest.type, {
+         textDocument: { uri: document.uri, version: document.model.getVersionId() }
+      });
+      if (ticket > (this.markedSaves.get(document.uri) ?? 0)) {
+         this.markedSaves.set(document.uri, ticket);
+         this.markSaved(document);
+      }
+      return document;
+   }
+
+   /**
+    * {@link save} every dirty document, all at once, each marked saved on its
+    * own answer. Rejects with the first failure once every answer is in, so a
+    * refusal of one does not leave the others' outcome unknown; the documents
+    * that saved stay marked, and a second call retries the rest.
+    */
+   async saveAll(): Promise<EditorDocument[]> {
+      this.assertSaveAdvertised();
+      const results = await Promise.allSettled(this.dirtyDocuments().map(document => this.save(document.uri)));
+      const failure = results.find(result => result.status === 'rejected');
+      if (failure !== undefined) {
+         throw failure.reason;
+      }
+      return results.flatMap(result => (result.status === 'fulfilled' && result.value !== undefined ? [result.value] : []));
+   }
+
+   protected assertSaveAdvertised(): void {
+      if (!this.saveAdvertised) {
+         throw new Error(`The server does not advertise ${SaveTextDocumentRequest.method}; its host saves the files itself`);
+      }
    }
 
    /**

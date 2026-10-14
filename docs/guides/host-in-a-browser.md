@@ -135,15 +135,15 @@ const fileSystem = persistentFileSystem({
    `WorkspaceManager.workspaceInitialized` resolves, and reports a build that
    fails.
 
-6. **Save through the data head.** An editor's `didSave` writes nothing: LSP
-   leaves the write to the client, and a page has no disk. Open a
-   `DataConnection` on the port `connectWorkerHeads` hands you, and save the
-   unsaved documents of the `MonacoLspClient` you build in step 9 with
-   `saveDirtyDocuments`, from the same `@hydranium/client-browser/monaco`,
-   through one of its sessions: it persists, in the worker, the text every
-   `didChange` already gave the server, and refuses a document whose server
-   text is not the buffer's it read, which stays unsaved for the next save. A
-   diagram edit reaches the editor first, so one save covers both.
+6. **Save through the LSP head.** An editor's `didSave` writes nothing: LSP
+   leaves the write to the client, and a page has no disk. Call `save(uri)` or
+   `saveAll()` on the `MonacoLspClient` you build in step 9. Each asks the
+   worker to persist the text every `didChange` already gave it, in a request
+   the LSP starter answers and advertises, so a page with only text editors
+   needs no other head. The worker refuses a document whose buffer does not
+   hold its text, such as while a server edit is still on its way to the
+   editor; the document stays unsaved for the next save. A diagram edit
+   reaches the editor first, so one save covers both.
 
 7. **Show the server's log.** The server logs every head over LSP
    `window/logMessage`, and a page with no handler loses all of it. Pass the

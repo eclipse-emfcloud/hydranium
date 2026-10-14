@@ -139,14 +139,14 @@ describe('DefaultLanguageClientShadow.preparePush', () => {
    /** Opened with an equality-only snapshot, so the first push is a full replace. */
    const openShadow = (configuration = factories): ReturnType<typeof makeShadow> => {
       const made = makeShadow(configuration);
-      made.shadow.addOpen(KEY, URI, 1, '', false);
+      made.shadow.addOpen(KEY, URI, 1, '', false, undefined);
       return made;
    };
 
    test('pushes to no URI until the client opens the key, then to that URI', () => {
       const { shadow } = makeShadow();
       expect(shadow.pushTargets(KEY)).toEqual([]);
-      shadow.addOpen(KEY, URI, 1, '', true);
+      shadow.addOpen(KEY, URI, 1, '', true, undefined);
       expect(shadow.pushTargets(KEY)).toEqual([URI]);
    });
 
@@ -178,7 +178,7 @@ describe('DefaultLanguageClientShadow.preparePush', () => {
 
    test('a settled push ignores a second answer', () => {
       const { shadow } = openShadow();
-      shadow.setLanguageClientText(URI, 'a\nb\n');
+      shadow.setLanguageClientText(URI, 'a\nb\n', undefined);
       const push = shadow.preparePush(KEY, URI, 'a\nB\n');
       push?.notifyOutcome('applied');
       // A refusal drops the diff baseline; counted, the next push would be a full replace.
@@ -188,7 +188,7 @@ describe('DefaultLanguageClientShadow.preparePush', () => {
 
    test('setLanguageClientText primes the baseline so next call is a diff', () => {
       const { shadow } = openShadow();
-      shadow.setLanguageClientText(URI, 'a\nb\n');
+      shadow.setLanguageClientText(URI, 'a\nb\n', undefined);
       expect(isFullReplace(editsOf(shadow, 'a\nB\n'), 'a\nB\n')).toBe(false);
    });
 
@@ -212,7 +212,7 @@ describe('DefaultLanguageClientShadow.preparePush', () => {
       };
       const { shadow, lines } = openShadow(corrupting);
       // Prime a baseline so the push takes the diff path (not the first-sync full replace).
-      shadow.setLanguageClientText(URI, 'a\nb\nc\n');
+      shadow.setLanguageClientText(URI, 'a\nb\nc\n', undefined);
       const edits = editsOf(shadow, 'a\nB\nc\n');
       expect(fallbacks(lines).map(line => line.level)).toEqual(['warn']);
       expect(isFullReplace(edits, 'a\nB\nc\n')).toBe(true);

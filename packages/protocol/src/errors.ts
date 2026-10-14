@@ -39,6 +39,16 @@ export const STALE_BASE_VERSION_UPDATE = defineMessage(
 );
 
 /**
+ * {@link STALE_BASE_VERSION_UPDATE}'s counterpart for an editor's save the
+ * server refused, since the editor's buffer is not the text it holds. Its
+ * English keeps the same marker.
+ */
+export const STALE_BASE_VERSION_SAVE = defineMessage(
+   'hydranium/protocol/stale-base-version-save',
+   'The save of {uri} was not applied: it was made to an older version of the document.'
+);
+
+/**
  * Every JSON-RPC error code the framework raises, from any package, keyed by
  * the error it identifies.
  *
@@ -108,15 +118,21 @@ export interface ConflictErrorData extends HydraniumMessageData {
  * No auto-retry or auto-merge ships by default.
  */
 export class ConflictError extends ResponseError<ConflictErrorData> {
-   constructor(uri: string, baseVersion: ModelVersion, actualVersion: TextVersion) {
+   /** `message` words what was refused: an edit, or with {@link STALE_BASE_VERSION_SAVE} a save. */
+   constructor(
+      uri: string,
+      baseVersion: ModelVersion,
+      actualVersion: TextVersion,
+      message: typeof STALE_BASE_VERSION_UPDATE | typeof STALE_BASE_VERSION_SAVE = STALE_BASE_VERSION_UPDATE
+   ) {
       // The identity rides alongside the typed payload rather than replacing
       // it: `isConflictError`'s name check is surface an adopter may bind, so
       // adding the identity widens the payload rather than reshaping it.
-      super(CONFLICT_ERROR_CODE, STALE_BASE_VERSION_UPDATE.format({ uri }), {
+      super(CONFLICT_ERROR_CODE, message.format({ uri }), {
          uri,
          baseVersion,
          actualVersion,
-         ...messageData(STALE_BASE_VERSION_UPDATE, { uri })
+         ...messageData(message, { uri })
       });
       this.name = 'ConflictError';
       // ResponseError's constructor calls `Object.setPrototypeOf(this,
@@ -388,9 +404,10 @@ const CONFLICT_ERROR_MESSAGE_MARKER = ': it was made to an older version of the 
  *     canonical wire-side check; the JSON-RPC `code` field is preserved
  *     across reconstruction, so any adopter catching after an RPC call
  *     hits this branch.
- *  3. `error.message` contains the marker {@link STALE_BASE_VERSION_UPDATE}'s
- *     English carries — fallback for transports that re-wrap the message
- *     and drop the code (rare).
+ *  3. `error.message` contains the marker the English of
+ *     {@link STALE_BASE_VERSION_UPDATE} and
+ *     {@link STALE_BASE_VERSION_SAVE} carries — fallback for transports
+ *     that re-wrap the message and drop the code (rare).
  *
  * `instanceof ConflictError` alone returns `false` on a rejection that was
  * not {@link reviveProtocolError revived}, so callers do not use it.

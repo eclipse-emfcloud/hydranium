@@ -87,23 +87,22 @@ Build the Monaco client, from `./monaco`, in `beforeInitialized` too, from the
 server's capabilities and your language table, and hand it each diagnostics
 notification. Open a document on the text the worker holds, never on a copy
 in your bundle, and create editors through the client, which keeps the
-settings a server-driven language needs under your own. Save through a data
-session: the server already holds every edit, so the save persists and
-authors nothing.
+settings a server-driven language needs under your own. Save through the
+client: the server already holds every edit, so `save` and `saveAll` ask the
+worker's LSP head to persist them. `saveDirtyDocuments` saves through a data
+session instead, for a server whose LSP head does not advertise the request.
 
 <!-- snippet-preamble
 import { connectWorkerHeads } from '@hydranium/client-browser';
-import { DataConnectionWithEvents } from '@hydranium/protocol';
 declare const worker: Parameters<typeof connectWorkerHeads>[0];
 declare const container: HTMLElement;
 declare const textFromTheWorker: string;
 const heads = connectWorkerHeads(worker);
-const data = new DataConnectionWithEvents(heads.data);
 -->
 
 ```ts
 import { initializeLanguageClient } from '@hydranium/client-browser';
-import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient, saveDirtyDocuments } from '@hydranium/client-browser/monaco';
+import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient } from '@hydranium/client-browser/monaco';
 import { PublishDiagnosticsNotification } from 'vscode-languageserver-protocol';
 
 let client!: MonacoLspClient;
@@ -119,7 +118,7 @@ await initializeLanguageClient(heads.lsp, {
 });
 const model = client.openDocument('file:///workspace/a.my', textFromTheWorker);
 client.createEditor(container, model, { theme: 'vs' });
-await saveDirtyDocuments(client, data.createSession('editors'));
+await client.saveAll();
 ```
 
 `MONACO_CLIENT_CAPABILITIES` declares `workspace.applyEdit`, which the Monaco
