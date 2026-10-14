@@ -126,8 +126,11 @@ const fileSystem = persistentFileSystem({
    by every page on the origin, so name it after your app. Once the store can
    differ from the seed, open your editors on the text the worker holds, not on
    the seed in your bundle: an editor opened on the seed overwrites the restored
-   document. The provider's `restoredPaths` names the files that came out of
-   the store, and the store's `clear()` returns the next load to the seed.
+   document. Pass `hostHeadsInWorker` the root you give `persistentFileSystem`
+   as `{ rootUri }`, and `heads.ready` resolves with the ready message, whose
+   `workspace` holds every file under the root, keyed by its URI-encoded path
+   below it, and the paths that came out of the store. The store's `clear()`
+   returns the next load to the seed.
 
 5. **Validate once the workspace is up.** The first build of the workspace does
    not validate, so a page that only waits would see no diagnostics at all.

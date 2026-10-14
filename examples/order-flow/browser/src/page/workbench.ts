@@ -46,7 +46,7 @@
  */
 
 import { connectWorkerHeads, initializeLanguageClient, WORKER_ERROR_EVENT_PHASE, type WorkerHeads } from '@hydranium/client-browser';
-import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient, saveDirtyDocuments } from '@hydranium/client-browser/monaco';
+import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient } from '@hydranium/client-browser/monaco';
 import { type PublishDiagnosticsParams, PublishDiagnosticsNotification } from 'vscode-languageserver-protocol';
 import {
    ConsoleLogger,
@@ -61,16 +61,11 @@ import {
    type Logger,
    type TransferDocument,
    type WorkerErrorMessage,
+   type WorkerWorkspace,
    describeError
 } from '@hydranium/protocol';
 import { type DomainModel, isLayoutModel, type LayoutModel, type ProcessModel } from '@hydranium/example-order-flow-protocol';
-import {
-   isWorkspaceReadyMessage,
-   isWorkspaceResetMessage,
-   RESET_WORKSPACE_MESSAGE_TYPE,
-   WORKSPACE_ROOT_URI,
-   type WorkspaceReadyMessage
-} from '../head-channels.js';
+import { isWorkspaceResetMessage, RESET_WORKSPACE_MESSAGE_TYPE, WORKSPACE_ROOT_URI } from '../head-channels.js';
 import { requireButton, requireCheckbox, requireDialog, requireElement } from './dom.js';
 import { EditorArea } from './editor-area.js';
 import { wireLogLevelControl, wireTraceControl } from './log-controls.js';
@@ -427,8 +422,6 @@ function wireSchemeSwitch(): void {
 /** Everything the page holds after bootstrap: the heads, plus this host's own protocol. */
 interface WorkerChannels {
    readonly heads: WorkerHeads;
-   /** The workspace the heads' filesystem came up on, once they are live. */
-   readonly workspace: Promise<WorkspaceReadyMessage>;
    /** Ask the worker to forget every stored edit. The page reloads when it answers. */
    readonly resetWorkspace: () => void;
    /** The report the heads ended on, once they have. */
@@ -456,18 +449,8 @@ function bootstrapWorker(logger: Logger): WorkerChannels {
       );
    });
    heads.onDispose(() => (failure = lastReport));
-   // The executor runs synchronously, so `announceWorkspace` is assigned before
-   // the listener below can possibly fire.
-   let announceWorkspace: (message: WorkspaceReadyMessage) => void = () => undefined;
-   const workspace = new Promise<WorkspaceReadyMessage>(resolve => {
-      announceWorkspace = resolve;
-   });
 
    worker.addEventListener('message', event => {
-      if (isWorkspaceReadyMessage(event.data)) {
-         announceWorkspace(event.data);
-         return;
-      }
       if (isWorkspaceResetMessage(event.data)) {
          // Reloaded rather than re-seeded in place: the worker dies with the
          // document, so the next load rebuilds every head over a store that is
@@ -477,7 +460,7 @@ function bootstrapWorker(logger: Logger): WorkerChannels {
       }
    });
 
-   return { heads, workspace, resetWorkspace: () => worker.postMessage({ type: RESET_WORKSPACE_MESSAGE_TYPE }), failure: () => failure };
+   return { heads, resetWorkspace: () => worker.postMessage({ type: RESET_WORKSPACE_MESSAGE_TYPE }), failure: () => failure };
 }
 
 /**
@@ -641,39 +624,27 @@ async function watchLayoutThroughDataHead({ session, connection }: DataHead): Pr
 }
 
 /**
- * Persist every unsaved editor's document through the DATA head.
+ * Persist the unsaved editors' documents through the LSP head, `only`'s
+ * alone when it is given.
  *
- * **A browser host has to ask for this explicitly, and the reason is a framework
- * fact rather than a browser one.** LSP puts the file write on the CLIENT — a
- * `textDocument/didSave` notification tells the server a save has happened, and
- * the framework answers it by firing `onDidSave`, not by writing anything. In
- * Theia or VS Code the shell does the writing; a page has no filesystem, so the
- * only end that can write is the worker, and the persist request through the
- * page's session is what makes it. Sending `didSave` here would persist
- * nothing at all, silently.
- *
- * Which makes the parity with a Node host exact rather than approximate: an edit
- * lives in the in-memory text document until something saves it, on both ends.
- * A diagram drag reaches this buffer as a `workspace/applyEdit` first, so one
- * save covers both directions.
- *
- * The documents are the client's dirty set, narrowed to `only` by the save
- * itself, which takes the URI in this page's form, so "what Ctrl+S writes" and
- * "what Save workspace writes" can never disagree about whether a document had
- * changed.
+ * **A browser host has to ask for this explicitly.** LSP puts the file write
+ * on the client: `didSave` tells the server a save has happened and writes
+ * nothing. A page has no filesystem, so the worker writes, on the save request
+ * the LSP head advertises. A diagram drag reaches the buffer as a
+ * `workspace/applyEdit` first, so one save covers both directions.
  */
-async function saveWorkspace(dataHead: DataHead, client: MonacoLspClient, editors: EditorArea, only?: string): Promise<void> {
+async function saveWorkspace(client: MonacoLspClient, editors: EditorArea, only?: string): Promise<void> {
    setWorkspaceReport('saving…');
    try {
-      const saved = await saveDirtyDocuments(client, dataHead.session, only === undefined ? undefined : [only]);
+      const saved = only === undefined ? await client.saveAll() : [await client.save(only)].filter(document => document !== undefined);
       editors.refreshDirtyMarks();
       setWorkspaceReport(saved.length === 0 ? 'nothing to save' : `saved ${saved.length} document(s) — a reload restores them`);
    } catch (error: unknown) {
       // Reported rather than swallowed, because the store can genuinely refuse:
       // a quota is finite and the origin's storage may have been evicted. A page
       // that reported success here would lose the workspace on the next load
-      // with nothing anywhere to say why. The documents the save never reached
-      // stay dirty, so a second press retries exactly those.
+      // with nothing anywhere to say why. The documents the worker refused stay
+      // dirty, so a second press retries exactly those.
       editors.refreshDirtyMarks();
       setWorkspaceReport(`save failed: ${describeError(error)}`);
    }
@@ -742,13 +713,13 @@ function wireSaveShortcut(save: (only?: string) => void, editors: EditorArea, pr
 }
 
 /** Enable the save / reset controls, now that there is a head behind them. */
-function wireWorkspaceControls(channels: WorkerChannels, dataHead: DataHead, client: MonacoLspClient, editors: EditorArea): void {
+function wireWorkspaceControls(channels: WorkerChannels, client: MonacoLspClient, editors: EditorArea): void {
    const save = requireButton('save-workspace');
-   save.addEventListener('click', () => void saveWorkspace(dataHead, client, editors));
+   save.addEventListener('click', () => void saveWorkspace(client, editors));
    save.disabled = false;
    // Published for the guards, which offer saving as the answer to a navigation
    // that would otherwise drop the work.
-   saveEverything = () => saveWorkspace(dataHead, client, editors);
+   saveEverything = () => saveWorkspace(client, editors);
 
    const reset = requireButton('reset-workspace');
    reset.addEventListener('click', () => {
@@ -824,6 +795,7 @@ export async function main(locale: Locale | undefined): Promise<void> {
    let client!: MonacoLspClient;
 
    setStatus(locale === undefined ? 'initializing…' : `initializing… (locale '${locale}')`);
+   let workspace: WorkerWorkspace | undefined;
    try {
       await initializeLanguageClient(connection, {
          rootUri: WORKSPACE_ROOT_URI,
@@ -859,33 +831,37 @@ export async function main(locale: Locale | undefined): Promise<void> {
             });
          }
       });
+      // The editors wait for the worker's workspace, which is the only place
+      // their text can honestly come from once a stored edit may be laid over
+      // the seed. Awaited AFTER `initialized` because a `didOpen` is a client
+      // statement about a document and the server is not obliged to answer one
+      // before then — and the LSP handshake above needs no content, so the
+      // wait costs nothing it did not already cost.
+      workspace = (await channels.heads.ready).workspace;
    } catch (error: unknown) {
-      // A worker that failed to load, or threw on its first line, ends the
-      // heads and rejects this handshake with a generic text; the report it
-      // ended on names the phase, and the URL goes with it because the event
-      // for a script that did not load carries no detail of its own.
+      // A worker that failed to load, threw on its first line or failed a head
+      // after `initialize` ends the heads and rejects this handshake or the
+      // ready wait with a generic text; the report it ended on names the
+      // phase, and the URL goes with it because the event for a script that
+      // did not load carries no detail of its own.
       const failure = channels.failure();
       throw failure === undefined
          ? error
          : new Error(`worker ended during ${failure.phase} (${WORKER_URL}): ${failure.message}`, { cause: error });
    }
 
-   // The editors wait for the worker's workspace, which is the only place their
-   // text can honestly come from once a stored edit may be laid over the seed.
-   // Awaited AFTER `initialized` because a `didOpen` is a client statement about
-   // a document and the server is not obliged to answer one before then — and
-   // the LSP handshake above needs no content, so the wait costs nothing it did
-   // not already cost.
-   const ready = await channels.workspace;
+   if (workspace === undefined) {
+      throw new Error('the worker posted no workspace; its host passes hostHeadsInWorker no rootUri');
+   }
    setWorkspaceReport(
-      ready.restored.length === 0
+      workspace.restored.length === 0
          ? 'no stored edits — seeded from the committed workspace'
-         : `restored ${ready.restored.length} file(s) from storage: ${[...ready.restored].sort().join(', ')}`
+         : `restored ${workspace.restored.length} file(s) from storage: ${[...workspace.restored].sort().join(', ')}`
    );
 
    const editors = new EditorArea({
       client,
-      files: ready.files,
+      files: workspace.files,
       rootUri: WORKSPACE_ROOT_URI,
       fixed: FIXED_DOCUMENTS,
       initialSelection: INITIAL_SELECTION,
@@ -908,7 +884,7 @@ export async function main(locale: Locale | undefined): Promise<void> {
    // once the editors exist, because the opener is what shows the target.
    client.registerEditorOpener((uri, position) => editors.revealUri(uri, position));
 
-   sidebar.panel = new WorkspacePanel(Object.keys(ready.files), WORKSPACE_ROOT_URI, {
+   sidebar.panel = new WorkspacePanel(Object.keys(workspace.files), WORKSPACE_ROOT_URI, {
       onOpenDocument: path => editors.show(path),
       onOpenDiagnostic: target => editors.reveal(target.uri.slice(WORKSPACE_ROOT_URI.length + 1), target.line),
       // A `virtual:` document has no file behind it, so there is nothing to open
@@ -939,13 +915,13 @@ export async function main(locale: Locale | undefined): Promise<void> {
       }
    }, DIAGNOSTICS_DEADLINE_MS);
 
+   // Enabled once the editors exist: the save goes over the LSP head, which
+   // has answered `initialize` by now.
+   wireWorkspaceControls(channels, client, editors);
+   wireSaveShortcut(only => void saveWorkspace(client, editors, only), editors, properties);
+
    const dataHead = openDataHead(channels.heads.data);
    await watchThroughDataHead(dataHead);
-
-   // Enabled here, after the data head has answered once: the save goes through
-   // it, so a control armed before that could only fail.
-   wireWorkspaceControls(channels, dataHead, client, editors);
-   wireSaveShortcut(only => void saveWorkspace(dataHead, client, editors, only), editors, properties);
    provideLatency(dataHead, reportDetail);
 
    // The SECOND participant on the one connection, and the reason the page needs

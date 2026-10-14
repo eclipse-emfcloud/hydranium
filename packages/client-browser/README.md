@@ -73,6 +73,8 @@ with `isWorkerBootstrapMessage` from `@hydranium/protocol`, posts a
 failure it catches; one under `WORKER_BOOTSTRAP_PHASE` ends the page's heads,
 any other phase only reports. Until the worker has posted its ready message,
 or anything on a head's port, the `Worker`'s `error` event ends the heads too.
+`heads.ready` resolves with the ready message, which carries the workspace's
+files when the worker's host passed `hostHeadsInWorker` a `rootUri`.
 
 Register the handler for the server's diagnostics in `beforeInitialized`,
 which runs once `initialize` has answered and before `initialized` goes out.
@@ -89,8 +91,7 @@ notification. Open a document on the text the worker holds, never on a copy
 in your bundle, and create editors through the client, which keeps the
 settings a server-driven language needs under your own. Save through the
 client: the server already holds every edit, so `save` and `saveAll` ask the
-worker's LSP head to persist them. `saveDirtyDocuments` saves through a data
-session instead, for a server whose LSP head does not advertise the request.
+worker's LSP head to persist them.
 
 <!-- snippet-preamble
 import { connectWorkerHeads } from '@hydranium/client-browser';

@@ -30,14 +30,7 @@
  *   directly rather than counted here in parallel.
  */
 
-import {
-   type BaseVersion,
-   isResponseError,
-   SaveTextDocumentRequest,
-   sendByMethodName,
-   type TextState,
-   textHash
-} from '@hydranium/protocol';
+import { isResponseError, SaveTextDocumentRequest, sendByMethodName } from '@hydranium/protocol';
 import * as monaco from 'monaco-editor-core';
 import { ConnectionErrors, type MessageConnection } from 'vscode-jsonrpc/browser';
 import {
@@ -1467,66 +1460,4 @@ export class MonacoLspClient {
          );
       }
    }
-}
-
-/** The two calls of a data session {@link saveDirtyDocuments} makes, which `DataSession` satisfies. */
-export interface DocumentPersister {
-   /** Open `args.uri`, run `fn` with the opened document, whose `text` is the server's state of it, and close it after. */
-   withOpenDocument<T>(args: { readonly uri: string }, fn: (document: { readonly text?: TextState }) => Promise<T>): Promise<T>;
-   persistDocument(args: { readonly uri: string; readonly baseVersion: BaseVersion }): Promise<unknown>;
-}
-
-/**
- * Persist the dirty documents of `client`, or those of them `uris` names, in
- * the host's form or Monaco's, through `session`, one after another, and
- * return what was saved.
- *
- * **A save persists; it does not author.** Every keystroke already reached the
- * server as a `didChange`, and every server write reached the buffer as a
- * `workspace/applyEdit`, so the server's text is the buffer and disk is the
- * only thing behind. `persistDocument` at `'any'` writes that text without a
- * model: a write of the buffer's text would be authored against no read, so
- * no `ModelVersion` could gate it, and `'any'` on such a write could put an
- * older buffer over a server write still in flight.
- *
- * **The open's text hash is the gate.** A `didChange` travels the LSP port and
- * the persist the data port, and nothing orders one port's messages before
- * the other's, so the open can answer with text a keystroke has not reached.
- * The open answer's hash is `textHash` of the server's text; when it is not
- * the buffer's, the save throws, naming the document, and the document stays
- * dirty for the next save. A keystroke landing after the open persists as
- * newer text, which leaves the buffer dirty the same way.
- *
- * Each document's text is read just before its own open, not once for the
- * set: an earlier document's persist takes time, and a keystroke in a later
- * one during it would otherwise fail that one's hash check for nothing. Each
- * is marked saved at the version its text was read at, one at a time, so a
- * failure part-way through leaves the documents it never reached dirty and a
- * second call retries exactly those. Sequential, not concurrent: each persist
- * runs over the server's shared store.
- */
-export async function saveDirtyDocuments(
-   client: MonacoLspClient,
-   session: DocumentPersister,
-   uris?: readonly string[]
-): Promise<EditorDocument[]> {
-   const wanted = uris?.map(uri => monaco.Uri.parse(uri).toString());
-   const dirty = client.dirtyDocuments().filter(document => wanted === undefined || wanted.includes(document.uri));
-   const saved: EditorDocument[] = [];
-   for (const { uri } of dirty) {
-      // Read again now: an undo during an earlier save may have cleaned it.
-      const document = client.dirtyDocument(uri);
-      if (document === undefined) {
-         continue;
-      }
-      await session.withOpenDocument({ uri }, opened => {
-         if (opened.text?.hash !== textHash(document.text)) {
-            throw new Error(`The server's text for ${uri} differs from the buffer this save read; the document stays unsaved`);
-         }
-         return session.persistDocument({ uri, baseVersion: 'any' });
-      });
-      client.markSaved(document);
-      saved.push(document);
-   }
-   return saved;
 }

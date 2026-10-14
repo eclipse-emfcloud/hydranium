@@ -43,25 +43,18 @@
 // rather than the missing polyfill.
 import 'reflect-metadata';
 import { ServerModule } from '@eclipse-glsp/server/browser.js';
-import { PersistentFileSystemProvider, persistentFileSystem } from '@hydranium/core';
+import { persistentFileSystem } from '@hydranium/core';
 import { hostHeadsInWorker, IndexedDbFileSystemStore, reportWorkerError, startLanguageServerInWorker } from '@hydranium/core/browser';
 import { DataServer } from '@hydranium/data-server';
 import { startDataServerInWorker } from '@hydranium/data-server/browser';
-import { createOrderFlowServices, type OrderFlowSharedServices } from '@hydranium/example-order-flow-server';
+import { createOrderFlowServices } from '@hydranium/example-order-flow-server';
 import { OrderFlowProcessDiagramModule } from '@hydranium/example-order-flow-server/lib/glsp/order-flow-process-diagram-module';
 import { GlspClientLogger, HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { startGlspServerInWorker } from '@hydranium/glsp-server/browser';
 import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
-import { URI } from '@hydranium/langium';
 import { LatencyCollector } from '@hydranium/protocol';
 import { ORDER_FLOW_WORKSPACE_SEED } from '../generated/workspace-seed.js';
-import {
-   isResetWorkspaceMessage,
-   WORKSPACE_READY_MESSAGE_TYPE,
-   WORKSPACE_RESET_MESSAGE_TYPE,
-   WORKSPACE_ROOT_URI,
-   type WorkspaceFiles
-} from '../head-channels.js';
+import { isResetWorkspaceMessage, WORKSPACE_RESET_MESSAGE_TYPE, WORKSPACE_ROOT_URI } from '../head-channels.js';
 
 /** The union of transfer roots this workspace's three grammars produce. */
 type OrderFlowTransferRoot = DomainModel | LayoutModel | ProcessModel;
@@ -75,51 +68,12 @@ type OrderFlowTransferRoot = DomainModel | LayoutModel | ProcessModel;
  */
 const workspaceStore = new IndexedDbFileSystemStore('order-flow-browser-workspace');
 
-/**
- * Every file the heads came up on, read out of the FILESYSTEM rather than out of
- * the generated seed.
- *
- * The two differ the moment anything has been saved, and the seed is the wrong
- * one: the page opens editors on this content, and `didOpen` is authoritative —
- * so seeding an editor from the committed bytes would overwrite the restored
- * document in the server's text store and silently undo the reload.
- *
- * The walk goes through `readDirectorySync`, so a file that exists only in
- * storage is included; enumerating the seed's keys instead would miss exactly
- * the files a user created.
- */
-function readWorkspaceFiles(shared: OrderFlowSharedServices): WorkspaceFiles {
-   const provider = shared.workspace.FileSystemProvider;
-   const prefix = `${WORKSPACE_ROOT_URI}/`;
-   const files: Record<string, string> = {};
-   const visit = (uri: URI): void => {
-      for (const node of provider.readDirectorySync(uri)) {
-         if (node.isFile) {
-            files[node.uri.toString().slice(prefix.length)] = provider.readFileSync(node.uri);
-         } else {
-            visit(node.uri);
-         }
-      }
-   };
-   visit(URI.parse(WORKSPACE_ROOT_URI));
-   return files;
-}
-
-/**
- * What the provider restored as content. The store cannot answer this: a
- * deleted seeded file is a stored entry too, and only the provider knows the
- * marker from a file. The bound slot is the scheme registry, so the host's
- * provider is read through it.
- */
-function restoredPaths(shared: OrderFlowSharedServices): string[] {
-   const host = shared.workspace.FileSystemProvider.host;
-   return host instanceof PersistentFileSystemProvider ? [...host.restoredPaths] : [];
-}
-
 // The stored workspace is restored before any head is built around it, which
 // `hostHeadsInWorker` guarantees by awaiting this before `start`; the load
 // begins now rather than on the bootstrap, so the page's first message finds
-// as little of it left as possible.
+// as little of it left as possible. The root makes the ready message carry the
+// files the page opens its editors on, read from the filesystem rather than
+// the seed, which a stored edit would contradict.
 hostHeadsInWorker(
    persistentFileSystem({ store: workspaceStore, seed: ORDER_FLOW_WORKSPACE_SEED, rootUri: WORKSPACE_ROOT_URI }),
    (ports, fileSystem) => {
@@ -166,17 +120,11 @@ hostHeadsInWorker(
          serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
          appModules: [new HydraniumGlspAppModule({ shared })]
       });
-      // Only once the GLSP head is up, so a page never receives content for a
-      // composition that failed to come up — it would open editors against a
-      // server that cannot answer and report the silence as an empty
-      // workspace. The GLSP head reports a failed launch through `started`
-      // rather than by throwing, so the announcement chains on it; handed
-      // back, the ready message waits for both.
-      const announced = glsp.started.then(() => {
-         postMessage({ type: WORKSPACE_READY_MESSAGE_TYPE, files: readWorkspaceFiles(shared), restored: restoredPaths(shared) });
-      });
-      return { shared, started: [announced] };
-   }
+      // The GLSP head reports a failed launch through `started` rather than by
+      // throwing; handed back, the ready message waits for it.
+      return { shared, started: [glsp.started] };
+   },
+   { rootUri: WORKSPACE_ROOT_URI }
 );
 
 /**

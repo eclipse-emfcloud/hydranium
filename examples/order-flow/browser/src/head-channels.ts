@@ -12,11 +12,11 @@
  * neither can drift from the other.
  *
  * The handshake itself, the bootstrap that hands each head its own port and
- * the worker's failure reports, is the framework's, in `@hydranium/protocol`,
- * and the page's end of it is `@hydranium/client-browser`'s. What is here is
- * what this host adds beside it: the workspace the heads came up on, and a
- * reset. None of it is any head's protocol, which is the line to keep: a
- * message that belongs to a head belongs on that head's port.
+ * the worker's ready message with the files it holds and its failure reports,
+ * is the framework's, in `@hydranium/protocol`, and the page's end of it is
+ * `@hydranium/client-browser`'s. What is here is what this host adds beside
+ * it: a reset. None of it is any head's protocol, which is the line to keep:
+ * a message that belongs to a head belongs on that head's port.
  */
 
 /**
@@ -27,45 +27,6 @@
  * that has several.
  */
 export const WORKSPACE_ROOT_URI = 'file:///order-flow';
-
-/** Workspace content keyed by path relative to {@link WORKSPACE_ROOT_URI}. */
-export type WorkspaceFiles = Readonly<Record<string, string>>;
-
-/**
- * Discriminator of the worker's answer to bootstrap: the workspace the heads
- * actually came up on.
- *
- * # Why the page is TOLD the content instead of reading the seed
- *
- * The generated seed is what the filesystem starts from, not what it holds. Once
- * stored edits are laid over it, the two differ — and a `didOpen` carries the
- * client's text as authoritative, so a page that opened an editor on the seed
- * would OVERWRITE the restored document in the server's text store and undo the
- * reload it just performed. Nothing would report it: both sides parse, the
- * diagnostics agree, and only the content is a version old.
- *
- * So the worker's filesystem is the single source of truth for content and the
- * page derives its editor text from this message. Sending the whole workspace is
- * affordable because this one is a handful of small files; a host with a real
- * workspace wants a per-document read instead.
- */
-export const WORKSPACE_READY_MESSAGE_TYPE = 'order-flow/workspace-ready';
-
-export interface WorkspaceReadyMessage {
-   readonly type: typeof WORKSPACE_READY_MESSAGE_TYPE;
-   /** Every file the heads' filesystem holds, seed and stored edits merged. */
-   readonly files: WorkspaceFiles;
-   /** The subset that came out of storage, so the page can say a restore happened. */
-   readonly restored: readonly string[];
-}
-
-export function isWorkspaceReadyMessage(value: unknown): value is WorkspaceReadyMessage {
-   if (typeof value !== 'object' || value === null) {
-      return false;
-   }
-   const candidate = value as Partial<WorkspaceReadyMessage>;
-   return candidate.type === WORKSPACE_READY_MESSAGE_TYPE && typeof candidate.files === 'object' && candidate.files !== null;
-}
 
 /**
  * Discriminator of the page's request to forget every stored edit.
