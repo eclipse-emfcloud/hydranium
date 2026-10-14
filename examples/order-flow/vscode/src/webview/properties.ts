@@ -18,12 +18,9 @@
  * this file adds is only the two things a webview alone can do: acquire the VS
  * Code API, and draw.
  *
- * **Import discipline, both halves of which cost a debugging cycle when missed.**
- * `vscode-jsonrpc/browser` (in the port next door), because the package root
- * installs no runtime abstraction layer; and MODULE paths into
- * `@hydranium/example-order-flow-client` rather than its barrel, because the
- * barrel re-exports the GLSP diagram definition and its graph reaches CSS this
- * bundle has no loader for.
+ * **Import discipline.** MODULE paths into `@hydranium/example-order-flow-client`
+ * rather than its barrel, because the barrel re-exports the GLSP diagram
+ * definition and its graph reaches CSS this bundle has no loader for.
  */
 
 import {
@@ -32,23 +29,13 @@ import {
    ORDER_FLOW_PANEL_REPORT_ERROR,
    ORDER_FLOW_PANEL_SET_DOCUMENT
 } from '../properties-panel-protocol';
+import { createWebviewSideChannel } from '@hydranium/data-client-vscode';
+import { WebviewDataPort } from '@hydranium/data-client-vscode/browser';
 import { describeFailure, PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
-import { WebviewDataPort } from './properties-data-port';
 import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
-import {
-   createWebviewSideChannel,
-   type WebviewMessengerLike
-} from '@hydranium/example-order-flow-client/lib/data/order-flow-messenger-channel';
 import { OrderFlowPropertiesModel } from '@hydranium/example-order-flow-client/lib/data/order-flow-properties-model';
 import { PROPERTIES_LOADING, PROPERTIES_OPEN_FAILED } from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
-import {
-   ConsoleLogger,
-   DataConnectionWithEvents,
-   renderFrameworkMessage,
-   resolve,
-   type DataPort,
-   type ResolvedMessage
-} from '@hydranium/protocol';
+import { ConsoleLogger, DataConnectionWithEvents, renderFrameworkMessage, resolve, type ResolvedMessage } from '@hydranium/protocol';
 
 /**
  * The label of this webview's session on the data head. `createSession` mints
@@ -57,28 +44,11 @@ import {
  * process, and the id is the echo key a panel recognises its own writes by.
  */
 const PROPERTIES_WEBVIEW_SESSION_LABEL = 'order-flow-properties-webview';
-import { HOST_EXTENSION, type MessageParticipant } from 'vscode-messenger-common';
+import { HOST_EXTENSION } from 'vscode-messenger-common';
 import { Messenger, type VsCodeApi } from 'vscode-messenger-webview';
 
 /** The union of transfer roots this workspace's three grammars produce. */
 type OrderFlowTransferRoot = DomainModel | LayoutModel | ProcessModel;
-
-/**
- * Compile-time proof that the WEBVIEW-side `Messenger` satisfies
- * {@link WebviewMessengerLike}.
- *
- * Two interfaces and two assertions, one per side, because the two messengers are
- * not the same shape: the webview messenger's `onNotification` hands back the
- * messenger itself rather than a `Disposable`, and takes no `sender` option. A
- * single interface covering both would be false of the webview side, and nothing
- * but an assertion like this one would catch it.
- */
-const _webviewMessengerConforms: (messenger: Messenger) => WebviewMessengerLike<MessageParticipant> = messenger => messenger;
-void _webviewMessengerConforms;
-
-/** Compile-time proof that the port still fits the framework's contract. */
-const _portConforms: (port: WebviewDataPort) => DataPort = port => port;
-void _portConforms;
 
 /**
  * The webview host API, injected by VS Code into the sandbox's global scope.
@@ -113,11 +83,10 @@ function main(): void {
       messenger.sendNotification(ORDER_FLOW_PANEL_REPORT_ERROR, HOST_EXTENSION, { reported });
    };
 
-   const port = new WebviewDataPort(
-      createWebviewSideChannel(messenger, HOST_EXTENSION),
+   const port = new WebviewDataPort(createWebviewSideChannel(messenger, HOST_EXTENSION), {
       reportError,
-      new ConsoleLogger().with('data head')
-   );
+      logger: new ConsoleLogger().with('data head')
+   });
    const connection = new DataConnectionWithEvents<OrderFlowTransferRoot>(port);
    const session = connection.createSession(PROPERTIES_WEBVIEW_SESSION_LABEL);
    const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, connection.events);

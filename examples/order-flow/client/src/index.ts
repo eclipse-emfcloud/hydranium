@@ -28,13 +28,11 @@
  * `DataSession`, `DataEvents` and `createPostMessageTransport` are host-neutral
  * and grammar-free, and this example imports them from `@hydranium/protocol`.
  * What stays is what the framework should not carry: the properties model, which
- * chooses which fields are editable; the properties FORM, which is plain DOM and
- * host-free so both shells mount the same class rather than each growing its
- * own; and the messenger channel, the VS Code adapter this example supplies
- * because the framework ships Theia client packages and no VS Code equivalents.
+ * chooses which fields are editable, and the properties FORM, which is plain DOM
+ * and host-free so both shells mount the same class rather than each growing its
+ * own.
  */
 
-export * from './data/order-flow-messenger-channel';
 export * from './data/order-flow-properties-model';
 export * from './diagram/order-flow-process-diagram-module';
 export * from './properties/properties-form';

@@ -7,13 +7,14 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { registerPortCommands } from '@hydranium/client-vscode/node';
 import {
    ALL_LANGUAGES,
    ORDER_FLOW_DATA_SERVER_PORT_COMMAND,
    ORDER_FLOW_GLSP_SERVER_PORT_COMMAND
 } from '@hydranium/example-order-flow-protocol';
 import type { ExtensionContext } from 'vscode';
-import { commands, workspace } from 'vscode';
+import { workspace } from 'vscode';
 import { LanguageClient, type LanguageClientOptions, type ServerOptions, TransportKind } from 'vscode-languageclient/node';
 
 /**
@@ -47,24 +48,10 @@ export const ORDER_FLOW_HOST_PORT_COMMANDS = {
    glsp: 'order-flow.port.glsp'
 } as const;
 
-/** LSP request id backing each host command in {@link ORDER_FLOW_HOST_PORT_COMMANDS}. */
-const PORT_REQUESTS: Record<keyof typeof ORDER_FLOW_HOST_PORT_COMMANDS, string> = {
-   dataServer: ORDER_FLOW_DATA_SERVER_PORT_COMMAND,
-   glsp: ORDER_FLOW_GLSP_SERVER_PORT_COMMAND
-};
-
 /**
  * Fork the language server, start the client, and expose both head ports as
  * host commands. Returns the started client so a caller can drive the other
  * heads off it.
- *
- * **The port commands are thin pass-throughs, and that is load-bearing.** They
- * hand back `sendRequest`'s promise and do nothing else — in particular they do
- * not `await` a notification. A VS Code message with no buttons resolves only
- * when the user dismisses it, so awaiting one here would make the command's
- * return value wait on a human; harmless in VS Code, where the diagram and the
- * form discover ports directly, and fatal in Theia, where the backend reaches
- * the port *through* this command and would hang forever with nothing logged.
  */
 export async function startOrderFlowLanguageClient(context: ExtensionContext): Promise<LanguageClient> {
    // Resolved through the package layout, so this works both in the F5 dev host
@@ -94,10 +81,10 @@ export async function startOrderFlowLanguageClient(context: ExtensionContext): P
    context.subscriptions.push(client);
    await client.start();
 
-   for (const [head, request] of Object.entries(PORT_REQUESTS)) {
-      const commandId = ORDER_FLOW_HOST_PORT_COMMANDS[head as keyof typeof ORDER_FLOW_HOST_PORT_COMMANDS];
-      context.subscriptions.push(commands.registerCommand(commandId, () => client.sendRequest<number>(request)));
-   }
+   registerPortCommands(context, client, {
+      [ORDER_FLOW_HOST_PORT_COMMANDS.dataServer]: ORDER_FLOW_DATA_SERVER_PORT_COMMAND,
+      [ORDER_FLOW_HOST_PORT_COMMANDS.glsp]: ORDER_FLOW_GLSP_SERVER_PORT_COMMAND
+   });
 
    return client;
 }

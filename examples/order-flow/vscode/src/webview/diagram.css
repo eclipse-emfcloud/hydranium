@@ -37,9 +37,9 @@ body {
    overflow: hidden;
 }
 
-.order-flow-diagram-container,
-.order-flow-diagram-container > .sprotty,
-.order-flow-diagram-container > .sprotty > svg {
+.hydranium-diagram-container,
+.hydranium-diagram-container > .sprotty,
+.hydranium-diagram-container > .sprotty > svg {
    height: 100%;
    width: 100%;
    display: block;

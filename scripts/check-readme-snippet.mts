@@ -69,6 +69,12 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
  * decide the module system — the temp file is `.mts`, so a CommonJS host hosts
  * an ESM snippet fine.
  *
+ * `resolution: 'bundler'` compiles the target as a webview or page bundle
+ * resolves it, rather than as Node ESM. Under `nodenext` a dual package such as
+ * `inversify` resolves to its ESM types in the snippet and to its CommonJS types
+ * inside a CommonJS dependency's declarations, so code a bundler accepts fails
+ * here on two `Container` types.
+ *
  * `rewrites` map an illustrative import path to where the real file lives
  * relative to the temp-file directory (one level below the host package). They
  * exist so a fence can show the path an adopter will write rather than the path
@@ -142,6 +148,11 @@ const SNIPPET_TARGETS = [
    // Hosted by the browser example for the same reason: it is the package that
    // depends on `@hydranium/client-browser`.
    { readme: 'packages/client-browser/README.md', host: 'examples/order-flow/browser' },
+   // Hosted by the VS Code example, the package that depends on all three and
+   // on the `vscode-*` libraries their fences name.
+   { readme: 'packages/client-vscode/README.md', host: 'examples/order-flow/vscode' },
+   { readme: 'packages/data-client-vscode/README.md', host: 'examples/order-flow/vscode' },
+   { readme: 'packages/glsp-client-vscode/README.md', host: 'examples/order-flow/vscode', resolution: 'bundler' },
    {
       readme: 'docs/concepts/document-layers.md',
       host: 'examples/order-flow/server',
@@ -217,6 +228,11 @@ const TSC_FLAGS = [
    'es2022',
    '--skipLibCheck'
 ];
+
+/** {@link TSC_FLAGS} for a target with `resolution: 'bundler'`. */
+const BUNDLER_TSC_FLAGS = TSC_FLAGS.map((flag, index) =>
+   TSC_FLAGS[index - 1] === '--module' ? 'preserve' : TSC_FLAGS[index - 1] === '--moduleResolution' ? 'bundler' : flag
+);
 
 const FENCE_PATTERN = /^```ts\n([\s\S]*?)^```$/gm;
 /** A preamble block, anchored to the end of the text preceding its fence. */
@@ -305,8 +321,8 @@ for (const file of swept) {
    }
 }
 
-/** Compilable snippets, keyed by the host package whose `tsc` run will hold them. */
-const byHost = new Map<string, Snippet[]>();
+/** Compilable snippets, keyed by the host package and resolution whose `tsc` run will hold them. */
+const byHost = new Map<string, { host: string; bundler: boolean; entries: Snippet[] }>();
 
 SNIPPET_TARGETS.forEach((target, targetIndex) => {
    const readmePath = resolve(repoRoot, target.readme);
@@ -341,8 +357,10 @@ SNIPPET_TARGETS.forEach((target, targetIndex) => {
       // The target's own preamble comes first, so a doc whose fences share a
       // set of imports declares them once instead of per fence.
       const preamble = [target.preamble ?? '', fence.preamble].filter(Boolean).join('\n');
-      const entries = byHost.get(target.host) ?? [];
-      entries.push({
+      const bundler = target.resolution === 'bundler';
+      const groupKey = `${target.host}${bundler ? ' (bundler)' : ''}`;
+      const group = byHost.get(groupKey) ?? { host: target.host, bundler, entries: [] };
+      group.entries.push({
          readme: target.readme,
          line: fence.line,
          preambleLineCount: preamble ? preamble.split('\n').length : 0,
@@ -352,11 +370,11 @@ SNIPPET_TARGETS.forEach((target, targetIndex) => {
          tempFileName: `snippet-${targetIndex}-line-${fence.line}.mts`,
          contents: preamble ? `${preamble}\n${code}` : code
       });
-      byHost.set(target.host, entries);
+      byHost.set(groupKey, group);
    }
 });
 
-for (const [host, entries] of byHost) {
+for (const { host, bundler, entries } of byHost.values()) {
    const tempDir = mkdtempSync(join(resolve(repoRoot, host), '.readme-snippet-'));
    try {
       const tempFiles = entries.map(entry => {
@@ -365,7 +383,9 @@ for (const [host, entries] of byHost) {
          return tempFile;
       });
 
-      const result = spawnSync(process.execPath, [tscBin, ...TSC_FLAGS, ...tempFiles], { encoding: 'utf8' });
+      const result = spawnSync(process.execPath, [tscBin, ...(bundler ? BUNDLER_TSC_FLAGS : TSC_FLAGS), ...tempFiles], {
+         encoding: 'utf8'
+      });
       checked += entries.length;
       if (result.status === 0) {
          for (const entry of entries) {

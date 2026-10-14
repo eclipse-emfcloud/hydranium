@@ -11,9 +11,8 @@
  * VS Code shell for the order-flow example.
  *
  * All three heads: the LSP head as a language client, the data head under the
- * properties panel, and the GLSP head under the `.process` diagram editor. The
- * adapter is hand-rolled: the framework ships Theia client packages and no
- * VS Code equivalents, so a VS Code host supplies this layer itself.
+ * properties panel, and the GLSP head under the `.process` diagram editor, each
+ * wired through the framework's VS Code client packages.
  *
  * Node extension host only. Both socket heads are reached with `net`, and the
  * language server is forked, so this cannot run in a web extension host.
@@ -21,8 +20,10 @@
 
 import { OrderFlowPropertiesPanel } from './properties-panel';
 import { ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE, OrderFlowProcessDiagramEditorProvider } from './process-diagram-editor';
-import { OrderFlowGlspVscodeServer } from './process-diagram-server';
 import { GlspVscodeConnector } from '@eclipse-glsp/vscode-integration';
+import { findPort } from '@hydranium/client-vscode/node';
+import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_SERVER_PORT_COMMAND } from '@hydranium/example-order-flow-protocol';
+import { HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';
 import { ConsoleLogger, describeError } from '@hydranium/protocol';
 // The MODULE, not a barrel: this package is a VS Code extension with no public
 // API surface of its own, so the servers extension is consumed by path.
@@ -30,7 +31,6 @@ import { startOrderFlowLanguageClient } from '@hydranium/example-order-flow-vsco
 import type { ExtensionContext } from 'vscode';
 import { commands, window } from 'vscode';
 import type { LanguageClient } from 'vscode-languageclient/node';
-import { ORDER_FLOW_PORT_COMMANDS, awaitPort } from './head-ports';
 
 let client: LanguageClient | undefined;
 
@@ -55,10 +55,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
    // host→webview notification for a hidden diagram tab. Passing a messenger here
    // without repeating the option would reintroduce exactly that, which is the
    // hazard the properties panel's own doc comment describes.
-   const glspServer = new OrderFlowGlspVscodeServer({
+   const glspServer = new HydraniumGlspVscodeServer({
       clientId: 'order-flow-glsp',
       clientName: 'Order Flow',
-      findPort: () => awaitPort(running, ORDER_FLOW_PORT_COMMANDS.glsp),
+      findPort: () => findPort(running, ORDER_FLOW_GLSP_SERVER_PORT_COMMAND),
       logger: new ConsoleLogger().with('GLSP head')
    });
    const glspConnector = new GlspVscodeConnector({ server: glspServer, logging: false });
@@ -96,11 +96,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
    );
 
    // The properties panel. It discovers the data-server port through the same
-   // `awaitPort` poll the diagram head uses — per connection generation, not
+   // `findPort` poll the diagram head uses — per connection generation, not
    // once, because a restarted language server binds a fresh ephemeral port.
    const properties = new OrderFlowPropertiesPanel({
       extensionUri: context.extensionUri,
-      findPort: () => awaitPort(running, ORDER_FLOW_PORT_COMMANDS.dataServer),
+      findPort: () => findPort(running, ORDER_FLOW_DATA_SERVER_PORT_COMMAND),
       // One messenger for both heads. The panel requires `ignoreHiddenViews: false`,
       // which is exactly what `GlspVscodeConnector` defaults to — the diagram's
       // requirement and the panel's are one requirement, and this is the line that

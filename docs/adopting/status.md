@@ -72,15 +72,13 @@ server's token types. The browser example's
 [`monaco-setup.ts`](../../examples/order-flow/browser/src/page/monaco-setup.ts)
 holds such rules; there `MonacoLspClient.createEditor` turns the setting on.
 
-### Client libraries cover Theia and a web page
+### Client libraries cover Theia, VS Code and a web page
 
-The `-theia` client packages target Theia. For a web page,
-`@hydranium/client-browser` covers the worker bootstrap, the LSP handshake, a
-Monaco editor's LSP client and the data head, and `@hydranium/glsp-client`
-the diagram and its mount. For VS Code, the diagram classes come from
-`@hydranium/glsp-client` and the rest of the client code is copied from the
-order-flow example. The protocol packages are host-neutral, so a client for
-another host is supported.
+The `-theia` client packages target Theia and the `-vscode` ones a VS Code
+extension. For a web page, `@hydranium/client-browser` covers the worker
+bootstrap, the LSP handshake, a Monaco editor's LSP client and the data head,
+and `@hydranium/glsp-client` the diagram and its mount. The protocol packages
+are host-neutral, so a client for another host is supported.
 
 ### Persistence is text files on disk
 

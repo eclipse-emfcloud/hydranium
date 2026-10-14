@@ -10,7 +10,7 @@
 import { NoopLogger, type PostMessageChannel } from '@hydranium/protocol';
 import { describe, expect, it } from 'vitest';
 import type { Message, MessageConnection } from 'vscode-jsonrpc';
-import { WebviewDataPort } from '../src/webview/properties-data-port';
+import { WebviewDataPort } from '../src/browser/webview-data-port';
 
 /** A pipe that counts the readers subscribed to it. */
 function countingChannel(): PostMessageChannel & { readonly readers: number } {
@@ -30,7 +30,7 @@ function countingChannel(): PostMessageChannel & { readonly readers: number } {
 describe('WebviewDataPort', () => {
    it('hands every generation the same connection until it is disposed', async () => {
       const channel = countingChannel();
-      const port = new WebviewDataPort(channel, () => undefined, new NoopLogger());
+      const port = new WebviewDataPort(channel, { logger: new NoopLogger() });
       try {
          const first = await port.connect();
 
@@ -51,7 +51,7 @@ describe('WebviewDataPort', () => {
 
    it('disposes its connection when the relay is lost, though no generation holds it', async () => {
       const channel = countingChannel();
-      const port = new WebviewDataPort(channel, () => undefined, new NoopLogger());
+      const port = new WebviewDataPort(channel, { logger: new NoopLogger() });
       try {
          const lost = await port.connect();
 
@@ -66,7 +66,7 @@ describe('WebviewDataPort', () => {
 
    it('hands a listener that connects as the relay is lost a fresh connection', async () => {
       const channel = countingChannel();
-      const port = new WebviewDataPort(channel, () => undefined, new NoopLogger());
+      const port = new WebviewDataPort(channel, { logger: new NoopLogger() });
       try {
          const lost = await port.connect();
          let reconnected: Promise<MessageConnection> | undefined;
@@ -83,7 +83,7 @@ describe('WebviewDataPort', () => {
 
    it('releases its connection and refuses to connect once disposed', async () => {
       const channel = countingChannel();
-      const port = new WebviewDataPort(channel, () => undefined, new NoopLogger());
+      const port = new WebviewDataPort(channel, { logger: new NoopLogger() });
       await port.connect();
 
       port.dispose();
@@ -92,5 +92,15 @@ describe('WebviewDataPort', () => {
       // The consumer reconnects when told of the dispose; a connection opened then is released by nothing.
       await expect(port.connect()).rejects.toThrow('disposed');
       expect(channel.readers).toBe(0);
+   });
+
+   it('reports an error through the host when one is given', () => {
+      const reported: unknown[] = [];
+      const port = new WebviewDataPort(countingChannel(), { reportError: error => reported.push(error) });
+      const error = new Error('lost');
+
+      port.reportError(error, { code: 'a/b', params: {}, text: 'Lost.' });
+
+      expect(reported).toEqual([error]);
    });
 });

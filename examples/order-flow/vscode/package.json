@@ -3,7 +3,7 @@
   "displayName": "Order Flow",
   "version": "0.0.0",
   "private": true,
-  "description": "Thin VS Code extension hosting the order-flow server. The diagram and property form are mounted from the host-agnostic client; this package is the VS Code adapter, which the example supplies itself because the framework ships Theia client packages and no VS Code equivalents.",
+  "description": "Thin VS Code extension hosting the order-flow server. The diagram and property form are mounted from the host-agnostic client over the framework's VS Code client packages; this package adds the diagram editor's bundle, the properties panel and the webview UI.",
   "categories": [
     "Programming Languages"
   ],
@@ -36,10 +36,13 @@
     "@eclipse-glsp/client": "2.7.0",
     "@eclipse-glsp/vscode-integration": "2.7.0",
     "@eclipse-glsp/vscode-integration-webview": "2.7.0",
+    "@hydranium/client-vscode": "^1.0.0-next",
+    "@hydranium/data-client-vscode": "^1.0.0-next",
     "@hydranium/example-order-flow-client": "0.0.0",
     "@hydranium/example-order-flow-protocol": "0.0.0",
     "@hydranium/example-order-flow-vscode-servers": "0.0.0",
     "@hydranium/glsp-client": "^1.0.0-next",
+    "@hydranium/glsp-client-vscode": "^1.0.0-next",
     "@hydranium/protocol": "^1.0.0-next",
     "inversify": "^6.1.3",
     "vscode-jsonrpc": "9.0.0",

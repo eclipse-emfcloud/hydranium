@@ -65,7 +65,12 @@ const readJson = (file: string): Manifest => JSON.parse(readFileSync(file, 'utf-
 const rootManifest = readJson(join(root, 'package.json'));
 
 /** Workspaces whose `src` runs inside a host that provides a devDependency-typed module at runtime. */
-const HOST_PROVIDED = new Set(['examples/order-flow/vscode', 'examples/order-flow/vscode-servers']);
+const HOST_PROVIDED = new Set([
+   'examples/order-flow/vscode',
+   'examples/order-flow/vscode-servers',
+   'packages/client-vscode',
+   'packages/glsp-client-vscode'
+]);
 const GENERATED = /\/(generated|generated-hydranium)\//;
 const SOURCE_EXTENSIONS = { src: /\.tsx?$/, test: /\.(tsx?|mts)$/ };
 

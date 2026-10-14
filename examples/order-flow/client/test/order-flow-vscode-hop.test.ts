@@ -12,24 +12,15 @@
  * composes it: real socket → relay → extension-side messenger channel ↔
  * webview-side messenger channel → transport → session → properties model.
  *
- * **This composition falls between the two suites either side of it, and that
- * gap is where the panel actually lives.** The relay suite runs a real
- * socket but hand-rolls its clone pipe, so the messenger channel is absent from
- * the path it proves. The messenger-channel suite uses the channel but has no
- * socket and no server, so the far end is a hand-written responder. Neither
- * therefore exercises what `connectDataHead` + `createWebviewSideChannel`
- * actually do together, which is the whole of the panel's plumbing.
+ * `data-client-vscode`'s own suites run the same relay and channels over a real
+ * socket, against an echo server. What this one adds is the real order-flow
+ * data server behind them, the properties model above them, and a reconnect.
  *
- * **The reconnect case is the one worth having, but not for the hazard it looks
- * like.** The webview messenger's ONE-HANDLER-PER-METHOD registry is real —
- * the port builds a fresh `PostMessageTransport` once the relay is lost, each
- * calls `channel.onMessage` again, and upstream's registry is a `Map`, so the
- * second connection's registration replaces the first's — and it is *benign*:
- * flipping the double to allow many handlers per method leaves every suite
- * green, because a superseded generation's reader is already inert via the
- * channel's per-subscription forwarding flag, so a surviving stale handler has
- * nothing to deliver to. A control that will not redden is itself the answer,
- * not a wording problem.
+ * Both messengers are the real classes, joined by `makeMessengerHarness`. The
+ * webview messenger keeps ONE handler per method, so a second generation's
+ * registration replaces the first's; that is benign, because a superseded
+ * generation's reader is already inert through the channel's per-subscription
+ * forwarding flag.
  *
  * What the reconnect test does establish is narrower and still uncovered
  * elsewhere: that dropping a generation and re-relaying really does build a
@@ -58,28 +49,21 @@ import {
    DataEvents,
    DataConnection,
    type DataSession,
-   type DataPort,
    type MessageRelay,
-   type PostMessageChannel,
-   type ResolvedMessage,
-   createPostMessageTransport,
-   relayToPostMessageChannel
+   type ResolvedMessage
 } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import { createOrderFlowServices } from '@hydranium/example-order-flow-server/lib/language-server/order-flow-module';
 import * as path from 'node:path';
-import { Emitter, type Event, type MessageConnection } from 'vscode-jsonrpc';
-import { createMessageConnection } from 'vscode-jsonrpc/node';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createExtensionSideChannel, createWebviewSideChannel } from '../src/data/order-flow-messenger-channel';
+import type { MessageConnection } from 'vscode-jsonrpc';
+import { HOST_EXTENSION } from 'vscode-messenger-common';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createWebviewSideChannel, DATA_TO_WEBVIEW } from '@hydranium/data-client-vscode';
+import { WebviewDataPort } from '@hydranium/data-client-vscode/browser';
+import { connectDataServer } from '@hydranium/data-client-vscode/node';
+import { makeMessengerHarness, type MessengerHarness, type MessengerHarnessWebview } from '@hydranium/data-client-vscode/testing';
 import { OrderFlowPropertiesModel } from '../src/data/order-flow-properties-model';
-import { FakeMessengerHub } from './testing/fake-messenger-hub';
-import {
-   type OrderFlowTransferRoot,
-   type SocketDataServer,
-   openSocketTransport,
-   startSocketDataServer
-} from './testing/socket-data-server';
+import { type OrderFlowTransferRoot, type SocketDataServer, startSocketDataServer } from './testing/socket-data-server';
 import type { ProcessModel } from '@hydranium/example-order-flow-protocol';
 import { thirdPartyWrite as writeAsThirdParty } from './testing/third-party-write.js';
 
@@ -94,76 +78,24 @@ function idOf(message: unknown): unknown {
    return typeof message === 'object' && message !== null ? (message as { id?: unknown }).id : undefined;
 }
 
-/** The three participants a shared VS Code hop has. */
-type Participant = 'host-extension' | 'webview' | 'other-webview';
-
-/**
- * The webview's port, over the messenger hop rather than a bare pipe.
- *
- * This is `order-flow-vscode`'s `WebviewDataPort` reproduced at the tier that
- * can be tested headlessly — the same moves (transport over the channel, a
- * listening connection, `onDispose` on the host's word) against the same channel
- * factory. It cannot be imported: that class lives in the VS Code example and
- * pulls `vscode-jsonrpc/browser`, whose RAL is the wrong one for a Node test.
- */
-class MessengerHopPort implements DataPort {
-   readonly clientId = 'order-flow-properties-webview';
+/** The webview's port, counting the connections it builds so a reconnect is observable. */
+class CountingWebviewDataPort extends WebviewDataPort {
    readonly errors: Array<{ error: unknown; message: ResolvedMessage }> = [];
-   /** One entry per connection built, so a reconnect is observable. */
-   readonly generations: MessageConnection[] = [];
+   readonly generations = new Set<MessageConnection>();
 
-   protected readonly disposeEmitter = new Emitter<void>();
-   readonly onDispose: Event<void> = this.disposeEmitter.event;
-   protected disposed = false;
-   protected connection?: MessageConnection;
-
-   constructor(protected readonly channel: PostMessageChannel) {}
-
-   async connect(): Promise<MessageConnection> {
-      if (this.disposed) {
-         throw new Error('MessengerHopPort: the port is disposed');
-      }
-      if (!this.connection) {
-         const transport = createPostMessageTransport(this.channel);
-         const connection = createMessageConnection(transport.reader, transport.writer);
-         connection.onDispose(() => {
-            transport.dispose();
-            if (this.connection === connection) {
-               this.connection = undefined;
-            }
-         });
-         connection.listen();
-         this.connection = connection;
-         this.generations.push(connection);
-      }
-      return this.connection;
-   }
-
-   reportError(error: unknown, message: ResolvedMessage): void {
-      this.errors.push({ error, message });
-   }
-
-   /** What the panel's `connectionLost` notification triggers. */
-   connectionLost(): void {
-      const lost = this.connection;
-      this.connection = undefined;
-      this.disposeEmitter.fire();
-      lost?.dispose();
-   }
-
-   dispose(): void {
-      this.disposed = true;
-      this.disposeEmitter.fire();
-      this.disposeEmitter.dispose();
-      this.connection?.dispose();
+   override async connect(): Promise<MessageConnection> {
+      const connection = await super.connect();
+      this.generations.add(connection);
+      return connection;
    }
 }
 
 let workspace: ScratchWorkspace | undefined;
 let dataServer: SocketDataServer | undefined;
-let hub: FakeMessengerHub<Participant> | undefined;
+let harness: MessengerHarness | undefined;
+let webview: MessengerHarnessWebview | undefined;
 let relay: MessageRelay | undefined;
-let port: MessengerHopPort | undefined;
+let port: CountingWebviewDataPort | undefined;
 let events: DataEvents<OrderFlowTransferRoot> | undefined;
 let connection: DataConnection<OrderFlowTransferRoot> | undefined;
 let session: DataSession<OrderFlowTransferRoot> | undefined;
@@ -176,25 +108,29 @@ function uriOf(relativePath: string): string {
    return workspace.uri(relativePath);
 }
 
-/**
- * Stand up both halves of the hop, as `OrderFlowPropertiesPanel.create` does.
- *
- * `webview` names which participant the extension addresses, so the isolation
- * test can point the panel at one webview while another one talks.
- */
-function mountHop(webview: Participant = 'webview'): void {
-   const messengerHub = new FakeMessengerHub<Participant>();
-   hub = messengerHub;
+/** The extension host's end, as the panel wires it. */
+function relayHop(): MessageRelay {
+   return connectDataServer({
+      messenger: harness!.extension,
+      webview: webview!.participant,
+      findPort: async () => dataServer!.port,
+      reportError: (error, reported) => port?.reportError(error, reported)
+   });
+}
+
+/** Stand up both halves of the hop, as `OrderFlowPropertiesPanel.create` does. */
+function mountHop(): void {
+   harness = makeMessengerHarness();
+   webview = harness.openWebview();
 
    // Extension host: the socket, relayed onto the messenger.
-   relay = relayToPostMessageChannel(
-      createExtensionSideChannel(messengerHub.asExtension('host-extension'), webview),
-      () => openSocketTransport(dataServer!.port),
-      { reportError: (error, reported) => port?.reportError(error, reported) }
-   );
+   relay = relayHop();
 
    // Webview: the mirror channel, and the whole host-invariant stack above it.
-   port = new MessengerHopPort(createWebviewSideChannel(messengerHub.asWebview('webview'), 'host-extension'));
+   const webviewPort = new CountingWebviewDataPort(createWebviewSideChannel(webview.messenger, HOST_EXTENSION), {
+      reportError: (error, message) => webviewPort.errors.push({ error, message })
+   });
+   port = webviewPort;
    events = new DataEvents<OrderFlowTransferRoot>();
    connection = new DataConnection<OrderFlowTransferRoot>(port, events);
    const dataSession = connection.createSession('order-flow-hop-test');
@@ -227,7 +163,9 @@ describe('order-flow properties panel data path through a socket, a relay and a 
       relay = undefined;
       port?.dispose();
       port = undefined;
-      hub = undefined;
+      webview = undefined;
+      harness?.dispose();
+      harness = undefined;
       await dataServer?.dispose();
       dataServer = undefined;
       workspace?.dispose();
@@ -236,6 +174,8 @@ describe('order-flow properties panel data path through a socket, a relay and a 
 
    it('opens a document and writes a field across the whole hop', async () => {
       mountHop();
+      const toWebview = vi.spyOn(harness!.extension, 'sendNotification');
+      const toExtension = vi.spyOn(webview!.messenger, 'sendNotification');
       const uri = uriOf(FULFILLMENT_PROCESS);
 
       await model!.open(uri);
@@ -258,8 +198,8 @@ describe('order-flow properties panel data path through a socket, a relay and a 
       // (`vscode-messenger` addresses by receiver, so a shared method name still
       // delivers correctly). With a real round trip in the path the direction
       // ENCODING becomes observable, which it is not at that tier.
-      const methods = new Set(hub!.delivered.map(delivery => delivery.method));
-      expect(methods).toEqual(new Set(['orderFlow/data/toExtension', 'orderFlow/data/toWebview']));
+      const methods = new Set([...toWebview.mock.calls, ...toExtension.mock.calls].map(([type]) => type.method));
+      expect(methods).toEqual(new Set(['hydranium/data/toExtension', 'hydranium/data/toWebview']));
    });
 
    it('follows a third-party write pushed back through the hop', async () => {
@@ -294,16 +234,14 @@ describe('order-flow properties panel data path through a socket, a relay and a 
       port!.connectionLost();
 
       // The extension side has to be re-relayed too — a restarted server binds a
-      // fresh port, which is why `connectDataHead` re-resolves it per generation.
+      // fresh port, which is why `connectDataServer` re-resolves it per generation.
       relay!.dispose();
-      relay = relayToPostMessageChannel(createExtensionSideChannel(hub!.asExtension('host-extension'), 'webview'), () =>
-         openSocketTransport(dataServer!.port)
-      );
+      relay = relayHop();
 
       // A fresh request builds generation two and must be answered.
       await model!.open(uri);
       expect(model!.fields.find(field => field.name === 'name')?.value).toBe('Fulfillment');
-      expect(port!.generations).toHaveLength(2);
+      expect(port!.generations.size).toBe(2);
       expect(await model!.setField('name', 'AfterReconnect')).toEqual({ status: 'applied' });
    });
 
@@ -315,12 +253,13 @@ describe('order-flow properties panel data path through a socket, a relay and a 
       // REAL server and it answered".
       mountHop();
       await model!.open(uriOf(FULFILLMENT_PROCESS));
+      const toWebview = vi.spyOn(harness!.extension, 'sendNotification');
 
-      const intruder = createWebviewSideChannel(hub!.asWebview('other-webview'), 'host-extension');
+      const intruder = createWebviewSideChannel(harness!.openWebview().messenger, HOST_EXTENSION);
       intruder.post({ jsonrpc: '2.0', id: INTRUDER_ID, method: `${DATA_SERVER_WIRE_PREFIX}getProjects`, params: {} } as never);
 
-      // **A BOUNDED WAIT, NOT A SYNCHRONOUS PEEK.** Reading `hub.delivered` on
-      // the line after `post` shows nothing: a forwarded message still has a
+      // **A BOUNDED WAIT, NOT A SYNCHRONOUS PEEK.** Reading the sends on the
+      // line after `post` shows nothing: a forwarded message still has a
       // whole socket round trip ahead of it, so that version passes with the
       // sender filter deliberately removed. The observable is an ABSENCE, so it
       // can only be established by waiting longer than the thing would have
@@ -330,8 +269,8 @@ describe('order-flow properties panel data path through a socket, a relay and a 
       // Matched by id, not by direction alone: the model's own traffic produces
       // `toWebview` deliveries throughout, so "no toWebview since" would be
       // satisfied by an unrelated quiet moment.
-      const answered = hub!.delivered.filter(
-         delivery => delivery.method === 'orderFlow/data/toWebview' && idOf(delivery.message) === INTRUDER_ID
+      const answered = toWebview.mock.calls.filter(
+         ([type, , params]) => type.method === DATA_TO_WEBVIEW.method && idOf(params) === INTRUDER_ID
       );
       expect(answered).toEqual([]);
       // The panel's own connection is untouched by the intrusion.
