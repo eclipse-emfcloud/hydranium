@@ -25,6 +25,7 @@ import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type HydraniumTextDocuments } from '../../documents/hydranium-text-documents.js';
 import { Registry } from '../../util/registry.js';
 import { type ServerLanguageServices } from '../language-module.js';
+import { type ServerSharedServices } from '../module.js';
 import { isVirtualUri } from '../workspace/virtual-document.js';
 import { type IntegrityRuleRegistry } from './integrity-contribution.js';
 import { IntegrityPhase, type IntegrityRule, type IntegritySyncMode } from './integrity-rule.js';
@@ -97,6 +98,14 @@ export namespace IntegrityService {
     */
    export const SettledState: DocumentState = DocumentState.IndexedReferences;
 }
+
+/**
+ * The shared services of each server that has logged its first silent
+ * write-back. Every language of a server holds the same shared services, so
+ * keying on them makes {@link DefaultIntegrityService.noteSilentWrite} report once
+ * per server rather than once per language.
+ */
+const silentWriteReported = new WeakSet<ServerSharedServices>();
 
 /**
  * Construction options for {@link DefaultIntegrityService}. All fields
@@ -527,6 +536,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          await this.services.shared.workspace.FileSystemTaskQueue.enqueue(document.uri, () =>
             this.fileSystemProvider.writeFile(UriUtils.toUri(document.uri), repaired)
          );
+         this.noteSilentWrite(document.uri);
          return;
       }
 
@@ -578,7 +588,33 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          }
          await this.fileSystemProvider.writeFile(uri, repaired);
          this.textDocuments.setDiskBaseline(document.uri, repaired);
+         this.noteSilentWrite(document.uri);
       });
+   }
+
+   /**
+    * Hand the first repair written to disk in `'silent'` sync mode to
+    * {@link reportSilentWrite}. Once per server, whichever language writes,
+    * rather than per file: a workspace-wide repair pass would otherwise log a
+    * line per document.
+    */
+   protected noteSilentWrite(uri: string): void {
+      if (silentWriteReported.has(this.services.shared)) {
+         return;
+      }
+      silentWriteReported.add(this.services.shared);
+      this.reportSilentWrite(uri);
+   }
+
+   /**
+    * Log a server's first silent write-back, so an adopter learns that
+    * integrity rules edit their files and which setting controls it.
+    */
+   protected reportSilentWrite(uri: string): void {
+      this.tracer.info(
+         `Wrote an integrity repair to ${uri}. The integrity service's syncMode option is 'silent', ` +
+            "which writes repairs to disk; 'editor' leaves disk alone. Later repairs are written without this line."
+      );
    }
 
    /**

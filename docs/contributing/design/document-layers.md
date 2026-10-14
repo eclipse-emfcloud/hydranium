@@ -86,6 +86,10 @@ depends on who holds the URI:
   disk while the AST carries the repair until a first open consumes the
   stage. `IntegrityService.SettledState` guarantees the AST, not the text.
 
+A server's first `'silent'` write, from either route and whichever language
+makes it, is logged at `info` with the file and the `syncMode` option, so an
+adopter learns that rules edit their sources; later writes add no line.
+
 ### Transitions that change the owner
 
 - **First `didOpen`** creates the shared entry from staged content, if any,
