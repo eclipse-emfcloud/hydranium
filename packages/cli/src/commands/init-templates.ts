@@ -29,6 +29,8 @@
  *   Drives the PER-LANGUAGE generated symbols (`<grammar>GeneratedModule`,
  *   `<grammar>LanguageMetaData`).
  * - `__GRAMMAR_ID__` — kebab grammar id: the `.langium` filename.
+ * - `__GRAMMAR_ID_CONST__` — SCREAMING_SNAKE grammar id, prefixing the
+ *   diagram's type-id constants.
  * - `__LANGUAGE_ID__` — kebab routing key: the `langium-config` entry id and
  *   its TextMate output.
  * - `__EXTENSION__` — the grammar's FIRST file extension, without the dot.
@@ -49,10 +51,12 @@
  * generator emits `interface <projectName>Element` as the base type every rule
  * extends, which a rule of that name would collide with.
  *
- * Kept as in-source strings (not on-disk assets) so no build-time copy step
- * is needed and the substitution is unit-testable. The `.ts` / `.langium` / JSON
- * templates are derived from the in-repo reference example so the generated project
- * compiles against the real `@hydranium/*` API once `langium generate` has run.
+ * A file that is fixed text with tokens lives in the `templates/` tree the
+ * package ships beside `lib`, at the path it is emitted at, tokens included
+ * (the ignore file without its dot); one computed from the composition is
+ * built here. The tree is read synchronously, so `runInit` stays synchronous,
+ * and it is neither formatted with the repo's settings nor given a license
+ * header, since either would change what `init` emits.
  *
  * Two conventions the templates follow deliberately:
  *
@@ -72,6 +76,7 @@
  *   over; the adopter's own formatter settles it.
  */
 
+import { readFileSync } from 'node:fs';
 import { readCliVersion } from '../cli-version.js';
 import type { InitComposition, InitFile, InitGrammarNames, InitHead } from './init.js';
 import type { JsonValue } from './init-workspace.js';
@@ -130,6 +135,7 @@ function project(text: string, composition: InitComposition): string {
  */
 function grammarTier(text: string, grammar: InitGrammarNames): string {
    return text
+      .replace(/__GRAMMAR_ID_CONST__/g, screamingSnake(grammar.grammarId))
       .replace(/__GRAMMAR_ID__/g, grammar.grammarId)
       .replace(/__GRAMMAR__/g, grammar.grammar)
       .replace(/__LANGUAGE_ID__/g, grammar.languageId)
@@ -141,6 +147,24 @@ function grammarTier(text: string, grammar: InitGrammarNames): string {
 /** Render both tiers for a single-grammar file. */
 function render(text: string, composition: InitComposition, grammar: InitGrammarNames): string {
    return grammarTier(project(text, composition), grammar);
+}
+
+/** The template tree, the same two levels up from `src/commands` and `lib/commands`. */
+const TEMPLATES = new URL('../../templates/', import.meta.url);
+
+/** One template file's text. */
+function template(path: string): string {
+   return readFileSync(new URL(path, TEMPLATES), 'utf-8');
+}
+
+/** A `server/` template emitted once per project, rendered with the project tokens. */
+function projectTemplate(path: string, composition: InitComposition): InitFile {
+   return { path, content: project(template(`server/${path}`), composition) };
+}
+
+/** A `server/` template emitted once per grammar, its path rendered like its content. */
+function grammarTemplate(path: string, composition: InitComposition, grammar: InitGrammarNames): InitFile {
+   return { path: render(path, composition, grammar), content: render(template(`server/${path}`), composition, grammar) };
 }
 
 /** A comma-separated list of single-quoted TypeScript/JS string literals. */
@@ -540,90 +564,17 @@ function tsconfigJson(composition: InitComposition): string {
    return `{\n${extendsLine}  "compilerOptions": {\n${body}\n  },\n  "include": ["src", "src/**/*.json"]\n}\n`;
 }
 
-// `isolatedModules` is what makes this check agree with the transform that
-// actually runs the tests. `npm test` is `typecheck:test && vitest run`, and
-// vitest compiles each file on its own — a transform with no type
-// information, which cannot tell a re-exported TYPE from a re-exported value.
-// Without the flag `tsc` accepts `export { SomeType } from './x'` that the
-// transform then emits as a real import of a symbol that does not exist at
-// runtime, so the typecheck passes and the suite fails with a confusing
-// missing-export.
-const TSCONFIG_TEST = `{
-  "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "rootDir": ".",
-    "noEmit": true,
-    "isolatedModules": true,
-    "types": ["node"]
-  },
-  "include": ["src", "test", "src/**/*.json"]
-}
-`;
-
-// Found by name, unlike `tsconfig.test.json`. Under vite 8, vitest's transform
-// applies a tsconfig only to the files its own `include` lists, so without this
-// a test declaring a decorated class fails to load.
-const TEST_DIR_TSCONFIG = `{
-  "extends": "../tsconfig.test.json",
-  "include": ["../src", ".", "../src/**/*.json"]
-}
-`;
-
-const VITEST_CONFIG = `import { defineConfig } from 'vitest/config';
-
-// Vitest transforms TypeScript itself and resolves \`.js\` specifiers to their
-// \`.ts\` source, so tests import from \`../src/\` with the same specifiers the
-// compiled output uses. \`include\` is scoped to \`test/\` so \`lib/\` is never
-// scanned; \`npm test\` runs \`typecheck:test\` first, because vitest's
-// transform strips types without checking them.
-
-export default defineConfig({
-   test: {
-      environment: 'node',
-      include: ['test/**/*.{test,spec}.ts']
-   }
-});
-`;
-
 /**
- * The `.gitignore`, written for a workspace member too: its root may not ignore
- * `lib/` (a `yo langium` root ignores `out/`), and a rule the root repeats
- * costs nothing.
+ * The terminals every grammar needs: the shared fragment's text after its
+ * leading comment run, so a lone grammar declares the same set.
  */
-const GITIGNORE = `node_modules/
-lib/
-*.tsbuildinfo
-
-# Langium-generated TextMate grammar (rewritten by every \`langium generate\`).
-syntaxes/
-`;
-
-/** The terminals every grammar needs, shared verbatim by the fragment and the lone-grammar case. */
-const TERMINALS = `hidden terminal WS: /\\s+/;
-terminal ID: /[_a-zA-Z][\\w_]*/;
-hidden terminal SL_COMMENT: /\\/\\/[^\\n\\r]*/;
-hidden terminal ML_COMMENT: /\\/\\*[\\s\\S]*?\\*\\//;
-`;
-
-/**
- * The shared lexical fragment, emitted only for a multi-grammar project.
- *
- * The alternative — every grammar declaring its own `WS` / `ID` — lets the token
- * sets drift apart.
- */
-const COMMON_GRAMMAR = `// Shared lexical basis for this project's grammars. Imported, never registered:
-// it has no entry rule and no \`langium-config.json\` entry, so it is a fragment
-// rather than a language.
-//
-// Keeping the tokens here rather than in one of the languages means a grammar
-// imports \`common\` for its TOKENS and another language only when it needs that
-// language's TYPES — separate reasons that are worth keeping separate.
-
-${TERMINALS}`;
+function terminals(): string {
+   return template('server/src/grammar/common.langium').replace(/^(\/\/.*\n)*\n/, '');
+}
 
 /** One starter grammar. `shared` decides whether it imports the fragment or declares its own terminals. */
 function grammarFile(shared: boolean): string {
-   const lexis = shared ? "import './common'\n" : `\n${TERMINALS}`;
+   const lexis = shared ? "import './common'\n" : `\n${terminals()}`;
    return `grammar __GRAMMAR__
 ${shared ? '\n' + lexis : ''}
 // A minimal starter grammar — replace with your own language. \`__NODE_RULE__\` is
@@ -811,108 +762,6 @@ ${returnType}
 `;
    return project(text, composition);
 }
-
-const SERVICES = `// Zero-arg service factory for the headless \`hydranium-cli\` tooling: the
-// \`reflect\` / \`lint-grammar\` / \`validate\` subcommands import this via
-// \`--services ./lib/services.js\`. The head wires its own filesystem here.
-//
-// The contract is language-count-agnostic — a second grammar needs no edit here.
-
-import { NodeFileSystem } from '@hydranium/core/node';
-import { create__NAME__Services } from './language-server/__PROJECT_ID__-module.js';
-
-export function createServices(): ReturnType<typeof create__NAME__Services> {
-   return create__NAME__Services({ ...NodeFileSystem });
-}
-`;
-
-const AST = `// The language's AST entry point: a re-export of what \`langium generate\`
-// emits, plus anywhere you augment those types.
-//
-// Import the AST from HERE rather than from \`./generated/ast.js\`, so any
-// augmentation below travels with every import. One \`langium-cli\` run over N
-// grammars emits ONE combined AST module sharing one reflection, so a further
-// grammar needs no change here.
-//
-// \`generate:transfer-model\` reads this file as its \`--augmentation-file\`: the
-// generated wire types are derived from the AST *as augmented*, not from the
-// raw generated module. Augment a type here and the transfer model follows.
-//
-// A \`@derived\` property is computed at build time rather than parsed, so it is
-// declared here and populated by an AST-extension contribution:
-//
-// declare module './generated/ast.js' {
-//    interface __ENTRY_RULE__ {
-//       /** @derived Populated by an \`ast.extensions.computedProperties\` contribution. */
-//       readonly _summary?: string;
-//    }
-// }
-
-export * from './generated/ast.js';
-`;
-
-/**
- * The starter serializer — the concrete-syntax emitter for ONE grammar.
- *
- * Emitted per grammar, not per project, because `services.serializer.Serializer`
- * is a per-language slot and a serializer is grammar-shaped by definition. That
- * is also why the framework refuses to default it: its `UnboundSerializer`
- * throws, naming the binding to add, rather than guessing a syntax.
- */
-const SERIALIZER = `// Concrete-syntax emitter for __GRAMMAR__ — the parser's inverse, turning a
-// model back into text this grammar accepts. Derived from the starter grammar
-// exactly as \`generated/ast.ts\` is, so replacing the grammar replaces this too.
-//
-// Without it every structured write fails: the framework's default binding at
-// \`services.serializer.Serializer\` THROWS, because a concrete syntax is
-// language knowledge no framework can derive. A client session's \`update\` /
-// \`save\`, the data head's \`saveModelDocument\` and a GLSP \`SaveModelAction\`
-// all reach it.
-//
-// \`AbstractSerializer\`'s generic property walk lays out FORMAT-structured
-// output — its YAML and JSON subclasses are what it exists for — and cannot
-// produce a keyword-delimited syntax like \`node a -> b\`. So \`serializeNode\` is
-// a per-\`$type\` emitter here and the two array hooks are unreachable.
-
-import { AbstractSerializer } from '@hydranium/core';
-import type { AstNode } from '@hydranium/langium';
-import { type __ENTRY_RULE__, type __NODE_RULE__, is__ENTRY_RULE__, is__NODE_RULE__ } from './ast.js';
-
-export class __GRAMMAR__Serializer extends AbstractSerializer<__ENTRY_RULE__> {
-   protected override serializeNode(node: AstNode | Record<string, unknown>): string {
-      if (is__ENTRY_RULE__(node)) {
-         return node.nodes.map(child => this.emitNode(child)).join('\\n');
-      }
-      if (is__NODE_RULE__(node)) {
-         return this.emitNode(node);
-      }
-      // Defensive: a rule added to the grammar with no emitter added here.
-      throw new Error(\`__GRAMMAR__Serializer: no emitter for $type \${(node as AstNode).$type}\`);
-   }
-
-   /** Unreachable — this grammar's one list is emitted by its \`__ENTRY_RULE__\` parent. */
-   protected override serializeArray(): string {
-      throw new Error('__GRAMMAR__Serializer: arrays are emitted by the per-$type parent, not the generic dispatch.');
-   }
-
-   /** Unreachable — same reasoning as {@link serializeArray}. */
-   protected override serializeReferenceArray(): string {
-      throw new Error('__GRAMMAR__Serializer: reference arrays are emitted by the per-$type parent, not the generic dispatch.');
-   }
-
-   /**
-    * \`serializeReferenceText\` rather than \`node.target?.$refText\`: it is the one
-    * read that spans BOTH input shapes. A transfer model reaching
-    * \`serializeTransfer\` carries \`target\` as a plain string rather than a
-    * \`Reference\`, and a serializer that reaches for \`$refText\` directly emits
-    * the AST correctly and drops every reference on the transfer path.
-    */
-   private emitNode(node: __NODE_RULE__): string {
-      const target = this.serializeReferenceText(node.target);
-      return target === undefined ? \`node \${node.name}\` : \`node \${node.name} -> \${target}\`;
-   }
-}
-`;
 
 /**
  * The exported constant names for the head set, in emission order. Both are
@@ -1664,160 +1513,11 @@ function readme(composition: InitComposition): string {
  */
 function glspFiles(composition: InitComposition, grammar: InitGrammarNames): InitFile[] {
    const columns = columnsFor(composition);
-   const upper = screamingSnake(grammar.grammarId);
-   const dir = `src/glsp/${grammar.grammarId}`;
-   const render = (text: string): string => grammarTier(project(text, composition), grammar);
-
-   const types = `// GLSP diagram-type and element-type ids for the __GRAMMAR__ diagram.
-//
-// **Authoritative half of a client/server contract.** Every id here has to be
-// registered on the client too: sprotty's registries are exact-key maps with no
-// prefix fallback, so an id the client does not know yields an element with none
-// of a node's features, rendered by \`MissingView\` with only a
-// \`no registered view for type '…'\` console warning. Nothing fails server-side.
-//
-// The ids stay namespaced under the GLSP defaults (\`node:\` / \`edge:\`) so a
-// reader can tell a node id from an edge id at a glance.
-
-import { DefaultTypes } from '@eclipse-glsp/server';
-
-/**
- * The GLSP diagram type — the string GLSP routes every per-diagram-type request
- * by. Mirrored by the client; a mismatch silently DROPS the request rather than
- * reporting an unknown diagram type. Same value as the language id, so the two
- * cannot drift apart as a diagram gains element types.
- */
-export const ${upper}_DIAGRAM_TYPE = '__LANGUAGE_ID__';
-
-/** A \`__NODE_RULE__\` — the starter grammar's one named, referenceable node. */
-export const ${upper}_NODE_TYPE = \`\${DefaultTypes.NODE}:__GRAMMAR_ID__-node\`;
-
-/** A resolved \`target\` reference, drawn as a connection between two nodes. */
-export const ${upper}_EDGE_TYPE = \`\${DefaultTypes.EDGE}:__GRAMMAR_ID__-target\`;
-`;
-
-   const state = `// GLSP state for the __GRAMMAR__ diagram.
-//
-// \`FullTextHydraniumGlspState\` is the simplest of the framework source-model
-// strategies (the others project a structured transfer model, over one document
-// or several): the source model is the whole document text, serialised through
-// the per-URI \`Serializer\` and round-tripped by re-parsing. Both seams resolve
-// through shared services, so narrowing the root type is all an adopter adds.
-//
-// It cannot field-merge — every concurrent edit on a whole-document model is a
-// same-document collision, so undo / redo degrade to drop-on-divergence. Move to
-// \`ReconcilingTransferHydraniumGlspState\` when you need field-level undo.
-
-import { FullTextHydraniumGlspState } from '@hydranium/glsp-server';
-import { injectable } from 'inversify';
-import type { __ENTRY_RULE__ } from '../../language-server/ast.js';
-
-@injectable()
-export class __GRAMMAR__GlspState extends FullTextHydraniumGlspState<__ENTRY_RULE__> {}
-`;
-
-   const storage = `// Source-model storage for the __GRAMMAR__ diagram, inheriting both framework
-// defaults: \`loadSourceModel\` (open + settle + \`setSourceRoot\`) and
-// \`saveSourceModel\` (flush the store's text for the primary and every tracked
-// secondary through the diagram's client session).
-//
-// No serializer runs on the save path — a save persists what the diagram's
-// operations already wrote to the store.
-//
-// The subclass exists so a bespoke load or save has a stable place to land.
-
-import { type FullTextSourceModel, HydraniumGlspStorage } from '@hydranium/glsp-server';
-import { injectable } from 'inversify';
-import type { __ENTRY_RULE__ } from '../../language-server/ast.js';
-
-@injectable()
-export class __GRAMMAR__GlspStorage extends HydraniumGlspStorage<__ENTRY_RULE__, FullTextSourceModel> {}
-`;
-
-   const submission = `// Submission handler for the __GRAMMAR__ diagram.
-//
-// Inherits the framework's \`readyEvent = IntegrityService.SettledState\`, which
-// is load-bearing rather than incidental: the GModel factory resolves
-// \`target.ref\`, so it needs a fully-linked AST. Without the gate those reads
-// fire mid-build and warn about resolution before scopes are computed.
-//
-// Only \`formatSourceRoot\` is overridden, so the submit log names the model and
-// its node count instead of a bare \`$type\`.
-
-import { ModelState } from '@eclipse-glsp/server';
-import { type FullTextSourceModel, HydraniumGlspSubmissionHandler } from '@hydranium/glsp-server';
-import { inject, injectable } from 'inversify';
-import type { __ENTRY_RULE__ } from '../../language-server/ast.js';
-import type { __GRAMMAR__GlspState } from './state.js';
-
-@injectable()
-export class __GRAMMAR__SubmissionHandler extends HydraniumGlspSubmissionHandler<__ENTRY_RULE__, FullTextSourceModel> {
-   @inject(ModelState) declare protected modelState: __GRAMMAR__GlspState;
-
-   protected override formatSourceRoot(root: __ENTRY_RULE__ | undefined): string {
-      return root ? \`__ENTRY_RULE__ nodes=\${root.nodes.length}\` : 'none';
-   }
-}
-`;
-
-   const factory = `// AST → GModel for the __GRAMMAR__ diagram: one node per \`__NODE_RULE__\`, one
-// edge per resolved \`target\` reference.
-//
-// Ids come from the index rather than being composed here, so the id strategy
-// stays in one place. Nodes are emitted before edges, because a GLSP edge
-// pointing at an id that does not exist fails client-side with a far less
-// obvious error than a missing edge. An unresolved reference is SKIPPED rather
-// than treated as an error: a dangling reference is ordinary editing state, and
-// the LSP head already reports it as a diagnostic.
-
-import { DefaultTypes, GEdge, GGraph, GLabel, type GModelFactory, GNode, ModelState } from '@eclipse-glsp/server';
-import { inject, injectable } from 'inversify';
-import type { __ENTRY_RULE__ } from '../../language-server/ast.js';
-import { ${upper}_EDGE_TYPE, ${upper}_NODE_TYPE } from './types.js';
-import type { __GRAMMAR__GlspState } from './state.js';
-
-@injectable()
-export class __GRAMMAR__GModelFactory implements GModelFactory {
-   @inject(ModelState) protected readonly modelState!: __GRAMMAR__GlspState;
-
-   createModel(): void {
-      const root = this.modelState.sourceRoot;
-      const graph = GGraph.builder().id(this.modelState.sourceUri).build();
-      if (root) {
-         this.buildGraph(root, graph);
-      }
-      this.modelState.updateRoot(graph);
-   }
-
-   protected buildGraph(root: __ENTRY_RULE__, graph: GGraph): void {
-      for (const node of root.nodes) {
-         const id = this.modelState.index.createId(node);
-         graph.children.push(
-            GNode.builder()
-               .id(id)
-               .type(${upper}_NODE_TYPE)
-               .add(GLabel.builder().id(\`\${id}_name\`).text(node.name).type(DefaultTypes.LABEL).build())
-               .build()
-         );
-      }
-      for (const node of root.nodes) {
-         const target = node.target?.ref;
-         if (!target) {
-            continue;
-         }
-         const sourceId = this.modelState.index.createId(node);
-         graph.children.push(
-            GEdge.builder()
-               .id(\`\${sourceId}_target\`)
-               .type(${upper}_EDGE_TYPE)
-               .sourceId(sourceId)
-               .targetId(this.modelState.index.createId(target))
-               .build()
-         );
-      }
-   }
-}
-`;
+   const fixed = (file: string): InitFile => grammarTemplate(`src/glsp/__GRAMMAR_ID__/${file}`, composition, grammar);
+   const computed = (file: string, text: string): InitFile => ({
+      path: `src/glsp/${grammar.grammarId}/${file}`,
+      content: render(text, composition, grammar)
+   });
 
    const configuration = `// Diagram configuration for the __GRAMMAR__ diagram.
 //
@@ -1842,7 +1542,7 @@ ${importList(
    columns
 )}
 import { injectable } from 'inversify';
-import { ${upper}_EDGE_TYPE, ${upper}_NODE_TYPE } from './types.js';
+import { __GRAMMAR_ID_CONST___EDGE_TYPE, __GRAMMAR_ID_CONST___NODE_TYPE } from './types.js';
 
 @injectable()
 export class __GRAMMAR__DiagramConfiguration implements DiagramConfiguration {
@@ -1854,7 +1554,7 @@ export class __GRAMMAR__DiagramConfiguration implements DiagramConfiguration {
 
    readonly shapeTypeHints: ShapeTypeHint[] = [
       {
-         elementTypeId: ${upper}_NODE_TYPE,
+         elementTypeId: __GRAMMAR_ID_CONST___NODE_TYPE,
          deletable: false,
          reparentable: false,
          repositionable: false,
@@ -1864,77 +1564,14 @@ export class __GRAMMAR__DiagramConfiguration implements DiagramConfiguration {
 
    readonly edgeTypeHints: EdgeTypeHint[] = [
       {
-         elementTypeId: ${upper}_EDGE_TYPE,
+         elementTypeId: __GRAMMAR_ID_CONST___EDGE_TYPE,
          deletable: false,
          repositionable: false,
          routable: false,
-         sourceElementTypeIds: [${upper}_NODE_TYPE],
-         targetElementTypeIds: [${upper}_NODE_TYPE]
+         sourceElementTypeIds: [__GRAMMAR_ID_CONST___NODE_TYPE],
+         targetElementTypeIds: [__GRAMMAR_ID_CONST___NODE_TYPE]
       }
    ];
-}
-`;
-
-   const createHandler = `// The starter operation handler for the __GRAMMAR__ diagram: the tool-palette
-// entry that creates a \`__NODE_RULE__\`.
-//
-// **Deleting this file and its \`configureOperationHandlers\` registration in
-// \`diagram-module.ts\` gives a read-only viewer**, and nothing else has to change
-// — creation is offered through the palette rather than through a type hint, so
-// every hint in \`diagram-configuration.ts\` is already \`false\`. The scaffold emits
-// the editable direction because that asymmetry runs one way: editable →
-// read-only is a deletion the compiler checks, while read-only → editable is
-// authoring against a seam you have not used yet.
-//
-// **It edits the operation's working copy.** A handler runs inside an operation,
-// where \`sourceRoot\` is a copy of the built root: the recording command's
-// runnable appends to the copy, and the operation writes the copy's text through
-// the grammar's \`Serializer\` once, gated on the version the copy was made at,
-// with undo and redo applying that one change. A command that writes the
-// document itself instead reads no text off the copy, which has no \`$document\`,
-// and the operation's own write then overwrites it.
-//
-// **The drop location is discarded.** \`needsClientLayout\` is \`true\` and the
-// starter grammar persists no bounds, so there is nowhere to put a coordinate: the
-// node is appended at the end of the document and the client places it.
-//
-// Like \`types.ts\`, \`gmodel-factory.ts\` and \`diagram-configuration.ts\`, this file
-// knows the starter grammar's shape — the \`nodes\` list and the \`__NODE_RULE__\`
-// it holds. Replacing the grammar means replacing these four together.
-
-import { type Command, type CreateNodeOperation, JsonCreateNodeOperationHandler, type MaybePromise } from '@eclipse-glsp/server';
-import { appendChild } from '@hydranium/core';
-import { HydraniumGlspRecordingCommand } from '@hydranium/glsp-server';
-import { findNextUnique } from '@hydranium/protocol';
-import { injectable } from 'inversify';
-import type { __NODE_RULE__ } from '../../language-server/ast.js';
-import { ${upper}_NODE_TYPE } from './types.js';
-import type { __GRAMMAR__GlspState } from './state.js';
-
-/** Proposed name for a new node, uniquified against the ones the document already has. */
-const NODE_NAME_STEM = 'Node';
-
-@injectable()
-export class __GRAMMAR__CreateNodeOperationHandler extends JsonCreateNodeOperationHandler {
-   declare protected modelState: __GRAMMAR__GlspState;
-
-   /** The palette's word for the thing it creates, so a noun rather than an action. */
-   override readonly label = '__NODE_RULE__';
-   elementTypeIds = [${upper}_NODE_TYPE];
-
-   override createCommand(operation: CreateNodeOperation): MaybePromise<Command | undefined> {
-      if (!this.elementTypeIds.includes(operation.elementTypeId)) {
-         return undefined;
-      }
-      return new HydraniumGlspRecordingCommand(this.modelState, this.label, () => {
-         const root = this.modelState.sourceRoot;
-         const name = findNextUnique(
-            NODE_NAME_STEM,
-            root.nodes.map(node => node.name)
-         );
-         appendChild(root, 'nodes', root.nodes, { $type: '__NODE_RULE__', name } as __NODE_RULE__);
-      });
-   }
 }
 `;
 
@@ -1977,10 +1614,10 @@ import { __GRAMMAR__GModelFactory } from './gmodel-factory.js';
 import { __GRAMMAR__GlspState } from './state.js';
 import { __GRAMMAR__GlspStorage } from './storage.js';
 import { __GRAMMAR__SubmissionHandler } from './submission-handler.js';
-import { ${upper}_DIAGRAM_TYPE } from './types.js';
+import { __GRAMMAR_ID_CONST___DIAGRAM_TYPE } from './types.js';
 
 export class __GRAMMAR__DiagramModule extends AbstractHydraniumGlspDiagramModule {
-   readonly diagramType = ${upper}_DIAGRAM_TYPE;
+   readonly diagramType = __GRAMMAR_ID_CONST___DIAGRAM_TYPE;
 
    protected override bindModelState(): BindingTarget<ModelState> {
       return { service: __GRAMMAR__GlspState };
@@ -2019,86 +1656,16 @@ export class __GRAMMAR__DiagramModule extends AbstractHydraniumGlspDiagramModule
 }
 `;
 
-   const diagramTest = `// The starter create-node handler, run the way a client runs it: an in-process
-// GLSP server opens a document, a create-node operation adds a node, and an undo
-// and a redo take it out and put it back. Every step must keep the nodes the
-// document already had, and its comments: the diagram writes the document from
-// its AST, which carries none.
-
-import 'reflect-metadata';
-import { type Action, CreateNodeOperation, RedoAction, ServerModule, SetDirtyStateAction, UndoAction } from '@eclipse-glsp/server';
-import { initializeWorkspaceProgrammatically } from '@hydranium/core';
-import { makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
-import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
-import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
-import { waitFor } from '@hydranium/protocol/testing';
-import { afterEach, describe, expect, it } from 'vitest';
-import { __GRAMMAR__DiagramModule } from '../src/glsp/__GRAMMAR_ID__/diagram-module.js';
-import type { __GRAMMAR__GlspState } from '../src/glsp/__GRAMMAR_ID__/state.js';
-import { ${upper}_DIAGRAM_TYPE, ${upper}_NODE_TYPE } from '../src/glsp/__GRAMMAR_ID__/types.js';
-import { createServices } from '../src/services.js';
-
-let workspace: ScratchWorkspace | undefined;
-let diagram: GlspHarness<__GRAMMAR__GlspState> | undefined;
-
-afterEach(() => {
-   diagram?.dispose();
-   workspace?.dispose();
-   diagram = undefined;
-   workspace = undefined;
-});
-
-/** Send \`action\` and wait for the dirty state the server answers it with, which it sends once the edit is written. */
-async function send(harness: GlspHarness<__GRAMMAR__GlspState>, action: Action, reason: string): Promise<void> {
-   const before = harness.actions.length;
-   harness.dispatch(action);
-   await waitFor(() => harness.actions.slice(before).some(sent => SetDirtyStateAction.is(sent) && sent.reason === reason), {
-      message: \`no '\${reason}' dirty state\`
-   });
-}
-
-describe('__GRAMMAR__ diagram', () => {
-   it('creates a node after the existing ones, keeping their comments, and undoes and redoes it', async () => {
-      workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
-      const original = '// keep this comment\\nnode first -> second\\n// about second\\nnode second';
-      const file = workspace.write('model.__EXTENSION__', original);
-      const { shared } = createServices();
-      await initializeWorkspaceProgrammatically(shared, workspace.root);
-      diagram = makeGlspHarness<__GRAMMAR__GlspState>({
-         serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
-         diagramType: ${upper}_DIAGRAM_TYPE,
-         appModules: [new HydraniumGlspAppModule({ shared })]
-      });
-      await diagram.start();
-      await diagram.openDocument(file);
-      const uri = workspace.uri('model.__EXTENSION__');
-      const text = (): string | undefined => shared.workspace.TextDocuments.get(uri)?.getText();
-
-      await send(diagram, CreateNodeOperation.create(${upper}_NODE_TYPE), 'operation');
-      const created = text();
-      await send(diagram, UndoAction.create(), 'undo');
-      const undone = text();
-      await send(diagram, RedoAction.create(), 'redo');
-
-      expect({ created, undone, redone: text() }).toEqual({
-         created: \`\${original}\\nnode Node\`,
-         undone: original,
-         redone: \`\${original}\\nnode Node\`
-      });
-   });
-});
-`;
-
    return [
-      { path: `${dir}/types.ts`, content: render(types) },
-      { path: `${dir}/state.ts`, content: render(state) },
-      { path: `${dir}/storage.ts`, content: render(storage) },
-      { path: `${dir}/submission-handler.ts`, content: render(submission) },
-      { path: `${dir}/gmodel-factory.ts`, content: render(factory) },
-      { path: `${dir}/diagram-configuration.ts`, content: render(configuration) },
-      { path: `${dir}/create-node-operation-handler.ts`, content: render(createHandler) },
-      { path: `${dir}/diagram-module.ts`, content: render(module) },
-      { path: `test/${grammar.grammarId}-diagram.test.ts`, content: render(diagramTest) }
+      fixed('types.ts'),
+      fixed('state.ts'),
+      fixed('storage.ts'),
+      fixed('submission-handler.ts'),
+      fixed('gmodel-factory.ts'),
+      computed('diagram-configuration.ts', configuration),
+      fixed('create-node-operation-handler.ts'),
+      computed('diagram-module.ts', module),
+      grammarTemplate('test/__GRAMMAR_ID__-diagram.test.ts', composition, grammar)
    ];
 }
 
@@ -2115,8 +1682,10 @@ export function buildInitTemplates(composition: InitComposition): InitFile[] {
       path: `src/grammar/${grammar.grammarId}.langium`,
       content: render(grammarFile(multi), composition, grammar)
    }));
+   // The shared lexical fragment, only for several grammars: each declaring its
+   // own `WS` / `ID` lets the token sets drift apart.
    if (multi) {
-      grammarFiles.unshift({ path: 'src/grammar/common.langium', content: COMMON_GRAMMAR });
+      grammarFiles.unshift(projectTemplate('src/grammar/common.langium', composition));
    }
 
    const diagramFiles = composition.grammars.filter(grammar => grammar.diagram).flatMap(grammar => glspFiles(composition, grammar));
@@ -2125,20 +1694,36 @@ export function buildInitTemplates(composition: InitComposition): InitFile[] {
       { path: 'package.json', content: packageJson(composition) },
       { path: 'langium-config.json', content: langiumConfig(composition) },
       { path: 'tsconfig.json', content: tsconfigJson(composition) },
-      { path: 'tsconfig.test.json', content: TSCONFIG_TEST },
-      { path: 'test/tsconfig.json', content: TEST_DIR_TSCONFIG },
-      { path: 'vitest.config.ts', content: VITEST_CONFIG },
-      { path: '.gitignore', content: GITIGNORE },
+      // `isolatedModules` is what makes this check agree with the transform that
+      // actually runs the tests. `npm test` is `typecheck:test && vitest run`, and
+      // vitest compiles each file on its own — a transform with no type
+      // information, which cannot tell a re-exported TYPE from a re-exported value.
+      // Without the flag `tsc` accepts `export { SomeType } from './x'` that the
+      // transform then emits as a real import of a symbol that does not exist at
+      // runtime, so the typecheck passes and the suite fails with a confusing
+      // missing-export.
+      projectTemplate('tsconfig.test.json', composition),
+      // Found by name, unlike `tsconfig.test.json`. Under vite 8, vitest's transform
+      // applies a tsconfig only to the files its own `include` lists, so without this
+      // a test declaring a decorated class fails to load.
+      projectTemplate('test/tsconfig.json', composition),
+      projectTemplate('vitest.config.ts', composition),
+      // Written for a workspace member too: its root may not ignore `lib/` (a `yo
+      // langium` root ignores `out/`), and a rule the root repeats costs nothing.
+      // Stored without its dot, because `npm pack` drops a nested `.gitignore` from
+      // the tarball and applies it as an ignore file.
+      { path: '.gitignore', content: template('server/gitignore') },
       { path: 'README.md', content: readme(composition) },
       ...grammarFiles,
       { path: `src/language-server/${composition.projectId}-module.ts`, content: moduleFile(composition) },
-      { path: 'src/language-server/ast.ts', content: render(AST, composition, composition.grammars[0]) },
-      ...composition.grammars.map(grammar => ({
-         path: `src/language-server/${grammar.grammarId}-serializer.ts`,
-         content: render(SERIALIZER, composition, grammar)
-      })),
+      grammarTemplate('src/language-server/ast.ts', composition, composition.grammars[0]),
+      // Per grammar, because `services.serializer.Serializer` is a per-language slot
+      // and a serializer is grammar-shaped by definition. That is also why the
+      // framework refuses to default it: its `UnboundSerializer` throws, naming the
+      // binding to add, rather than guessing a syntax.
+      ...composition.grammars.map(grammar => grammarTemplate('src/language-server/__GRAMMAR_ID__-serializer.ts', composition, grammar)),
       { path: 'src/index.ts', content: indexFile(composition) },
-      { path: 'src/services.ts', content: project(SERVICES, composition) },
+      projectTemplate('src/services.ts', composition),
       { path: 'src/main.ts', content: mainFile(composition) },
       ...(composition.heads.includes('data') ? [{ path: 'src/data-server-main.ts', content: dataServerMainFile(composition) }] : []),
       ...(portCommandNames(composition).length ? [{ path: 'src/head-ports.ts', content: headPortsFile(composition) }] : []),

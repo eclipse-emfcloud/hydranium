@@ -29,8 +29,8 @@ type ProseRule = (path: string) => boolean;
 /** Example workspaces are fixture trees that tests and e2e copy, prose or not. */
 const isFixture = (path: string): boolean => /^examples\/[^/]+\/workspace\//.test(path);
 
-/** A package's source, test and script trees are turbo inputs of its build, test and lint. */
-const isPackageTree = (path: string): boolean => /(^|\/)(src|test|scripts)\//.test(path);
+/** A package's source, test, script and template trees are turbo inputs of its build, test or lint. */
+const isPackageTree = (path: string): boolean => /(^|\/)(src|test|scripts|templates)\//.test(path);
 
 /**
  * Files under a prose path that a build reads anyway, so a change to one ships without e2e if it
@@ -91,6 +91,11 @@ const FIXTURES = [
    {
       name: 'markdown in a package source or test tree runs everything',
       paths: ['packages/protocol/src/rpc/README.md', 'packages/core/test/fixtures/sample.md'],
+      proseOnly: false
+   },
+   {
+      name: 'markdown in the CLI templates runs everything',
+      paths: ['packages/cli/templates/server/README.md'],
       proseOnly: false
    },
    { name: 'a workflow change runs everything', paths: ['.github/workflows/ci.yml'], proseOnly: false },
