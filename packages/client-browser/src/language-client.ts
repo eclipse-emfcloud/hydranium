@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { Locale } from '@hydranium/protocol';
+import { type Locale, sendByMethodName } from '@hydranium/protocol';
 import type { MessageConnection } from 'vscode-jsonrpc/browser';
 import {
    ConfigurationRequest,
@@ -92,7 +92,10 @@ export async function initializeLanguageClient(connection: MessageConnection, op
    }
    connection.listen();
 
-   const result = await connection.sendRequest(InitializeRequest.type, {
+   // By method name: these types come from `vscode-languageserver-protocol`'s
+   // copy of `vscode-jsonrpc`, which need not be the connection's.
+   const sender = sendByMethodName(connection);
+   const result = await sender.sendRequest(InitializeRequest.type, {
       processId: null,
       rootUri: options.rootUri,
       locale: options.locale,
@@ -100,7 +103,7 @@ export async function initializeLanguageClient(connection: MessageConnection, op
       workspaceFolders: [{ uri: options.rootUri, name: workspaceName }]
    });
    options.beforeInitialized?.(result);
-   await connection.sendNotification(InitializedNotification.type, {});
+   await sender.sendNotification(InitializedNotification.type, {});
    return result;
 }
 

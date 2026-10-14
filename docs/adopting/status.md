@@ -68,16 +68,19 @@ to match a scope, such as `comment` or `keyword`.
 
 The framework cannot ship the colours, because each language has its own token
 types. Your host can: turn the setting on and add theme rules named by your
-server's token types, as the browser example does in
-[`monaco-lsp-adapter.ts`](../../examples/order-flow/browser/src/page/monaco-lsp-adapter.ts).
+server's token types. The browser example's
+[`monaco-setup.ts`](../../examples/order-flow/browser/src/page/monaco-setup.ts)
+holds such rules; there `MonacoLspClient.createEditor` turns the setting on.
 
-### Client libraries cover Theia, and part of a web page
+### Client libraries cover Theia and a web page
 
-The client packages target Theia. For a web page,
-`@hydranium/client-browser` covers the worker bootstrap, the LSP handshake and
-the data head; the text editor and the diagram are copied from the order-flow
-example. For VS Code, copy the client code from the order-flow example. The
-protocol packages are host-neutral, so a client for another host is supported.
+The `-theia` client packages target Theia. For a web page,
+`@hydranium/client-browser` covers the worker bootstrap, the LSP handshake, a
+Monaco editor's LSP client and the data head, and `@hydranium/glsp-client`
+the diagram and its mount. For VS Code, the diagram classes come from
+`@hydranium/glsp-client` and the rest of the client code is copied from the
+order-flow example. The protocol packages are host-neutral, so a client for
+another host is supported.
 
 ### Persistence is text files on disk
 

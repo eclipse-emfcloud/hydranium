@@ -46,6 +46,7 @@
  */
 
 import { connectWorkerHeads, initializeLanguageClient, WORKER_ERROR_EVENT_PHASE, type WorkerHeads } from '@hydranium/client-browser';
+import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient, saveDirtyDocuments } from '@hydranium/client-browser/monaco';
 import { type PublishDiagnosticsParams, PublishDiagnosticsNotification } from 'vscode-languageserver-protocol';
 import {
    ConsoleLogger,
@@ -79,7 +80,7 @@ import { requireButton, requireCheckbox, requireDialog, requireElement } from '.
 import { EditorArea } from './editor-area.js';
 import { wireLogLevelControl, wireTraceControl } from './log-controls.js';
 import { LogPanel } from './log-panel.js';
-import { applyEditorScheme, type ColourScheme, MonacoLspAdapter } from './monaco-lsp-adapter.js';
+import { applyEditorScheme, type ColourScheme, ORDER_FLOW_LANGUAGES } from './monaco-setup.js';
 import { applyPageLocale, localeUrl, type PageLocale, PAGE_LOCALES, rememberLocale } from './page-nls.js';
 import { rememberPreference, storedPreference } from './preferences.js';
 import { mountProcessDiagram, PROCESS_DIAGRAM_ELEMENT_ID } from './process-diagram.js';
@@ -175,7 +176,7 @@ const FIXED_DOCUMENTS: readonly [string, string] = ['orders/fulfillment.process'
  * has to stay closed for the problems list to be worth having, since the whole
  * point is a diagnostic published for a file nobody opened.
  *
- * Three documents of the workspace's eight, which also keeps the adapter's "no
+ * Three documents of the workspace's eight, which also keeps the client's "no
  * model for this URI" branch on the normal path rather than leaving it an edge
  * case waiting to be discovered — most `publishDiagnostics` notifications still
  * address a document Monaco has never heard of.
@@ -324,6 +325,12 @@ async function switchLocale(locale: PageLocale): Promise<void> {
       }
       if (answer === 'save') {
          await saveEverything();
+         // A failed save reports and leaves its document unsaved, and a
+         // keystroke during the save is as unsaved: either keeps the page on
+         // the work rather than reloading over it.
+         if (unsavedDocuments().length > 0) {
+            return;
+         }
       }
    }
    // Stored BEFORE the navigation, because the navigation is what ends this
@@ -639,60 +646,40 @@ async function watchLayoutThroughDataHead({ session, connection }: DataHead): Pr
 }
 
 /**
- * Persist every open editor's content through the DATA head.
+ * Persist every unsaved editor's document through the DATA head.
  *
  * **A browser host has to ask for this explicitly, and the reason is a framework
  * fact rather than a browser one.** LSP puts the file write on the CLIENT — a
  * `textDocument/didSave` notification tells the server a save has happened, and
  * the framework answers it by firing `onDidSave`, not by writing anything. In
  * Theia or VS Code the shell does the writing; a page has no filesystem, so the
- * only end that can write is the worker, and `saveModelDocument` is the request
- * that makes it. Sending `didSave` here would persist nothing at all, silently.
+ * only end that can write is the worker, and the persist request through the
+ * page's session is what makes it. Sending `didSave` here would persist
+ * nothing at all, silently.
  *
  * Which makes the parity with a Node host exact rather than approximate: an edit
  * lives in the in-memory text document until something saves it, on both ends.
  * A diagram drag reaches this buffer as a `workspace/applyEdit` first, so one
  * save covers both directions.
  *
- * Sequential, not concurrent: each save runs a serialize / apply / rebuild chain
- * over the shared store, and two of those interleaved would have the second
- * rebuild racing the first document's settle for no gain on two files.
- *
- * Each save runs inside `withOpenDocument`, because the page's session writes
- * only what it has open and the dirty documents are the editors', not the
- * session's. A document the session already had open stays open afterwards.
+ * The documents are the client's dirty set, narrowed to `only` by the save
+ * itself, which takes the URI in this page's form, so "what Ctrl+S writes" and
+ * "what Save workspace writes" can never disagree about whether a document had
+ * changed.
  */
-async function saveWorkspace(dataHead: DataHead, adapter: MonacoLspAdapter, editors: EditorArea, only?: string): Promise<void> {
-   // Filtered from the same dirty set the button uses rather than read another
-   // way, so "what Ctrl+S writes" and "what Save workspace writes" can never
-   // disagree about whether a document had changed.
-   const documents = adapter.dirtyDocuments().filter(document => only === undefined || document.uri === only);
-   if (documents.length === 0) {
-      setWorkspaceReport('nothing to save');
-      return;
-   }
-   setWorkspaceReport(`saving ${documents.length} document(s)…`);
+async function saveWorkspace(dataHead: DataHead, client: MonacoLspClient, editors: EditorArea, only?: string): Promise<void> {
+   setWorkspaceReport('saving…');
    try {
-      for (const document of documents) {
-         // `'any'`, and `EditorDocument.version` must not be dressed up as
-         // a model version: it is Monaco's alternative-version id for the local
-         // buffer, which counts keystrokes in this page and has no relation to
-         // the server's text-document counter the gate compares against.
-         await dataHead.session.withOpenDocument({ uri: document.uri }, () =>
-            dataHead.session.saveDocument({ uri: document.uri, model: document.text, baseVersion: 'any' })
-         );
-         // Marked one at a time, so a failure part-way through leaves the
-         // documents it never reached dirty and a second press retries exactly
-         // those.
-         adapter.markSaved(document);
-      }
+      const saved = await saveDirtyDocuments(client, dataHead.session, only === undefined ? undefined : [only]);
       editors.refreshDirtyMarks();
-      setWorkspaceReport(`saved ${documents.length} document(s) — a reload restores them`);
+      setWorkspaceReport(saved.length === 0 ? 'nothing to save' : `saved ${saved.length} document(s) — a reload restores them`);
    } catch (error: unknown) {
       // Reported rather than swallowed, because the store can genuinely refuse:
       // a quota is finite and the origin's storage may have been evicted. A page
       // that reported success here would lose the workspace on the next load
-      // with nothing anywhere to say why.
+      // with nothing anywhere to say why. The documents the save never reached
+      // stay dirty, so a second press retries exactly those.
+      editors.refreshDirtyMarks();
       setWorkspaceReport(`save failed: ${describeError(error)}`);
    }
 }
@@ -760,13 +747,13 @@ function wireSaveShortcut(save: (only?: string) => void, editors: EditorArea, pr
 }
 
 /** Enable the save / reset controls, now that there is a head behind them. */
-function wireWorkspaceControls(channels: WorkerChannels, dataHead: DataHead, adapter: MonacoLspAdapter, editors: EditorArea): void {
+function wireWorkspaceControls(channels: WorkerChannels, dataHead: DataHead, client: MonacoLspClient, editors: EditorArea): void {
    const save = requireButton('save-workspace');
-   save.addEventListener('click', () => void saveWorkspace(dataHead, adapter, editors));
+   save.addEventListener('click', () => void saveWorkspace(dataHead, client, editors));
    save.disabled = false;
    // Published for the guards, which offer saving as the answer to a navigation
    // that would otherwise drop the work.
-   saveEverything = () => saveWorkspace(dataHead, adapter, editors);
+   saveEverything = () => saveWorkspace(dataHead, client, editors);
 
    const reset = requireButton('reset-workspace');
    reset.addEventListener('click', () => {
@@ -839,7 +826,7 @@ export async function main(locale: Locale | undefined): Promise<void> {
    // from the server that encoded it. Assigned in the handshake's window
    // between `initialize` and `initialized`, with the diagnostics handler that
    // needs it.
-   let adapter!: MonacoLspAdapter;
+   let client!: MonacoLspClient;
 
    setStatus(locale === undefined ? 'initializing…' : `initializing… (locale '${locale}')`);
    try {
@@ -851,13 +838,10 @@ export async function main(locale: Locale | undefined): Promise<void> {
          // uses. Absent means the framework's English, which is correct rather than
          // a fallback: a page that declares no language has no user to have one.
          locale,
-         // The default capabilities, `applyEdit` and `configuration`, are the two
-         // this page answers: the adapter handles `workspace/applyEdit`, and the
-         // level picker below answers the configuration request. Everything else
-         // is left off rather than filled in optimistically. An absent capability
-         // makes Langium fall back to a shape every client understands, whereas
-         // claiming one this page does not implement produces a response it cannot
-         // render.
+         // What the Monaco client renders, with the two workspace answers: the
+         // client handles `workspace/applyEdit`, and the level picker below
+         // answers the configuration request.
+         capabilities: MONACO_CLIENT_CAPABILITIES,
          configuration: wireLogLevelControl(connection),
          // The lines from the first workspace build are the ones worth having: a
          // handler attached after `initialize` resolves would miss the whole of
@@ -865,18 +849,18 @@ export async function main(locale: Locale | undefined): Promise<void> {
          // come up.
          onLogMessage: params => log.append(params.type, params.message),
          beforeInitialized: result => {
-            adapter = new MonacoLspAdapter(connection, result.capabilities);
+            client = new MonacoLspClient(connection, result.capabilities, { languages: ORDER_FLOW_LANGUAGES });
             // ONE handler for the notification, fanning out to all three consumers.
             // A second `onNotification` for the same method would silently REPLACE
             // this one — `MessageConnection` keys its handlers by method and still
-            // returns a disposable — so the adapter and the sidebar take the params
+            // returns a disposable — so the client and the sidebar take the params
             // from here rather than subscribing for themselves.
             connection.onNotification(PublishDiagnosticsNotification.type, params => {
                diagnosticsByUri.set(params.uri, params);
                const total = [...diagnosticsByUri.values()].reduce((sum, entry) => sum + entry.diagnostics.length, 0);
                setStatus(`${diagnosticsByUri.size} documents validated, ${total} diagnostics`);
                sidebar.panel?.render(diagnosticsByUri);
-               adapter.applyDiagnostics(params);
+               client.applyDiagnostics(params);
             });
          }
       });
@@ -905,7 +889,7 @@ export async function main(locale: Locale | undefined): Promise<void> {
    );
 
    const editors = new EditorArea({
-      adapter,
+      client,
       files: ready.files,
       rootUri: WORKSPACE_ROOT_URI,
       fixed: FIXED_DOCUMENTS,
@@ -927,7 +911,7 @@ export async function main(locale: Locale | undefined): Promise<void> {
    // document — `for Order` in `.process` declares nothing, and `entity Order`
    // lives in a `.domain` file the selection editor has to go and get. Registered
    // once the editors exist, because the opener is what shows the target.
-   adapter.registerEditorOpener((uri, position) => editors.revealUri(uri, position));
+   client.registerEditorOpener((uri, position) => editors.revealUri(uri, position));
 
    sidebar.panel = new WorkspacePanel(Object.keys(ready.files), WORKSPACE_ROOT_URI, {
       onOpenDocument: path => editors.show(path),
@@ -965,8 +949,8 @@ export async function main(locale: Locale | undefined): Promise<void> {
 
    // Enabled here, after the data head has answered once: the save goes through
    // it, so a control armed before that could only fail.
-   wireWorkspaceControls(channels, dataHead, adapter, editors);
-   wireSaveShortcut(only => void saveWorkspace(dataHead, adapter, editors, only), editors, properties);
+   wireWorkspaceControls(channels, dataHead, client, editors);
+   wireSaveShortcut(only => void saveWorkspace(dataHead, client, editors, only), editors, properties);
    provideLatency(dataHead, reportDetail);
 
    // The SECOND participant on the one connection, and the reason the page needs

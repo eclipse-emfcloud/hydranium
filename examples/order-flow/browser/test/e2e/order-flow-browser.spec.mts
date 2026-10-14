@@ -548,6 +548,31 @@ test.describe('order-flow in a web worker', () => {
       await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', /5 entries:/);
    });
 
+   test('undoing a diagram drag leaves the typing before it in place', async ({ page }) => {
+      await page.goto('/');
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
+
+      // A typing run leaves Monaco's last undo element OPEN, and an edit pushed
+      // into an open element joins it, so without an undo stop around the
+      // server's write one Ctrl+Z reverts the drag and the typing together. A
+      // comment rather than a token, so the layout still parses and the diagram
+      // stays writable for the drag.
+      await page.locator(`${LAYOUT_EDITOR} .view-line`).last().click();
+      await page.keyboard.press('Control+End');
+      await page.keyboard.type('// typed');
+      await expect(page.locator(`${LAYOUT_EDITOR} .view-lines`)).toContainText('// typed');
+
+      await dragBy(page, nodeLocator('Cancel'), { x: 300, y: 180 });
+      const entry = await expectLayoutEntry(page, 'Cancel');
+      await expect(page.locator(`${LAYOUT_EDITOR} .view-lines`)).toContainText(`node Cancel at ${entry.x}, ${entry.y}`);
+
+      // The drag left the focus on the diagram, and the undo is the editor's.
+      await page.locator(`${LAYOUT_EDITOR} .view-line`).last().click();
+      await page.keyboard.press('Control+Z');
+      await expect(page.locator(`${LAYOUT_EDITOR} .view-lines`)).not.toContainText('node Cancel at');
+      await expect(page.locator(`${LAYOUT_EDITOR} .view-lines`)).toContainText('// typed');
+   });
+
    test('creating a task from the palette writes both documents', async ({ page }) => {
       await page.goto('/');
       await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
@@ -1096,7 +1121,7 @@ test.describe('order-flow in a web worker', () => {
 
       // And the diagnostic reached it as a marker, which is the check that the
       // document was genuinely OPENED rather than merely named in a header: the
-      // adapter only paints markers on a model it has, so a title that changed
+      // client only paints markers on a model it has, so a title that changed
       // without a `didOpen` behind it fails here.
       await expect(page.locator('#selected-editor .squiggly-error')).toHaveCount(WORKSPACE_DIAGNOSTIC_COUNT);
    });
@@ -1613,7 +1638,7 @@ test.describe('order-flow in a web worker', () => {
 
       // Read through the DATA head, not off the editor, which makes this one
       // assertion cover the whole chain: the worker computed 481, Monaco applied
-      // it, the adapter's `didChange` carried it to the server, and the shared
+      // it, the client's `didChange` carried it to the server, and the shared
       // Langium store now holds it. Compared against the seeded line with one
       // number substituted, so an edit that disturbed any other entry fails here
       // too.

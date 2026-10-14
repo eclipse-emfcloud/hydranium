@@ -27,6 +27,7 @@ import {
    type InitializeResult
 } from 'vscode-languageserver-protocol';
 import { initializeLanguageClient, type LanguageClientOptions } from '../src';
+import { anotherCopyConnection } from './another-copy-connection.js';
 
 const toDispose: { dispose(): void }[] = [];
 
@@ -77,6 +78,20 @@ describe('initializeLanguageClient', () => {
       });
       // `initialized` is a notification, so it is awaited by asking the server
       // a question it answers after it.
+      await server.sendRequest('server/flush').catch(() => undefined);
+      expect(initialized).toBe(1);
+   });
+
+   it('completes over a connection of another vscode-jsonrpc copy, sending by method name', async () => {
+      const { page, server, initializeParams } = makeEnds();
+      let initialized = 0;
+      server.onNotification(InitializedNotification.type, () => {
+         initialized++;
+      });
+
+      await expect(initializeLanguageClient(anotherCopyConnection(page), OPTIONS)).resolves.toEqual(SERVER_ANSWER);
+
+      expect(initializeParams).toHaveLength(1);
       await server.sendRequest('server/flush').catch(() => undefined);
       expect(initialized).toBe(1);
    });
