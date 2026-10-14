@@ -1,0 +1,32 @@
+# A diagram module that extends GLSP's `DiagramModule` or `GModelDiagramModule` instead of
+# `AbstractHydraniumGlspDiagramModule` compiles and runs without the framework's overrides:
+# without the status bindings nothing tells the client why its diagram is read-only, and
+# without the operation and undo handlers, operation handlers edit the built root every
+# reader shares. The rule reads the `extends` value, so a base of the adopter's own is
+# flagged where it extends GLSP's and a subclass of a compliant module passes; a base from
+# a dependency is invisible. Test trees are out: a harness module binds a stub state under
+# the plain base on purpose.
+id: glsp-diagram-module-base
+language: typescript
+severity: error
+message: Extend AbstractHydraniumGlspDiagramModule, not GLSP's DiagramModule; the plain base runs without the status, operation and undo overrides.
+files:
+  - packages/*/src/**/*.ts
+  - examples/**/src/**/*.ts
+rule:
+  any:
+    - kind: class_declaration
+    - kind: abstract_class_declaration
+    - kind: class
+  all:
+    - not:
+        has:
+          field: name
+          regex: '^AbstractHydraniumGlspDiagramModule$'
+    - has:
+        kind: class_heritage
+        has:
+          kind: extends_clause
+          has:
+            field: value
+            regex: '(^|\.)(GModel)?DiagramModule$'

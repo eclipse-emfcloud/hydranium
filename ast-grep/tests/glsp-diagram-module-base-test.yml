@@ -1,0 +1,18 @@
+id: glsp-diagram-module-base
+valid:
+  - 'export abstract class AbstractHydraniumGlspDiagramModule extends DiagramModule {}'
+  - 'export class BookstoreDiagramModule extends AbstractHydraniumGlspDiagramModule {}'
+  - 'class WithHandlers extends BookstoreDiagramModule {}'
+  - 'class Suffixed extends MyDiagramModule {}'
+  - 'export class ServerModule extends GLSPModule {}'
+  - 'class Unrelated extends ContainerModule implements DiagramModule {}'
+  - 'class DiagramModule {}'
+invalid:
+  - 'class Plain extends DiagramModule {}'
+  - 'export class Exported extends DiagramModule {}'
+  - 'export abstract class OwnBase extends DiagramModule {}'
+  - 'class GModel extends GModelDiagramModule {}'
+  - 'class Qualified extends glsp.DiagramModule {}'
+  - 'class Implements extends DiagramModule implements Foo {}'
+  - 'const Expression = class extends DiagramModule {};'
+  - 'export default class extends DiagramModule {}'
