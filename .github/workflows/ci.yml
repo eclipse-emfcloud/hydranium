@@ -78,7 +78,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
 
@@ -371,7 +371,7 @@ jobs:
       # runs that change dependencies for a saving only hits can collect.
       - name: Setup Node
         if: env.PROSE_ONLY_LEG != 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: ${{ steps.node-modules-cache.outputs.cache-hit == 'true' && '' || 'npm' }}
@@ -706,7 +706,7 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('.nvmrc', 'package-lock.json') }}
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           # Empty on a hit, for the gate job's reason: `~/.npm` is read only by
@@ -815,7 +815,7 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('.nvmrc', 'package-lock.json') }}
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: ${{ steps.node-modules-cache.outputs.cache-hit == 'true' && '' || 'npm' }}
@@ -926,7 +926,7 @@ jobs:
 
       # The npm cache even on a node_modules hit: the scaffold installs fetch.
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
