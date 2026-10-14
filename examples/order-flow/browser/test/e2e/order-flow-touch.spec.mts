@@ -72,14 +72,49 @@ test.describe('the process diagram under touch', () => {
       await expect(page.locator(`${LAYOUT_EDITOR} .view-lines`)).toContainText(`node Cancel at ${position.x}, ${position.y}`);
    });
 
+   test('a tap on the canvas reaches it as one mouse press', async ({ page }) => {
+      await expectFramedDiagram(page);
+      // Counted, because a second press passes everything else here: a tool
+      // that takes two taps, an edge's source and target, takes it as both.
+      // Read after the `click`, which the browser fires after its own presses.
+      await page.evaluate(selector => {
+         const seen: string[] = [];
+         Object.assign(window, { seen });
+         const canvas = document.querySelector(selector);
+         canvas?.addEventListener('mousedown', event => seen.push(event.isTrusted ? 'browser press' : 'shim press'), true);
+         canvas?.addEventListener('click', () => seen.push('click'), true);
+      }, MOUNT);
+      const mount = await page.locator(MOUNT).boundingBox();
+      if (mount === null) {
+         throw new Error('No bounding box for the diagram mount');
+      }
+      await page.locator(MOUNT).tap({ position: { x: mount.width * 0.4, y: mount.height * 0.85 } });
+
+      await expect.poll(() => page.evaluate(() => (window as unknown as { seen: string[] }).seen)).toContain('click');
+      expect(await page.evaluate(() => (window as unknown as { seen: string[] }).seen)).toEqual(['shim press', 'click']);
+   });
+
+   test('a tap on a text field inside the diagram focuses it', async ({ page }) => {
+      await expectFramedDiagram(page);
+      // The palette's search field, as one field GLSP draws inside the mount:
+      // opening it focuses it in code, so it is blurred first and only the tap
+      // can focus it again.
+      await page.locator(`${MOUNT} .search-icon`).tap();
+      const field = page.locator(`${MOUNT} .search-input`);
+      await expect(field).toBeFocused();
+      await field.blur();
+
+      await field.tap();
+
+      await expect(field).toBeFocused();
+   });
+
    test('creating a task from the palette works under a finger', async ({ page }) => {
       await expectFramedDiagram(page);
 
-      // Two TAPS, and that is why this needs no shim: a browser synthesizes mouse
-      // events for a tap, so every tap-driven tool already reaches a canvas that
-      // binds them. Only a DRAG has no synthesis, which is the whole of what the
-      // shim exists for — so this case marks the boundary between the two rather
-      // than covering the same ground as the drag above.
+      // Two TAPS on two paths: the palette button takes the browser's `click`,
+      // and the canvas tap reaches the tool through the shim alone, since the
+      // shim cancels the press and with it the browser's own mouse events.
       await page.locator(`${MOUNT} .tool-button`, { hasText: 'Task' }).tap();
       const mount = await page.locator(MOUNT).boundingBox();
       if (mount === null) {

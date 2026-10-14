@@ -15,6 +15,7 @@
 export * from './action-dispatcher';
 export * from './diagram-load-failed';
 export * from './diagram-loader';
+export * from './diagram-mount';
 export * from './edge';
 export * from './glsp-client';
 export * from './glsp-client-module';
@@ -22,4 +23,5 @@ export * from './hidden-bounds-updater';
 export * from './select-mouse-listener';
 export * from './sprotty-logger-adapter';
 export * from './status-overlay';
+export * from './touch-input';
 export * from './types';

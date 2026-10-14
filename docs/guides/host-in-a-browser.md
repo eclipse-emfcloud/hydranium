@@ -147,26 +147,21 @@ const fileSystem = persistentFileSystem({
    before the connection listens, so you also see the first build, and keep
    only the newest lines. See `src/page/log-panel.ts`.
 
-8. **Mount the diagram.** Connect `HydraniumGlspClient` from
+8. **Mount the diagram.** Build `HydraniumGlspClient` from
    `@hydranium/glsp-client` over the GLSP head's connection from
    `connectWorkerHeads`, wrapped with `sendByMethodName` from
-   `@hydranium/protocol`. Upstream's `GLSPWebWorkerProvider` starts a worker of
-   its own, so it is not the piece to use. Add a container module after
-   `STANDALONE_MODULE_CONFIG` that calls `createGlspClientModule` with your
-   logger, so a failed load and sprotty's own errors reach it instead of
-   vanishing. Then supply what a shell would:
-   - size the `<svg>` to its mount, as in `#mount > svg { width: 100%; height:
-     100% }`, or the diagram draws only what fits in 300×150;
-   - give the mount a height and `position: relative`, so the tool palette
-     stays on it;
-   - use the mount element's id as the diagram's `clientId`;
-   - bind `TYPES.IContextMenuService` to a no-op, so GLSP stops warning about
-     it.
-
-   For touch, set `touch-action: none` on the mount and re-emit pointer events
-   as mouse events, skipping real mouse pointers, with one `mousemove` before
-   the `mousedown`. Without it, a finger drag moves nothing, or drops the node
-   at `0,0`. See `src/page/process-diagram.ts`.
+   `@hydranium/protocol`, and hand it with your diagram module's initializer
+   and the element to `mountGlspDiagram`. Upstream's `GLSPWebWorkerProvider`
+   starts a worker of its own, so it is not the piece to use. The mount adds
+   the framework's client module, so a failed load and sprotty's own errors
+   reach your logger instead of vanishing, and supplies what a shell would:
+   framing, canvas bounds that follow the element's size and position, touch
+   input and a context menu GLSP stops warning about. The page supplies the
+   element's CSS: a height and `position: relative`, so the tool palette stays
+   on it; `touch-action: none`, or the browser takes a finger drag as a pan;
+   and the `<svg>` sized to it, as in
+   `#mount > svg { width: 100%; height: 100% }`, or the diagram draws only what
+   fits in 300×150. See `src/page/process-diagram.ts`.
 
 9. **Make the text editor a full client.** Run the handshake with
    `initializeLanguageClient` from `@hydranium/client-browser`: it answers the

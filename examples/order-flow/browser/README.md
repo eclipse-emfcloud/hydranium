@@ -74,8 +74,7 @@ the call-stack view. The bundles are not minified unless you pass `--minify` to
 | Monaco's LSP client and editor themes | [src/page/monaco-lsp-adapter.ts](src/page/monaco-lsp-adapter.ts) |
 | Monaco's editor worker | [src/page/monaco-editor-worker.ts](src/page/monaco-editor-worker.ts), [monaco-editor-core-worker.d.ts](src/page/monaco-editor-core-worker.d.ts) |
 | The pinned editor pair and the lookup editor | [src/page/editor-area.ts](src/page/editor-area.ts) |
-| The diagram mount | [src/page/process-diagram.ts](src/page/process-diagram.ts) |
-| Touch drags on the diagram | [src/page/touch-input.ts](src/page/touch-input.ts) |
+| The GLSP client over the head's connection, `mountGlspDiagram` and the graph report | [src/page/process-diagram.ts](src/page/process-diagram.ts) |
 | The properties panel | [src/page/properties-panel.ts](src/page/properties-panel.ts) |
 | The workspace list and problems list | [src/page/workspace-panel.ts](src/page/workspace-panel.ts) |
 | The server log, its level and the message trace | [src/page/log-panel.ts](src/page/log-panel.ts), [src/page/log-controls.ts](src/page/log-controls.ts) |

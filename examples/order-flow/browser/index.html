@@ -1271,7 +1271,7 @@
                Without this the browser CLAIMS a touch drag as a pan: the canvas
                receives one `pointermove` and then `pointercancel`, so the
                gesture reaches the diagram as nothing at all. Necessary but not
-               sufficient — see `src/page/touch-input.ts` for the half that
+               sufficient — `mountGlspDiagram` supplies the half that
                carries the gesture to a canvas binding mouse events.
             */
             touch-action: none;

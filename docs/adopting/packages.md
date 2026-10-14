@@ -15,7 +15,7 @@ reads `<head>-<role>-<platform>`, and a name with no head spans all heads.
 | **Client integrations** | | |
 | [`@hydranium/client-theia`](../../packages/client-theia/README.md) | your host is Theia | What every head needs in a Theia application: logging, diagnostics and connection handling. |
 | [`@hydranium/data-client-theia`](../../packages/data-client-theia/README.md) | …and you run the data head | The data head's client side in Theia. |
-| [`@hydranium/glsp-client`](../../packages/glsp-client/README.md) | you run the GLSP head, whatever the host | The GLSP head's client side for any host: the diagram classes and the binder that mounts them. |
+| [`@hydranium/glsp-client`](../../packages/glsp-client/README.md) | you run the GLSP head, whatever the host | The GLSP head's client side for any host: the diagram classes, the binder that mounts them, and the mount for a plain page. |
 | [`@hydranium/glsp-client-theia`](../../packages/glsp-client-theia/README.md) | …and your host is Theia | The GLSP head's client side in Theia, including the diagram widget. |
 | [`@hydranium/client-browser`](../../packages/client-browser/README.md) | your host is a web page | The page side of a host whose heads run in a web worker: the worker bootstrap, the LSP handshake and the data head's port. |
 | **Tooling** | | |
