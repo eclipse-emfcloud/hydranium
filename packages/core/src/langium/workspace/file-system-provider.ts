@@ -164,6 +164,11 @@ export interface FileSystemProviderRegistry<
    providerFor(uri: URI): WritableFileSystemProvider;
 }
 
+/** Whether `provider` dispatches by scheme, as the provider bound on `workspace.FileSystemProvider` does. */
+export function isFileSystemProviderRegistry(provider: WritableFileSystemProvider): provider is FileSystemProviderRegistry {
+   return 'providerFor' in provider && typeof provider.providerFor === 'function';
+}
+
 /** Options for {@link DefaultFileSystemProviderRegistry}. */
 export interface FileSystemProviderRegistryOptions<
    THost extends WritableFileSystemProvider = WritableFileSystemProvider

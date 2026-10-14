@@ -22,12 +22,17 @@ import {
    type HeadPorts,
    type TransferredMessagePort,
    type WorkerBootstrapMessage,
-   type WorkerErrorMessage
+   type WorkerErrorMessage,
+   type WorkerReadyMessage
 } from '@hydranium/protocol';
 import { tick, waitFor } from '@hydranium/protocol/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OperationCancelled, type LangiumDocument } from '@hydranium/langium';
 import { hostHeadsInWorker, reportWorkerError } from '../../src/browser/index.js';
+import type { ServerSharedServicesMinimal } from '../../src/langium/shared-services.js';
+import { DefaultFileSystemProviderRegistry, type WritableFileSystemProvider } from '../../src/langium/workspace/file-system-provider.js';
+import { InMemoryFileSystemProvider } from '../../src/langium/workspace/in-memory-file-system-provider.js';
+import { persistentFileSystem } from '../../src/langium/workspace/persistent-file-system-provider.js';
 import { makeFakeAstNode, makeNoopSharedServices, makeStubLangiumDocuments } from '../../src/testing/index.js';
 
 type Listener = (event: unknown) => void;
@@ -65,7 +70,7 @@ function makeBootstrap(): WorkerBootstrapMessage {
    return { type: WORKER_BOOTSTRAP_MESSAGE_TYPE, ports: { lsp: makePort(), data: makePort(), glsp: makePort() } };
 }
 
-function readyMessages(): unknown[] {
+function readyMessages(): WorkerReadyMessage[] {
    return posted.filter(isWorkerReadyMessage);
 }
 
@@ -74,7 +79,7 @@ function errorReports(): WorkerErrorMessage[] {
 }
 
 /** What the runner reads for the validating build, with the gate and the build under the test's control. */
-function makeWorkspaceServices(uris: string[]) {
+function makeWorkspaceServices(uris: string[], fileSystemProvider?: WritableFileSystemProvider) {
    let initialized: () => void = () => undefined;
    let initializationFailed: (error: unknown) => void = () => undefined;
    const workspaceInitialized = new Promise<void>((resolve, reject) => {
@@ -85,6 +90,7 @@ function makeWorkspaceServices(uris: string[]) {
    let nextBuildFailure: Error | undefined;
    const services = makeNoopSharedServices({
       workspace: {
+         FileSystemProvider: fileSystemProvider,
          WorkspaceManager: { workspaceInitialized },
          LangiumDocuments: makeStubLangiumDocuments(uris.map(uri => ({ uri, root: makeFakeAstNode({ $type: 'Element' }) }))),
          DocumentBuilder: {
@@ -106,6 +112,19 @@ function makeWorkspaceServices(uris: string[]) {
          nextBuildFailure = error;
       }
    };
+}
+
+/** The bound slot as the framework binds it: the scheme registry over `host` and the providers registered by scheme. */
+function makeRegistry(
+   host: WritableFileSystemProvider,
+   fileSystemProviders: Record<string, WritableFileSystemProvider> = {}
+): WritableFileSystemProvider {
+   return new DefaultFileSystemProviderRegistry(
+      makeNoopSharedServices<ServerSharedServicesMinimal & { fileSystemProviders: Record<string, WritableFileSystemProvider> }>({
+         fileSystemProviders
+      }),
+      { host }
+   );
 }
 
 describe('hostHeadsInWorker', () => {
@@ -139,6 +158,118 @@ describe('hostHeadsInWorker', () => {
       await waitFor(() => readyMessages().length > 0);
 
       expect(prepared).toBe('plain');
+   });
+
+   it('posts the files under the root and each restored path once, keyed as the files are, the store over the seed, when given a root', async () => {
+      const seed = { 'a.x': 'seeded a', 'dir/b.x': 'seeded b', 'my file.x': 'seeded c' };
+      const store = {
+         load: async () => ({ 'a.x': 'stored a', 'my file.x': 'stored c', 'my%20file.x': 'stored c', 'only-stored.x': 'stored d' }),
+         write: async () => undefined,
+         remove: async () => undefined
+      };
+      const { fileSystemProvider } = await persistentFileSystem({ store, seed, rootUri: 'file:///w' });
+      const workspace = makeWorkspaceServices([], makeRegistry(fileSystemProvider(makeNoopSharedServices())));
+      hostHeadsInWorker(undefined, () => workspace.services, { rootUri: 'file:///w/' });
+
+      fire('message', { data: makeBootstrap() });
+      await waitFor(() => readyMessages().length > 0);
+
+      expect(readyMessages()[0].workspace).toEqual({
+         rootUri: 'file:///w/',
+         files: { 'a.x': 'stored a', 'dir/b.x': 'seeded b', 'my%20file.x': 'stored c', 'only-stored.x': 'stored d' },
+         restored: ['a.x', 'my%20file.x', 'only-stored.x']
+      });
+   });
+
+   it('posts the restored paths of a store keyed absolutely, and none from outside the root', async () => {
+      const store = {
+         load: async () => ({ 'file:///w/a.x': 'stored a', 'file:///other/a.x': 'stored elsewhere' }),
+         write: async () => undefined,
+         remove: async () => undefined
+      };
+      // `her/a.x` is what the outside key leaves once this root's length is cut
+      // off it, so only a check of the root keeps it out of `restored`.
+      const seed = { 'file:///w/b.x': 'seeded b', 'file:///w/her/a.x': 'seeded c' };
+      const { fileSystemProvider } = await persistentFileSystem({ store, seed });
+      const workspace = makeWorkspaceServices([], makeRegistry(fileSystemProvider(makeNoopSharedServices())));
+      hostHeadsInWorker(undefined, () => workspace.services, { rootUri: 'file:///w' });
+
+      fire('message', { data: makeBootstrap() });
+      await waitFor(() => readyMessages().length > 0);
+
+      expect(readyMessages()[0].workspace).toEqual({
+         rootUri: 'file:///w',
+         files: { 'a.x': 'stored a', 'b.x': 'seeded b', 'her/a.x': 'seeded c' },
+         restored: ['a.x']
+      });
+   });
+
+   it('posts a file named like a prototype key as any other', async () => {
+      const host = new InMemoryFileSystemProvider(makeNoopSharedServices(), {
+         seed: Object.fromEntries([['__proto__', 'seeded']]),
+         rootUri: 'file:///w'
+      });
+      const workspace = makeWorkspaceServices([], makeRegistry(host));
+      hostHeadsInWorker(undefined, () => workspace.services, { rootUri: 'file:///w' });
+
+      fire('message', { data: makeBootstrap() });
+      await waitFor(() => readyMessages().length > 0);
+
+      expect(Object.keys(readyMessages()[0].workspace?.files ?? {})).toEqual(['__proto__']);
+   });
+
+   it("posts the restored paths of the provider registered for the root's scheme", async () => {
+      const store = { load: async () => ({ 'a.x': 'stored a' }), write: async () => undefined, remove: async () => undefined };
+      const { fileSystemProvider } = await persistentFileSystem({ store, rootUri: 'memory:///w' });
+      const host = new InMemoryFileSystemProvider(makeNoopSharedServices(), {});
+      const registry = makeRegistry(host, { memory: fileSystemProvider(makeNoopSharedServices()) });
+      const workspace = makeWorkspaceServices([], registry);
+      hostHeadsInWorker(undefined, () => workspace.services, { rootUri: 'memory:///w' });
+
+      fire('message', { data: makeBootstrap() });
+      await waitFor(() => readyMessages().length > 0);
+
+      expect(readyMessages()[0].workspace).toEqual({ rootUri: 'memory:///w', files: { 'a.x': 'stored a' }, restored: ['a.x'] });
+   });
+
+   it('reports a listing that throws under the bootstrap phase and posts no ready message', async () => {
+      const host = new InMemoryFileSystemProvider(makeNoopSharedServices(), {});
+      vi.spyOn(host, 'readDirectorySync').mockImplementation(() => {
+         throw new Error('listing failed');
+      });
+      const workspace = makeWorkspaceServices([], makeRegistry(host));
+      hostHeadsInWorker(undefined, () => workspace.services, { rootUri: 'file:///w' });
+
+      fire('message', { data: makeBootstrap() });
+      await waitFor(() => errorReports().length > 0);
+
+      expect(errorReports().map(report => report.phase)).toEqual([WORKER_BOOTSTRAP_PHASE]);
+      expect(errorReports()[0].message).toContain('listing failed');
+      expect(readyMessages()).toHaveLength(0);
+   });
+
+   it('posts no restored paths from a filesystem without a store', async () => {
+      const host = new InMemoryFileSystemProvider(makeNoopSharedServices(), { seed: { 'a.x': 'seeded a' }, rootUri: 'file:///w' });
+      const workspace = makeWorkspaceServices([], makeRegistry(host));
+      hostHeadsInWorker(undefined, () => workspace.services, { rootUri: 'file:///w' });
+
+      fire('message', { data: makeBootstrap() });
+      await waitFor(() => readyMessages().length > 0);
+
+      expect(readyMessages()[0].workspace).toEqual({ rootUri: 'file:///w', files: { 'a.x': 'seeded a' }, restored: [] });
+   });
+
+   it('posts no workspace and reads no file without a root', async () => {
+      const host = new InMemoryFileSystemProvider(makeNoopSharedServices(), { seed: { 'a.x': 'seeded a' }, rootUri: 'file:///w' });
+      const readDirectorySync = vi.spyOn(host, 'readDirectorySync');
+      const workspace = makeWorkspaceServices([], makeRegistry(host));
+      hostHeadsInWorker(undefined, () => workspace.services);
+
+      fire('message', { data: makeBootstrap() });
+      await waitFor(() => readyMessages().length > 0);
+
+      expect(readyMessages()[0].workspace).toBeUndefined();
+      expect(readDirectorySync).not.toHaveBeenCalled();
    });
 
    it('answers one bootstrap and ignores a second', async () => {

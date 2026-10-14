@@ -9,6 +9,7 @@
 
 import {
    createMessagePortTransport,
+   Deferred,
    isWorkerErrorMessage,
    isWorkerReadyMessage,
    WORKER_BOOTSTRAP_MESSAGE_TYPE,
@@ -18,7 +19,8 @@ import {
    type Logger,
    type TransferredMessagePort,
    type WorkerBootstrapMessage,
-   type WorkerErrorMessage
+   type WorkerErrorMessage,
+   type WorkerReadyMessage
 } from '@hydranium/protocol';
 import { createMessageConnection, Emitter, type Disposable, type Event, type MessageConnection } from 'vscode-jsonrpc/browser';
 import { WorkerDataPort } from './worker-data-port';
@@ -57,6 +59,12 @@ export interface WorkerHeads {
     * this connection's copy rejects them unless they go by method name.
     */
    readonly glsp: MessageConnection;
+   /**
+    * The worker's ready message, once every head is up, with the files the
+    * worker holds when its host named a root for them. Rejects when the heads
+    * end first; stays pending for a worker that posts no ready message.
+    */
+   readonly ready: Promise<WorkerReadyMessage>;
    /**
     * Every failure the worker reports on its global, and its `error` event
     * under {@link WORKER_ERROR_EVENT_PHASE}, before and after the heads have
@@ -113,6 +121,9 @@ export function connectWorkerHeads(worker: Worker, options: WorkerHeadsOptions =
    const glspConnection = createMessageConnection(glspTransport.reader, glspTransport.writer, options.logger?.with('GLSP head'));
    const errorEmitter = new Emitter<WorkerErrorMessage>();
    const disposeEmitter = new Emitter<void>();
+   const ready = new Deferred<WorkerReadyMessage>();
+   // A page that never reads it must not see the rejection as unhandled.
+   ready.promise.catch(() => undefined);
 
    // Whether the worker is past its bootstrap: it says so with its ready
    // message, and a worker that posts none shows it by posting on a head's
@@ -133,6 +144,7 @@ export function connectWorkerHeads(worker: Worker, options: WorkerHeadsOptions =
       lspConnection.dispose();
       dataPort.dispose();
       glspConnection.dispose();
+      ready.reject(new Error('The worker heads ended before the worker was ready'));
       disposeEmitter.fire();
       disposeEmitter.dispose();
    };
@@ -153,6 +165,7 @@ export function connectWorkerHeads(worker: Worker, options: WorkerHeadsOptions =
    worker.addEventListener('message', event => {
       if (isWorkerReadyMessage(event.data)) {
          workerUp = true;
+         ready.resolve(event.data);
          return;
       }
       if (!isWorkerErrorMessage(event.data)) {
@@ -168,6 +181,7 @@ export function connectWorkerHeads(worker: Worker, options: WorkerHeadsOptions =
       lsp: lspConnection,
       data: dataPort,
       glsp: glspConnection,
+      ready: ready.promise,
       onWorkerError: errorEmitter.event,
       onDispose: disposeEmitter.event,
       dispose

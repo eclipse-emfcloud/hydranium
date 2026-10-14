@@ -226,7 +226,7 @@ export class PersistentFileSystemProvider extends InMemoryFileSystemProvider {
    }
 
    /** The absolute URI a store-space `path` addresses. */
-   protected storeUri(path: string): URI {
+   storeUri(path: string): URI {
       return URI.parse(this.storeRoot === undefined ? path : `${this.storeRoot}${path}`);
    }
 

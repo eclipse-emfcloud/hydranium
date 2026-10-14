@@ -64,6 +64,21 @@ export const WORKER_READY_MESSAGE_TYPE = 'hydranium/ready';
 
 export interface WorkerReadyMessage {
    readonly type: typeof WORKER_READY_MESSAGE_TYPE;
+   /** The files the heads came up on, when the worker's host named a root to read them under. */
+   readonly workspace?: WorkerWorkspace;
+}
+
+/**
+ * What the worker's filesystem holds under {@link rootUri} once its heads are
+ * up, which is what a page opens its editors on: once a store can differ from
+ * the seed, an editor opened on the seed overwrites the restored document.
+ */
+export interface WorkerWorkspace {
+   readonly rootUri: string;
+   /** Every file's content, keyed by its path relative to {@link rootUri}. */
+   readonly files: Readonly<Record<string, string>>;
+   /** The paths of {@link files} that came out of the store rather than the seed. */
+   readonly restored: readonly string[];
 }
 
 export function isWorkerReadyMessage(value: unknown): value is WorkerReadyMessage {

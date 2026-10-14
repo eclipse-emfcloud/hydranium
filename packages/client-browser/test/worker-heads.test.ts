@@ -246,6 +246,35 @@ describe('connectWorkerHeads', () => {
       ).toBe('pending');
    });
 
+   it('resolves ready with the ready message, workspace included', async () => {
+      const worker = new RecordingWorker();
+      const heads = connect(worker);
+      const message = { type: WORKER_READY_MESSAGE_TYPE, workspace: { rootUri: 'file:///w', files: { 'a.x': 'text' }, restored: ['a.x'] } };
+
+      worker.fire('message', { data: message });
+
+      await expect(heads.ready).resolves.toEqual(message);
+   });
+
+   it('rejects ready when a failed bootstrap ends the heads first', async () => {
+      const worker = new RecordingWorker();
+      const heads = connect(worker);
+
+      worker.fire('message', { data: errorReport(WORKER_BOOTSTRAP_PHASE) });
+
+      await expect(heads.ready).rejects.toThrow('ended before the worker was ready');
+   });
+
+   it('keeps ready resolved when the heads end after it', async () => {
+      const worker = new RecordingWorker();
+      const heads = connect(worker);
+
+      worker.fire('message', { data: { type: WORKER_READY_MESSAGE_TYPE } });
+      heads.dispose();
+
+      await expect(heads.ready).resolves.toEqual({ type: WORKER_READY_MESSAGE_TYPE });
+   });
+
    it('rejects pending requests on a failed bootstrap report', async () => {
       const worker = new RecordingWorker();
       const heads = connect(worker);

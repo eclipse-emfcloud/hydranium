@@ -19,9 +19,7 @@ import {
    createMessagePortTransport,
    NoopLogger,
    type SaveTextDocumentParams,
-   SaveTextDocumentRequest,
-   type TextState,
-   textHash
+   SaveTextDocumentRequest
 } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import type * as monaco from 'monaco-editor-core';
@@ -66,7 +64,7 @@ import {
    type ServerCapabilities,
    type WorkspaceEdit
 } from 'vscode-languageserver-protocol';
-import { type DocumentPersister, MONACO_CLIENT_CAPABILITIES, MonacoLspClient, saveDirtyDocuments } from '../src/monaco';
+import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient } from '../src/monaco';
 import { anotherCopyConnection } from './another-copy-connection.js';
 import * as monacoDouble from './monaco-editor-core-double.js';
 
@@ -1541,149 +1539,6 @@ describe('MonacoLspClient', () => {
             ['file:///d.two', { lineNumber: 1, column: 1 }]
          ]);
       });
-   });
-});
-
-describe('saveDirtyDocuments', () => {
-   interface SessionDouble extends DocumentPersister {
-      readonly opened: string[];
-      readonly closed: string[];
-      readonly persisted: string[];
-      failing?: string;
-      /** The text the server holds per URI; the model's own unless set, as for a `didChange` it has handled. */
-      readonly serverText: Map<string, string>;
-   }
-
-   function makeSession(): SessionDouble {
-      const session: SessionDouble = {
-         opened: [],
-         closed: [],
-         persisted: [],
-         serverText: new Map(),
-         async withOpenDocument(args, fn) {
-            session.opened.push(args.uri);
-            const text: TextState = {
-               version: 1,
-               hash: textHash(session.serverText.get(args.uri) ?? modelOf(args.uri).getValue()),
-               dirty: true
-            };
-            try {
-               return await fn({ text });
-            } finally {
-               session.closed.push(args.uri);
-            }
-         },
-         async persistDocument(args) {
-            if (args.uri === session.failing) {
-               throw new Error('quota');
-            }
-            session.persisted.push(`${args.uri}@${String(args.baseVersion)}`);
-         }
-      };
-      return session;
-   }
-
-   function makeDirtyClient(ends: Ends): MonacoLspClient {
-      const client = new MonacoLspClient(ends.page, CAPABILITIES, { languages: LANGUAGES });
-      toDispose.push(client);
-      for (const uri of ['file:///a.one', 'file:///b.two', 'file:///c.two']) {
-         client.openDocument(uri, 'text');
-         modelOf(uri).edit([{ range: range(1, 1, 1, 1), text: '!' }]);
-      }
-      return client;
-   }
-
-   it('persists each dirty document through the session, marks it saved and returns what it saved', async () => {
-      const ends = makeEnds();
-      const client = makeDirtyClient(ends);
-      const session = makeSession();
-
-      const saved = await saveDirtyDocuments(client, session);
-
-      expect(saved).toEqual([
-         { uri: 'file:///a.one', text: '!text', version: 2, model: modelOf('file:///a.one') },
-         { uri: 'file:///b.two', text: '!text', version: 2, model: modelOf('file:///b.two') },
-         { uri: 'file:///c.two', text: '!text', version: 2, model: modelOf('file:///c.two') }
-      ]);
-      expect(session.persisted).toEqual(['file:///a.one@any', 'file:///b.two@any', 'file:///c.two@any']);
-      expect(session.closed).toEqual(session.opened);
-      expect(client.dirtyDocuments()).toEqual([]);
-   });
-
-   it('saves only the named URIs', async () => {
-      const ends = makeEnds();
-      const client = makeDirtyClient(ends);
-      const session = makeSession();
-
-      const saved = await saveDirtyDocuments(client, session, ['file:///b.two']);
-
-      expect(saved.map(document => document.uri)).toEqual(['file:///b.two']);
-      expect(client.dirtyDocuments().map(document => document.uri)).toEqual(['file:///a.one', 'file:///c.two']);
-   });
-
-   it('leaves the documents a failing persist never reached dirty', async () => {
-      const ends = makeEnds();
-      const client = makeDirtyClient(ends);
-      const session = makeSession();
-      session.failing = 'file:///b.two';
-
-      await expect(saveDirtyDocuments(client, session)).rejects.toThrow('quota');
-
-      expect(client.dirtyDocuments().map(document => document.uri)).toEqual(['file:///b.two', 'file:///c.two']);
-   });
-
-   it('reads each buffer just before its own open, so a keystroke during an earlier save does not fail it', async () => {
-      const ends = makeEnds();
-      const client = makeDirtyClient(ends);
-      const session = makeSession();
-      const open = session.withOpenDocument.bind(session);
-      session.withOpenDocument = async (args, fn) => {
-         if (args.uri === 'file:///a.one') {
-            modelOf('file:///b.two').edit([{ range: range(1, 1, 1, 1), text: '?' }]);
-         }
-         return open(args, fn);
-      };
-
-      const saved = await saveDirtyDocuments(client, session);
-
-      expect(saved.map(document => document.text)).toEqual(['!text', '?!text', '!text']);
-      expect(client.dirtyDocuments()).toEqual([]);
-   });
-
-   it("saves a named URI given in the host's form, not only in Monaco's", async () => {
-      const ends = makeEnds();
-      const client = makeDirtyClient(ends);
-      client.openDocument('file:///w/my file.one', 'text');
-      modelOf('file:///w/my%20file.one').edit([{ range: range(1, 1, 1, 1), text: '!' }]);
-      const session = makeSession();
-
-      const saved = await saveDirtyDocuments(client, session, ['file:///w/my file.one']);
-
-      expect(saved.map(document => document.uri)).toEqual(['file:///w/my%20file.one']);
-      expect(client.dirtyDocuments().map(document => document.uri)).toEqual(['file:///a.one', 'file:///b.two', 'file:///c.two']);
-   });
-
-   it("refuses a document whose server text is not the buffer's, naming it, and leaves it dirty", async () => {
-      const ends = makeEnds();
-      const client = makeDirtyClient(ends);
-      const session = makeSession();
-      session.serverText.set('file:///b.two', 'text');
-
-      await expect(saveDirtyDocuments(client, session)).rejects.toThrow(/file:\/\/\/b\.two/);
-
-      expect(session.persisted).toEqual(['file:///a.one@any']);
-      expect(client.dirtyDocuments().map(document => document.uri)).toEqual(['file:///b.two', 'file:///c.two']);
-   });
-
-   it('saves nothing when nothing is dirty', async () => {
-      const ends = makeEnds();
-      const client = new MonacoLspClient(ends.page, CAPABILITIES, { languages: LANGUAGES });
-      toDispose.push(client);
-      client.openDocument('file:///a.one', 'text');
-      const session = makeSession();
-
-      expect(await saveDirtyDocuments(client, session)).toEqual([]);
-      expect(session.opened).toEqual([]);
    });
 });
 
