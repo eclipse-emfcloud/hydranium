@@ -48,6 +48,17 @@ export class HydraniumGlspRecordingCommand<TSourceModel extends AnyObject> exten
    /** The operation this command opened, when it executed outside one. */
    protected ownOperation?: HydraniumGlspOperationCommand<TSourceModel>;
 
+   /** Backing field for {@link dropped}. */
+   protected _dropped = false;
+
+   /**
+    * Whether the operation this command opened, executing outside one, had its
+    * write dropped: the command changed nothing, and its undo does nothing.
+    */
+   get dropped(): boolean {
+      return this._dropped;
+   }
+
    constructor(
       modelState: HydraniumGlspRecordingState<TSourceModel>,
       /** Human-readable label for the operation; appears in the timing-pair log line. */
@@ -66,7 +77,9 @@ export class HydraniumGlspRecordingCommand<TSourceModel extends AnyObject> exten
       const open = openOperationOf(this.modelState);
       if (!open) {
          const operation = new HydraniumGlspOperationCommand<TSourceModel>(this.modelState);
-         if ((await this.modelState.runExclusive(() => runOperation(operation, () => this))) === 'executed') {
+         const outcome = await this.modelState.runExclusive(() => runOperation(operation, () => this));
+         this._dropped = outcome === 'dropped';
+         if (outcome === 'executed') {
             this.ownOperation = operation;
          }
          return;

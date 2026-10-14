@@ -8,9 +8,13 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { type Action, ComputedBoundsAction, GModelRoot } from '@eclipse-glsp/server';
+import { type Action, ComputedBoundsAction, GModelRoot, MessageAction } from '@eclipse-glsp/server';
+import { type MessageDefinition } from '@hydranium/protocol';
 import 'reflect-metadata';
-import { HydraniumGlspComputedBoundsActionHandler } from '../src/computed-bounds/hydranium-glsp-computed-bounds-action-handler.js';
+import {
+   DIAGRAM_LAYOUT_STALE,
+   HydraniumGlspComputedBoundsActionHandler
+} from '../src/computed-bounds/hydranium-glsp-computed-bounds-action-handler.js';
 
 interface LogCapture {
    debug: string[];
@@ -70,9 +74,10 @@ function bindFakes(
    state: FakeState,
    submission: FakeSubmissionHandler
 ): HydraniumGlspComputedBoundsActionHandler {
-   const slots = handler as unknown as { modelState: FakeState; submissionHandler: FakeSubmissionHandler };
+   const slots = handler as unknown as { modelState: FakeState; submissionHandler: FakeSubmissionHandler; sharedServices: unknown };
    slots.modelState = state;
    slots.submissionHandler = submission;
+   slots.sharedServices = { MessageRenderer: { renderMessage: (message: MessageDefinition<string>) => `rendered ${message.code}` } };
    return handler;
 }
 
@@ -81,14 +86,14 @@ function makeAction(revision: number): ComputedBoundsAction {
 }
 
 describe('HydraniumGlspComputedBoundsActionHandler', () => {
-   it('logs an error when revision mismatches AND initial handshake is pending, since the diagram stays empty', () => {
+   it('logs an error and tells the client when revision mismatches AND initial handshake is pending, since the diagram stays empty', () => {
       const log = makeLog();
       const state = makeState(makeRoot(7), log);
       const handler = bindFakes(new HydraniumGlspComputedBoundsActionHandler(), state, { hasPendingInitialRequest: () => true });
 
       const result = handler.execute(makeAction(3)) as Action[];
 
-      expect(result).toEqual([]);
+      expect(result).toEqual([MessageAction.create(`rendered ${DIAGRAM_LAYOUT_STALE.code}`, { severity: 'ERROR' })]);
       expect(log.warn).toEqual([]);
       expect(log.error).toHaveLength(1);
       expect(log.error[0]).toContain('initial handshake');

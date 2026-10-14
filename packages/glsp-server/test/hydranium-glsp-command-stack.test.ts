@@ -100,3 +100,15 @@ describe('upstream handleError', () => {
       ).toBe('9edbf2ea5a8565a8ee15d8ae64a6d873488ba9bf266ac7ad799b6f8d82d9e2eb');
    });
 });
+
+describe('upstream execute', () => {
+   it('still matches the body HydraniumGlspCommandStack was lifted from', () => {
+      // Whitespace-insensitive so a reformat alone does not redden.
+      const body = DefaultCommandStack.prototype.execute.toString().replace(/\s+/g, ' ').trim();
+      expect(
+         createHash('sha256').update(body).digest('hex'),
+         'upstream @eclipse-glsp/server changed DefaultCommandStack.execute — re-lift the body into ' +
+            'HydraniumGlspCommandStack (keeping the skipped push of a dropped recording command) and update this digest'
+      ).toBe('64d5c7e074f0e3f7f791f8f6c769e6108f6f99acef6db95a58d6e36994362355');
+   });
+});

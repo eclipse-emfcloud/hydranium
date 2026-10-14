@@ -19,6 +19,7 @@ import {
    UndoAction
 } from '@eclipse-glsp/server';
 import { DiagramStatus, type HydraniumGlspSubmissionHandler } from '@hydranium/glsp-server';
+import { DIAGRAM_EDIT_DROPPED } from '@hydranium/glsp-server/messages';
 import { waitFor } from '@hydranium/protocol/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { OrderFlowCommand } from '../../src/glsp/order-flow-command.js';
@@ -148,7 +149,7 @@ describe('the exits of an operation', () => {
       }).toEqual({ writes: 2, pay: true, ship: true, foreign: true, pick: true, canUndo: true });
    });
 
-   it('lands nothing, reverts the side effects, pushes no undo step and submits the client view when the write is dropped', async () => {
+   it('lands nothing, reverts the side effects, pushes no undo step, warns and submits the client when the write is dropped', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
       await apply(diagram, move(diagram, 'Cancel', 300, 300));
@@ -172,13 +173,18 @@ describe('the exits of an operation', () => {
             )
       );
 
+      const before = diagram.actions.length;
       await apply(diagram, create);
       const layout = textOf(opened, layoutUri);
       const dropped = {
          pay: layout.includes('node Pay at 40, 100'),
          ship: layout.includes('node Ship at 665, 205'),
          builtNames: builtProcessRoot(opened).nodes.map(node => node.name),
-         sideEffects
+         sideEffects,
+         messages: diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ severity, message }) => ({ severity, message }))
       };
       // The one undo step there is the move of Cancel.
       await undoOrRedo(diagram, UndoAction.create());
@@ -188,9 +194,75 @@ describe('the exits of an operation', () => {
          cancelUndone: !textOf(opened, layoutUri).includes('node Cancel at 300, 300'),
          canUndo: commandStackOf(diagram).canUndo()
       }).toEqual({
-         dropped: { pay: true, ship: true, builtNames: ['Pay', 'PaymentOk', 'Pick', 'Ship', 'Cancel'], sideEffects: 0 },
+         dropped: {
+            pay: true,
+            ship: true,
+            builtNames: ['Pay', 'PaymentOk', 'Pick', 'Ship', 'Cancel'],
+            sideEffects: 0,
+            messages: [{ severity: 'WARNING', message: DIAGRAM_EDIT_DROPPED.text }]
+         },
          cancelUndone: true,
          canUndo: false
+      });
+   });
+
+   it('warns the client and pushes no undo step when a recording command executed outside an operation has its write dropped', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await changeTextUnbuilt(opened, text => text.replace('node Pay at 40, 100', 'node Pay at 45, 105'), layoutUri);
+      const before = diagram.actions.length;
+
+      await commandStackOf(diagram).execute(new OrderFlowCommand(diagram.state, 'Outside', () => place(diagram, 'Pay', 50, 110)));
+      // Executed outside any action, so the warning is queued on the dispatcher rather than sent inline.
+      await waitFor(() => diagram.actions.slice(before).some(action => MessageAction.is(action)), { message: 'the client was not warned' });
+
+      expect({
+         pay: textOf(opened, layoutUri).includes('node Pay at 45, 105'),
+         messages: diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ severity, message }) => ({ severity, message })),
+         canUndo: commandStackOf(diagram).canUndo()
+      }).toEqual({ pay: true, messages: [{ severity: 'WARNING', message: DIAGRAM_EDIT_DROPPED.text }], canUndo: false });
+   });
+
+   describe('a compound of recording commands executed outside an operation', () => {
+      /** Execute a compound moving Pay, whose write conflicts with a foreign move, and `rest`; answer the warnings the stack logged. */
+      async function executeCompound(opened: Setup, ...rest: OrderFlowCommand[]): Promise<string[]> {
+         const { diagram, layoutUri } = opened;
+         const stack = commandStackOf(diagram);
+         const warn = vi.spyOn((stack as unknown as { logger: { warn(message: string): void } }).logger, 'warn');
+         await changeTextUnbuilt(opened, text => text.replace('node Pay at 40, 100', 'node Pay at 45, 105'), layoutUri);
+         await stack.execute(
+            new CompoundCommand([new OrderFlowCommand(diagram.state, 'Pay', () => place(diagram, 'Pay', 50, 110)), ...rest])
+         );
+         return warn.mock.calls.map(([message]) => message);
+      }
+
+      it('pushes the step and warns that its undo leaves out the dropped write, when another write landed', async () => {
+         const opened = await openDiagram();
+         const { diagram, layoutUri } = opened;
+
+         const warnings = await executeCompound(
+            opened,
+            new OrderFlowCommand(diagram.state, 'Ship', () => place(diagram, 'Ship', 700, 220))
+         );
+
+         const layout = textOf(opened, layoutUri);
+         expect({
+            pay: layout.includes('node Pay at 45, 105'),
+            ship: layout.includes('node Ship at 700, 220'),
+            canUndo: commandStackOf(diagram).canUndo(),
+            warnings
+         }).toEqual({ pay: true, ship: true, canUndo: true, warnings: [expect.stringContaining('1 of 2 commands of a compound')] });
+      });
+
+      it('pushes no step when every write was dropped', async () => {
+         const opened = await openDiagram();
+
+         const warnings = await executeCompound(opened);
+
+         expect({ canUndo: commandStackOf(opened.diagram).canUndo(), warnings }).toEqual({ canUndo: false, warnings: [] });
       });
    });
 

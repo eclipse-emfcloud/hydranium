@@ -7,15 +7,18 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { DefaultCommandStack, ModelState } from '@eclipse-glsp/server';
+import { type Command, CompoundCommand, DefaultCommandStack, ModelState } from '@eclipse-glsp/server';
 import { type ServerSharedServices } from '@hydranium/core';
 import { inject, injectable } from 'inversify';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
+import { isCommandArray } from './hydranium-glsp-operation-command.js';
+import { HydraniumGlspRecordingCommand } from './hydranium-glsp-recording-command.js';
 
 /**
  * GLSP's command stack with the diagram's dirty state read from the text store:
  * dirty while any document the diagram's client session has open differs from
- * its file, as the store last knew the file. Undo and redo are GLSP's.
+ * its file, as the store last knew the file. Undo and redo are GLSP's; a
+ * command whose every write was dropped is not pushed.
  *
  * GLSP's own answer counts the diagram's commands since its last save, so it
  * misses every change the diagram did not make: another client's unsaved edit
@@ -35,6 +38,43 @@ export class HydraniumGlspCommandStack extends DefaultCommandStack {
    }
 
    /**
+    * Lifted from `@eclipse-glsp/server` 2.7.0's `DefaultCommandStack.execute`,
+    * pushing no entry for a recording command executed outside an operation
+    * whose write was dropped, or a `CompoundCommand` of only such commands at
+    * any depth: its undo would do nothing, and the user's next undo would be
+    * spent on it. A compound that also changed something is pushed, warning
+    * that its undo step leaves out what was dropped. The accompanying test
+    * pins upstream's source.
+    */
+   override async execute(command: Command): Promise<void> {
+      try {
+         await command.execute();
+      } catch (error: unknown) {
+         this.handleError(error);
+      }
+      const leaves = leavesOf(command);
+      const dropped = leaves.filter(leaf => leaf instanceof HydraniumGlspRecordingCommand && leaf.dropped).length;
+      if (dropped > 0 && dropped === leaves.length) {
+         return;
+      }
+      if (dropped > 0) {
+         this.logger.warn(
+            `${dropped} of ${leaves.length} commands of a compound executed outside an operation had their write dropped, ` +
+               'so its undo step leaves them out; execute them in one operation to write and undo them as one'
+         );
+      }
+      // Clear the command list past the top (i.e. the old redo list)
+      this.commands = this.commands.slice(0, this.top + 1);
+      this.commands.push(command);
+      ++this.top;
+      // if the saveIndex points to the old redo list we can never reach a state again
+      // where save is not necessary. => ensure that `isDirty` always returns true
+      if (this.saveIndex >= this.top) {
+         this.saveIndex = -2;
+      }
+   }
+
+   /**
     * Lifted from `@eclipse-glsp/server` 2.7.0's `DefaultCommandStack.handleError`
     * without its `error` line: the failure is rethrown, and whoever ends it
     * logs it. The accompanying test pins upstream's source.
@@ -44,4 +84,14 @@ export class HydraniumGlspCommandStack extends DefaultCommandStack {
       this.logger.debug('A command failed; the command stack was flushed');
       throw error;
    }
+}
+
+/**
+ * The commands `command` executes: itself, or a `CompoundCommand`'s children
+ * at any depth, read from GLSP's protected `CompoundCommand.commands`, as the
+ * operation reads them.
+ */
+function leavesOf(command: Command): Command[] {
+   const children: unknown = command instanceof CompoundCommand ? Reflect.get(command, 'commands') : undefined;
+   return isCommandArray(children) ? children.flatMap(leavesOf) : [command];
 }

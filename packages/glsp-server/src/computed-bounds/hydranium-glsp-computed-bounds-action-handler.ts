@@ -12,12 +12,27 @@ import {
    type ComputedBoundsAction,
    ComputedBoundsActionHandler,
    type GModelRoot,
-   type MaybePromise
+   type MaybePromise,
+   MessageAction
 } from '@eclipse-glsp/server';
 import { type AstNode } from '@hydranium/langium';
-import { injectable } from 'inversify';
+import { type ServerSharedServices } from '@hydranium/core';
+import { defineMessage } from '@hydranium/protocol';
+import { inject, injectable } from 'inversify';
 import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
+import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { type HydraniumGlspSubmissionHandler } from '../submission/hydranium-glsp-submission-handler.js';
+
+/**
+ * The first layout of a diagram arrived for a model the server has since
+ * replaced, so the diagram stays empty. Rendered at the raise site, since
+ * GLSP's message action has no slot for its identity. It names the recovery:
+ * a reopened diagram requests its model again.
+ */
+export const DIAGRAM_LAYOUT_STALE = defineMessage(
+   'hydranium/glsp-server/diagram-layout-stale',
+   'Could not show this diagram: the document changed while it was opening. Close the diagram and open it again.'
+);
 
 /**
  * GLSP {@link ComputedBoundsActionHandler} base shared by all hydranium
@@ -32,7 +47,8 @@ import { type HydraniumGlspSubmissionHandler } from '../submission/hydranium-gls
  * very first `computedBounds` arrives with a revision the server has already
  * bumped, the subsequent `SetModelAction` response never fires and the diagram
  * stays stuck at "model loading…". Adopters need this initial-handshake case
- * logged as an error: the diagram stays empty, so the requested load failed.
+ * logged as an error, and the client told with {@link DIAGRAM_LAYOUT_STALE}:
+ * the diagram stays empty, so the requested load failed.
  *
  * **Handshake detection** uses
  * {@link HydraniumGlspSubmissionHandler.hasPendingInitialRequest} — true
@@ -49,6 +65,7 @@ import { type HydraniumGlspSubmissionHandler } from '../submission/hydranium-gls
 export class HydraniumGlspComputedBoundsActionHandler extends ComputedBoundsActionHandler {
    declare protected readonly modelState: AbstractHydraniumGlspState<AstNode, unknown>;
    declare protected readonly submissionHandler: HydraniumGlspSubmissionHandler<AstNode, unknown>;
+   @inject(HydraniumTypes.SharedCoreServices) protected readonly sharedServices!: ServerSharedServices;
 
    override execute(action: ComputedBoundsAction): MaybePromise<Action[]> {
       this.modelState.logger.debug(`ComputedBoundsActionHandler.execute entered: action.revision=${action.revision}`);
@@ -59,6 +76,7 @@ export class HydraniumGlspComputedBoundsActionHandler extends ComputedBoundsActi
                `ComputedBounds rejected (initial handshake): action.revision=${action.revision} model.revision=${model.revision} — ` +
                   'initial SetModelAction will not fire (empty diagram)'
             );
+            return [MessageAction.create(this.sharedServices.MessageRenderer.renderMessage(DIAGRAM_LAYOUT_STALE), { severity: 'ERROR' })];
          } else {
             this.modelState.logger.debug(
                `ComputedBounds dropped (stale): action.revision=${action.revision} model.revision=${model.revision} — ` +
