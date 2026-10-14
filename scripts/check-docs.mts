@@ -32,14 +32,21 @@ const BASELINE_FILE = 'scripts/check-docs-baseline.json';
 const OUT_OF_SCOPE_TREES = new Set(['.changeset', '.github', '.claude', 'internal']);
 
 /**
- * Our own agent skills are documentation and are checked; the tool finds them,
- * so no index has to reach them. A skill vendored through `skills-lock.json` is
- * someone else's text, pinned by hash, so it stays out.
+ * Our own agent skills and path-scoped rules are documentation and are checked;
+ * the tool finds them, so no index has to reach them. A skill vendored through
+ * `skills-lock.json` is someone else's text, pinned by hash, so it stays out.
  */
 const SKILLS = '.claude/skills/';
+const FOUND_BY_TOOL = [SKILLS, '.claude/rules/'];
 
-function isSkill(page: string): boolean {
-   return page.startsWith(SKILLS);
+function foundByTool(page: string): boolean {
+   return FOUND_BY_TOOL.some(prefix => page.startsWith(prefix));
+}
+
+/** Whether a page is ours to check: outside the skipped trees, or found by the tool and not vendored. */
+export function inScope(page: string, vendored: ReadonlySet<string>): boolean {
+   if (page.startsWith(SKILLS)) return !vendored.has(page.slice(SKILLS.length).split('/')[0]);
+   return foundByTool(page) || !OUT_OF_SCOPE_TREES.has(page.split('/')[0]);
 }
 
 function vendoredSkills(): Set<string> {
@@ -255,9 +262,7 @@ function listPages(): string[] {
    });
    const vendored = vendoredSkills();
    return [...new Set(stdout.split('\0').filter(Boolean))]
-      .filter(file =>
-         isSkill(file) ? !vendored.has(file.slice(SKILLS.length).split('/')[0]) : !OUT_OF_SCOPE_TREES.has(file.split('/')[0])
-      )
+      .filter(file => inScope(file, vendored))
       .filter(file => existsSync(join(REPO_ROOT, file)))
       .sort();
 }
@@ -331,6 +336,15 @@ function runSelfTests(): boolean {
          passed:
             unreachable(['README.md', 'a.md', 'b.md', 'c.md'], page => ({ 'README.md': ['a.md'], 'a.md': ['b.md'] })[page] ?? []).join() ===
             'c.md'
+      },
+      {
+         name: 'a skill and a path-scoped rule are checked and need no index; a vendored skill and other agent files are not',
+         passed:
+            inScope('.claude/skills/ours/SKILL.md', new Set(['theirs'])) &&
+            inScope('.claude/rules/area.md', new Set()) &&
+            foundByTool('.claude/rules/area.md') &&
+            !inScope('.claude/skills/theirs/SKILL.md', new Set(['theirs'])) &&
+            !inScope('.claude/agents/helper.md', new Set())
       }
    ];
    let broken = false;
@@ -415,7 +429,8 @@ for (const [page, text] of texts) {
 }
 
 const current: Counts = {};
-for (const page of unreachable(pages, page => linkGraph.get(page) ?? []).filter(page => !isSkill(page))) current[page] = { unreachable: 1 };
+for (const page of unreachable(pages, page => linkGraph.get(page) ?? []).filter(page => !foundByTool(page)))
+   current[page] = { unreachable: 1 };
 for (const [page, text] of texts) {
    for (const [category, count] of rotCounts(page, text, peersOf(page))) {
       current[page] = { ...current[page], [category]: count };
