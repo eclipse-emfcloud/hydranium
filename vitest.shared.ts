@@ -14,7 +14,17 @@ import { configDefaults, defineConfig, type UserConfigExport } from 'vitest/conf
 // `vscode-jsonrpc` 9 exports `./browser` under the `browser` condition alone, so
 // a Node test of a browser transport reaches it by path. A `browser` resolve
 // condition instead breaks Langium's test helpers' imports from `vscode-languageserver`.
-const jsonrpcBrowser = join(dirname(createRequire(import.meta.url).resolve('vscode-jsonrpc')), '../browser/main.js');
+//
+// `vscode-languageserver/browser` goes to the NODE entry instead: its browser
+// entry `require`s `vscode-languageserver-protocol/browser` through Node's own
+// resolver, which no alias reaches and which rejects the subpath. The two
+// entries share `createConnection(features, reader, writer, options)`, the one
+// form the worker-hosted head uses, so a Node test runs the head's real code
+// over the port transport; only the browser entry's own module stays for the
+// browser e2e tier to load.
+const require = createRequire(import.meta.url);
+const jsonrpcBrowser = join(dirname(require.resolve('vscode-jsonrpc')), '../browser/main.js');
+const languageServerNode = join(dirname(require.resolve('vscode-languageserver')), '../node/main.js');
 
 /**
  * Shared Vitest base for every hydranium package. A package's `vitest.config.ts`
@@ -35,7 +45,12 @@ const jsonrpcBrowser = join(dirname(createRequire(import.meta.url).resolve('vsco
  */
 export function definePackageVitestConfig(name: string, options: { exclude?: readonly string[] } = {}): UserConfigExport {
    return defineConfig({
-      resolve: { alias: [{ find: /^vscode-jsonrpc\/browser$/, replacement: jsonrpcBrowser }] },
+      resolve: {
+         alias: [
+            { find: /^vscode-jsonrpc\/browser$/, replacement: jsonrpcBrowser },
+            { find: /^vscode-languageserver\/browser$/, replacement: languageServerNode }
+         ]
+      },
       test: {
          name,
          environment: 'node',

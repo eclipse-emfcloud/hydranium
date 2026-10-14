@@ -11,8 +11,9 @@ Heads: LSP · data · GLSP
 
 The heads' `.` entries run anywhere, a browser included. Anything that needs
 Node sits behind a `/node` subpath, such as `@hydranium/core/node`, and your
-browser bundle must not import one. The GLSP head has a `/browser` subpath for
-its worker launcher. Run all heads in one worker, so they share one workspace.
+browser bundle must not import one. What starts a head in a worker sits behind
+a `/browser` subpath of its package. Run all heads in one worker, so they share
+one workspace.
 
 ## Steps
 
@@ -28,51 +29,60 @@ its worker launcher. Run all heads in one worker, so they share one workspace.
 2. **Give every head its own `MessagePort`.** In the page, build the `Worker`
    and hand it to `connectWorkerHeads` from `@hydranium/client-browser`, which
    creates one `MessageChannel` per head and transfers the ports to the worker
-   in the framework's bootstrap message. In the worker, read that message with
-   `isWorkerBootstrapMessage` from `@hydranium/protocol` and start each head
-   on its port. Never bind a head to the worker's global scope: heads on one
-   global read each other's messages, and GLSP posts a startup string there
-   whatever you configure. In the worker, connect each port through
-   `createMessagePortTransport` from `@hydranium/protocol`; `connectWorkerHeads`
-   does the page's end, so that closing a connection on one end closes the
-   head on the other. On the
-   LSP port's close, call `TextDocuments.closeLanguageClientDocuments()`, since
-   a worker has no process to exit. See `src/worker/order-flow-worker.ts`.
+   in the framework's bootstrap message. In the worker, answer that message
+   with `hostHeadsInWorker` from `@hydranium/core/browser`: it calls your
+   `start` with the ports, and you start each head on its port with the
+   starter from its package. Never bind a head to the worker's global scope:
+   heads on one global read each other's messages, and GLSP posts a startup
+   string there whatever you configure. Each starter connects its port so that
+   closing a connection on one end closes the head on the other; the LSP
+   starter also closes the language client's documents when the page closes
+   its end, since a worker has no process to exit. Keep `start` synchronous,
+   as its type says: a message that arrives while the worker awaits between
+   building a head and listening is lost. See `src/worker/order-flow-worker.ts`.
 
    Import `reflect-metadata` first in the worker's entry, before any module
    with an Inversify decorator. GLSP's server classes read their metadata when
    they are defined, so a later import gives a container that resolves
    nothing, with errors naming an injected parameter rather than the import.
 
-   Start the GLSP head on its port:
-
 <!-- snippet-preamble
 import { LogLevel, ServerModule } from '@eclipse-glsp/server';
 import type { DiagramModule } from '@eclipse-glsp/server';
 import type { ServerSharedServices } from '@hydranium/core';
 import { GlspClientLogger, HydraniumGlspAppModule } from '@hydranium/glsp-server';
-declare const shared: ServerSharedServices;
+import type { Connection } from 'vscode-languageserver';
+declare const fileSystem: Promise<object>;
+declare function createMyServices(context: { connection: Connection }): { shared: ServerSharedServices };
 declare const myDiagramModule: DiagramModule;
-// The port the host transferred in, spelled the way the option type spells it —
-// this gate compiles without the DOM lib, so `MessagePort` has no name here.
-declare const transferredPort: {
-   postMessage(message: unknown): void;
-   addEventListener(type: 'message', listener: (event: unknown) => void, options?: unknown): void;
-   removeEventListener(type: 'message', listener: (event: unknown) => void, options?: unknown): void;
-   start(): void;
-};
 -->
 
 ```ts
+import { hostHeadsInWorker, startLanguageServerInWorker } from '@hydranium/core/browser';
+import { DataServer } from '@hydranium/data-server';
+import { startDataServerInWorker } from '@hydranium/data-server/browser';
 import { startGlspServerInWorker } from '@hydranium/glsp-server/browser';
 
-startGlspServerInWorker({
-   context: transferredPort,
-   createLogger: caller => new GlspClientLogger(shared, { logLevel: LogLevel.info, component: caller }),
-   serverModule: new ServerModule().configureDiagramModule(myDiagramModule),
-   appModules: [new HydraniumGlspAppModule({ shared })]
+hostHeadsInWorker(fileSystem, (ports, restored) => {
+   const shared = startLanguageServerInWorker(ports.lsp, connection => createMyServices({ connection, ...restored }).shared);
+   startDataServerInWorker(ports.data, shared, connection => new DataServer(connection, shared));
+   const glsp = startGlspServerInWorker({
+      context: ports.glsp,
+      createLogger: caller => new GlspClientLogger(shared, { logLevel: LogLevel.info, component: caller }),
+      serverModule: new ServerModule().configureDiagramModule(myDiagramModule),
+      appModules: [new HydraniumGlspAppModule({ shared })]
+   });
+   return { shared, started: [glsp.started] };
 });
 ```
+
+   Hand back the GLSP head's `started`, since that head reports a failed
+   launch through it rather than by throwing; without a diagram, return the
+   shared tier alone. Once `start` has returned and every `started` has
+   resolved, the page is told the heads are up. A failure in `start`, in what
+   you prepared, or in a head's `started` ends the page's heads; a failure
+   later reaches the page as a report, which `onWorkerError` delivers. Report
+   a failure of your own with `reportWorkerError`.
 
 3. **Give the workspace a filesystem.** Without one, reads fail and writes go
    nowhere. For content held in memory, spread `inMemoryFileSystem` where a
@@ -95,15 +105,15 @@ const fileSystem = inMemoryFileSystem({
 4. **Keep edits across a reload, if you want to.** `persistentFileSystem` keeps
    the files in memory and mirrors every write to a store.
    `IndexedDbFileSystemStore` from `@hydranium/core/browser` is one; a store of
-   your own is three async methods over whatever the page has. Await it before
-   you create the services, since a message that arrives while the worker is
-   still awaiting is lost:
+   your own is three async methods over whatever the page has. Hand its
+   promise to `hostHeadsInWorker`, which awaits it before `start`, since a
+   message that arrives while a head is awaiting is lost:
 
 ```ts
 import { persistentFileSystem } from '@hydranium/core';
 import { IndexedDbFileSystemStore } from '@hydranium/core/browser';
 
-const fileSystem = await persistentFileSystem({
+const fileSystem = persistentFileSystem({
    store: new IndexedDbFileSystemStore('my-app-workspace'),
    rootUri: 'file:///order-flow',
    seed: { 'orders/orders.domain': 'project orders' }
@@ -120,9 +130,10 @@ const fileSystem = await persistentFileSystem({
    the store, and the store's `clear()` returns the next load to the seed.
 
 5. **Validate once the workspace is up.** The first build of the workspace does
-   not validate, so a page that only waits sees no diagnostics at all. Once
-   `WorkspaceManager.workspaceInitialized` resolves, build every document with
-   `{ validation: true }`. See `src/worker/order-flow-worker.ts`.
+   not validate, so a page that only waits would see no diagnostics at all.
+   `hostHeadsInWorker` builds every document with validation once
+   `WorkspaceManager.workspaceInitialized` resolves, and reports a build that
+   fails.
 
 6. **Save through the data head.** An editor's `didSave` writes nothing: LSP
    leaves the write to the client, and a page has no disk. Open a
@@ -194,12 +205,11 @@ const fileSystem = await persistentFileSystem({
 - **The worker does not start, and the error says nothing.** A `Worker` URL
   resolves against the page, not the module creating it. Derive it from your
   build, and report the URL you tried.
-- **The worker failed, and the console is empty.** Errors thrown in the
-  workspace walk become unhandled rejections in the worker. Add an
-  `unhandledrejection` listener in the worker that posts a
-  `WorkerErrorMessage` to the page, and show what `onWorkerError` reports.
-  An uncaught throw needs no listener: it reaches the page as the `Worker`'s
-  own `error` event, which `connectWorkerHeads` reports too.
+- **The worker failed, and the console is empty.** A failed workspace walk,
+  a failed validating build and an unhandled rejection in the worker are
+  reported to the page by `hostHeadsInWorker`; show what `onWorkerError`
+  reports. An uncaught throw reaches the page as the `Worker`'s own `error`
+  event, which `connectWorkerHeads` reports too.
 - **A diagram never loads in an automated test.** It renders on animation
   frames, which a hidden tab never gets. Drive tests with Playwright, whose
   headless Chromium counts as visible.
@@ -213,9 +223,9 @@ const fileSystem = await persistentFileSystem({
   and profiling need Node, so in a browser they reject; latency still works.
 
 Limits that hold for any browser host: a page or worker that dies ends no
-session; a worker that fails to start has its pending requests rejected, but
-one that dies later leaves them waiting, since a port cannot report either;
-and a closing tab cannot wait for a save. See
+session; a worker that fails before its heads are up has its pending requests
+rejected, but one that dies later leaves them waiting, since a port cannot
+report either; and a closing tab cannot wait for a save. See
 [Status and limitations](../adopting/status.md#unsaved-edits-are-kept-only-so-far).
 
 ## Going further

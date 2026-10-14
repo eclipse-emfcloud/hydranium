@@ -10,6 +10,7 @@
 import {
    createMessagePortTransport,
    isWorkerErrorMessage,
+   isWorkerReadyMessage,
    WORKER_BOOTSTRAP_MESSAGE_TYPE,
    WORKER_BOOTSTRAP_PHASE,
    WORKER_ERROR_MESSAGE_TYPE,
@@ -64,12 +65,13 @@ export interface WorkerHeads {
    readonly onWorkerError: Event<WorkerErrorMessage>;
    /**
     * Fires once when the heads end: on a failed bootstrap, on an `error` event
-    * before the worker has posted on any head's port, or on {@link dispose}.
-    * What the heads had pending is rejected then rather than left waiting. Any
-    * later report, and an `error` event once the worker has posted, ends
-    * nothing: the worker runs on after an uncaught error, and the heads with
-    * it. Subscribe before the first `await`: the end fires once, and a
-    * subscriber after it hears nothing.
+    * before the worker is known to be up, or on {@link dispose}. What the heads
+    * had pending is rejected then rather than left waiting. The worker is up
+    * once it has posted its ready message, or anything on a head's port for a
+    * worker that posts no ready message. Any later report, and an `error`
+    * event once the worker is up, ends nothing: the worker runs on after an
+    * uncaught error, and the heads with it. Subscribe before the first
+    * `await`: the end fires once, and a subscriber after it hears nothing.
     */
    readonly onDispose: Event<void>;
    /** End every head. A head whose connection exists signals its close to the worker, which ends the head there. */
@@ -81,9 +83,9 @@ export interface WorkerHeads {
  * each.
  *
  * The worker keeps `port2` of every pair and the page `port1`; neither end is
- * given the worker global, which carries the bootstrap, the worker's failure
- * reports and whatever the host adds for itself. See the handshake in
- * `@hydranium/protocol` for why a head on the global is unusable.
+ * given the worker global, which carries the bootstrap, the worker's ready
+ * message and failure reports, and whatever the host adds for itself. See the
+ * handshake in `@hydranium/protocol` for why a head on the global is unusable.
  *
  * **A port reports nothing when its peer dies**, so a worker that fails to
  * load, throws before its bootstrap or fails it would leave every request on
@@ -112,12 +114,14 @@ export function connectWorkerHeads(worker: Worker, options: WorkerHeadsOptions =
    const errorEmitter = new Emitter<WorkerErrorMessage>();
    const disposeEmitter = new Emitter<void>();
 
-   // Whether the worker has posted anything on a head's port, which only a
-   // worker past its bootstrap does. An `error` event before that is a worker
-   // that never started; one after it is an uncaught error the worker survives.
-   let workerPosted = false;
+   // Whether the worker is past its bootstrap: it says so with its ready
+   // message, and a worker that posts none shows it by posting on a head's
+   // port, which only a running head does. An `error` event before that is a
+   // worker that never started; one after it is an uncaught error the worker
+   // survives.
+   let workerUp = false;
    for (const port of [lsp.port1, data.port1, glsp.port1]) {
-      port.addEventListener('message', () => (workerPosted = true), { once: true });
+      port.addEventListener('message', () => (workerUp = true), { once: true });
    }
 
    let disposed = false;
@@ -142,11 +146,15 @@ export function connectWorkerHeads(worker: Worker, options: WorkerHeadsOptions =
          phase: WORKER_ERROR_EVENT_PHASE,
          message: event.message || 'no detail; check that the worker script loaded'
       });
-      if (!workerPosted) {
+      if (!workerUp) {
          dispose();
       }
    });
    worker.addEventListener('message', event => {
+      if (isWorkerReadyMessage(event.data)) {
+         workerUp = true;
+         return;
+      }
       if (!isWorkerErrorMessage(event.data)) {
          return;
       }

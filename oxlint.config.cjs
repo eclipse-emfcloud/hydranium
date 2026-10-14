@@ -300,10 +300,11 @@ const policyOverrides = [
       }
    },
 
-   // Core's browser-only subtree (the `./browser` subpath, holding the IndexedDB
-   // store), exempt from the sibling-browser ban alone for the reason above.
+   // The browser-only subtrees of core (the IndexedDB store and the worker
+   // starters) and of the data head (its worker starter), exempt from the
+   // sibling-browser ban alone for the reason above.
    {
-      files: ['packages/core/src/browser/**/*.ts'],
+      files: ['packages/core/src/browser/**/*.ts', 'packages/data-server/src/browser/**/*.ts'],
       rules: {
          'no-restricted-imports': ['warn', withHost(withNeutralExcept(RESTRICT_HEAD_NEUTRAL, RESTRICT_HYDRANIUM_BROWSER))]
       }

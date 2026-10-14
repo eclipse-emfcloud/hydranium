@@ -19,9 +19,9 @@
  * handshake through the global `postMessage` regardless of the connection it
  * was configured with, a plain string no JSON-RPC reader can parse.
  *
- * The global therefore carries the host protocol: the bootstrap in, failure
- * reports out, and whatever else the host adds for itself. A message that
- * belongs to a head belongs on that head's port.
+ * The global therefore carries the host protocol: the bootstrap in, the ready
+ * message and failure reports out, and whatever else the host adds for
+ * itself. A message that belongs to a head belongs on that head's port.
  *
  * The ports are {@link TransferredMessagePort}s, because this package compiles
  * without the DOM lib and the structural type is also what rejects a `Worker`
@@ -55,12 +55,27 @@ export function isWorkerBootstrapMessage(value: unknown): value is WorkerBootstr
 }
 
 /**
+ * Discriminator of the message the worker posts on the global once every head
+ * is up. Until it arrives, the page takes the `Worker`'s `error` event as a
+ * worker that never started and ends the heads; after it, as an uncaught error
+ * the worker runs on from, which it reports and keeps the heads through.
+ */
+export const WORKER_READY_MESSAGE_TYPE = 'hydranium/ready';
+
+export interface WorkerReadyMessage {
+   readonly type: typeof WORKER_READY_MESSAGE_TYPE;
+}
+
+export function isWorkerReadyMessage(value: unknown): value is WorkerReadyMessage {
+   return typeof value === 'object' && value !== null && (value as Partial<WorkerReadyMessage>).type === WORKER_READY_MESSAGE_TYPE;
+}
+
+/**
  * Discriminator of a failure report the worker posts on the global.
  *
  * A worker has no console anyone is looking at, and the failures that matter
- * most reach nobody by default: an LSP notification handler that rejects has
- * no reply to reject, so a workspace walk that throws looks exactly like a
- * workspace with no documents in it.
+ * most reach nobody by default: a workspace walk that throws has no reply to
+ * reject, so it looks exactly like a workspace with no documents in it.
  */
 export const WORKER_ERROR_MESSAGE_TYPE = 'hydranium/worker-error';
 

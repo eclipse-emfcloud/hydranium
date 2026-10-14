@@ -49,6 +49,13 @@ needs it.
 3. Start other heads on the same shared services, with `startSocketServer` and
    `publishPortOnLspConnection` beside the LSP head, or `startStdioServer`
    alone.
+4. In a web worker, answer the page's bootstrap with `hostHeadsInWorker` from
+   `./browser`: it awaits what you prepared, such as `persistentFileSystem`,
+   then calls your `start`, which starts the LSP head on its port with
+   `startLanguageServerInWorker` and the other heads with their own starters.
+   It posts the ready message once every head is up, runs the validating
+   build and reports a failed start, build or rejection to the page;
+   `reportWorkerError` reports a failure of your own.
 
 See *Compose a server by hand* and *Add a validation check* in
 [Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
@@ -59,7 +66,7 @@ See *Compose a server by hand* and *Add a validation check* in
 | ---------------------- | ---------------------------------------------------------------------------- | --------------- |
 | `.`                    | Composing services and extending the language's semantics                    | browser-neutral |
 | `./lsp`                | The LSP head and its modules                                                 | browser-neutral |
-| `./browser`            | The IndexedDB store behind a persistent filesystem in a web worker           | browser-only    |
+| `./browser`            | Hosting the heads in a web worker, and the IndexedDB store behind them       | browser-only    |
 | `./node`               | The Node filesystem, the stdio and socket launchers, the headless tools      | Node-only       |
 | `./messages`           | Validation messages with stable codes, and the codes this package raises     | browser-neutral |
 | `./testing`            | Parsing and service doubles for unit tests                                   | browser-neutral |

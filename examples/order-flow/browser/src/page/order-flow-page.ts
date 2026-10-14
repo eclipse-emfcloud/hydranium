@@ -50,7 +50,7 @@
 
 import { describeError, type Locale } from '@hydranium/protocol';
 import { applyBuildStamp } from './build-stamp.js';
-import { requireElement } from './dom.js';
+import { requireDialog, requireElement } from './dom.js';
 import { requestedLocale } from './page-nls.js';
 
 /**
@@ -103,9 +103,10 @@ async function boot(): Promise<void> {
 applyBuildStamp();
 
 boot().catch((error: unknown) => {
-   // Written straight to the element rather than through `workbench.ts`'s
-   // `setStatus`: importing that helper would import the module this file exists
-   // to load late, and the failure being reported here is most likely that the
-   // module never loaded at all.
-   requireElement('status').textContent = `failed: ${describeError(error)}`;
+   // Shown through the dialog in the markup rather than through `workbench.ts`:
+   // importing that module is the step most likely to have failed. The console
+   // gets the error itself, since only its stack names the failing module.
+   console.error('The page failed to start:', error);
+   requireElement('start-failure-detail').textContent = describeError(error);
+   requireDialog('start-failure-dialog').showModal();
 });

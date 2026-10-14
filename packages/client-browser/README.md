@@ -56,11 +56,15 @@ const { capabilities } = await initializeLanguageClient(heads.lsp, {
 const data = new DataConnectionWithEvents(heads.data);
 ```
 
-In the worker, read the bootstrap with `isWorkerBootstrapMessage` from
-`@hydranium/protocol` and start each head on its port, never on the worker's
-global scope. Post a `WorkerErrorMessage` for a failure you catch there; one
-under `WORKER_BOOTSTRAP_PHASE` ends the page's heads, any other phase only
-reports.
+In the worker, answer the bootstrap with `hostHeadsInWorker` from
+`@hydranium/core/browser`, which starts each head on its port, never on the
+worker's global scope, posts the ready message once they are up and reports
+a failed start, build or rejection. A worker of your own reads the bootstrap
+with `isWorkerBootstrapMessage` from `@hydranium/protocol`, posts a
+`WorkerReadyMessage` once its heads are up and a `WorkerErrorMessage` for a
+failure it catches; one under `WORKER_BOOTSTRAP_PHASE` ends the page's heads,
+any other phase only reports. Until the worker has posted its ready message,
+or anything on a head's port, the `Worker`'s `error` event ends the heads too.
 
 Register the handler for the server's diagnostics in `beforeInitialized`,
 which runs once `initialize` has answered and before `initialized` goes out.

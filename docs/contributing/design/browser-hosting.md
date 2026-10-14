@@ -26,13 +26,16 @@ being named there separates a considered exclusion from an oversight, so
 restating the list here would let a doc copy drift into claiming coverage the
 gate does not give.
 
-Two heads have a third spelling, `/browser`, for code that needs a browser
-global. `@hydranium/glsp-server/browser` is the mirror of its `/node` twin,
-because GLSP's launcher, app module and readiness signal all differ per
-platform. `@hydranium/core/browser` holds the IndexedDB store, and compiles as
-a second project of the package against `lib.webworker` with no Node types, so
-`indexedDB` resolves there and nowhere else in `core`; the checks that walk a
-package's project read both. `.` stays free of both tiers so it resolves under
+Every server package has a third spelling, `/browser`, for what starts its
+head in a web worker. `@hydranium/glsp-server/browser` is the mirror of its
+`/node` twin, because GLSP's launcher, app module and readiness signal all
+differ per platform; `@hydranium/data-server/browser` builds the head's
+connection from `vscode-jsonrpc`'s browser entry. `@hydranium/core/browser`
+holds the LSP starter, the composition that answers the page's bootstrap and
+the IndexedDB store, and compiles as a second project of the package against
+`lib.webworker` with no Node types, so `indexedDB` and the worker global
+resolve there and nowhere else in `core`; the checks that walk a package's
+project read both. `.` stays free of both tiers so it resolves under
 either platform, and the lint config bans naming GLSP's browser build and any
 sibling's `/browser` subpath from neutral code, as it bans their `/node` twins.
 
