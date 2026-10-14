@@ -10,10 +10,9 @@
 /**
  * The properties panel's extension-host half: a webview, a messenger, a relay.
  *
- * Everything below this file is host-invariant — `relayToPostMessageChannel`
- * pumps the socket, `createExtensionSideChannel` presents the `Messenger` as a
- * `PostMessageChannel`, `connectDataHead` joins them — so what is left here is
- * only what needs `vscode`: creating the panel, telling the webview which
+ * Everything below this file is framework code — `connectDataServer` relays the
+ * data-server's socket over the `Messenger` — so what is left here is only
+ * what needs `vscode`: creating the panel, telling the webview which
  * document to show, and turning a webview-side failure into a notification the
  * user can see.
  *
@@ -40,7 +39,7 @@
  * detects the omission. `extension.ts` is where that constraint is honoured.
  */
 
-import { connectDataHead, type GlspMessenger, type GlspParticipant } from './data-hop';
+import { connectDataServer } from '@hydranium/data-client-vscode/node';
 import {
    ORDER_FLOW_PANEL_CONNECTION_LOST,
    ORDER_FLOW_PANEL_READY,
@@ -52,22 +51,10 @@ import { ALL_LANGUAGES } from '@hydranium/example-order-flow-protocol';
 import { renderFrameworkMessage, type MessageRelay } from '@hydranium/protocol';
 import * as vscode from 'vscode';
 // Type-only: the panel receives the shell's messenger instead of constructing
-// one, so nothing here reaches the value.
+// one, so nothing here reaches the value. `extension.ts` hands it GLSP's, so a
+// GLSP bump that reshaped the messenger breaks that call rather than a webview.
 import type { Messenger } from 'vscode-messenger';
-
-/**
- * Compile-time proof that the messenger the shell shares is a plain
- * `vscode-messenger` `Messenger`.
- *
- * `GlspMessenger` is derived from `GlspVscodeConnector['messenger']`, so a GLSP
- * bump that reshaped the messenger — a wrapper, a narrowed facade — would break
- * this line rather than a webview at runtime. The direction is the one that
- * matters here: the question is whether GLSP's instance satisfies the `Messenger`
- * API this panel calls, not whether an instance of ours would satisfy GLSP's
- * parameter type.
- */
-const _glspMessengerIsAMessenger: (messenger: GlspMessenger) => Messenger = messenger => messenger;
-void _glspMessengerIsAMessenger;
+import type { MessageParticipant } from 'vscode-messenger-common';
 
 /** The language ids whose documents this panel can present. */
 const ORDER_FLOW_LANGUAGES: ReadonlySet<string> = new Set(ALL_LANGUAGES.map(language => language.languageId));
@@ -89,7 +76,7 @@ export interface OrderFlowPropertiesPanelOptions {
     * constructed here so the shell can share one messenger across the data and
     * diagram heads; the panel neither creates nor disposes it.
     */
-   readonly messenger: GlspMessenger;
+   readonly messenger: Messenger;
 }
 
 /**
@@ -106,7 +93,7 @@ export class OrderFlowPropertiesPanel {
 
    protected panel?: vscode.WebviewPanel;
    protected messenger?: Messenger;
-   protected participant?: GlspParticipant;
+   protected participant?: MessageParticipant;
    protected relay?: MessageRelay;
    protected subscriptions: vscode.Disposable[] = [];
    /**
@@ -287,7 +274,7 @@ export class OrderFlowPropertiesPanel {
          panel.onDidDispose(() => this.release())
       );
 
-      this.relay = connectDataHead({
+      this.relay = connectDataServer({
          messenger,
          webview: participant,
          findPort: this.options.findPort,

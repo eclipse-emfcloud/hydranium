@@ -4,13 +4,14 @@ The **VS Code extension** for the order-flow example: all three heads in one
 Node extension host — the LSP head as a language client, the data head under a
 properties webview, the GLSP head under a `.process` diagram editor.
 
-The framework ships Theia client packages and no VS Code equivalents, so every
-adapter layer that [`../theia`](../theia/README.md) inherits is written out
-here: the socket the extension host holds for the webview, the `postMessage`
-hop across the sandbox boundary, and the two webview documents with their CSP.
-What sits _above_ those layers — the diagram definition,
+The hop across the sandbox boundary comes from the framework's VS Code client
+packages, `@hydranium/client-vscode`, `@hydranium/data-client-vscode` and
+`@hydranium/glsp-client-vscode`; the
+[Host in VS Code](../../../docs/guides/host-in-vscode.md) guide walks through
+them. What sits _above_ them — the diagram definition,
 `OrderFlowPropertiesModel`, `PropertiesForm` — is mounted unchanged from
-[`../client`](../client/README.md).
+[`../client`](../client/README.md), and the properties panel, its webview
+document and the webview UI are this example's own.
 
 The server launch is **not** here: it lives in
 [`../vscode-servers`](../vscode-servers/README.md) and is shared, so the two
@@ -21,9 +22,8 @@ hosts cannot drift on `documentSelector` or the file watcher.
 | Concern                          | Files                                                                                                                                         |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | activation, and what it wires    | [`extension.ts`](src/extension.ts)                                                                                                            |
-| finding the socket heads' ports  | [`head-ports.ts`](src/head-ports.ts)                                                                                                          |
-| the properties panel             | [`properties-panel.ts`](src/properties-panel.ts), [`data-hop.ts`](src/data-hop.ts), [`webview/properties.ts`](src/webview/properties.ts), [`webview/properties-data-port.ts`](src/webview/properties-data-port.ts) |
-| the `.process` diagram editor    | [`process-diagram-editor.ts`](src/process-diagram-editor.ts), [`process-diagram-server.ts`](src/process-diagram-server.ts), [`webview/diagram.ts`](src/webview/diagram.ts) |
+| the properties panel             | [`properties-panel.ts`](src/properties-panel.ts), [`webview/properties.ts`](src/webview/properties.ts)                                        |
+| the `.process` diagram editor    | [`process-diagram-editor.ts`](src/process-diagram-editor.ts), [`webview/diagram.ts`](src/webview/diagram.ts)                                  |
 | the two webview bundles          | [`esbuild.mjs`](esbuild.mjs)                                                                                                                  |
 | what the extension contributes   | `contributes` in [`package.json`](package.json)                                                                                               |
 | the extension-host tests         | [`test/host/`](test/host/), [`.vscode-test.mjs`](.vscode-test.mjs)                                                                            |
@@ -63,11 +63,10 @@ it, so each bundle fails its own build on one.
 ## Extension-host wiring worth knowing
 
 - **Both socket ports are discovered, not configured.** They are ephemeral and
-  published as LSP requests, so `awaitPort` polls the running language client,
-  bounded by its `attempts` and `intervalMs` defaults — unlike the framework's
-  Theia-side default, so a wrong command id surfaces as an error instead of
-  hanging. The poll re-runs per connection generation, because a restarted
-  server binds a fresh port.
+  published as LSP requests, so `findPort` polls the running language client,
+  bounded, so a wrong request surfaces as an error instead of hanging. The poll
+  re-runs per connection generation, because a restarted server binds a fresh
+  port.
 - **The GLSP head resolves its port at first diagram open**, not during
   activation, so a user who never opens a diagram pays nothing.
 - **One `vscode-messenger` `Messenger` serves both webviews**, and it must have

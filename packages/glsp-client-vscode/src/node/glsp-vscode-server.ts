@@ -12,14 +12,14 @@ import { sendByMethodName, type Logger } from '@hydranium/protocol';
 import * as net from 'node:net';
 import { createMessageConnection, SocketMessageReader, SocketMessageWriter } from 'vscode-jsonrpc/node';
 
-/** What {@link OrderFlowGlspVscodeServer} needs beyond the GLSP client identity. */
-export interface OrderFlowGlspVscodeServerOptions {
+/** What {@link HydraniumGlspVscodeServer} needs beyond the GLSP client identity. */
+export interface HydraniumGlspVscodeServerOptions {
    readonly clientId: string;
    readonly clientName: string;
    /**
-    * Resolve the GLSP head's listening port. Called once, when the connection is
-    * actually opened, so the poll runs at first diagram open rather than during
-    * activation.
+    * Resolve the GLSP head's listening port, typically `findPort` from
+    * `@hydranium/client-vscode/node`. Called when the connection is opened, so
+    * the poll runs at `start()` rather than during activation.
     */
    readonly findPort: () => Promise<number>;
    /** Where the connection to the head logs its protocol faults. */
@@ -31,29 +31,22 @@ export interface OrderFlowGlspVscodeServerOptions {
  * rather than configured.
  *
  * `SocketGlspVscodeServer` takes a fixed `connectionOptions` at construction,
- * which does not fit this server: the port is assigned by the OS when the head
- * binds, and published as an LSP request the extension has to ask for. Awaiting
- * it in `activate` would work but would block activation behind a poll that can
- * legitimately take seconds, and would do so even for a user who never opens a
- * diagram.
+ * but the head's port is assigned when it binds and published as an LSP
+ * request. Awaiting it in `activate` would block activation behind a poll that
+ * can take seconds, even for a user who never opens a diagram, so the lookup
+ * moves to `createConnection`, which the base class calls from `start()`.
+ * The `connectionOptions` handed to `super` is never read, and is an unusable
+ * port so that a refactor reintroducing the base implementation fails loudly
+ * instead of dialling something.
  *
- * So the resolution moves to `createConnection`, which the base class calls from
- * `start()` — the point at which the port is genuinely needed. The
- * `connectionOptions` handed to `super` is therefore never read: this override
- * is the only path to a connection, and it computes its own. It is spelled as
- * an unusable port rather than a plausible one so that a future refactor
- * reintroducing the base implementation fails loudly instead of quietly dialling
- * something.
- *
- * The same lazy-discovery shape as the properties panel's `findPort`, and for
- * the same reason: a restarted language server binds a FRESH port, so a value
- * captured once at activation is wrong for the rest of the session.
+ * Report a failure off `onReady`, not off `start()`: `start()` routes its own
+ * error into the readiness promise and resolves anyway.
  */
-export class OrderFlowGlspVscodeServer extends SocketGlspVscodeServer {
+export class HydraniumGlspVscodeServer extends SocketGlspVscodeServer {
    protected readonly findPort: () => Promise<number>;
    protected readonly logger: Logger;
 
-   constructor(options: OrderFlowGlspVscodeServerOptions) {
+   constructor(options: HydraniumGlspVscodeServerOptions) {
       super({
          clientId: options.clientId,
          clientName: options.clientName,

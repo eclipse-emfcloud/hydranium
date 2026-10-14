@@ -10,12 +10,8 @@
 /**
  * The diagram webview's entry point.
  *
- * Almost nothing on top of `GLSPStarter`, which already owns the whole handshake:
- * acquiring the VS Code API, announcing readiness, taking the diagram identifier
- * the endpoint sends, building a container and instantiating the widget. What an
- * adopter supplies is only which container to build, and the framework's
- * client module, which reports a failed load and sprotty's errors on the
- * webview's console instead of dropping them.
+ * Almost nothing on top of `HydraniumGlspStarter`, which owns the handshake and
+ * adds the framework's client module; what is left is which container to build.
  *
  * **The import discipline is the opposite of the properties bundle's, and that
  * is the point.** `properties.ts` reaches into client MODULE paths precisely to
@@ -30,11 +26,10 @@
  * `extension.ts` fails the gate rather than the first activation.
  */
 
-import { GLSPStarter } from '@eclipse-glsp/vscode-integration-webview';
-import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
 import type { ContainerConfiguration } from '@eclipse-glsp/client';
-import { createGlspClientModule } from '@hydranium/glsp-client';
-import { Container, ContainerModule } from 'inversify';
+import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
+import { HydraniumGlspStarter } from '@hydranium/glsp-client-vscode/browser';
+import { Container } from 'inversify';
 // LAST, and that is what makes it work: esbuild emits the bundled stylesheet in
 // import order, so these rules land after `@eclipse-glsp/client`'s and win on
 // equal specificity. Moving either up would silently lose the sizing chain and
@@ -49,27 +44,14 @@ import { Container, ContainerModule } from 'inversify';
 import '@hydranium/example-order-flow-client/style/diagram.css';
 import './diagram.css';
 
-/** The framework's client classes over the webview's console, which is the
- *  only sink a webview has; no logger is passed, so the binder's default is it. */
-const hydraniumModule = new ContainerModule((bind, unbind, isBound, rebind) => {
-   createGlspClientModule({ bind, unbind, isBound, rebind });
-});
-
-class OrderFlowDiagramStarter extends GLSPStarter {
+class OrderFlowDiagramStarter extends HydraniumGlspStarter {
    /**
-    * Build the `.process` diagram container.
-    *
-    * The host's modules arrive in `containerConfiguration` — the diagram options
-    * module the starter minted plus VS Code's own feature set — the framework's
-    * module follows them, since it replaces tokens they bind, and the diagram
-    * definition is appended LAST by
-    * {@link initializeOrderFlowProcessDiagramContainer}. That order is not a
-    * preference: GLSP's model and view registries give an element type to
-    * whichever module registered it last, and the diagram definition has to be
-    * the one holding the keys.
+    * Build the `.process` diagram container. The diagram definition is
+    * appended LAST by {@link initializeOrderFlowProcessDiagramContainer}, after
+    * the host's and the framework's modules, so it holds the element types.
     */
    createContainer(...containerConfiguration: ContainerConfiguration): Container {
-      return initializeOrderFlowProcessDiagramContainer(new Container(), ...containerConfiguration, hydraniumModule);
+      return initializeOrderFlowProcessDiagramContainer(new Container(), ...containerConfiguration);
    }
 }
 

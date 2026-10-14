@@ -81,11 +81,6 @@ look Theia-only.
   arrives already rendered by the server, so the form draws its `message` as it
   came. Translating the rest of your language is in
   [Translate your language](../../../docs/guides/translate-your-language.md).
-- [`src/data/order-flow-messenger-channel.ts`](src/data/order-flow-messenger-channel.ts)
-  — the VS Code adapter, presenting a `vscode-messenger` `Messenger` as a
-  `PostMessageChannel` so the data head rides the same hop the diagram already
-  uses. Hand-rolled here because the framework ships Theia client packages and
-  no VS Code equivalents, so a VS Code host has to supply this adapter itself.
 
 The palette's entries are defined on the server, in `order-flow-server`'s
 [`order-flow-tool-palette-item-provider.ts`](../server/src/glsp/order-flow-tool-palette-item-provider.ts),

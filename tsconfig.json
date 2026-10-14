@@ -12,6 +12,9 @@
     { "path": "packages/client-theia" },
     { "path": "packages/glsp-client-theia" },
     { "path": "packages/data-client-theia" },
+    { "path": "packages/client-vscode" },
+    { "path": "packages/data-client-vscode" },
+    { "path": "packages/glsp-client-vscode" },
     { "path": "packages/conformance" },
     { "path": "packages/cli" }
   ]

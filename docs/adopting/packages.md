@@ -18,13 +18,13 @@ reads `<head>-<role>-<platform>`, and a name with no head spans all heads.
 | [`@hydranium/glsp-client`](../../packages/glsp-client/README.md) | you run the GLSP head, whatever the host | The GLSP head's client side for any host: the diagram classes, the binder that mounts them, and the mount for a plain page. |
 | [`@hydranium/glsp-client-theia`](../../packages/glsp-client-theia/README.md) | …and your host is Theia | The GLSP head's client side in Theia, including the diagram widget. |
 | [`@hydranium/client-browser`](../../packages/client-browser/README.md) | your host is a web page | The page side of a host whose heads run in a web worker: the worker bootstrap, the LSP handshake, a Monaco editor's LSP client and the data head's port. |
+| [`@hydranium/client-vscode`](../../packages/client-vscode/README.md) | your host is VS Code and runs a socket head | What every head needs in a VS Code extension: the lookup of a socket head's port, and the commands that publish it to a Theia app. |
+| [`@hydranium/data-client-vscode`](../../packages/data-client-vscode/README.md) | …and you run the data head | The data head's client side in VS Code: the extension host's relay and the webview's data port. |
+| [`@hydranium/glsp-client-vscode`](../../packages/glsp-client-vscode/README.md) | …and you run the GLSP head | The GLSP head's client side in VS Code, including the diagram's custom editor and its webview starter. |
 | **Tooling** | | |
 | [`@hydranium/cli`](../../packages/cli/README.md) | always, as a development dependency | `hydranium-cli`: scaffold a project, inspect a grammar, validate models headlessly, generate the transfer model, and drive a data server. |
 | [`@hydranium/conformance`](../../packages/conformance/README.md) | you want to check your server against the protocol | A conformance suite you run against your own server, in any test runner. |
 | [`@hydranium/langium`](../../packages/langium/README.md) | you import Langium at all | The one route to Langium, so your install has exactly one copy of it. |
-
-For VS Code there is no client package beyond the diagram's; copy the rest of
-the client code from the order-flow example.
 
 ## Entry points
 

@@ -173,6 +173,23 @@ const TARGETS = [
    // not a `node:` slip.
    { name: '@hydranium/client-browser (./monaco)', entry: 'packages/client-browser/lib/monaco/index.js', resolvePackages: [] },
 
+   // The VS Code client packages' webview side, and the messenger channel both
+   // ends of the data hop build on. A webview IS a browser; the `./node`
+   // siblings are the extension host's and need `vscode` and `net`.
+   { name: '@hydranium/client-vscode', entry: 'packages/client-vscode/lib/index.js', resolvePackages: [] },
+   { name: '@hydranium/data-client-vscode', entry: 'packages/data-client-vscode/lib/index.js', resolvePackages: [] },
+   {
+      name: '@hydranium/data-client-vscode (./browser)',
+      entry: 'packages/data-client-vscode/lib/browser/index.js',
+      resolvePackages: []
+   },
+   { name: '@hydranium/glsp-client-vscode', entry: 'packages/glsp-client-vscode/lib/index.js', resolvePackages: [] },
+   {
+      name: '@hydranium/glsp-client-vscode (./browser)',
+      entry: 'packages/glsp-client-vscode/lib/browser/index.js',
+      resolvePackages: []
+   },
+
    // The portable half of the test-support surface, so a browser-hosted test
    // tier can load the doubles. Worth saying why these are listed at all:
    // before this block they were neutral by luck rather than by design — some
@@ -191,29 +208,29 @@ const TARGETS = [
       resolvePackages: ['@eclipse-glsp/server']
    },
    { name: '@hydranium/client-theia (./testing)', entry: 'packages/client-theia/lib/testing/index.js', resolvePackages: [] },
+   {
+      name: '@hydranium/data-client-vscode (./testing)',
+      entry: 'packages/data-client-vscode/lib/testing/index.js',
+      resolvePackages: []
+   },
    { name: '@hydranium/conformance', entry: 'packages/conformance/lib/index.js', resolvePackages: [] },
 
-   // The example's remaining client-side modules, gated module-by-module rather
-   // than through its barrel — the barrel also re-exports the diagram
-   // definition, whose `@eclipse-glsp/client` graph reaches CSS imports and
-   // needs a bundler with a loader for them.
+   // The example's remaining client-side module, gated by module rather than
+   // through its barrel — the barrel also re-exports the diagram definition,
+   // whose `@eclipse-glsp/client` graph reaches CSS imports and needs a bundler
+   // with a loader for them.
    //
    // Still gated here even though `examples/order-flow/vscode`'s webview bundle
-   // now consumes both modules, because the two checks fail differently and the
-   // difference is useful. That bundle IS a neutrality gate — esbuild with
+   // consumes it, because the two checks fail differently and the difference is
+   // useful. That bundle IS a neutrality gate — esbuild with
    // `platform: 'browser'` refuses to resolve a `node:*` builtin rather than
    // shimming it, so a Node import anywhere in the webview graph fails
    // `order-flow-vscode`'s build. But it reports against the whole graph, and
-   // only for the modules that bundle reaches. These two entries keep the blame
-   // on the client tier and keep covering it if the webview stops importing it.
+   // only for the modules that bundle reaches. This entry keeps the blame on
+   // the client tier and keeps covering it if the webview stops importing it.
    {
       name: 'order-flow-client (properties model)',
       entry: 'examples/order-flow/client/lib/data/order-flow-properties-model.js',
-      resolvePackages: []
-   },
-   {
-      name: 'order-flow-client (messenger channel)',
-      entry: 'examples/order-flow/client/lib/data/order-flow-messenger-channel.js',
       resolvePackages: []
    },
    // What the server shares with every client, through its barrel: no tier of

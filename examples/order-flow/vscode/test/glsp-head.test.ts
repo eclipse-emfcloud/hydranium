@@ -31,13 +31,13 @@ import type { Module } from 'node:module';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type * as Jsonrpc from 'vscode-jsonrpc';
-import { ORDER_FLOW_PORT_COMMANDS } from '../src/head-ports';
-import { OrderFlowGlspVscodeServer } from '../src/process-diagram-server';
+import { ORDER_FLOW_GLSP_SERVER_PORT_COMMAND } from '@hydranium/example-order-flow-protocol';
+import { HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';
 
 let head: SpawnedServer | undefined;
-let glspServer: OrderFlowGlspVscodeServer | undefined;
+let glspServer: HydraniumGlspVscodeServer | undefined;
 
-describe('OrderFlowGlspVscodeServer', () => {
+describe('HydraniumGlspVscodeServer', () => {
    beforeAll(async () => {
       head = await startSpawnedServer({ serverModule: path.resolve(__dirname, '../../server/lib/main.js') });
    }, SPAWNED_SERVER_HOOK_TIMEOUT_MS);
@@ -50,10 +50,10 @@ describe('OrderFlowGlspVscodeServer', () => {
 
    it('initialises the order-flow GLSP head over the connection the server builds', async () => {
       const spawned = head!;
-      glspServer = new OrderFlowGlspVscodeServer({
+      glspServer = new HydraniumGlspVscodeServer({
          clientId: 'order-flow-vscode-test',
          clientName: 'Order Flow',
-         findPort: () => spawned.port(ORDER_FLOW_PORT_COMMANDS.glsp),
+         findPort: () => spawned.port(ORDER_FLOW_GLSP_SERVER_PORT_COMMAND),
          logger: new NoopLogger()
       });
       await glspServer.start();

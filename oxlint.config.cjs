@@ -360,7 +360,10 @@ const policyOverrides = [
          'packages/glsp-client/src/**/*.ts',
          'packages/client-theia/src/**/*.ts',
          'packages/glsp-client-theia/src/**/*.ts',
-         'packages/data-client-theia/src/**/*.ts'
+         'packages/data-client-theia/src/**/*.ts',
+         'packages/client-vscode/src/**/*.ts',
+         'packages/data-client-vscode/src/**/*.ts',
+         'packages/glsp-client-vscode/src/**/*.ts'
       ],
       rules: {
          'no-restricted-globals': [
@@ -429,7 +432,10 @@ const policyOverrides = [
       files: [
          'packages/client-theia/src/node/**/*.ts',
          'packages/glsp-client-theia/src/node/**/*.ts',
-         'packages/data-client-theia/src/node/**/*.ts'
+         'packages/data-client-theia/src/node/**/*.ts',
+         'packages/client-vscode/src/node/**/*.ts',
+         'packages/data-client-vscode/src/node/**/*.ts',
+         'packages/glsp-client-vscode/src/node/**/*.ts'
       ],
       rules: {
          'no-restricted-globals': 'off'

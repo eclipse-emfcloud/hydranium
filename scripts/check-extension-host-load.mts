@@ -49,6 +49,17 @@ const EXTENSIONS = ['examples/order-flow/vscode'];
 /** What `activate` is expected to export, so a truncated module is not "loaded". */
 const REQUIRED_EXPORTS = ['activate'];
 
+/**
+ * The framework's extension-host tiers, loaded by name although an extension
+ * above reaches each, so a regression is reported against the package and an
+ * adopter's extension that reaches a tier the example does not is covered too.
+ */
+const HOST_TIERS = [
+   'packages/client-vscode/lib/node/index.js',
+   'packages/data-client-vscode/lib/node/index.js',
+   'packages/glsp-client-vscode/lib/node/index.js'
+];
+
 /** The undocumented loader hook the stub replaces. */
 interface ModuleInternals {
    _load(this: unknown, request: string, parent: unknown, isMain: boolean): unknown;
@@ -88,6 +99,7 @@ function stubVsCode() {
 stubVsCode();
 
 let failed = false;
+const targets: Array<{ label: string; entry: string; requiredExports: string[] }> = [];
 for (const packageDir of EXTENSIONS) {
    const packageJsonPath = join(repoRoot, packageDir, 'package.json');
    if (!existsSync(packageJsonPath)) {
@@ -101,25 +113,32 @@ for (const packageDir of EXTENSIONS) {
       failed = true;
       continue;
    }
-   const entry = join(repoRoot, packageDir, main);
+   targets.push({ label: packageDir, entry: join(packageDir, main), requiredExports: REQUIRED_EXPORTS });
+}
+for (const entry of HOST_TIERS) {
+   targets.push({ label: entry, entry, requiredExports: [] });
+}
+
+for (const { label, entry: relativeEntry, requiredExports } of targets) {
+   const entry = join(repoRoot, relativeEntry);
    if (!existsSync(entry)) {
-      console.error(`✗ ${packageDir}: ${main} does not exist — build first`);
+      console.error(`✗ ${label}: ${relativeEntry} does not exist — build first`);
       failed = true;
       continue;
    }
 
    try {
       const loaded = require(entry) as Record<string, unknown>;
-      const missing = REQUIRED_EXPORTS.filter(name => typeof loaded[name] !== 'function');
+      const missing = requiredExports.filter(name => typeof loaded[name] !== 'function');
       if (missing.length > 0) {
-         console.error(`✗ ${packageDir} loaded but does not export ${missing.join(', ')}`);
+         console.error(`✗ ${label} loaded but does not export ${missing.join(', ')}`);
          failed = true;
          continue;
       }
-      console.log(`✓ ${packageDir} loads in the extension host (exports ${Object.keys(loaded).join(', ')})`);
+      console.log(`✓ ${label} loads in the extension host (exports ${Object.keys(loaded).join(', ')})`);
    } catch (error) {
       failed = true;
-      console.error(`✗ ${packageDir} fails to load — the extension host would report this as an activation failure:`);
+      console.error(`✗ ${label} fails to load — the extension host would report this as an activation failure:`);
       console.error(`    ${error instanceof Error ? error.message : String(error)}`);
       const frame = error instanceof Error && error.stack ? error.stack.split('\n')[1] : undefined;
       if (frame) {

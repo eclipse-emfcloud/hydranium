@@ -63,8 +63,9 @@ Two examples, for two different questions:
 - [Host in Theia](guides/host-in-theia.md): text, forms and diagrams in a
   Theia application.
 - [Host in a browser](guides/host-in-a-browser.md): every head in a web
-  worker, with no backend. To host in VS Code, start from the
-  [order-flow VS Code extension](../examples/order-flow/vscode/README.md).
+  worker, with no backend.
+- [Host in VS Code](guides/host-in-vscode.md): text, forms and diagrams in a
+  VS Code extension.
 - [Compose a server by hand](guides/compose-a-server.md) without `init`.
 
 ## Reference
