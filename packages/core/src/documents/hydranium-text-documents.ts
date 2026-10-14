@@ -49,7 +49,11 @@ import {
    type CanonicalUri,
    type LanguageClientUri,
    asLanguageClientUri,
+   asModelVersion,
+   ConflictError,
    DisposableCollection,
+   DocumentNotOpenError,
+   STALE_BASE_VERSION_SAVE,
    type TextState,
    type TextVersion,
    STALE_VERSION,
@@ -460,7 +464,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          const committed = this.commitChange(uri, document, verdict.kind === 'direct' ? changes : [{ text: verdict.text }], clientId);
          document = committed.document;
          if (editor) {
-            this.languageClientShadow.setLanguageClientText(clientUri, document.getText());
+            this.languageClientShadow.setLanguageClientText(clientUri, document.getText(), document.version);
             // Content-identical echo: the editor is echoing text we already had.
             // The model is unchanged, so skip the rebuild. Restricted to the
             // editor: a ModelService-authored change is never skipped.
@@ -772,14 +776,17 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       }
       this.resolveDeferredRelease(uri, clientId);
       let document = this.__syncedDocuments.get(uri);
+      const editor = clientId === LANGUAGE_CLIENT_ID;
       // The client's declared text, never the synced document: staged
       // content this open consumes leaves the two different, and a baseline
       // asserting the client already holds it suppresses the one sync that
       // would deliver it. On an attach, another client may already have
       // changed the synced text, so the baseline is equality-only; a refresh
-      // pushing the full text would dirty the file on open.
-      if (clientId === LANGUAGE_CLIENT_ID) {
-         this.languageClientShadow.addOpen(uri, this.toLanguageClientUri(td.uri), td.version, td.text, document === undefined);
+      // pushing the full text would dirty the file on open. A first open's
+      // version is known only once its document is made, below.
+      if (editor) {
+         const held = document?.getText() === td.text ? document.version : undefined;
+         this.languageClientShadow.addOpen(uri, this.toLanguageClientUri(td.uri), td.version, td.text, document === undefined, held);
       }
       if (this.isOpenInClient(uri, clientId)) {
          // A repeat open, or the editor's second URI for the file, e.g. a
@@ -796,6 +803,10 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          const text = pendingText ?? td.text;
          const source = pendingText ? ', source=pending' : '';
          const version = this.textLedger.openingVersion(uri, text) ?? this.builtRootOpeningVersion(uri, text) ?? td.version;
+         if (editor && text === td.text) {
+            // What `addOpen` already recorded, now with the version it is held at.
+            this.languageClientShadow.setLanguageClientText(this.toLanguageClientUri(td.uri), text, version);
+         }
          this.log(uri, `Open document: Version ${version} by ${this.formatClientId(clientId)} [first client${source}]`);
          document = this.create(uri, td.languageId, version, text);
          this.commitText(uri, document, clientId);
@@ -941,6 +952,38 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     */
    openedVersion(uri: DocumentUri): TextVersion | undefined {
       return this.__openedVersions.get(this.documentKey(uri));
+   }
+
+   /**
+    * Refuse unless the editor's buffer under `uri`, at its own `version`, holds
+    * the synced text, so a save the editor asks for persists what it shows.
+    * The editor's version counts its own buffer and the store's counts the
+    * synced text, so neither stands in for the other: `version` has to be the
+    * one the editor last declared, and the shadow has to know the buffer to
+    * hold the store's current version, which a push in flight breaks.
+    *
+    * A refusal is a {@link ConflictError} based on the store version the buffer
+    * last held, or on {@link STALE_VERSION} when it never held one or `version`
+    * names a buffer the editor never declared. It is a
+    * {@link DocumentNotOpenError} when the editor does not have `uri` open, or
+    * a delete of it is under way, which a save landing before the deletion
+    * build would undo by writing the file back.
+    */
+   assertLanguageClientHolds(uri: DocumentUri, version: number): void {
+      const key = this.documentKey(uri);
+      const clientUri = this.toLanguageClientUri(uri);
+      const declared = this.languageClientShadow.declaredVersion(key, clientUri);
+      const document = this.__syncedDocuments.get(key);
+      if (declared === undefined || document === undefined || this.services.workspace.AstDocumentManager.isDeleting(key)) {
+         throw new DocumentNotOpenError(uri, LANGUAGE_CLIENT_ID);
+      }
+      const held = declared === version ? this.languageClientShadow.heldVersion(key, clientUri) : undefined;
+      if (held !== document.version) {
+         const base = held ?? STALE_VERSION;
+         this.logUri(key, `Refuse editor save: buffer v${version} holds text v${base}, store holds v${document.version}`, 'debug');
+         // A snapshot, as the brand means: recorded when the buffer held that text, not read live.
+         throw new ConflictError(uri, asModelVersion(base), document.version, STALE_BASE_VERSION_SAVE);
+      }
    }
 
    /**
@@ -1485,10 +1528,13 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
     * didChange paths from the LSP language client already auto-track the
     * shadow. A seed for a URI the client has not opened is kept but changes no
     * push, since nothing is pushed there; its open replaces it with the text it
-    * declares.
+    * declares. `text` other than the synced text refuses the editor's saves
+    * until the editor holds the synced text again.
     */
    setLanguageClientText(uri: DocumentUri, text: string): void {
-      this.languageClientShadow.setLanguageClientText(this.toLanguageClientUri(uri), text);
+      const document = this.get(uri);
+      const held = document?.getText() === text ? document.version : undefined;
+      this.languageClientShadow.setLanguageClientText(this.toLanguageClientUri(uri), text, held);
    }
 
    /**

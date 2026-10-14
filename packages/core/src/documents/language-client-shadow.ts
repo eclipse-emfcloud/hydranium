@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type CanonicalUri, type LanguageClientUri, textHash, type Tracer } from '@hydranium/protocol';
+import { type CanonicalUri, type LanguageClientUri, textHash, type TextVersion, type Tracer } from '@hydranium/protocol';
 import { diffLines } from 'diff';
 import { Range, type TextDocumentsConfiguration, type TextEdit, uinteger } from 'vscode-languageserver';
 import { TextDocument, type TextDocumentContentChangeEvent } from 'vscode-languageserver-textdocument';
@@ -93,12 +93,26 @@ export interface LanguageClientShadow {
     * the store's first open of `key`: that text becomes the diff baseline;
     * otherwise there is none, since a buffer opened from disk can lag the
     * synced text, and a push of other text is a full replace. Either replaces
-    * what was tracked for `clientUri` before the open. A no-op when this URI
-    * is already open.
+    * what was tracked for `clientUri` before the open. `heldVersion` is the
+    * store version `text` is held at, `undefined` when the store holds other
+    * text. A no-op when this URI is already open.
     */
-   addOpen(key: CanonicalUri, clientUri: LanguageClientUri, version: number, text: string, firstOpen: boolean): void;
+   addOpen(
+      key: CanonicalUri,
+      clientUri: LanguageClientUri,
+      version: number,
+      text: string,
+      firstOpen: boolean,
+      heldVersion: TextVersion | undefined
+   ): void;
    /** The version the client last declared for `key` under `clientUri`; `undefined` when it never opened it there. */
    declaredVersion(key: CanonicalUri, clientUri: LanguageClientUri): number | undefined;
+   /**
+    * The store version whose text the client was last known to hold under
+    * `clientUri`, behind the store's while a push is in flight; `undefined`
+    * when it has not held the store's text there since its open.
+    */
+   heldVersion(key: CanonicalUri, clientUri: LanguageClientUri): TextVersion | undefined;
    /**
     * Take `version` as the client's newest for `clientUri`, and classify its
     * change against `document`, the synced document. The caller has already
@@ -106,7 +120,8 @@ export interface LanguageClientShadow {
     * commits the change and reports the synced text through
     * {@link LanguageClientShadow.setLanguageClientText}: a `direct` change advances what
     * the client was last heard to hold only through that call, and without it
-    * the next change is rebuilt against a stale text.
+    * the next change is rebuilt against a stale text. An `echo` that brings
+    * the client to `document`'s text records it as held at `document`'s version.
     */
    acceptChange(
       key: CanonicalUri,
@@ -115,8 +130,12 @@ export interface LanguageClientShadow {
       document: TextDocument,
       changes: TextDocumentContentChangeEvent[]
    ): LanguageClientChangeVerdict;
-   /** The client holds `text` with nothing in flight. */
-   setLanguageClientText(clientUri: LanguageClientUri, text: string): void;
+   /**
+    * The client holds `text` with nothing in flight: the store's text at
+    * `heldVersion`, or other text when it is `undefined`, which refuses the
+    * client's saves until it holds the store's text again.
+    */
+   setLanguageClientText(clientUri: LanguageClientUri, text: string, heldVersion: TextVersion | undefined): void;
    /** The client closed `clientUri`; what it held there is forgotten. */
    removeOpen(key: CanonicalUri, clientUri: LanguageClientUri): void;
    /** Whether the client has `key` open: under `clientUri` when given, else under any URI. */
@@ -183,6 +202,8 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
     */
    protected readonly heardTexts = new Map<LanguageClientUri, string>();
    protected readonly pending = new Map<LanguageClientUri, PendingLanguageClientPush[]>();
+   /** {@link LanguageClientShadow.heldVersion}, kept beside {@link heardTexts}, which it versions. */
+   protected readonly heldVersions = new Map<LanguageClientUri, TextVersion>();
 
    /**
     * @param configuration the store's text-document factories, the store's own
@@ -196,7 +217,14 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       protected readonly tracer: Tracer
    ) {}
 
-   addOpen(key: CanonicalUri, clientUri: LanguageClientUri, version: number, text: string, firstOpen: boolean): void {
+   addOpen(
+      key: CanonicalUri,
+      clientUri: LanguageClientUri,
+      version: number,
+      text: string,
+      firstOpen: boolean,
+      heldVersion: TextVersion | undefined
+   ): void {
       let uris = this.opens.get(key);
       if (uris?.has(clientUri)) {
          return;
@@ -210,6 +238,7 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       // against it splices text the client does not hold.
       this.invalidateLanguageClientText(clientUri);
       this.heardTexts.set(clientUri, text);
+      this.setHeldVersion(clientUri, heldVersion);
       if (firstOpen) {
          this.baselines.set(clientUri, text);
       }
@@ -217,6 +246,10 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
 
    declaredVersion(key: CanonicalUri, clientUri: LanguageClientUri): number | undefined {
       return this.opens.get(key)?.get(clientUri)?.declaredVersion;
+   }
+
+   heldVersion(key: CanonicalUri, clientUri: LanguageClientUri): TextVersion | undefined {
+      return this.isOpen(key, clientUri) ? this.heldVersions.get(clientUri) : undefined;
    }
 
    acceptChange(
@@ -230,7 +263,12 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       if (state) {
          state.declaredVersion = version;
       }
-      return this.classify(clientUri, document, changes);
+      const verdict = this.classify(clientUri, document, changes);
+      // The echo of a push the store has since moved past keeps the older record.
+      if (verdict.kind === 'echo' && this.heardTexts.get(clientUri) === document.getText()) {
+         this.heldVersions.set(clientUri, document.version);
+      }
+      return verdict;
    }
 
    /**
@@ -277,10 +315,19 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       return heard === document.getText() ? { kind: 'direct' } : { kind: 'divergent', text: reconstructed };
    }
 
-   setLanguageClientText(clientUri: LanguageClientUri, text: string): void {
+   setLanguageClientText(clientUri: LanguageClientUri, text: string, heldVersion: TextVersion | undefined): void {
       this.baselines.set(clientUri, text);
       this.heardTexts.set(clientUri, text);
       this.pending.delete(clientUri);
+      this.setHeldVersion(clientUri, heldVersion);
+   }
+
+   protected setHeldVersion(clientUri: LanguageClientUri, heldVersion: TextVersion | undefined): void {
+      if (heldVersion === undefined) {
+         this.heldVersions.delete(clientUri);
+      } else {
+         this.heldVersions.set(clientUri, heldVersion);
+      }
    }
 
    removeOpen(key: CanonicalUri, clientUri: LanguageClientUri): void {
@@ -288,6 +335,7 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       if (uris?.delete(clientUri)) {
          this.invalidateLanguageClientText(clientUri);
          this.heardTexts.delete(clientUri);
+         this.heldVersions.delete(clientUri);
          if (uris.size === 0) {
             this.opens.delete(key);
          }
@@ -303,6 +351,7 @@ export class DefaultLanguageClientShadow<T extends TextDocument = TextDocument> 
       for (const clientUri of this.opens.get(key)?.keys() ?? []) {
          this.invalidateLanguageClientText(clientUri);
          this.heardTexts.delete(clientUri);
+         this.heldVersions.delete(clientUri);
       }
       this.opens.delete(key);
    }

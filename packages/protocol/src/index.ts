@@ -46,6 +46,7 @@ export * from './transfer-document';
 export * from './model-server';
 export * from './project';
 export * from './random-uuid';
+export * from './save-text-document';
 export * from './rpc';
 export * from './uri';
 export * from './util';

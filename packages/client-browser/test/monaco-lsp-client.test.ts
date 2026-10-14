@@ -14,7 +14,16 @@
  * and what it tells Monaco.
  */
 
-import { createMessagePortTransport, NoopLogger, type TextState, textHash } from '@hydranium/protocol';
+import {
+   CONFLICT_ERROR_CODE,
+   createMessagePortTransport,
+   NoopLogger,
+   type SaveTextDocumentParams,
+   SaveTextDocumentRequest,
+   type TextState,
+   textHash
+} from '@hydranium/protocol';
+import { waitFor } from '@hydranium/protocol/testing';
 import type * as monaco from 'monaco-editor-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -1675,5 +1684,197 @@ describe('saveDirtyDocuments', () => {
 
       expect(await saveDirtyDocuments(client, session)).toEqual([]);
       expect(session.opened).toEqual([]);
+   });
+});
+
+describe('MonacoLspClient save over the LSP head', () => {
+   const SAVING: ServerCapabilities = { ...CAPABILITIES, experimental: { [SaveTextDocumentRequest.method]: true } };
+
+   interface SaveServer {
+      /** Each save request as `uri@version`, with the changes the server had heard of when it arrived. */
+      readonly requests: { readonly save: string; readonly changesHeard: number }[];
+      /** Answers the server holds back until the test releases them, by `uri@version`. */
+      readonly held: Map<string, () => void>;
+      /** URIs the server refuses with a conflict. */
+      readonly refusing: Set<string>;
+      hold: boolean;
+   }
+
+   function makeSaveServer(ends: Ends): SaveServer {
+      const server: SaveServer = { requests: [], held: new Map(), refusing: new Set(), hold: false };
+      ends.server.onRequest(SaveTextDocumentRequest.method, (params: SaveTextDocumentParams) => {
+         const { uri, version } = params.textDocument;
+         server.requests.push({ save: `${uri}@${version}`, changesHeard: ends.changes.length });
+         const answer = (): null => {
+            if (server.refusing.has(uri)) {
+               throw new ResponseError(CONFLICT_ERROR_CODE, `refused ${uri}`);
+            }
+            return null;
+         };
+         return server.hold
+            ? new Promise<null>((resolve, reject) =>
+                 server.held.set(`${uri}@${version}`, () => {
+                    try {
+                       resolve(answer());
+                    } catch (error: unknown) {
+                       reject(error);
+                    }
+                 })
+              )
+            : answer();
+      });
+      return server;
+   }
+
+   function makeSavingClient(ends: Ends, capabilities = SAVING): MonacoLspClient {
+      const client = new MonacoLspClient(ends.page, capabilities, { languages: LANGUAGES });
+      toDispose.push(client);
+      for (const uri of ['file:///a.one', 'file:///b.two']) {
+         client.openDocument(uri, 'text');
+         modelOf(uri).edit([{ range: range(1, 1, 1, 1), text: '!' }]);
+      }
+      return client;
+   }
+
+   const dirtyUris = (client: MonacoLspClient): string[] => client.dirtyDocuments().map(document => document.uri);
+
+   it('sends the save after the changes it covers, at the buffer version, and marks the document saved', async () => {
+      const ends = makeEnds();
+      const server = makeSaveServer(ends);
+      const client = makeSavingClient(ends);
+
+      const saved = await client.save('file:///b.two');
+
+      expect(saved).toEqual({ uri: 'file:///b.two', text: '!text', version: 2, model: modelOf('file:///b.two') });
+      expect(server.requests).toEqual([{ save: 'file:///b.two@2', changesHeard: 2 }]);
+      expect(dirtyUris(client)).toEqual(['file:///a.one']);
+   });
+
+   it('sends the version the didChanges declared, which an undo steps on, not the one dirty tracking steps back', async () => {
+      const ends = makeEnds();
+      const server = makeSaveServer(ends);
+      const client = makeSavingClient(ends);
+      modelOf('file:///a.one').edit([{ range: range(1, 1, 1, 1), text: '?' }]);
+      modelOf('file:///a.one').undo();
+
+      await client.save('file:///a.one');
+
+      expect(server.requests.map(request => request.save)).toEqual([`file:///a.one@${ends.changes.at(-1)!.textDocument.version}`]);
+   });
+
+   it("saves a URI given in the host's form", async () => {
+      const ends = makeEnds();
+      const server = makeSaveServer(ends);
+      const client = makeSavingClient(ends);
+      client.openDocument('file:///w/my file.one', 'text');
+      modelOf('file:///w/my%20file.one').edit([{ range: range(1, 1, 1, 1), text: '!' }]);
+
+      await client.save('file:///w/my file.one');
+
+      expect(server.requests.map(request => request.save)).toEqual(['file:///w/my%20file.one@2']);
+   });
+
+   it('sends nothing for a document that is not dirty', async () => {
+      const ends = makeEnds();
+      const server = makeSaveServer(ends);
+      const client = makeSavingClient(ends);
+      client.openDocument('file:///c.two', 'text');
+
+      expect(await client.save('file:///c.two')).toBeUndefined();
+      await ends.flush();
+      expect(server.requests).toEqual([]);
+   });
+
+   it('keeps a document dirty when a keystroke lands while its save is in flight', async () => {
+      const ends = makeEnds();
+      const server = makeSaveServer(ends);
+      server.hold = true;
+      const client = makeSavingClient(ends);
+
+      const saving = client.save('file:///a.one');
+      await waitFor(() => server.held.has('file:///a.one@2'));
+      modelOf('file:///a.one').edit([{ range: range(1, 1, 1, 1), text: '?' }]);
+      server.held.get('file:///a.one@2')!();
+      await saving;
+
+      expect(dirtyUris(client)).toEqual(['file:///a.one', 'file:///b.two']);
+   });
+
+   it('keeps a newer save marked when an older save of the document is answered after it', async () => {
+      const ends = makeEnds();
+      const server = makeSaveServer(ends);
+      server.hold = true;
+      const client = makeSavingClient(ends);
+      const older = client.save('file:///a.one');
+      await waitFor(() => server.held.has('file:///a.one@2'));
+      modelOf('file:///a.one').edit([{ range: range(1, 1, 1, 1), text: '?' }]);
+      const newer = client.save('file:///a.one');
+      await waitFor(() => server.held.has('file:///a.one@3'));
+
+      // As a coalesced save answers: the newer save first, then the one it wrote for.
+      server.held.get('file:///a.one@3')!();
+      await newer;
+      server.held.get('file:///a.one@2')!();
+      await older;
+
+      expect(dirtyUris(client)).toEqual(['file:///b.two']);
+   });
+
+   it('rejects with the refusal and leaves the document dirty', async () => {
+      const ends = makeEnds();
+      const server = makeSaveServer(ends);
+      server.refusing.add('file:///a.one');
+      const client = makeSavingClient(ends);
+
+      const refused = await client.save('file:///a.one').catch((error: unknown) => error);
+
+      expect(refused).toMatchObject({ code: CONFLICT_ERROR_CODE, message: 'refused file:///a.one' });
+      expect(dirtyUris(client)).toEqual(['file:///a.one', 'file:///b.two']);
+   });
+
+   it('throws, sending nothing, when the server does not advertise the request', async () => {
+      const ends = makeEnds();
+      const server = makeSaveServer(ends);
+      const client = makeSavingClient(ends, CAPABILITIES);
+
+      await expect(client.save('file:///a.one')).rejects.toThrow(SaveTextDocumentRequest.method);
+      await expect(client.saveAll()).rejects.toThrow(SaveTextDocumentRequest.method);
+      await ends.flush();
+      expect(server.requests).toEqual([]);
+   });
+
+   it('saves every dirty document at once, marking each on its own answer', async () => {
+      const ends = makeEnds();
+      const server = makeSaveServer(ends);
+      server.hold = true;
+      const client = makeSavingClient(ends);
+
+      const saving = client.saveAll();
+      await waitFor(() => server.held.size === 2);
+      server.held.get('file:///b.two@2')!();
+      await waitFor(() => dirtyUris(client).length === 1);
+      expect(dirtyUris(client)).toEqual(['file:///a.one']);
+      server.held.get('file:///a.one@2')!();
+
+      expect((await saving).map(document => document.uri)).toEqual(['file:///a.one', 'file:///b.two']);
+      expect(dirtyUris(client)).toEqual([]);
+   });
+
+   it('rejects a save of all with the first refusal once every answer is in, keeping the documents that saved', async () => {
+      const ends = makeEnds();
+      const server = makeSaveServer(ends);
+      server.hold = true;
+      server.refusing.add('file:///a.one');
+      const client = makeSavingClient(ends);
+
+      const saving = client.saveAll().catch((error: unknown) => error);
+      await waitFor(() => server.held.size === 2);
+      server.held.get('file:///a.one@2')!();
+      await ends.flush();
+      expect(dirtyUris(client)).toEqual(['file:///a.one', 'file:///b.two']);
+      server.held.get('file:///b.two@2')!();
+
+      expect(await saving).toMatchObject({ code: CONFLICT_ERROR_CODE, message: 'refused file:///a.one' });
+      expect(dirtyUris(client)).toEqual(['file:///a.one']);
    });
 });

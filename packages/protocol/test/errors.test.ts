@@ -23,6 +23,7 @@ import {
    ReservedClientIdError,
    SESSION_CLOSED,
    SESSION_CLOSED_ERROR_CODE,
+   STALE_BASE_VERSION_SAVE,
    STALE_BASE_VERSION_UPDATE,
    SessionClosedError,
    isConflictError,
@@ -279,6 +280,11 @@ describe('isConflictError', () => {
 
    it('returns true for a plain Error whose message contains the marker (message fallback)', () => {
       const wrapped = new Error(`Request ns/save failed: ${STALE_BASE_VERSION_UPDATE.format({ uri: 'file:///A' })}`);
+      expect(isConflictError(wrapped)).toBe(true);
+   });
+
+   it("returns true for a plain Error whose message contains a refused save's sentence (message fallback)", () => {
+      const wrapped = new Error(`Request ns/save failed: ${STALE_BASE_VERSION_SAVE.format({ uri: 'file:///A' })}`);
       expect(isConflictError(wrapped)).toBe(true);
    });
 
