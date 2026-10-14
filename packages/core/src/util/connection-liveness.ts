@@ -43,7 +43,16 @@ const CONNECTION_GONE_PATTERNS = [
 const DESTROYED_STREAM_CODE = 'ERR_STREAM_DESTROYED';
 
 function isDestroyedStreamError(err: unknown): boolean {
-   return err instanceof Error && 'code' in err && err.code === DESTROYED_STREAM_CODE;
+   return errorCode(err) === DESTROYED_STREAM_CODE;
+}
+
+/** `err.code` where `err` is an `Error`, or `undefined` where reading it throws, as a getter or a revoked proxy can. */
+function errorCode(err: unknown): unknown {
+   try {
+      return err instanceof Error && 'code' in err ? err.code : undefined;
+   } catch {
+      return undefined;
+   }
 }
 
 /**
@@ -57,6 +66,9 @@ function isDestroyedStreamError(err: unknown): boolean {
  * happens on every ordinary shutdown — so a `false` here turns routine teardown
  * into errors that look like they need investigation. A `true` for a real
  * `applyEdit` failure (the client refused, the request malformed) hides it.
+ *
+ * Never throws, nor does {@link isClientGoneError}: a caller classifying a
+ * failure would otherwise lose it to a getter or proxy trap of the error.
  *
  * Callers that only need to *survive* a dead connection rather than classify it
  * should just catch — see `LspLogger.emit`, whose fallback path does exactly
@@ -91,7 +103,8 @@ export function isClientGoneError(err: unknown): boolean {
    if (isConnectionGoneError(err)) {
       return true;
    }
-   if (err instanceof Error && 'code' in err && typeof err.code === 'string' && SOCKET_GONE_CODES.has(err.code)) {
+   const code = errorCode(err);
+   if (typeof code === 'string' && SOCKET_GONE_CODES.has(code)) {
       return true;
    }
    const message = describeError(err);

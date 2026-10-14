@@ -19,12 +19,13 @@ import {
    type LogThreshold,
    ObservableValue,
    type MaybeObservableValue,
-   describeErrorWithStack,
    parseLogLevel
 } from '@hydranium/protocol';
 import { type URI } from '@hydranium/langium';
 import type { Connection } from 'vscode-languageserver';
 import { type ServerSharedServices } from '../module.js';
+import { installConsoleTee } from './console-tee.js';
+import { formatLogArg } from './format-log-arg.js';
 import { setLogFilePath, teeLogLine } from './logger.js';
 import { processEnv, writeStderr } from '../../util/environment.js';
 
@@ -35,6 +36,8 @@ import { processEnv, writeStderr } from '../../util/environment.js';
  * live setting.
  */
 let envBaselineApplied = false;
+/** Whether the first logger has run the console tee's install, which does nothing in a browser. */
+let consoleTeeInstalled = false;
 
 /**
  * Options accepted by {@link LspLogger}. Carries the logger's own
@@ -112,6 +115,13 @@ export class LspLogger extends AbstractLogger implements Logger {
                this.applyLevel(envLevel, DEFAULT_LOG_LEVEL_ENV);
             }
          }
+      }
+      // Once, so a server without an LSP head writes console lines to the file
+      // too; `startLanguageServer` wraps again where a stdio connection created
+      // after this logger replaced them.
+      if (!consoleTeeInstalled) {
+         consoleTeeInstalled = true;
+         installConsoleTee();
       }
       // Apply the configured threshold from the root logger only — `derive`
       // passes just `component`, so children never carry `logThreshold`. The
@@ -291,32 +301,3 @@ const LSP_CONSOLE: Record<LogLevel, (connection: Connection) => (message: string
    debug: c => c.console.debug.bind(c.console),
    trace: c => c.console.log.bind(c.console)
 };
-
-/**
- * Render a logger-argument value into the single combined string the LSP
- * `window/logMessage` channel takes. Mirrors how raw `console.*` would
- * format multiple args, but with explicit handling for Errors (stack) and
- * objects (JSON).
- */
-function formatLogArg(value: unknown): string {
-   if (value === undefined) {
-      return 'undefined';
-   }
-   if (value === null) {
-      return 'null';
-   }
-   if (typeof value === 'string') {
-      return value;
-   }
-   if (value instanceof Error) {
-      return describeErrorWithStack(value);
-   }
-   if (typeof value === 'object') {
-      try {
-         return JSON.stringify(value);
-      } catch {
-         return String(value);
-      }
-   }
-   return String(value);
-}

@@ -163,16 +163,22 @@ export class GlspClientLogger extends LspLogger implements GlspLogger {
       return params.length === 0 ? message : `${message} ${params.map(p => this.formatParam(p)).join(',\n')}`;
    }
 
-   /** Format a single param: errors → their stack and causes; everything else → JSON.stringify(p, undefined, 4). */
+   /**
+    * Format a single param: errors → their stack and causes; everything else →
+    * JSON.stringify(p, undefined, 4), or where JSON renders nothing or throws,
+    * its description. Never throws, since a log call that throws loses the line.
+    */
    protected formatParam(param: unknown): string {
-      if (param instanceof Error) {
-         return describeErrorWithStack(param);
-      }
       try {
-         return JSON.stringify(param, undefined, 4);
+         // `undefined` for `undefined`, a function, a symbol, or a `toJSON` returning nothing.
+         const json: string | undefined = param instanceof Error ? undefined : JSON.stringify(param, undefined, 4);
+         if (json !== undefined) {
+            return json;
+         }
       } catch {
-         return '';
+         // Cyclic, a BigInt, or a revoked proxy; described below instead.
       }
+      return describeErrorWithStack(param);
    }
 
    /**

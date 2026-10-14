@@ -168,10 +168,18 @@ describe('GlspClientLogger', () => {
 
    describe('formatParam', () => {
       const logger = new TestableGlspClientLogger(stubServices, { logLevel: LogLevel.info });
-      it('returns empty string for unserialisable input (circular)', () => {
+      it('describes what JSON cannot render rather than dropping it', () => {
          const circular: { self?: unknown } = {};
          circular.self = circular;
-         expect(logger.testFormatParam(circular)).toBe('');
+         expect(logger.testFormatParam(circular)).toBe('[object Object]');
+         expect(logger.testFormatParam(10n)).toBe('10');
+         expect(logger.testFormatParam({ toJSON: () => undefined })).toBe('[object Object]');
+      });
+
+      it('does not throw for a revoked proxy, on which even instanceof throws', () => {
+         const { proxy, revoke } = Proxy.revocable({}, {});
+         revoke();
+         expect(logger.testFormatParam(proxy)).toBe('[object]');
       });
    });
 

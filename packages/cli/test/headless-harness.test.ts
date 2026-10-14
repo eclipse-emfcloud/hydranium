@@ -327,7 +327,7 @@ describe('emitReport', () => {
    it('writes the report to the named file and keeps it off stdout', () => {
       const target = path.join(scratch, 'report.md');
       const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
       emitReport('# Report', target);
 
@@ -335,7 +335,7 @@ describe('emitReport', () => {
       // Off stdout entirely, not merely "also written": a caller that redirects
       // stdout into a second artefact must not receive the report twice.
       expect(log).not.toHaveBeenCalled();
-      expect(error).toHaveBeenCalledWith(`Wrote ${target}`);
+      expect(stderr).toHaveBeenCalledWith(`Wrote ${target}\n`);
    });
 
    it('falls back to stdout when no file is named, writing nothing to disk', () => {
@@ -355,7 +355,7 @@ describe('emitReport', () => {
       // Markdown ones do end that way and the JSON ones do not, and both land here.
       const ended = path.join(scratch, 'ended.md');
       const bare = path.join(scratch, 'bare.md');
-      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
       emitReport('body\n', ended);
       emitReport('body', bare);

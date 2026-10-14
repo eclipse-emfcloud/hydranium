@@ -68,7 +68,8 @@ async function main(argv: string[]): Promise<void> {
    if (args.outFile) {
       fs.writeFileSync(args.outFile, `${json}\n`);
       // Progress to stderr keeps stdout clean for callers that capture either form.
-      console.error(`Ground truth: ${result.documents} docs, ${result.totalAstNodes} AST nodes -> ${args.outFile}`);
+      // Not `console.error`, which a configured log file records as an error line.
+      process.stderr.write(`Ground truth: ${result.documents} docs, ${result.totalAstNodes} AST nodes -> ${args.outFile}\n`);
    } else {
       console.log(json);
    }

@@ -134,8 +134,9 @@ export function emitReport(report: string, outFile: string | undefined): void {
    }
    writeFileSync(outFile, report.endsWith('\n') ? report : `${report}\n`);
    // Progress on stderr, so a caller that also captures stdout gets a clean
-   // stream rather than a note where the report used to be.
-   console.error(`Wrote ${outFile}`);
+   // stream rather than a note where the report used to be. Not `console.error`,
+   // which a configured log file records as an error line.
+   process.stderr.write(`Wrote ${outFile}\n`);
 }
 
 /**

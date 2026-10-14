@@ -19,6 +19,7 @@ import {
    resolveLogFilePlaceholder,
    setLogFileSink,
    setLogFilePath,
+   teeLogLine,
    toLogFileWorkspaceToken
 } from '../../../src/langium/diagnostics/logger.js';
 import { installNodeLogFileSink } from '../../../src/node/log-file-sink.js';
@@ -382,6 +383,26 @@ describe('LspLogger file-tee', () => {
          expect(contents).not.toContain('debug-line');
          expect(contents).toContain('info-line');
          expect(clientLines.join('\n')).toContain('debug-line');
+      });
+
+      it.each(['sinkless.log', '{workspace}.log'])('builds no line where no sink can write it, to %s', name => {
+         setLogFilePath(join(tmpDir, name), 'info');
+         setLogFileSink(undefined);
+         const build = vi.fn(() => 'line');
+
+         teeLogLine('info', build);
+         expect(build).not.toHaveBeenCalled();
+      });
+
+      it('builds a line passed as a function only when the file takes it', () => {
+         const path = join(tmpDir, 'lazy.log');
+         setLogFilePath(path, 'info');
+         const build = vi.fn(() => 'lazy-line');
+
+         teeLogLine('debug', build);
+         expect(build).not.toHaveBeenCalled();
+         teeLogLine('info', build);
+         expect(readFileSync(path, 'utf-8')).toBe('lazy-line\n');
       });
    });
 

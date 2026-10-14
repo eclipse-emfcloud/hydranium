@@ -14,6 +14,7 @@ import {
 } from '@hydranium/langium/lsp';
 import { HydraniumDocumentUpdateHandler } from './hydranium-document-update-handler.js';
 import { guardDiagnosticsConnection } from './diagnostics-connection.js';
+import { installConsoleTee } from '../langium/diagnostics/console-tee.js';
 
 /**
  * Fail the LSP head's start when its shared module was never composed.
@@ -58,11 +59,14 @@ export function assertLspHeadComposed(services: LangiumSharedServices): void {
 
 /**
  * The framework's LSP server entry point: {@link assertLspHeadComposed}, then
- * {@link guardDiagnosticsConnection} on the tree's connection, then Langium's
- * `startLanguageServer`. Signature-compatible with Langium's, so it is a
- * drop-in for adopters importing from `@hydranium/core/lsp`. Calling Langium's
- * directly skips both: the composition check, and the guard without which a
- * publish racing teardown fails the build that validated the document.
+ * {@link guardDiagnosticsConnection} on the tree's connection, then the
+ * console's wrapping for the log file, then Langium's `startLanguageServer`.
+ * Signature-compatible with Langium's, so it is a drop-in for adopters
+ * importing from `@hydranium/core/lsp`. Calling Langium's directly skips the
+ * composition check, the guard without which a publish racing teardown fails
+ * the build that validated the document, and the wrapping, which a stdio
+ * connection discards where a logger was built before it (see
+ * `installConsoleTee`).
  */
 export function startLanguageServer(services: LangiumSharedServices, serviceRequirements: Partial<ServiceRequirements> = {}): void {
    assertLspHeadComposed(services);
@@ -70,5 +74,6 @@ export function startLanguageServer(services: LangiumSharedServices, serviceRequ
    if (connection) {
       guardDiagnosticsConnection(connection);
    }
+   installConsoleTee();
    startLangiumLanguageServer(services, serviceRequirements);
 }

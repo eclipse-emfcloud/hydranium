@@ -240,7 +240,7 @@ export function resolvedFromResponseError(error: ResponseError<unknown>): Resolv
  * For a reader of the client; the log takes {@link describeErrorWithStack}.
  */
 export function describeError(error: unknown): string {
-   return error instanceof Error ? error.message : String(error);
+   return describeSafely(error, () => (error instanceof Error ? error.message : error));
 }
 
 /**
@@ -257,18 +257,56 @@ function describeChain(error: unknown, seen: Set<unknown>): string {
    const lines: string[] = [];
    let current: unknown = error;
    let prefix = '';
-   do {
-      seen.add(current);
-      lines.push(prefix + (current instanceof Error ? (current.stack ?? current.message) : String(current)));
-      // Node fails a connect to several addresses with one, whose own message is empty.
-      if (current instanceof AggregateError) {
-         const errors: unknown[] = current.errors;
-         lines.push(...errors.filter(inner => !seen.has(inner)).map(inner => `Including: ${describeChain(inner, seen)}`));
-      }
-      current = current instanceof Error ? current.cause : undefined;
-      prefix = 'Caused by: ';
-   } while (current !== undefined && current !== null && !seen.has(current));
+   try {
+      do {
+         seen.add(current);
+         const described = current;
+         lines.push(prefix + describeSafely(described, () => (described instanceof Error ? stackOrMessage(described) : described)));
+         // Node fails a connect to several addresses with one, whose own message is empty.
+         if (current instanceof AggregateError) {
+            try {
+               const errors: unknown[] = current.errors;
+               lines.push(...errors.filter(inner => !seen.has(inner)).map(inner => `Including: ${describeChain(inner, seen)}`));
+            } catch {
+               // An `errors` that is no list, or throws when read; the cause still follows.
+            }
+         }
+         current = current instanceof Error ? current.cause : undefined;
+         prefix = 'Caused by: ';
+      } while (current !== undefined && current !== null && !seen.has(current));
+   } catch {
+      // A getter or proxy trap threw while walking the chain; keep what was described.
+   }
    return lines.join('\n');
+}
+
+/** `error`'s stack as a string, or its message where reading or converting the stack throws. */
+function stackOrMessage(error: Error): string {
+   try {
+      return String(error.stack ?? error.message);
+   } catch {
+      return String(error.message);
+   }
+}
+
+/**
+ * What `select()` picks from `value`, as a string, or where selecting or
+ * converting it throws, as `String` does for an object without a prototype,
+ * the `[object Type]` tag, or where reading the tag throws too, the value's
+ * type. Describing an error must not throw, or the failure it reports is lost;
+ * the conversion sits inside the guard because a thrown value's `message` or
+ * `stack` need not be a string.
+ */
+function describeSafely(value: unknown, select: () => unknown): string {
+   try {
+      return String(select());
+   } catch {
+      try {
+         return Object.prototype.toString.call(value);
+      } catch {
+         return `[${typeof value}]`;
+      }
+   }
 }
 
 /**

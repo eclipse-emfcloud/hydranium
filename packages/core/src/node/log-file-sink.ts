@@ -9,6 +9,8 @@
 
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { format } from 'node:util';
+import { setConsoleFormat } from '../langium/diagnostics/console-tee.js';
 import { type LogFileSink, setLogFileSink } from '../langium/diagnostics/logger.js';
 
 /**
@@ -35,9 +37,11 @@ export const nodeLogFileSink: LogFileSink = {
 
 /**
  * Install the Node file-tee sink so a configured `HYDRANIUM_LOG_FILE` target
- * is honoured. Idempotent. Called once at `@hydranium/core/node` load so any
- * Node host that imports the entry gets the file-tee for free.
+ * is honoured, and render console lines in it with `util.format`, as the
+ * console prints them. Idempotent. Called once at `@hydranium/core/node` load
+ * so any Node host that imports the entry gets the file-tee for free.
  */
 export function installNodeLogFileSink(): void {
    setLogFileSink(nodeLogFileSink);
+   setConsoleFormat(format);
 }

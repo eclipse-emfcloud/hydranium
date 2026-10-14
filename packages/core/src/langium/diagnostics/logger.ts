@@ -39,7 +39,7 @@ export function setLogFileSink(sink: LogFileSink | undefined): void {
 }
 
 /**
- * File-tee state for `LspLogger`'s emit. When
+ * File-tee state for `LspLogger`'s emit and the console tee. When
  * non-empty, every formatted log line is appended to the path in addition to
  * its LSP `window/logMessage` / console destination (see {@link teeLogLine}).
  * Diagnostic surface only — once the LSP connection binds, server logs route
@@ -201,19 +201,26 @@ export function getLogFilePath(): string | undefined {
  * Fan a single already-formatted log line out to the file-tee target, if one is
  * configured and `level` is within the file's threshold
  * (`Logger.getFileLevel() ?? Logger.getLevel()`). Called by `LspLogger`'s emit in
- * addition to the LSP/console sink — log sinks fan out, they don't replace.
+ * addition to the LSP/console sink, and by the console tee before the console
+ * method it wraps — log sinks fan out, they don't replace.
  * While the target is still pending (unresolved `{placeholder}`), the line is
- * buffered instead of dropped.
+ * buffered instead of dropped. Where no sink is installed, as in a process
+ * that never loaded `@hydranium/core/node`, nothing is built or buffered,
+ * since nothing will write it. A caller whose line is costly to build passes
+ * a function, called only when the file takes the line.
  */
-export function teeLogLine(level: LogLevel, formatted: string): void {
+export function teeLogLine(level: LogLevel, formatted: string | (() => string)): void {
    if (!logFileTemplate || LEVEL_ORDER[level] > LEVEL_ORDER[Logger.getFileLevel() ?? Logger.getLevel()]) {
       return;
    }
-   const line = `${formatted}\n`;
+   if (!fileSink) {
+      return;
+   }
+   const line = `${typeof formatted === 'string' ? formatted : formatted()}\n`;
    if (resolvedLogFilePath) {
       // The sink swallows its own errors; recursing into the logger here would
-      // re-enter emit and loop. The LSP/console sink already delivered the line.
-      fileSink?.append(resolvedLogFilePath, line);
+      // re-enter emit and loop. The caller delivers the line to its other sink.
+      fileSink.append(resolvedLogFilePath, line);
    } else {
       pendingLogLines.push(line);
    }
