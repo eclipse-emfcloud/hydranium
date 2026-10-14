@@ -33,4 +33,4 @@
 export const ORDER_FLOW_DATA_SERVER_PORT_COMMAND = 'order-flow/data-server/port';
 
 /** LSP request the host queries to discover the GLSP socket port. */
-export const ORDER_FLOW_GLSP_PORT_COMMAND = 'order-flow/glsp/port';
+export const ORDER_FLOW_GLSP_SERVER_PORT_COMMAND = 'order-flow/glsp-server/port';

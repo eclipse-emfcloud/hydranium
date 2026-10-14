@@ -40,7 +40,7 @@ import { describeErrorWithStack } from '@hydranium/protocol';
 import { startLanguageServer, withHydraniumLspFeatures } from '@hydranium/core/lsp';
 import { ProposedFeatures, createConnection } from 'vscode-languageserver/node';
 import { OrderFlowProcessDiagramModule } from './glsp/order-flow-process-diagram-module.js';
-import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from '@hydranium/example-order-flow-protocol';
+import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_SERVER_PORT_COMMAND } from '@hydranium/example-order-flow-protocol';
 // The TRANSFER roots, not the AST ones. The data head serialises to the
 // persisted shape, where `Reference<T>` is `string`; the AST's is a Langium
 // reference object with `.ref` / `.$refText`. Both satisfy `TransferElement`
@@ -59,7 +59,7 @@ startLanguageServer(shared);
 // Neither the bind nor the publish may be swallowed: either failure leaves the LSP
 // head serving text edits while every data client waits on a port command that was
 // never registered, and the launcher reports a bind failure only if given a logger.
-const dataServer = startSocketServer({ port: 0, logTag: 'ModelServer', logger: shared.Logger }, dataConnection => {
+const dataServer = startSocketServer({ shared, port: 0, logTag: 'ModelServer', logger: shared.Logger }, dataConnection => {
    new DataServer<DomainModel | LayoutModel | ProcessModel>(dataConnection, shared);
    return { dispose: () => undefined };
 });
@@ -108,6 +108,6 @@ const glspServer = startGlspServer({
    serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
    appModules: [new HydraniumGlspAppModule({ shared })],
    lspConnection: shared.lsp.Connection,
-   portCommand: ORDER_FLOW_GLSP_PORT_COMMAND
+   portCommand: ORDER_FLOW_GLSP_SERVER_PORT_COMMAND
 });
 void glspServer;

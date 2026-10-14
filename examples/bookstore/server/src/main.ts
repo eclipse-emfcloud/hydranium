@@ -45,7 +45,7 @@ import { BookstoreDiagramModule } from './glsp/bookstore/diagram-module.js';
 import type { BookstoreModel } from '@hydranium/bookstore-protocol';
 import { createBookstoreServices } from './language-server/bookstore-module.js';
 
-import { BOOKSTORE_DATA_SERVER_PORT_COMMAND, BOOKSTORE_GLSP_PORT_COMMAND } from '@hydranium/bookstore-protocol';
+import { BOOKSTORE_DATA_SERVER_PORT_COMMAND, BOOKSTORE_GLSP_SERVER_PORT_COMMAND } from '@hydranium/bookstore-protocol';
 
 const connection = createConnection(withHydraniumLspFeatures(ProposedFeatures.all));
 const { shared } = createBookstoreServices({ connection, ...NodeFileSystem });
@@ -57,7 +57,7 @@ startLanguageServer(shared);
 // Neither the bind nor the publish may be swallowed: either failure leaves the LSP
 // head serving text edits while every data client waits on a port command that was
 // never registered, and the launcher reports a bind failure only if given a logger.
-const dataServer = startSocketServer({ port: 0, logTag: 'ModelServer', logger: shared.Logger }, dataConnection => {
+const dataServer = startSocketServer({ shared, port: 0, logTag: 'ModelServer', logger: shared.Logger }, dataConnection => {
    new DataServer<BookstoreModel>(dataConnection, shared);
    return { dispose: () => undefined };
 });
@@ -97,6 +97,6 @@ const glspServer = startGlspServer({
    serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
    appModules: [new HydraniumGlspAppModule({ shared })],
    lspConnection: shared.lsp.Connection,
-   portCommand: BOOKSTORE_GLSP_PORT_COMMAND
+   portCommand: BOOKSTORE_GLSP_SERVER_PORT_COMMAND
 });
 void glspServer;

@@ -45,7 +45,11 @@ import { tick } from '@hydranium/protocol/testing';
 import { readFileSync } from 'node:fs';
 import { DidOpenTextDocumentNotification } from 'vscode-languageserver-protocol/node';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { ORDER_FLOW_GLSP_PORT_COMMAND, PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
+import {
+   ORDER_FLOW_GLSP_SERVER_PORT_COMMAND,
+   PROCESS_GATEWAY_NODE_TYPE,
+   PROCESS_TASK_NODE_TYPE
+} from '@hydranium/example-order-flow-protocol';
 import { ProcessLanguageMetaData } from '../../src/language-server/generated/module.js';
 import { WORKSPACE_FILES, WORKSPACE_ROOT } from '../order-flow-harness.js';
 import { SPAWN_TIMEOUT_MS, type SpawnedOrderFlowServer, startSpawnedOrderFlowServer } from './spawned-order-flow-server.js';
@@ -68,7 +72,7 @@ let glspPort: number | undefined;
 beforeAll(async () => {
    workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-smoke-glsp-conformance-' });
    server = await startSpawnedOrderFlowServer({ workspaceRoot: workspace.root });
-   glspPort = await server.port(ORDER_FLOW_GLSP_PORT_COMMAND);
+   glspPort = await server.port(ORDER_FLOW_GLSP_SERVER_PORT_COMMAND);
    const uri = workspace.uri(WORKSPACE_FILES.fulfillmentProcess);
    // Awaited through its diagnostics, so the open is in the server's store
    // before any check writes the document over the other channel.

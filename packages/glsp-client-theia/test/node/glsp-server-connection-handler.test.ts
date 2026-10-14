@@ -30,7 +30,7 @@ class TestHandler extends GlspServerConnectionHandler {
 
 describe('GlspServerConnectionHandler', () => {
    it('composes path from servicePath + language contribution id', () => {
-      const handler = new TestHandler({ languageContributionId: 'foo', portCommand: 'foo/glsp/port' });
+      const handler = new TestHandler({ languageContributionId: 'foo', portCommand: 'foo/glsp-server/port' });
       // GLSPContribution.servicePath is the upstream constant; we don't need to know its value here,
       // we just verify the contribution id is appended after a slash.
       expect(handler.path.endsWith('/foo')).toBe(true);

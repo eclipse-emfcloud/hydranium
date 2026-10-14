@@ -90,7 +90,7 @@ declare const shared: ServerSharedServices & LspServerAddedSharedServices;
 import { publishPortOnLspConnection, startSocketServer } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
 
-const dataServer = startSocketServer({ port: 0, logTag: 'DataServer', logger: shared.Logger }, dataConnection => {
+const dataServer = startSocketServer({ shared, port: 0, logTag: 'DataServer', logger: shared.Logger }, dataConnection => {
    new DataServer(dataConnection, shared);
    return { dispose: () => undefined };
 });
@@ -105,6 +105,11 @@ if (dataServer.port !== undefined) {
 
 5. **Start the GLSP head** on the same shared services, as in step 4 of
    [Make a diagram editable](editable-diagram.md).
+
+Without an LSP head, skip step 3 and compose without a connection. Pass
+`workspace` to each starter in steps 4 and 5 instead of publishing a port
+over LSP: the starters bring the workspace up once, before they listen, and
+you report the ports to the host yourself.
 
 ## How you know it worked
 

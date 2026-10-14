@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_PORT_COMMAND } from '@hydranium/example-order-flow-protocol';
+import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_SERVER_PORT_COMMAND } from '@hydranium/example-order-flow-protocol';
 import { describe, expect, it } from 'vitest';
 import { ORDER_FLOW_HOST_PORT_COMMANDS } from '../src/common/order-flow-diagram-language';
 
@@ -29,7 +29,7 @@ describe('ORDER_FLOW_HOST_PORT_COMMANDS', () => {
 
    it.each([
       ['dataServer', ORDER_FLOW_DATA_SERVER_PORT_COMMAND],
-      ['glsp', ORDER_FLOW_GLSP_PORT_COMMAND]
+      ['glsp', ORDER_FLOW_GLSP_SERVER_PORT_COMMAND]
    ])('derives the %s host id the way the extension registers it', head => {
       // The extension declares its host ids as `order-flow.port.<head>` and
       // registers one command per head, mapping each to the LSP request id that
@@ -42,6 +42,6 @@ describe('ORDER_FLOW_HOST_PORT_COMMANDS', () => {
       // only in spelling, and picking the wrong one fails silently.
       const hostIds: string[] = Object.values(ORDER_FLOW_HOST_PORT_COMMANDS);
       expect(hostIds).not.toContain(ORDER_FLOW_DATA_SERVER_PORT_COMMAND);
-      expect(hostIds).not.toContain(ORDER_FLOW_GLSP_PORT_COMMAND);
+      expect(hostIds).not.toContain(ORDER_FLOW_GLSP_SERVER_PORT_COMMAND);
    });
 });

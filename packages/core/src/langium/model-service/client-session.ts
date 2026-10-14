@@ -89,6 +89,11 @@ export interface ClientSession<
     * it open already or it holds this client's unsaved text within its release
     * grace. `options` are kept for this open until it closes; a repeat open,
     * concurrent or not, keeps the options of the first.
+    *
+    * Waits for the workspace to be brought up, as {@link create} does, and does
+    * not settle while nothing brings it up. So neither may be awaited from
+    * inside the bring-up, such as a workspace manager's document loading: the
+    * bring-up then waits for itself.
     */
    open(uri: string, options?: TOpenOptions): Promise<void>;
    /** The options this session opened `uri` with, or `undefined` when it gave none or does not have `uri` open. */
@@ -538,8 +543,15 @@ export class DefaultClientSession<
     * A first open records its options before the store opens the URI, so a
     * listener of the store's open reads this open's options rather than an
     * earlier one's.
+    *
+    * It waits for the workspace first, as an LSP head's open does: a document
+    * opened before the bring-up links against a workspace that holds only
+    * itself, and the bring-up does not always relink it.
     */
    protected async registerOpen(uri: string, options: TOpenOptions | undefined): Promise<void> {
+      await this.modelService.ready;
+      // A session ended during the wait opens nothing.
+      this.assertLive();
       const wasOpen = this.services.workspace.TextDocuments.isOpenInClient(uri, this.clientId);
       if (!wasOpen) {
          this.openOptionsByUri.set(this.canonicalKey(uri), options);
@@ -553,6 +565,8 @@ export class DefaultClientSession<
    }
 
    protected async createDocument(uri: string, text: string): Promise<TextVersion> {
+      // As `registerOpen` does, and before the checks, which read the workspace.
+      await this.modelService.ready;
       if (await this.services.workspace.FileSystemProvider.exists(UriUtils.toUri(uri))) {
          throw new Error(`Cannot create ${uri}: the file exists`);
       }

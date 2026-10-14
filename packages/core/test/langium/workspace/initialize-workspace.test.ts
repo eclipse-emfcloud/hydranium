@@ -17,7 +17,8 @@ import type { ServerSharedServicesMinimal } from '../../../src/langium/shared-se
 import { makeNoopSharedServices } from '../../../src/testing/index.js';
 import {
    buildWorkspaceProgrammatically,
-   initializeWorkspaceProgrammatically
+   initializeWorkspaceProgrammatically,
+   initializeWorkspaceWithoutLsp
 } from '../../../src/langium/workspace/initialize-workspace.js';
 
 /** Captures the lifecycle calls the seam drives, in order. */
@@ -82,6 +83,88 @@ describe('initializeWorkspaceProgrammatically', () => {
       gate.resolve();
       await done;
       expect(resolved).toBe(true);
+   });
+});
+
+describe('initializeWorkspaceWithoutLsp', () => {
+   /** Services composed around an LSP connection, or with an `lsp` slot holding none. */
+   function withLsp(manager: FakeWorkspaceManager, connection: object | undefined): ServerSharedServicesMinimal {
+      return makeNoopSharedServices({ workspace: { WorkspaceManager: manager }, lsp: { Connection: connection } });
+   }
+
+   it('initializes the workspace when no LSP head is composed, starting before it returns', async () => {
+      const manager = new FakeWorkspaceManager();
+      const done = initializeWorkspaceWithoutLsp(makeServices(manager), '/ws');
+      expect(manager.events).toEqual(['initialize', 'initialized']);
+      await done;
+   });
+
+   it('counts an lsp slot without a connection as no LSP head', async () => {
+      const manager = new FakeWorkspaceManager();
+      await initializeWorkspaceWithoutLsp(withLsp(manager, undefined), '/ws');
+      expect(manager.events).toEqual(['initialize', 'initialized']);
+   });
+
+   it('throws before anything starts when no LSP head is composed and no workspace is given', () => {
+      const manager = new FakeWorkspaceManager();
+      expect(() => initializeWorkspaceWithoutLsp(makeServices(manager), undefined)).toThrow(/nothing initialises the workspace/);
+      expect(manager.events).toEqual([]);
+   });
+
+   it('throws before anything starts for an empty workspace list without an LSP head', () => {
+      const manager = new FakeWorkspaceManager();
+      expect(() => initializeWorkspaceWithoutLsp(makeServices(manager), [])).toThrow(/nothing initialises the workspace/);
+      expect(manager.events).toEqual([]);
+   });
+
+   it('leaves the workspace to an LSP head', async () => {
+      const manager = new FakeWorkspaceManager();
+      await initializeWorkspaceWithoutLsp(withLsp(manager, {}), undefined);
+      expect(manager.events).toEqual([]);
+   });
+
+   it('throws before anything starts for a workspace given beside an LSP head', () => {
+      const manager = new FakeWorkspaceManager();
+      expect(() => initializeWorkspaceWithoutLsp(withLsp(manager, {}), '/ws')).toThrow(/beside an LSP head/);
+      expect(manager.events).toEqual([]);
+   });
+
+   it('initializes once for every starter on one services tree', async () => {
+      const manager = new FakeWorkspaceManager();
+      const services = makeServices(manager);
+      const first = initializeWorkspaceWithoutLsp(services, '/ws');
+      const second = initializeWorkspaceWithoutLsp(services, '/ws');
+      expect(second).toBe(first);
+      await second;
+      expect(manager.events).toEqual(['initialize', 'initialized']);
+   });
+
+   it('throws for a second starter naming other folders', async () => {
+      const manager = new FakeWorkspaceManager();
+      const services = makeServices(manager);
+      const first = initializeWorkspaceWithoutLsp(services, '/ws');
+      expect(() => initializeWorkspaceWithoutLsp(services, '/other')).toThrow(
+         /every caller on one services tree has to name the same folders/
+      );
+      await first;
+      expect(manager.events).toEqual(['initialize', 'initialized']);
+   });
+
+   it('takes the same folders in another order as the same workspace', async () => {
+      const manager = new FakeWorkspaceManager();
+      const services = makeServices(manager);
+      const first = initializeWorkspaceWithoutLsp(services, ['/a', '/b']);
+      expect(initializeWorkspaceWithoutLsp(services, ['/b', '/a'])).toBe(first);
+      await first;
+   });
+
+   it('shares the initialisation a caller already started directly', async () => {
+      const manager = new FakeWorkspaceManager();
+      const services = makeServices(manager);
+      const direct = initializeWorkspaceProgrammatically(services, '/ws');
+      expect(initializeWorkspaceWithoutLsp(services, '/ws')).toBe(direct);
+      await direct;
+      expect(manager.events).toEqual(['initialize', 'initialized']);
    });
 });
 

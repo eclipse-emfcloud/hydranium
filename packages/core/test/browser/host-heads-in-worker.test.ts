@@ -78,8 +78,12 @@ function errorReports(): WorkerErrorMessage[] {
    return posted.filter(isWorkerErrorMessage);
 }
 
-/** What the runner reads for the validating build, with the gate and the build under the test's control. */
-function makeWorkspaceServices(uris: string[], fileSystemProvider?: WritableFileSystemProvider) {
+/**
+ * What the runner reads for the validating build, with the gate and the build
+ * under the test's control. Composed around an LSP connection unless `lsp` is
+ * false; the folders of every bring-up are recorded either way.
+ */
+function makeWorkspaceServices(uris: string[], fileSystemProvider?: WritableFileSystemProvider, options: { lsp?: boolean } = {}) {
    let initialized: () => void = () => undefined;
    let initializationFailed: (error: unknown) => void = () => undefined;
    const workspaceInitialized = new Promise<void>((resolve, reject) => {
@@ -87,11 +91,18 @@ function makeWorkspaceServices(uris: string[], fileSystemProvider?: WritableFile
       initializationFailed = reject;
    });
    const builds: { uris: string[]; options: unknown }[] = [];
+   const bringUps: string[][] = [];
    let nextBuildFailure: Error | undefined;
    const services = makeNoopSharedServices({
+      ...(options.lsp === false ? {} : { lsp: { Connection: {} } }),
       workspace: {
          FileSystemProvider: fileSystemProvider,
-         WorkspaceManager: { workspaceInitialized },
+         WorkspaceManager: {
+            workspaceInitialized,
+            initialize: (params: { workspaceFolders: { uri: string }[] }) =>
+               bringUps.push(params.workspaceFolders.map(folder => folder.uri)),
+            initialized: () => workspaceInitialized
+         },
          LangiumDocuments: makeStubLangiumDocuments(uris.map(uri => ({ uri, root: makeFakeAstNode({ $type: 'Element' }) }))),
          DocumentBuilder: {
             build: async (documents: LangiumDocument[], options: unknown) => {
@@ -106,6 +117,7 @@ function makeWorkspaceServices(uris: string[], fileSystemProvider?: WritableFile
    return {
       services,
       builds,
+      bringUps,
       initialized: () => initialized(),
       initializationFailed: (error: unknown) => initializationFailed(error),
       failNextBuild: (error: Error) => {
@@ -125,6 +137,11 @@ function makeRegistry(
       }),
       { host }
    );
+}
+
+/** A registry over one seeded file under `file:///w`, so a ready message with a root has something to read. */
+function seededRegistry(): WritableFileSystemProvider {
+   return makeRegistry(new InMemoryFileSystemProvider(makeNoopSharedServices(), { seed: { 'a.x': 'a' }, rootUri: 'file:///w' }));
 }
 
 describe('hostHeadsInWorker', () => {
@@ -453,6 +470,56 @@ describe('hostHeadsInWorker', () => {
       expect(errorReports().map(report => report.phase)).toEqual(['unhandled rejection']);
       expect(errorReports()[0].message).toContain('workspace walk failed');
       expect(preventDefault).not.toHaveBeenCalled();
+   });
+
+   describe('without an LSP head', () => {
+      it('brings the workspace up from the root before it awaits the heads, and posts the ready message once it is up', async () => {
+         const workspace = makeWorkspaceServices([], seededRegistry(), { lsp: false });
+         let headUp: () => void = () => undefined;
+         const head = new Promise<void>(resolve => {
+            headUp = resolve;
+         });
+         hostHeadsInWorker(undefined, () => ({ shared: workspace.services, started: [head] }), { rootUri: 'file:///w' });
+         fire('message', { data: makeBootstrap() });
+
+         await waitFor(() => workspace.bringUps.length > 0);
+         headUp();
+         await tick();
+         expect({ bringUps: workspace.bringUps, ready: readyMessages().length }).toEqual({ bringUps: [['file:///w']], ready: 0 });
+
+         workspace.initialized();
+         await waitFor(() => readyMessages().length === 1);
+      });
+
+      it('reports a missing root under the bootstrap phase and posts no ready message', async () => {
+         const workspace = makeWorkspaceServices([], undefined, { lsp: false });
+         hostHeadsInWorker(undefined, () => workspace.services);
+         fire('message', { data: makeBootstrap() });
+
+         await waitFor(() => errorReports().length === 1);
+         expect(errorReports()[0]).toMatchObject({ phase: WORKER_BOOTSTRAP_PHASE, message: expect.stringContaining('rootUri') });
+         expect({ bringUps: workspace.bringUps, ready: readyMessages().length }).toEqual({ bringUps: [], ready: 0 });
+      });
+
+      it('still handles a head that fails beside a missing root', async () => {
+         const workspace = makeWorkspaceServices([], undefined, { lsp: false });
+         const head = Promise.reject(new Error('launcher built no connection'));
+         hostHeadsInWorker(undefined, () => ({ shared: workspace.services, started: [head] }));
+         fire('message', { data: makeBootstrap() });
+
+         await waitFor(() => errorReports().length === 1);
+         await tick();
+         expect(errorReports().map(report => report.phase)).toEqual([WORKER_BOOTSTRAP_PHASE]);
+      });
+
+      it('leaves the workspace to an LSP head, root or not', async () => {
+         const workspace = makeWorkspaceServices([], seededRegistry());
+         hostHeadsInWorker(undefined, () => workspace.services, { rootUri: 'file:///w' });
+         fire('message', { data: makeBootstrap() });
+
+         await waitFor(() => readyMessages().length === 1);
+         expect(workspace.bringUps).toEqual([]);
+      });
    });
 });
 

@@ -50,7 +50,7 @@ vi.mock('@clack/prompts', () => {
    };
 });
 
-const { createClackPrompt, InitWizardCancelled, OPTIONAL_HEAD_CHOICES } = await import('../src/commands/init-prompt.js');
+const { createClackPrompt, InitWizardCancelled, HEAD_CHOICES } = await import('../src/commands/init-prompt.js');
 
 describe('createClackPrompt', () => {
    beforeEach(() => {
@@ -104,17 +104,14 @@ describe('createClackPrompt', () => {
       expect(Object.keys((calls.select[0].options as object[])[0])).toEqual(['value', 'label']);
    });
 
-   /**
-    * An `lsp`-only project is legal — a plain LSP server with no other head —
-    * so the head checkbox must accept an empty selection.
-    */
-   it('lets the head multiselect come back empty', async () => {
+   /** A project needs at least one head, so the head checkbox refuses an empty selection. */
+   it('requires a head from the multiselect', async () => {
       const prompt = await createClackPrompt();
-      nextAnswer = [];
-      const answer = await prompt.multiselect({ message: 'Heads', choices: OPTIONAL_HEAD_CHOICES, initialValues: ['data'] });
+      nextAnswer = ['data'];
+      const answer = await prompt.multiselect({ message: 'Heads', choices: HEAD_CHOICES, initialValues: ['lsp', 'data'] });
 
-      expect(answer).toEqual([]);
-      expect(calls.multiselect[0]).toMatchObject({ required: false, initialValues: ['data'] });
+      expect(answer).toEqual(['data']);
+      expect(calls.multiselect[0]).toMatchObject({ required: true, initialValues: ['lsp', 'data'] });
    });
 
    it('turns the cancel sentinel into a throw, on every prompt kind', async () => {

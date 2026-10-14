@@ -76,7 +76,7 @@ try {
    if (heads.includes('glsp')) {
       // Imported here, because a scaffold without the GLSP head does not install the package.
       const { MINIMAL_CLIENT_ACTION_KINDS, isRejectionOrError } = await import('@hydranium/glsp-server/testing');
-      const glspRpc = await connect(await server.port('my-lang/glsp/port'));
+      const glspRpc = await connect(await server.port('my-lang/glsp-server/port'));
       const actions = [];
       glspRpc.onNotification('process', message => {
          actions.push(message.action);

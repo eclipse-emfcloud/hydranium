@@ -137,8 +137,8 @@ export function parseInitArgs(args: string[], onError: UsageError = exitWithUsag
             scoped().diagram = true;
             break;
          case '--heads': {
-            // Validated in `resolveInitComposition`, which owns the rule that
-            // `lsp` is mandatory; the cast only gets the strings that far.
+            // Validated in `resolveInitComposition`; the cast only gets the
+            // strings that far.
             heads = next().split(',') as InitHead[];
             break;
          }
@@ -203,11 +203,11 @@ export const INIT_HELP: readonly string[] = [
    '  --name <Name>         PascalCase PROJECT name; drives the services and the',
    '                        Langium projectName, i.e. the shared generated symbols',
    '                        (<Name>AstReflection, <Name>GeneratedSharedModule) (required).',
-   '  --heads <list>        Comma-separated protocol heads: lsp, data, glsp.',
-   '                        `lsp` is mandatory — it owns the workspace, the build',
-   '                        pipeline and the shared tier the others read through.',
-   '                        The emitted dependencies, main.ts and module bindings',
-   '                        all follow this set. Default: lsp,data.',
+   '  --heads <list>        Comma-separated protocol heads: lsp, data, glsp, any',
+   '                        non-empty set. Without lsp, main.ts serves the socket',
+   '                        heads from a workspace path it is given and prints',
+   '                        their ports. The emitted dependencies, main.ts and',
+   '                        module bindings all follow this set. Default: lsp,data.',
    '  --force               Scaffold into a non-empty directory anyway.',
    '  --monorepo            Scaffold the packages as members of the surrounding npm',
    '                        workspace, with no root of their own: each tsconfig',

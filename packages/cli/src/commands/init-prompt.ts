@@ -66,7 +66,7 @@ export interface PromptPort {
       readonly choices: ReadonlyArray<PromptChoice<Value>>;
       readonly initialValue?: Value;
    }) => Promise<Value>;
-   /** Ask for any number of several choices, including none. */
+   /** Ask for at least one of several choices. */
    readonly multiselect: <Value extends string>(options: {
       readonly message: string;
       readonly choices: ReadonlyArray<PromptChoice<Value>>;
@@ -78,8 +78,9 @@ export interface PromptPort {
    readonly outro: (message: string) => void;
 }
 
-/** The optional heads, as a checkbox list. `lsp` is not offered — see `askHeads`. */
-export const OPTIONAL_HEAD_CHOICES: ReadonlyArray<PromptChoice<Exclude<InitHead, 'lsp'>>> = [
+/** The heads, as a checkbox list. */
+export const HEAD_CHOICES: ReadonlyArray<PromptChoice<InitHead>> = [
+   { value: 'lsp', label: 'lsp', hint: 'text editing in an LSP client' },
    { value: 'data', label: 'data', hint: 'typed JSON-RPC for forms, trees and code-gen' },
    { value: 'glsp', label: 'glsp', hint: 'graphical editing; adds a scaffolded diagram' }
 ];
@@ -138,9 +139,7 @@ export async function createClackPrompt(): Promise<PromptPort> {
                message: options.message,
                options: toOptions(options.choices),
                initialValues: options.initialValues ? [...options.initialValues] : [],
-               // Legal and meaningful: an `lsp`-only project is a plain LSP
-               // server, so an empty selection must not be rejected.
-               required: false
+               required: true
             })
          ),
       confirm: async options => unwrap(await clack.confirm({ message: options.message, initialValue: options.initialValue })),

@@ -22,11 +22,8 @@ import {
 } from './init-workspace.js';
 
 /**
- * The protocol heads a scaffold can start, in composition order.
- *
- * `lsp` is mandatory rather than optional: it owns the workspace, the build
- * pipeline and the shared service tier every other head reads through, so a
- * project without it has nothing for `data` or `glsp` to serve.
+ * The protocol heads a scaffold can start, in composition order. Any non-empty
+ * set: without `lsp`, the socket heads bring the workspace up themselves.
  */
 export const INIT_HEADS = ['lsp', 'data', 'glsp'] as const;
 
@@ -228,7 +225,7 @@ export interface InitComposition {
     * one data server per project, not one per language).
     */
    readonly projectId: string;
-   /** The protocol heads to start, always including `lsp`. */
+   /** The protocol heads to start, at least one. */
    readonly heads: readonly InitHead[];
    /** The grammars, in the order given. The first is the configuration root. */
    readonly grammars: readonly InitGrammarNames[];
@@ -378,17 +375,12 @@ function resolveDiagrams(specs: readonly InitGrammarSpec[], heads: readonly Init
    );
 }
 
-/** Validate the head set: known names only, and `lsp` present. */
+/** Validate the head set: known names only. */
 function resolveHeads(heads: readonly InitHead[] | undefined): readonly InitHead[] {
    const resolved = heads === undefined || heads.length === 0 ? DEFAULT_INIT_HEADS : heads;
    const unknown = resolved.filter(head => !isInitHead(head));
    if (unknown.length > 0) {
       throw new Error(`Unknown head(s) '${unknown.join(', ')}': expected one of ${INIT_HEADS.join(', ')}.`);
-   }
-   if (!resolved.includes('lsp')) {
-      throw new Error(
-         "--heads must include 'lsp': it owns the workspace, the build pipeline and the shared service tier the other heads read through."
-      );
    }
    // De-duplicated and put back in composition order, so the order the heads
    // were named in does not change the emitted project.

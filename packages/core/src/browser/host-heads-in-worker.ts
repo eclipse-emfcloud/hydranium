@@ -21,6 +21,7 @@ import {
 import { isOperationCancelled, URI } from '@hydranium/langium';
 import type { ServerSharedServicesMinimal } from '../langium/shared-services.js';
 import { isFileSystemProviderRegistry } from '../langium/workspace/file-system-provider.js';
+import { hasLspConnection, initializeWorkspaceWithoutLsp } from '../langium/workspace/initialize-workspace.js';
 import { PersistentFileSystemProvider } from '../langium/workspace/persistent-file-system-provider.js';
 import { isConnectionGoneError } from '../util/connection-liveness.js';
 
@@ -56,6 +57,9 @@ export interface HostHeadsInWorkerOptions {
     * Left out, the ready message carries no files and nothing is read. Every
     * file's content goes in one message, so a workspace too large for that
     * wants a per-document read instead.
+    *
+    * Required when `start` composes no LSP head: the workspace is then brought
+    * up from it before the ready message, which nothing else would do.
     */
    readonly rootUri?: string;
 }
@@ -72,9 +76,11 @@ export interface HostHeadsInWorkerOptions {
  * awaited before `start` is called. It may be a plain value where nothing has
  * to be awaited.
  *
- * Once `start` has returned and every `started` it handed back has resolved,
- * the ready message goes out, so a page never hears of heads that failed to
- * come up, and an uncaught error from then on is a report rather than the end
+ * Once `start` has returned, every `started` it handed back has resolved and,
+ * without an LSP head, the workspace has been brought up from
+ * {@link HostHeadsInWorkerOptions.rootUri}, the ready message goes out, so a
+ * page never hears of heads that failed to come up, and an uncaught error from
+ * then on is a report rather than the end
  * of the heads. It carries the workspace's files when
  * {@link HostHeadsInWorkerOptions.rootUri} is given. Then every document is
  * built with validation once the workspace has initialised: Langium's initial
@@ -137,8 +143,17 @@ export function hostHeadsInWorker<TPrepared>(
       const value = await preparation;
       const result = start(ports, value);
       const { shared, started } = 'shared' in result ? result : { shared: result, started: undefined };
+      // Without an LSP head the workspace is brought up here, queued in the step
+      // `start` returns in: a page message is handled in a later task, so no
+      // request settles against a workspace not yet brought up. Its throw is a
+      // rejection, so the awaiting below still handles every head's `started`.
+      const bringUp = hasLspConnection(shared)
+         ? undefined
+         : new Promise<void>(resolve =>
+              resolve(initializeWorkspaceWithoutLsp(shared, options.rootUri === undefined ? undefined : URI.parse(options.rootUri)))
+           );
       // Safe to await now: every head listens already, so nothing is lost.
-      await Promise.all(started ?? []);
+      await Promise.all([...(started ?? []), bringUp]);
       const ready: WorkerReadyMessage = {
          type: WORKER_READY_MESSAGE_TYPE,
          workspace: options.rootUri === undefined ? undefined : readWorkspace(shared, options.rootUri)

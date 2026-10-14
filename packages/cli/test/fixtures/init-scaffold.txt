@@ -117,7 +117,7 @@ protocol/src/head-ports.ts
 ==============================================================================
 // The LSP requests a host queries to discover this server's socket head.
 //
-// Both are keyed by the PROJECT, not the language: one server of each kind per
+// It is keyed by the PROJECT, not the language: one server of each kind per
 // process serves every registered grammar, so a language-derived name would tie
 // a project-level endpoint to whichever grammar was scaffolded first.
 //
@@ -697,7 +697,7 @@ startLanguageServer(shared);
 // Neither the bind nor the publish may be swallowed: either failure leaves the LSP
 // head serving text edits while every data client waits on a port command that was
 // never registered, and the launcher reports a bind failure only if given a logger.
-const dataServer = startSocketServer({ port: 0, logTag: 'ModelServer', logger: shared.Logger }, dataConnection => {
+const dataServer = startSocketServer({ shared, port: 0, logTag: 'ModelServer', logger: shared.Logger }, dataConnection => {
    new DataServer<BookstoreModel>(dataConnection, shared);
    return { dispose: () => undefined };
 });

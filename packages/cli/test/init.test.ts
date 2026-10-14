@@ -187,10 +187,8 @@ describe('resolveInitComposition with heads', () => {
       expect(resolveInitComposition('Bookstore', [], ['glsp', 'lsp', 'lsp']).heads).toEqual(['lsp', 'glsp']);
    });
 
-   it('rejects a head set without lsp', () => {
-      // It owns the workspace and the build pipeline, so the others have
-      // nothing to serve without it.
-      expect(() => resolveInitComposition('Bookstore', [], ['data'])).toThrow(/must include 'lsp'/);
+   it('accepts a head set without lsp', () => {
+      expect(resolveInitComposition('Bookstore', [], ['glsp', 'data']).heads).toEqual(['data', 'glsp']);
    });
 
    it('rejects an unknown head', () => {
@@ -330,8 +328,10 @@ describe('planInitFiles with heads', () => {
       const imports = main.split('\n').filter(line => line.startsWith('import '));
       expect(imports[0]).toBe("import 'reflect-metadata';");
       expect(main).toContain('.configureDiagramModule(new BookstoreDiagramModule())');
-      expect(main).toContain('BOOKSTORE_GLSP_PORT_COMMAND');
-      expect(contentOf(files, 'protocol/src/head-ports.ts')).toContain("export const BOOKSTORE_GLSP_PORT_COMMAND = 'bookstore/glsp/port';");
+      expect(main).toContain('BOOKSTORE_GLSP_SERVER_PORT_COMMAND');
+      expect(contentOf(files, 'protocol/src/head-ports.ts')).toContain(
+         "export const BOOKSTORE_GLSP_SERVER_PORT_COMMAND = 'bookstore/glsp-server/port';"
+      );
    });
 
    it('binds the diagram type and the full-text state in the diagram module', () => {
@@ -357,8 +357,47 @@ describe('planInitFiles with heads', () => {
       expect(contentOf(files, 'server/src/main.ts')).toContain('.configureDiagramModule(new ProcessDiagramModule())');
    });
 
+   it('starts the socket heads on a workspace and prints their ports without the LSP head', () => {
+      const files = filesFor(['data', 'glsp']);
+      const main = contentOf(files, 'server/src/main.ts') ?? '';
+      expect(main).not.toContain('startLanguageServer');
+      expect(main).not.toContain('publishPortOnLspConnection');
+      expect(main).toContain('const { shared } = createBookstoreServices({ ...NodeFileSystem });');
+      expect(main).toContain("port: portFrom('data-server-port', BOOKSTORE_DATA_SERVER_PORT_ENV)");
+      expect(main).toContain("port: portFrom('glsp-server-port', BOOKSTORE_GLSP_SERVER_PORT_ENV)");
+      expect(main).toContain('JSON.stringify({ dataServer: dataServer.port, glspServer: glspServer.port })');
+      expect(contentOf(files, 'protocol/src/head-ports.ts')).toContain(
+         "export const BOOKSTORE_GLSP_SERVER_PORT_ENV = 'BOOKSTORE_GLSP_SERVER_PORT';"
+      );
+      expect(contentOf(files, 'protocol/src/head-ports.ts')).not.toContain('_PORT_COMMAND');
+      // No `--stdio`, which the strict flag parse refuses, and the starter
+      // workspace rather than the server package as the cwd.
+      expect(contentOf(files, 'server/package.json')).toContain('"start": "node lib/main.js ../workspace",');
+   });
+
+   it('keeps the stdio data entry beside the socket one for --heads data', () => {
+      const files = filesFor(['data']);
+      expect(contentOf(files, 'server/src/main.ts')).toContain('JSON.stringify({ dataServer: dataServer.port })');
+      expect(contentOf(files, 'server/src/data-server-main.ts')).toContain('startStdioServer');
+   });
+
+   it('emits the base framework dependencies whatever the head set', () => {
+      const manifest = JSON.parse(contentOf(filesFor(['data']), 'server/package.json') ?? '{}') as { dependencies: Record<string, string> };
+      expect(Object.keys(manifest.dependencies)).toEqual(
+         expect.arrayContaining(['@hydranium/core', '@hydranium/langium', '@hydranium/protocol', 'langium', 'vscode-languageserver'])
+      );
+   });
+
    it('leaves no unsubstituted token in any emitted head combination', () => {
-      for (const heads of [['lsp'], ['lsp', 'data'], ['lsp', 'glsp'], ['lsp', 'data', 'glsp']] as InitHead[][]) {
+      for (const heads of [
+         ['lsp'],
+         ['lsp', 'data'],
+         ['lsp', 'glsp'],
+         ['lsp', 'data', 'glsp'],
+         ['data'],
+         ['glsp'],
+         ['data', 'glsp']
+      ] as InitHead[][]) {
          for (const file of filesFor(heads)) {
             expect(file.content, `${heads.join(',')} ${file.path} still has a token`).not.toMatch(/__[A-Z_]+__/);
          }

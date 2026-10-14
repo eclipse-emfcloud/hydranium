@@ -16,7 +16,9 @@ import {
    ServerModule,
    SocketServerLauncher
 } from '@eclipse-glsp/server/node.js';
-import { DUPLICATE_CLIENT_ID_ERROR_CODE, DuplicateClientIdError } from '@hydranium/protocol';
+import { Deferred, DUPLICATE_CLIENT_ID_ERROR_CODE, DuplicateClientIdError } from '@hydranium/protocol';
+import type { ServerSharedServices } from '@hydranium/core';
+import { makeNoopSharedServices } from '@hydranium/core/testing';
 import { ContainerModule, injectable } from 'inversify';
 import { waitFor } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -30,7 +32,7 @@ import {
    type MessageConnection,
    type ResponseMessage
 } from 'vscode-jsonrpc/node';
-import { HydraniumGlspServer } from '../src/index.js';
+import { HydraniumGlspServer, HydraniumTypes } from '../src/index.js';
 import { HydraniumGlspSocketServerLauncher, startGlspServer, type StartedGlspServer } from '../src/node/index.js';
 import { makeCapturingGlspLogger, makeNoopGlspLogger } from '../src/testing/index.js';
 
@@ -188,6 +190,34 @@ class RejectingServerModule extends ServerModule {
 @injectable()
 class AdopterLauncher extends HydraniumGlspSocketServerLauncher {}
 
+/** Pushes every launcher the app container resolves onto `resolved`, so a test can shut it down. */
+function observeLaunchers(resolved: SocketServerLauncher[]): ContainerModule {
+   // Observed under both ids, so a head that bypasses GLSP's token is still torn down.
+   return new ContainerModule((_bind, _unbind, _isBound, _rebind, _unbindAsync, onActivation) => {
+      for (const id of [SocketServerLauncher, HydraniumGlspSocketServerLauncher]) {
+         onActivation<SocketServerLauncher>(id, (_context, launcher) => {
+            resolved.push(launcher);
+            return launcher;
+         });
+      }
+   });
+}
+
+/** Binds `shared` where `HydraniumGlspAppModule` would, the one place the launcher reads it. */
+function bindShared(shared: ServerSharedServices): ContainerModule {
+   return new ContainerModule(bind => {
+      bind(HydraniumTypes.SharedCoreServices).toConstantValue(shared);
+   });
+}
+
+/** Services composed around an LSP connection, whose client brings the workspace up. */
+const lspShared = makeNoopSharedServices<ServerSharedServices>({ lsp: { Connection: {} } });
+
+/** Services with no LSP head, whose workspace manager's `initialized` is `initialized`. */
+function sharedWithoutLsp(initialized: () => Promise<void>): ServerSharedServices {
+   return makeNoopSharedServices<ServerSharedServices>({ workspace: { WorkspaceManager: { initialize: () => undefined, initialized } } });
+}
+
 describe('startGlspServer', () => {
    const disposables: Array<() => void> = [];
 
@@ -200,19 +230,11 @@ describe('startGlspServer', () => {
    /** Start a head and return the launcher it resolved, and a client connected to it. */
    async function startHead(appModules: ContainerModule[] = []): Promise<{ launcher: SocketServerLauncher; client: MessageConnection }> {
       const resolved: SocketServerLauncher[] = [];
-      // Observed under both ids, so a head that bypasses GLSP's token is still torn down.
-      const observe = new ContainerModule((_bind, _unbind, _isBound, _rebind, _unbindAsync, onActivation) => {
-         for (const id of [SocketServerLauncher, HydraniumGlspSocketServerLauncher]) {
-            onActivation<SocketServerLauncher>(id, (_context, launcher) => {
-               resolved.push(launcher);
-               return launcher;
-            });
-         }
-      });
+      const observe = observeLaunchers(resolved);
       const server: StartedGlspServer = startGlspServer({
          createLogger: makeNoopGlspLogger,
          serverModule: new RejectingServerModule(),
-         appModules: [...appModules, observe]
+         appModules: [bindShared(lspShared), ...appModules, observe]
       });
       const [launcher] = resolved;
       if (launcher === undefined) {
@@ -260,5 +282,62 @@ describe('startGlspServer', () => {
       expect(() =>
          startGlspServer({ createLogger: makeNoopGlspLogger, serverModule: new RejectingServerModule(), appModules: [adopter] })
       ).toThrow('Ambiguous match found for serviceIdentifier');
+   });
+});
+
+describe('startGlspServer without an LSP head', () => {
+   it('brings the workspace up before it listens', async () => {
+      const gate = new Deferred<void>();
+      let started = false;
+      const resolved: SocketServerLauncher[] = [];
+      const server = startGlspServer({
+         createLogger: makeNoopGlspLogger,
+         serverModule: new RejectingServerModule(),
+         appModules: [bindShared(sharedWithoutLsp(() => gate.promise)), observeLaunchers(resolved)],
+         workspace: '/ws'
+      });
+      void server.started.then(() => {
+         started = true;
+      });
+
+      // A timer, so a launcher that listened first would have resolved by now.
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect({ started, port: server.port }).toEqual({ started: false, port: undefined });
+
+      gate.resolve();
+      try {
+         await server.started;
+         expect(server.port).toBeGreaterThan(0);
+      } finally {
+         for (const launcher of resolved) {
+            launcher.shutdown();
+         }
+      }
+   });
+
+   it('rejects `started` and listens nowhere without a workspace', async () => {
+      const server = startGlspServer({
+         createLogger: makeNoopGlspLogger,
+         serverModule: new RejectingServerModule(),
+         appModules: [bindShared(sharedWithoutLsp(async () => undefined))]
+      });
+
+      await expect(server.started).rejects.toThrow(/nothing initialises the workspace/);
+      await expect(server.stopped).resolves.toBeUndefined();
+      expect(server.port).toBeUndefined();
+   });
+
+   it('rejects `started` when no shared services are bound', async () => {
+      const server = startGlspServer({ createLogger: makeNoopGlspLogger, serverModule: new RejectingServerModule() });
+
+      await expect(server.started).rejects.toThrow(/HydraniumGlspAppModule/);
+   });
+
+   it('leaves a failed start no unhandled rejection when nobody awaits `started`', async () => {
+      const server = startGlspServer({ createLogger: makeNoopGlspLogger, serverModule: new RejectingServerModule() });
+
+      await server.stopped;
+      // A rejection is reported as unhandled once the microtasks have drained.
+      await new Promise(resolve => setTimeout(resolve, 0));
    });
 });

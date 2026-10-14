@@ -81,20 +81,51 @@ function toWorkspaceFolders(folders: WorkspaceFolderInput | ReadonlyArray<Worksp
  * negotiation, `onInitialize`/`onInitialized` events) are intentionally not
  * reproduced — a headless server has no client and they degrade gracefully.
  *
- * Invoke once during headless startup; this is not a re-initialization API.
- * Errors from discovery/build propagate to the caller.
+ * Runs once per workspace manager: a later call naming the same folders, in
+ * any order, gets the first call's promise, and one naming others throws
+ * synchronously. A second initialisation would cancel the first one's build
+ * and leave the documents unbuilt, which happens as soon as a starter and its
+ * caller both bring the workspace up. Errors from discovery/build propagate to
+ * the caller.
  *
  * @param services the shared services tree the workspace manager lives on
  * @param folders one or more workspace roots (filesystem paths or URIs)
  * @param options the message locale, when the caller has one
  */
-export async function initializeWorkspaceProgrammatically(
+export function initializeWorkspaceProgrammatically(
    services: ServerSharedServicesMinimal,
    folders: WorkspaceFolderInput | ReadonlyArray<WorkspaceFolderInput>,
    options: ProgrammaticInitOptions = {}
 ): Promise<void> {
    const workspaceFolders = toWorkspaceFolders(folders);
    const manager = services.workspace.WorkspaceManager;
+   const key = workspaceFolders
+      .map(folder => folder.uri)
+      .sort()
+      .join('\n');
+   const running = bringUps.get(manager);
+   if (running !== undefined) {
+      if (running.folders !== key) {
+         throw new Error(
+            `[hydranium] the workspace is already initialised from ${running.folders.replace(/\n/g, ', ')}; ` +
+               'every caller on one services tree has to name the same folders.'
+         );
+      }
+      return running.promise;
+   }
+   const promise = initialize(manager, workspaceFolders, options);
+   bringUps.set(manager, { folders: key, promise });
+   return promise;
+}
+
+/** The programmatic initialisation running on each workspace manager, with the folders it names. */
+const bringUps = new WeakMap<object, { readonly folders: string; readonly promise: Promise<void> }>();
+
+async function initialize(
+   manager: ServerSharedServicesMinimal['workspace']['WorkspaceManager'],
+   workspaceFolders: WorkspaceFolder[],
+   options: ProgrammaticInitOptions
+): Promise<void> {
    // `locale` goes through the synthesized params rather than a direct
    // `acceptLocale` call, so this seam and a real LSP `initialize` reach the
    // slot by the SAME path — an adopter overriding the capture in
@@ -106,6 +137,58 @@ export async function initializeWorkspaceProgrammatically(
    // once discovery + the init build settle, so awaiting it is the ready gate.
    manager.initialize({ workspaceFolders, locale: options.locale } as InitializeParams);
    await manager.initialized({} as InitializedParams);
+}
+
+/**
+ * Whether the services were composed around an LSP connection, which is what
+ * makes an LSP head present: its client's `initialize`/`initialized` pair then
+ * brings the workspace up, and nothing else should.
+ */
+export function hasLspConnection(shared: ServerSharedServicesMinimal): boolean {
+   const lsp: unknown = 'lsp' in shared ? shared.lsp : undefined;
+   return typeof lsp === 'object' && lsp !== null && 'Connection' in lsp && lsp.Connection !== undefined;
+}
+
+/**
+ * The starters' workspace bring-up: {@link initializeWorkspaceProgrammatically}
+ * on `workspace` when no LSP head is present, nothing when one is.
+ *
+ * Without an LSP head nothing else initialises the workspace, and a head
+ * serving from it answers without an error but wrongly: a diagram loads with
+ * its cross-file references unresolved. So a missing `workspace` there throws,
+ * and so does one given beside an LSP head, whose client names the folders
+ * itself. Both throw synchronously, before anything starts, so a starter can
+ * tell its caller's mistake from a failed initialisation, which the workspace
+ * manager logs. The initialisation is queued on the workspace lock
+ * synchronously too: a request that settles before it is queued keeps its
+ * unresolved references for good.
+ *
+ * Two starters on one services tree each name the workspace, and share one
+ * initialisation: see {@link initializeWorkspaceProgrammatically}.
+ */
+export function initializeWorkspaceWithoutLsp(
+   shared: ServerSharedServicesMinimal,
+   workspace: WorkspaceFolderInput | ReadonlyArray<WorkspaceFolderInput> | undefined,
+   options: ProgrammaticInitOptions = {}
+): Promise<void> {
+   if (hasLspConnection(shared)) {
+      if (workspace !== undefined) {
+         throw new Error(
+            '[hydranium] a workspace was given to a starter beside an LSP head, whose client names the folders in `initialize`. ' +
+               "Drop the starter's `workspace`."
+         );
+      }
+      return Promise.resolve();
+   }
+   // An empty list too: Langium initialises zero folders without complaint,
+   // and the heads would serve an empty workspace.
+   if (workspace === undefined || toWorkspaceFolders(workspace).length === 0) {
+      throw new Error(
+         '[hydranium] no LSP head is composed, so nothing initialises the workspace. ' +
+            'Name its root to the starter: `workspace`, or `rootUri` on `hostHeadsInWorker`.'
+      );
+   }
+   return initializeWorkspaceProgrammatically(shared, workspace, options);
 }
 
 /**
