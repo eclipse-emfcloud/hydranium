@@ -10,7 +10,7 @@
 import 'reflect-metadata';
 import { describe, expect, it, vi } from 'vitest';
 import { type Channel, type CommandService, Disposable, type ILogger } from '@theia/core';
-import { ForwardingChannel } from '@theia/core/lib/common/message-rpc/channel';
+import { BasicChannel, ForwardingChannel } from '@theia/core/lib/common/message-rpc/channel';
 import type { MessageProvider } from '@theia/core/lib/common/message-rpc/channel';
 import * as net from 'node:net';
 import {
@@ -239,11 +239,9 @@ describe('AbstractSocketForwardingConnectionHandler', () => {
     * before the forwarder is wired is dropped silently and the handshake hangs
     * with no error.
     *
-    * These cover the replay half specifically because it is the fragile half:
-    * it re-fires on `AbstractChannel.onMessageEmitter`, which is `protected`
-    * upstream and reached via cast. A Theia rename degrades to warn-and-drop,
-    * which reinstates that hang and its silence. Without these assertions
-    * nothing in the suite would notice.
+    * These cover the replay half because a replay that fires nothing, or fires
+    * out of order, reinstates that hang and its silence. Without these
+    * assertions nothing in the suite would notice.
     */
    describe('pre-forward buffer replay', () => {
       const makeHandler = (): { handler: TestHandler; logger: ILogger } => {
@@ -301,22 +299,26 @@ describe('AbstractSocketForwardingConnectionHandler', () => {
          expect(received[0]()).toEqual(provider());
       });
 
-      it('logs an error and drops rather than throwing when the channel is not a ForwardingChannel', () => {
+      it('replays onto any AbstractChannel, not only a ForwardingChannel', () => {
+         const { handler } = makeHandler();
+         const channel = new BasicChannel(() => {
+            throw new Error('write buffer not needed for these tests');
+         });
+         const provider = (() => 'payload') as unknown as MessageProvider;
+
+         const received: MessageProvider[] = [];
+         channel.onMessage(incoming => received.push(incoming));
+         handler.replay(channel, [provider]);
+
+         expect(received).toEqual([provider]);
+      });
+
+      it('logs an error and drops rather than throwing when the channel is not an AbstractChannel', () => {
          const { handler, logger } = makeHandler();
          const foreign = { onMessage: () => Disposable.create(() => {}) } as unknown as Channel;
 
          expect(() => handler.replay(foreign, [(() => 'payload') as unknown as MessageProvider])).not.toThrow();
-         expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('not a ForwardingChannel'));
-      });
-
-      it('logs an error and drops when Theia renames onMessageEmitter out from under the cast', () => {
-         const { handler, logger } = makeHandler();
-         const channel = makeChannel();
-         // Simulate the upstream rename this workaround is exposed to.
-         delete (channel as unknown as Record<string, unknown>).onMessageEmitter;
-
-         expect(() => handler.replay(channel, [(() => 'payload') as unknown as MessageProvider])).not.toThrow();
-         expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('onMessageEmitter not accessible'));
+         expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('not an AbstractChannel'));
       });
    });
 });

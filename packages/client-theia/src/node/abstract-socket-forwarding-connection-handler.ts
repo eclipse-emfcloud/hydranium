@@ -17,7 +17,7 @@ import {
    type MessageProvider,
    MessageService
 } from '@theia/core';
-import { ForwardingChannel } from '@theia/core/lib/common/message-rpc/channel';
+import { AbstractChannel } from '@theia/core/lib/common/message-rpc/channel';
 import { Deferred } from '@theia/core/lib/common/promise-util';
 import { inject, injectable, optional } from '@theia/core/shared/inversify';
 import * as net from 'node:net';
@@ -221,7 +221,7 @@ export abstract class AbstractSocketForwardingConnectionHandler implements Conne
       if (preForwardBuffer && preForwardBuffer.buffered.length > 0) {
          this.replayBufferedMessages(channel, preForwardBuffer.buffered);
       }
-      if (channel instanceof ForwardingChannel) {
+      if (channel instanceof AbstractChannel) {
          socket.on('error', error => channel.onErrorEmitter.fire(error));
       }
       // `127.0.0.1`, not the `localhost` Node dials when no host is given, and it
@@ -244,33 +244,24 @@ export abstract class AbstractSocketForwardingConnectionHandler implements Conne
    }
 
    /**
-    * Re-fire pre-forward buffered `MessageProvider`s on the channel's internal
+    * Re-fire pre-forward buffered `MessageProvider`s on the channel's
     * `onMessageEmitter` so the now-subscribed forwarder picks them up in arrival
     * order. `MessageProvider` is a thunk (`() => ReadBuffer`) — buffering does
     * not consume the read position, so replay produces the same bytes the
     * forwarder would have seen if wired earlier.
     *
-    * `AbstractChannel.onMessageEmitter` is `protected` in `@theia/core` but
-    * reachable at runtime; the cast is the workaround. A future Theia rename
-    * surfaces as an error here, since the dropped messages are lost.
+    * The emitter is public on `AbstractChannel`; the `Channel` interface
+    * carries just its `Event`, so any other channel has its messages logged as
+    * dropped. A Theia rename of the emitter fails to compile here.
     */
    protected replayBufferedMessages(channel: Channel, buffered: MessageProvider[]): void {
-      if (!(channel instanceof ForwardingChannel)) {
-         this.logger.error(
-            `[${this.logComponent}] dropping ${buffered.length} pre-forward message(s) — channel is not a ForwardingChannel`
-         );
-         return;
-      }
-      const internals = channel as unknown as { onMessageEmitter?: { fire(provider: MessageProvider): void } };
-      if (!internals.onMessageEmitter) {
-         this.logger.error(
-            `[${this.logComponent}] dropping ${buffered.length} pre-forward message(s) — ForwardingChannel.onMessageEmitter not accessible`
-         );
+      if (!(channel instanceof AbstractChannel)) {
+         this.logger.error(`[${this.logComponent}] dropping ${buffered.length} pre-forward message(s) — channel is not an AbstractChannel`);
          return;
       }
       this.logger.debug(`[${this.logComponent}] replaying ${buffered.length} pre-forward message(s) onto the wired socket forwarder`);
       for (const provider of buffered) {
-         internals.onMessageEmitter.fire(provider);
+         channel.onMessageEmitter.fire(provider);
       }
    }
 }
