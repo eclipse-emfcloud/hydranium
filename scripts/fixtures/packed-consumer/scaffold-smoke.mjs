@@ -8,9 +8,12 @@
  ********************************************************************************/
 
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { createConnection as connectSocket } from 'node:net';
 import { resolve } from 'node:path';
+import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { startSpawnedServer } from '@hydranium/core/testing/node';
 import { createRpcProxy } from '@hydranium/protocol';
@@ -50,21 +53,46 @@ async function waitFor(find, what) {
    }
 }
 
+/**
+ * Without an LSP head, `lib/main.js` takes the workspace path and prints the
+ * ports of the socket heads as one JSON line on stdout once they listen.
+ */
+async function startWithoutLsp() {
+   const child = spawn(process.execPath, [resolve('lib/main.js'), workspaceRoot], { stdio: ['ignore', 'pipe', 'pipe'] });
+   const stderr = [];
+   child.stderr.on('data', chunk => stderr.push(chunk.toString()));
+   const exited = once(child, 'exit').then(([code]) => Promise.reject(new Error(`main.js exited ${code}:\n${stderr.join('')}`)));
+   exited.catch(() => undefined);
+   const line = new Promise(resolveLine =>
+      createInterface({ input: child.stdout }).on('line', text => text.startsWith('{') && resolveLine(text))
+   );
+   return { child, stderr, ports: JSON.parse(await Promise.race([line, exited])) };
+}
+
 let server;
+let serverWithoutLsp;
 try {
-   server = await startSpawnedServer({ serverModule: resolve('lib/main.js'), workspaceRoot });
-   assert.ok(server.initializeResult.capabilities.textDocumentSync);
-   const fromIndex = server.diagnostics.length;
-   server.connection.sendNotification('textDocument/didOpen', { textDocument: { uri, languageId: 'my-lang', version: 1, text } });
-   assert.deepEqual(await server.nextDiagnostics(uri, { fromIndex }), []);
-   // Langium returns this error rather than throwing it, and a connection on
-   // another protocol copy sends a returned error as a result.
-   await assert.rejects(server.connection.sendRequest('textDocument/documentSymbol', { textDocument: { uri: missingUri } }), {
-      code: -32802
-   });
+   let portOf;
+   if (heads.includes('lsp')) {
+      server = await startSpawnedServer({ serverModule: resolve('lib/main.js'), workspaceRoot });
+      assert.ok(server.initializeResult.capabilities.textDocumentSync);
+      const fromIndex = server.diagnostics.length;
+      server.connection.sendNotification('textDocument/didOpen', { textDocument: { uri, languageId: 'my-lang', version: 1, text } });
+      assert.deepEqual(await server.nextDiagnostics(uri, { fromIndex }), []);
+      // Langium returns this error rather than throwing it, and a connection on
+      // another protocol copy sends a returned error as a result.
+      await assert.rejects(server.connection.sendRequest('textDocument/documentSymbol', { textDocument: { uri: missingUri } }), {
+         code: -32802
+      });
+      portOf = head => server.port(`my-lang/${head}/port`);
+   } else {
+      serverWithoutLsp = await startWithoutLsp();
+      const { dataServer, glspServer } = serverWithoutLsp.ports;
+      portOf = async head => ({ 'data-server': dataServer, 'glsp-server': glspServer })[head];
+   }
 
    if (heads.includes('data')) {
-      const dataRpc = await connect(await server.port('my-lang/data-server/port'));
+      const dataRpc = await connect(await portOf('data-server'));
       dataRpc.listen();
       const data = createRpcProxy(dataRpc, { methodNamespace: DATA_SERVER_WIRE_PREFIX, localMethods: DATA_CLIENT_PROTOCOL_METHODS });
       await data.waitForReady();
@@ -76,7 +104,7 @@ try {
    if (heads.includes('glsp')) {
       // Imported here, because a scaffold without the GLSP head does not install the package.
       const { MINIMAL_CLIENT_ACTION_KINDS, isRejectionOrError } = await import('@hydranium/glsp-server/testing');
-      const glspRpc = await connect(await server.port('my-lang/glsp-server/port'));
+      const glspRpc = await connect(await portOf('glsp-server'));
       const actions = [];
       glspRpc.onNotification('process', message => {
          actions.push(message.action);
@@ -120,14 +148,25 @@ try {
       assert.deepEqual(actions.filter(isRejectionOrError), []);
    }
 
-   assert.deepEqual(
-      server.logMessages.filter(message => message.type === 1).map(message => message.message),
-      []
-   );
+   // The server logs over LSP; without that head its log goes to stderr.
+   const errors = server
+      ? server.logMessages.filter(message => message.type === 1).map(message => message.message)
+      : serverWithoutLsp.stderr
+           .join('')
+           .split('\n')
+           .filter(line => line.startsWith('[Error'));
+   assert.deepEqual(errors, []);
+} catch (error) {
+   // A server that crashed after printing its ports shows here, not only as a failed connection.
+   if (serverWithoutLsp !== undefined) {
+      console.error(`main.js stderr:\n${serverWithoutLsp.stderr.join('')}`);
+   }
+   throw error;
 } finally {
    for (const { socket, rpc } of opened) {
       rpc.dispose();
       socket.destroy();
    }
    await server?.dispose();
+   serverWithoutLsp?.child.kill();
 }

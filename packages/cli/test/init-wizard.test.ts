@@ -292,12 +292,20 @@ describe('runInitWizard', () => {
       expect(resolveInitComposition('Bookstore', [], ['lsp', 'glsp']).grammars[0].diagram).toBe(true);
    });
 
-   it('composes a head set without lsp in composition order', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['glsp', 'data'], 'Bookstore', 'bookstore', false, false]);
+   it('composes a head set without lsp in composition order, offering the browser host through the diagram', async () => {
+      const prompt = scriptedPrompt(['Bookstore', ['glsp', 'data'], false, 'Bookstore', 'bookstore', false, false]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore', '--heads', 'data,glsp']);
-      // `init` refuses a browser host without the LSP head, so it is not offered.
+      expect(prompt.asked).toContain(BROWSER_HOST);
+   });
+
+   it('does not offer the browser host without a head the page saves through', async () => {
+      const prompt = scriptedPrompt(['Bookstore', ['data'], 'Bookstore', 'bookstore', false, false]);
+      const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
+
+      expect(argv).toEqual(['./bookstore', '--name', 'Bookstore', '--heads', 'data']);
+      // `init` refuses a browser host with neither lsp nor glsp.
       expect(prompt.asked).not.toContain(BROWSER_HOST);
    });
 

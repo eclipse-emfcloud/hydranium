@@ -21,12 +21,13 @@ export const INIT_HOSTS = ['browser'] as const;
 export type InitHost = (typeof INIT_HOSTS)[number];
 
 /**
- * The heads a host cannot run without. The browser page saves through the LSP
- * head, since it has no filesystem of its own; every other head is optional,
- * and a head the host does not know is left unused.
+ * The heads a host needs at least one of: those whose client edits and saves
+ * the files. The browser page has no filesystem of its own, so it saves through
+ * the LSP head's editor or the GLSP head's diagram; every other head is
+ * optional, and a head the host does not know is left unused.
  */
-const REQUIRED_HEADS: Record<InitHost, readonly InitHead[]> = {
-   browser: ['lsp']
+const EDITING_HEADS: Record<InitHost, readonly InitHead[]> = {
+   browser: ['lsp', 'glsp']
 };
 
 /** True for a string naming one of {@link INIT_HOSTS}. */
@@ -34,7 +35,7 @@ export function isInitHost(value: string): value is InitHost {
    return (INIT_HOSTS as readonly string[]).includes(value);
 }
 
-/** The heads {@link host} needs in the composition. */
-export function requiredHeads(host: InitHost): readonly InitHead[] {
-   return REQUIRED_HEADS[host];
+/** The heads {@link host} needs at least one of in the composition. */
+export function editingHeads(host: InitHost): readonly InitHead[] {
+   return EDITING_HEADS[host];
 }

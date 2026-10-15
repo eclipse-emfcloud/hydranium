@@ -833,10 +833,11 @@ describe('planInitFiles with hosts', () => {
    const pathsUnder = (files: readonly InitFile[], directory: string): string[] =>
       files.filter(file => file.path.startsWith(`${directory}/`)).map(file => file.path.slice(directory.length + 1));
 
-   it('refuses a browser host without the LSP head, through which the page saves', () => {
-      expect(() => resolveInitComposition('Bookstore', undefined, ['data', 'glsp'], undefined, ['browser'])).toThrow(
-         "--hosts browser needs the 'lsp' head, but the head set is 'data,glsp'."
+   it('refuses a browser host with neither head the page saves through', () => {
+      expect(() => resolveInitComposition('Bookstore', undefined, ['data'], undefined, ['browser'])).toThrow(
+         "--hosts browser needs one of the 'lsp, glsp' heads, but the head set is 'data'."
       );
+      expect(resolveInitComposition('Bookstore', undefined, ['glsp'], undefined, ['browser']).hosts).toEqual(['browser']);
    });
 
    it('rejects an unknown host and drops a repeated one', () => {
@@ -888,7 +889,7 @@ describe('planInitFiles with hosts', () => {
       expect(host).not.toContain('src/data-status.ts');
       expect(host).not.toContain('src/diagram.ts');
       const page = contentOf(files, 'host-browser/src/page.ts') ?? '';
-      expect(page).toContain('await startEditor(heads);');
+      expect(page).toContain('await startEditor(heads, shownFile);');
       expect(page).not.toMatch(/showDataStatus|mountDiagram|WORKSPACE_ROOT_URI/);
       const worker = contentOf(files, 'host-browser/src/worker.ts') ?? '';
       expect(worker).toContain('return shared;');
@@ -898,9 +899,12 @@ describe('planInitFiles with hosts', () => {
    it('runs each head’s part of the page, in order, with every head', () => {
       const files = filesFor(['lsp', 'data', 'glsp']);
       expect(pathsUnder(files, 'host-browser')).toEqual(expect.arrayContaining(['src/data-status.ts', 'src/diagram.ts']));
+      // The editor saves, so the diagram arms no Save of its own.
+      expect(pathsUnder(files, 'host-browser')).not.toContain('src/diagram-save.ts');
       const page = contentOf(files, 'host-browser/src/page.ts') ?? '';
       const calls = [
-         'const shownFile = await startEditor(heads);',
+         'const shownFile = await startShownFile(heads, ALL_LANGUAGES);',
+         'await startEditor(heads, shownFile);',
          'await showDataStatus(heads.data,',
          'await mountDiagram(heads.glsp, shownFile, logger);'
       ];
@@ -920,6 +924,46 @@ describe('planInitFiles with hosts', () => {
       expect(contentOf(filesFor(['lsp']), 'host-browser/hydranium-mark.svg')).toBe(logo);
    });
 
+   it('mounts the diagram alone without the LSP head, and saves through it', () => {
+      const files = filesFor(['data', 'glsp']);
+      const host = pathsUnder(files, 'host-browser');
+      expect(host).toEqual(expect.arrayContaining(['src/data-status.ts', 'src/diagram.ts', 'src/diagram-save.ts']));
+      expect(host).not.toContain('src/editor.ts');
+      expect(host.filter(path => path.includes('monaco'))).toEqual([]);
+      const page = contentOf(files, 'host-browser/src/page.ts') ?? '';
+      expect(page).not.toContain('startEditor');
+      // Without the editor, the switch still drives the diagram.
+      expect(page).toContain('const shownDiagram = await mountDiagram(heads.glsp, shownFile, logger, saveBeforeLeaving);');
+      expect(page.indexOf('armDiagramSave(shownDiagram);')).toBeGreaterThan(page.indexOf('await mountDiagram('));
+      const worker = contentOf(files, 'host-browser/src/worker.ts') ?? '';
+      expect(worker).not.toContain('startLanguageServerInWorker');
+      expect(worker).toContain('const shared = createBookstoreServices({ ...fileSystem }).shared;');
+      const manifest = JSON.parse(contentOf(files, 'host-browser/package.json') ?? '{}') as { dependencies: Record<string, string> };
+      expect(manifest.dependencies).toHaveProperty('@eclipse-glsp/client');
+      expect(manifest.dependencies).not.toHaveProperty('monaco-editor-core');
+      const smoke = contentOf(files, 'host-browser/test/smoke.spec.mts') ?? '';
+      expect(smoke).toContain("page.locator('#save').click()");
+      expect(smoke).not.toContain('#editor');
+      // The log view says where the server's log goes instead.
+      expect(contentOf(files, 'host-browser/index.html')).toContain("The server logs to the worker's console");
+      expect(contentOf(filesFor(['lsp', 'data', 'glsp']), 'host-browser/index.html')).toContain('What the server logs over the LSP head');
+   });
+
+   it('lists only the diagram grammar’s files without the LSP head, the only ones the page shows', () => {
+      const pageFor = (heads: InitHead[]): string =>
+         contentOf(
+            planInitFiles(
+               resolveInitComposition('OrderFlow', [{ name: 'Domain' }, { name: 'Process', diagram: true }], heads, undefined, ['browser'])
+            ),
+            'host-browser/src/page.ts'
+         ) ?? '';
+      const diagramOnly = pageFor(['data', 'glsp']);
+      expect(diagramOnly).toContain('const shownFile = await startShownFile(heads, [PROCESS_LANGUAGE]);');
+      expect(diagramOnly).toMatch(/^import \{ PROCESS_LANGUAGE \} from '[^']+';$/m);
+      // With the editor every language's files are listed, since it edits them all.
+      expect(pageFor(['lsp', 'data', 'glsp'])).toContain('const shownFile = await startShownFile(heads, ALL_LANGUAGES);');
+   });
+
    it('asserts in the smoke test what each head shows', () => {
       const all = contentOf(filesFor(['lsp', 'data', 'glsp']), 'host-browser/test/smoke.spec.mts') ?? '';
       expect(all).toContain("toHaveText('data head: nodes.bookstore holds a BookstoreModel')");
@@ -937,7 +981,14 @@ describe('planInitFiles with hosts', () => {
    it('leaves no unsubstituted token in any host combination', () => {
       // The constants `esbuild.mjs` defines, which the bundles read, look like tokens and are not.
       const token = /__(?!(?:WORKSPACE_SEED|DIRECTORY_KEY|WORKER_BUNDLE_URL|MONACO_WORKER_BUNDLE_URL)__)[A-Z_]+__/;
-      for (const heads of [['lsp'], ['lsp', 'data'], ['lsp', 'glsp'], ['lsp', 'data', 'glsp']] as InitHead[][]) {
+      for (const heads of [
+         ['lsp'],
+         ['lsp', 'data'],
+         ['lsp', 'glsp'],
+         ['lsp', 'data', 'glsp'],
+         ['glsp'],
+         ['data', 'glsp']
+      ] as InitHead[][]) {
          for (const file of filesFor(heads)) {
             expect(file.content, `${heads.join(',')} ${file.path} still has a token`).not.toMatch(token);
          }
@@ -1018,11 +1069,12 @@ describe('planInitFiles with detected workspace facts', () => {
    });
 
    it('falls back to the scaffold budget when the workspace pins no width', () => {
-      // Byte-identical to an explicit 120, which is what "falls back" has to
-      // mean; asserting merely that it renders would pass at any width.
-      const main = contentOf(plan({}), 'server/src/main.ts');
-      expect(main).not.toBe('');
-      expect(main).toBe(contentOf(plan({ printWidth: 120 }), 'server/src/main.ts'));
+      // Every file byte-identical to an explicit 140, which is what "falls
+      // back" has to mean; asserting merely that it renders would pass at any
+      // width, and one file alone can wrap the same at two widths.
+      const fallback = plan({});
+      expect(fallback.length).toBeGreaterThan(0);
+      expect(fallback).toEqual(plan({ printWidth: 140 }));
    });
 
    it('emits the Oxlint command in a migrated workspace, from each member one level below the project', () => {

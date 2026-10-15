@@ -381,6 +381,9 @@ const SCAFFOLD_SHAPES: readonly ScaffoldShape[] = [
       vitest: '~4.0.18'
    },
    { label: 'standalone, LSP and GLSP', heads: 'lsp,glsp', vitest: '~4.0.18' },
+   // No LSP head: main.ts serves the socket heads from a workspace path, and
+   // the page mounts the diagram alone and saves through it.
+   { label: 'standalone, data and GLSP', heads: 'data,glsp', hosts: 'browser', vitest: '~4.0.18' },
    { label: 'standalone, LSP only', heads: 'lsp', hosts: 'browser', vitest: '~4.0.18' },
    { label: 'workspace member, all heads', heads: 'lsp,data,glsp', hosts: 'browser', monorepo: true, vitest: '~4.0.18' },
    { label: 'workspace member under its root npm, LSP only', heads: 'lsp', monorepo: true, npm: WORKSPACE_NPM, vitest: '^4.0.0' },

@@ -33,14 +33,11 @@
             font-size: 13px;
             color: var(--text);
          }
-         header,
-         .toolbar {
+         /* The page's toolbar: its name, then the file switch, Save and the status they report to. */
+         header {
             display: flex;
             gap: 12px;
             align-items: center;
-            padding: 6px 12px;
-         }
-         header {
             padding: 10px 16px;
             background: var(--accent);
             color: #ffffff;
@@ -56,24 +53,24 @@
             background: rgb(255 255 255 / 0.18);
             font-size: 12px;
          }
-         .toolbar {
-            background: var(--surface);
-            border-bottom: 1px solid var(--border);
-         }
          select,
          button {
             padding: 4px 10px;
             border: 1px solid var(--border);
             border-radius: 4px;
             background: #ffffff;
-            color: inherit;
+            color: var(--text);
             font: inherit;
          }
+         /* On the toolbar's accent: white, with the accent as its text. */
          button {
-            border-color: var(--accent);
-            background: var(--accent);
-            color: #ffffff;
+            border-color: #ffffff;
+            color: var(--accent);
+            font-weight: 600;
             cursor: pointer;
+         }
+         button:hover {
+            background: #e8eef6;
          }
          /* One column per shown pane, its title, hint and body rows shared, so the titles and hints line up. */
          main {
@@ -125,6 +122,7 @@
          }
          /* The diagram needs a height, `position: relative` for its tool palette, and its `<svg>` sized to it. */
          #diagram {
+            flex: 1 1 auto;
             position: relative;
             min-height: 0;
             background: var(--surface) radial-gradient(#d5dae1 1px, transparent 1px) 0 0 / 16px 16px;
@@ -248,36 +246,39 @@
    <body>
       <header>
          <h1>Bookstore</h1>
-         <span id="status">starting…</span>
+         <!-- Each control stays hidden until the part it belongs to is up: the switch once the worker has sent its files, Save once
+              the part that saves (the editor, or the diagram without one) is armed. -->
+         <select id="file" aria-label="File" hidden></select>
+         <button id="save" type="button" title="Save (Ctrl+S)" hidden>Save</button>
+         <span id="status" role="status">starting…</span>
       </header>
       <!-- Each pane stays hidden until the page part for its head fills it. -->
       <main>
          <section id="editor-pane" hidden>
             <h2 class="pane-title">Monaco Editor</h2>
             <p class="hint">
-               Pick a file to edit it with completion, hover and diagnostics. Save (Ctrl+S) keeps it in this browser, over the files in
-               <code>../workspace</code>.
+               Edit the file picked above with completion, hover and diagnostics. Save (Ctrl+S) keeps every edit in this browser, over the
+               files in <code>../workspace</code>.
             </p>
             <div class="pane-body">
-               <div class="toolbar">
-                  <select id="file" aria-label="File"></select>
-                  <button id="save" type="button">Save</button>
-               </div>
                <div id="editor"></div>
             </div>
          </section>
          <section id="diagram-pane" hidden>
             <h2 class="pane-title">Diagram Editor</h2>
             <p class="hint">
-               The diagram of the file in the editor. An arrow runs from a node to the node it references; a dashed node is declared in
+               The diagram of the file picked above. An arrow runs from a node to the node it references; a dashed node is declared in
                another file. Create a node from the palette; the file stores no positions, so each node is placed above the node it
                references rather than where you drop it.
             </p>
-            <div id="diagram"></div>
+            <div class="pane-body">
+               <div id="diagram"></div>
+            </div>
          </section>
       </main>
       <footer>
          <h2 class="pane-title">Log View</h2>
+         <p class="hint">What the server logs over the LSP head, and the errors the page reports.</p>
          <p id="data-status" hidden></p>
          <pre id="log" aria-label="Log"></pre>
       </footer>

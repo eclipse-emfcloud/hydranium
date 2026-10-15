@@ -56,7 +56,7 @@
 
 import * as path from 'node:path';
 import { DEFAULT_INIT_HEADS, INIT_HEADS, type InitHead, initMembers, isNonEmptyDir, isUsableExtension, memberPlacements } from './init.js';
-import { INIT_HOSTS, type InitHost, requiredHeads } from './init-hosts.js';
+import { editingHeads, INIT_HOSTS, type InitHost } from './init-hosts.js';
 import { kebab } from './kebab.js';
 import { HEAD_CHOICES, InitWizardCancelled, type PromptPort } from './init-prompt.js';
 import { type WorkspaceDetection } from './init-workspace.js';
@@ -217,12 +217,12 @@ const HOST_QUESTIONS: Record<InitHost, string> = {
 };
 
 /**
- * Ask for each host the head set can run, one yes/no each. A host whose
- * required heads are off is not offered: `init` would refuse it.
+ * Ask for each host the head set can run, one yes/no each. A host none of
+ * whose editing heads is on is not offered: `init` would refuse it.
  */
 async function askHosts(prompt: PromptPort, heads: readonly InitHead[]): Promise<InitHost[]> {
    const hosts: InitHost[] = [];
-   for (const host of INIT_HOSTS.filter(candidate => requiredHeads(candidate).every(head => heads.includes(head)))) {
+   for (const host of INIT_HOSTS.filter(candidate => editingHeads(candidate).some(head => heads.includes(head)))) {
       if (await prompt.confirm({ message: HOST_QUESTIONS[host], initialValue: false })) {
          hosts.push(host);
       }

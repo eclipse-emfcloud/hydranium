@@ -1,7 +1,6 @@
-// The LSP part of the page: one Monaco editor over the LSP head, a switch
-// between the workspace files, which the rest of the page can follow, and
-// Save. The worker holds the files, so the page saves through the LSP head and
-// the worker writes them to IndexedDB.
+// The LSP part of the page: one Monaco editor over the LSP head, showing the
+// file the page shows, and Save. The worker holds the files, so the page saves
+// through the LSP head and the worker writes them to IndexedDB.
 
 import { initializeLanguageClient, type WorkerHeads } from '@hydranium/client-browser';
 import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient } from '@hydranium/client-browser/monaco';
@@ -9,6 +8,7 @@ import { describeError } from '@hydranium/protocol';
 import { ALL_LANGUAGES } from '__PROTOCOL_PACKAGE__';
 import { PublishDiagnosticsNotification } from 'vscode-languageserver-protocol';
 import { appendLog, setStatus } from './log.js';
+import type { ShownFile } from './shown-file.js';
 import { WORKSPACE_ROOT_URI } from './workspace.js';
 
 /** Where Monaco's own worker bundle is served, substituted by `esbuild.mjs`. */
@@ -24,16 +24,8 @@ const LANGUAGES = ALL_LANGUAGES.map(language => ({
    extensions: [...language.fileExtensions]
 }));
 
-/** The file the editor shows, for a part of the page that follows it. */
-export interface ShownFile {
-   /** The URI of the file shown now. */
-   current(): string;
-   /** Call `listener` with the URI of each file the editor switches to. */
-   onDidChange(listener: (uri: string) => void): void;
-}
-
-/** Run the LSP handshake, then show the first workspace file in the editor. */
-export async function startEditor(heads: WorkerHeads): Promise<ShownFile> {
+/** Run the LSP handshake, then show the page's shown file in the editor, following each switch. */
+export async function startEditor(heads: WorkerHeads, shownFile: ShownFile): Promise<void> {
    let client!: MonacoLspClient;
    await initializeLanguageClient(heads.lsp, {
       rootUri: WORKSPACE_ROOT_URI,
@@ -46,50 +38,21 @@ export async function startEditor(heads: WorkerHeads): Promise<ShownFile> {
       }
    });
 
-   // The text comes from the worker rather than the seed, since a saved edit
-   // is laid over the seed there.
-   const { workspace } = await heads.ready;
-   if (workspace === undefined) {
-      throw new Error('the worker sent no workspace files');
-   }
-   // Only the files a language claims: the client refuses to open any other.
-   const paths = Object.keys(workspace.files)
-      .filter(path => LANGUAGES.some(language => language.extensions.some(extension => path.endsWith(extension))))
-      .sort();
-   if (paths.length === 0) {
-      throw new Error('no workspace file has a language extension');
-   }
-   const uriOf = (path: string): string => `${WORKSPACE_ROOT_URI}/${path}`;
-   const modelOf = (path: string) => client.openDocument(uriOf(path), workspace.files[path]);
-
-   const select = document.getElementById('file') as HTMLSelectElement;
-   // The worker keys each file by its encoded path, as in its URI: shown decoded.
-   select.append(...paths.map(path => new Option(decodeURIComponent(path), path)));
-   const editor = client.createEditor(document.getElementById('editor') as HTMLElement, modelOf(paths[0]), {
+   const modelOf = (uri: string) => client.openDocument(uri, shownFile.files.get(uri) as string);
+   const editor = client.createEditor(document.getElementById('editor') as HTMLElement, modelOf(shownFile.current()), {
       automaticLayout: true,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       wordWrap: 'on'
    });
-   let shown = paths[0];
-   const listeners: Array<(uri: string) => void> = [];
-   const show = (path: string): void => {
-      select.value = path;
-      if (path !== shown) {
-         shown = path;
-         editor.setModel(modelOf(path));
-         listeners.forEach(listener => listener(uriOf(path)));
-      }
-   };
-   select.addEventListener('change', () => show(select.value));
+   shownFile.onDidChange(uri => editor.setModel(modelOf(uri)));
 
    // Go to definition across files switches the editor to the target file.
    client.registerEditorOpener((uri, position) => {
-      const path = paths.find(candidate => uriOf(candidate) === uri);
-      if (path === undefined) {
+      if (!shownFile.files.has(uri)) {
          return false;
       }
-      show(path);
+      shownFile.show(uri);
       editor.setPosition(position);
       editor.revealPositionInCenter(position);
       return true;
@@ -101,7 +64,8 @@ export async function startEditor(heads: WorkerHeads): Promise<ShownFile> {
          (error: unknown) => setStatus(`save failed: ${describeError(error)}`)
       );
    };
-   (document.getElementById('save') as HTMLButtonElement).addEventListener('click', save);
+   const saveButton = document.getElementById('save') as HTMLButtonElement;
+   saveButton.addEventListener('click', save);
    // Ctrl+S (Cmd+S) saves too, in place of the browser's "Save page as".
    window.addEventListener('keydown', event => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
@@ -115,6 +79,6 @@ export async function startEditor(heads: WorkerHeads): Promise<ShownFile> {
          event.preventDefault();
       }
    });
+   saveButton.hidden = false;
    (document.getElementById('editor-pane') as HTMLElement).hidden = false;
-   return { current: () => uriOf(shown), onDidChange: listener => listeners.push(listener) };
 }

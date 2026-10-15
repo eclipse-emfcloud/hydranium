@@ -39,8 +39,9 @@ Three flags shape it:
   Leave `lsp` out and the server entry takes the workspace path as its
   argument and prints the ports of the heads it started.
 - `--hosts` adds host applications around the heads. `browser` emits the page
-  and needs the `lsp` head, which the page saves through. Leave it out for a
-  server you connect to from your own host.
+  and needs the `lsp` head or the `glsp` head, which the page saves through:
+  without `lsp` it has no editor and saves through the diagram. Leave it out
+  for a server you connect to from your own host.
 - Leave `--name` off on a terminal and `init` asks instead, then prints the
   command it composed.
 
@@ -64,7 +65,7 @@ npm run start:browser
 ```
 
 Open the URL it prints. The page shows the starter files in an editor
-with diagnostics, the diagram of the file the editor shows, and a line read
+with diagnostics, the diagram of the file picked at the top, and a line read
 through the data head. Edit a file and press Save: the worker keeps the file in
 the browser's storage, so it survives a reload.
 
