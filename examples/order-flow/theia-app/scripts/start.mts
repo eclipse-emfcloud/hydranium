@@ -14,7 +14,7 @@
 
 import { spawn } from 'node:child_process';
 
-const port = Number(process.env.THEIA_PORT ?? 3001);
+const port = Number(process.env.THEIA_PORT || 3001);
 const theia = spawn(`theia start --plugins=local-dir:./plugins --hostname=0.0.0.0 --port=${port} ../workspace`, {
    stdio: 'inherit',
    shell: true

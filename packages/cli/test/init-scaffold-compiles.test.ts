@@ -67,16 +67,29 @@ interface CompileCase {
 const CASES: readonly CompileCase[] = [
    { label: 'the single-grammar default', name: 'Bookshelf', grammars: [{ name: 'Bookshelf', extensions: ['book'] }] },
    // The largest emission: further files the other shapes never reach, the
-   // client package, a browser host running every head and a VS Code host
-   // with a diagram editor.
-   { label: 'the GLSP head', name: 'Shelf', heads: ['lsp', 'data', 'glsp'], hosts: ['browser', 'vscode'] },
+   // client package, a browser host running every head, a VS Code host with a
+   // diagram editor and a Theia extension forwarding every head.
+   { label: 'the GLSP head', name: 'Shelf', heads: ['lsp', 'data', 'glsp'], hosts: ['browser', 'vscode', 'theia-browser'] },
    // The only shape emitting common.langium and the additionalLanguages wiring,
-   // and both hosts with no diagram.
+   // and every host with no diagram.
    {
       label: 'three grammars',
       name: 'Depot',
       grammars: [{ name: 'Domain' }, { name: 'Process' }, { name: 'Layout' }],
-      hosts: ['browser', 'vscode']
+      hosts: ['browser', 'vscode', 'theia-browser']
+   },
+   // A Theia extension with no socket head to forward.
+   { label: 'the LSP head alone', name: 'Ledger', heads: ['lsp'], hosts: ['theia-browser'] },
+   // A Theia extension with two diagrams, named apart from the project, and no data head.
+   {
+      label: 'two diagrams',
+      name: 'Atlas',
+      heads: ['lsp', 'glsp'],
+      grammars: [
+         { name: 'Route', diagram: true },
+         { name: 'Region', diagram: true }
+      ],
+      hosts: ['theia-browser']
    },
    // The only main.ts that brings the workspace up itself and prints its ports,
    // and a browser host that saves through the diagram.
@@ -255,10 +268,13 @@ describe('the emitted scaffold compiles', () => {
             // `platform: 'browser'` like the page.
             const servers = path.join(targetDir, 'vscode-servers');
             const vscodeHost = path.join(targetDir, 'host-vscode');
-            expect(fs.existsSync(vscodeHost)).toBe(hosts?.includes('vscode') ?? false);
-            if (fs.existsSync(vscodeHost)) {
+            expect(fs.existsSync(servers)).toBe((hosts?.includes('vscode') ?? false) || (hosts?.includes('theia-browser') ?? false));
+            if (fs.existsSync(servers)) {
                link(servers, protocol);
                expect(() => runTool(servers, 'typescript', 'tsc', ['-p', path.join(servers, 'tsconfig.json')])).not.toThrow();
+            }
+            expect(fs.existsSync(vscodeHost)).toBe(hosts?.includes('vscode') ?? false);
+            if (fs.existsSync(vscodeHost)) {
                for (const member of [protocol, servers, ...(fs.existsSync(client) ? [client] : [])]) {
                   link(vscodeHost, member);
                }
@@ -273,6 +289,20 @@ describe('the emitted scaffold compiles', () => {
                      expect.arrayContaining([`${name.toLowerCase()}-diagram.css`, `${name.toLowerCase()}-diagram.js`])
                   );
                }
+            }
+
+            // The Theia extension the app loads, and the app's smoke tier.
+            const theia = path.join(targetDir, 'theia');
+            const theiaHost = path.join(targetDir, 'host-theia-browser');
+            expect(fs.existsSync(theia)).toBe(hosts?.includes('theia-browser') ?? false);
+            if (fs.existsSync(theia)) {
+               for (const member of [protocol, ...(fs.existsSync(client) ? [client] : [])]) {
+                  link(theia, member);
+               }
+               expect(() => runTool(theia, 'typescript', 'tsc', ['-p', path.join(theia, 'tsconfig.json')])).not.toThrow();
+               expect(() =>
+                  runTool(theiaHost, 'typescript', 'tsc', ['--noEmit', '-p', path.join(theiaHost, 'tsconfig.e2e.json')])
+               ).not.toThrow();
             }
 
             // Without an LSP head only main.ts names the workspace and reports

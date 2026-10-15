@@ -19,7 +19,7 @@ reads `<head>-<role>-<platform>`, and a name with no head spans all heads.
 | [`@hydranium/glsp-client-theia`](../../packages/glsp-client-theia/README.md) | …and your host is Theia | The GLSP head's client side in Theia, including the diagram widget. |
 | [`@hydranium/client-browser`](../../packages/client-browser/README.md) | your host is a web page | The page side of a host whose heads run in a web worker: the worker bootstrap, the LSP handshake, a Monaco editor's LSP client and the data head's port. |
 | [`@hydranium/client-vscode`](../../packages/client-vscode/README.md) | your host is VS Code and runs a socket head | What every head needs in a VS Code extension: the lookup of a socket head's port, and the commands that publish it to a Theia app. |
-| [`@hydranium/data-client-vscode`](../../packages/data-client-vscode/README.md) | …and you run the data head | The data head's client side in VS Code: the extension host's relay and the webview's data port. |
+| [`@hydranium/data-client-vscode`](../../packages/data-client-vscode/README.md) | …and you run the data head | The data head's client side in VS Code: the extension host's relay, the webview's data port, and a data port for the extension host itself. |
 | [`@hydranium/glsp-client-vscode`](../../packages/glsp-client-vscode/README.md) | …and you run the GLSP head | The GLSP head's client side in VS Code, including the diagram's custom editor and its webview starter. |
 | **Tooling** | | |
 | [`@hydranium/cli`](../../packages/cli/README.md) | always, as a development dependency | `hydranium-cli`: scaffold a project, inspect a grammar, validate models headlessly, generate the transfer model, and drive a data server. |

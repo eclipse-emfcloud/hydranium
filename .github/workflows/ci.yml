@@ -668,7 +668,7 @@ jobs:
           - shard: 1
             label: browser 1/2, bookstore, theia
           - shard: 2
-            label: browser 2/2, theia restart+reconnect
+            label: browser 2/2, theia restart+reconnect, bookstore theia
     # Skipped in two cases. A dispatch can set `skip_e2e`, because repeating a
     # run to measure the gate should not also repeat four minutes this job
     # shares nothing with. A pull request skips it on a prose-only verdict. A
@@ -776,6 +776,15 @@ jobs:
       - name: Theia e2e (reconnect tier)
         if: matrix.shard == 2
         run: npm run test:e2e:reconnect -w @hydranium/example-order-flow-theia-app
+
+      # The app `init --hosts theia-browser` emits, as bookstore carries it, on
+      # the shard without the bookstore page. Reporters as for the page.
+      - name: Bookstore Theia e2e
+        if: ${{ !cancelled() && matrix.shard == 2 }}
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/junit.xml
+        run: npm run test:e2e -w @hydranium/bookstore-host-theia-browser -- --reporter=list,github,html,junit
 
       # Each job summarizes what its own workspace holds — the runners are
       # separate, so neither can see the other's reports. This one is therefore

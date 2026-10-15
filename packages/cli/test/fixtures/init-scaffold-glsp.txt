@@ -10,8 +10,10 @@ package.json
     "server",
     "client",
     "vscode-servers",
+    "theia",
     "host-browser",
-    "host-vscode"
+    "host-vscode",
+    "host-theia-browser"
   ],
   "scripts": {
     "build": "npm run build --workspaces",
@@ -24,6 +26,7 @@ package.json
     "@eclipse-glsp/graph": "2.7.0",
     "@eclipse-glsp/protocol": "2.7.0",
     "@eclipse-glsp/server": "2.7.0",
+    "@eclipse-glsp/theia-integration": "2.7.0",
     "@eclipse-glsp/vscode-integration": "2.7.0",
     "@eclipse-glsp/vscode-integration-webview": "2.7.0",
     "@vscode/codicons": "0.0.45",
@@ -2278,14 +2281,14 @@ vscode-servers/README.md
 ==============================================================================
 # bookstore-vscode-servers
 
-A VS Code extension that starts the Bookstore server and contributes no
-editor, view or command: the languages, their grammars and the server.
-With a socket head, it also answers each head’s port under a host command,
-which a host without a language client of its own runs, such as a Theia app
-sideloading this extension. The VS Code extension in `../host-vscode` starts
-the server through the same function. Both work side by side, but each
-starts its own server and language client, so diagnostics may show twice:
-install one.
+A VS Code extension that starts the Bookstore server and contributes no editor,
+view or command: the languages, their grammars and the server. With a socket
+head, it also answers each head’s port under a host command, which a host
+without a language client of its own runs: the Theia application in
+`../host-theia-browser`, which sideloads this extension. The VS Code extension
+in `../host-vscode` starts the server through the same function. Both work side
+by side, but each starts its own server and language client, so diagnostics may
+show twice: install one.
 
 ```bash
 npm run build   # copy the server’s grammars and compile into out/; build the server first
@@ -2386,6 +2389,450 @@ export async function startBookstoreLanguageClient(context: ExtensionContext): P
    await client.start();
 
    return client;
+}
+
+==============================================================================
+theia/package.json
+==============================================================================
+{
+  "name": "bookstore-theia",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Bookstore Theia extension: reconnect hardening, a Show Model command reading a file through the data head, and a diagram editor for each diagram.",
+  "license": "UNLICENSED",
+  "author": "",
+  "files": [
+    "lib",
+    "src",
+    "style"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "@eclipse-glsp/client": "2.7.0",
+    "@eclipse-glsp/theia-integration": "2.7.0",
+    "@hydranium/client-theia": "^__FRAMEWORK_VERSION__",
+    "@hydranium/data-client-theia": "^__FRAMEWORK_VERSION__",
+    "@hydranium/glsp-client": "^__FRAMEWORK_VERSION__",
+    "@hydranium/glsp-client-theia": "^__FRAMEWORK_VERSION__",
+    "@hydranium/protocol": "^__FRAMEWORK_VERSION__",
+    "@theia/core": "^1.75.0",
+    "@theia/editor": "^1.75.0",
+    "@theia/filesystem": "^1.75.0",
+    "@theia/output": "^1.75.0",
+    "@theia/process": "^1.75.0",
+    "@theia/workspace": "^1.75.0",
+    "bookstore-client": "0.0.0",
+    "bookstore-protocol": "0.0.0",
+    "inversify": "^6.1.3",
+    "vscode-jsonrpc": "9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "theiaExtensions": [
+    {
+      "frontendPreload": "lib/browser/bookstore-connection-preload-module",
+      "frontend": "lib/browser/bookstore-frontend-module",
+      "backend": "lib/node/bookstore-connection-backend-module"
+    },
+    {
+      "backend": "lib/node/bookstore-data-backend-module"
+    },
+    {
+      "backend": "lib/node/bookstore-glsp-backend-module"
+    },
+    {
+      "frontend": "lib/browser/bookstore-diagram-frontend-module"
+    }
+  ]
+}
+
+==============================================================================
+theia/.gitignore
+==============================================================================
+node_modules/
+lib/
+*.tsbuildinfo
+
+==============================================================================
+theia/README.md
+==============================================================================
+# bookstore-theia
+
+The Bookstore Theia extension: reconnect hardening, a Show Model command reading
+a file through the data head, and a diagram editor for each diagram. The
+language client is not here: the application sideloads `../vscode-servers`,
+which starts the server and answers each socket head’s port under a host
+command, and the backend modules forward the page’s channels to those ports. The
+application in `../host-theia-browser` runs it.
+
+```bash
+npm run build   # compile into lib/; build the protocol and client packages first
+```
+
+## Layout
+
+- `src/browser/bookstore-connection-preload-module.ts` and `src/node/bookstore-connection-backend-module.ts` — reconnect hardening, sized by the application’s `connectionBufferBytes`
+- `src/browser/bookstore-frontend-module.ts` — the frontend bindings
+- `src/browser/bookstore-data-port.ts` and `bookstore-data-connection.ts` — the data head’s connection
+- `src/browser/bookstore-show-model-command.ts` — `Bookstore: Show Model`, reading the current file through the data head
+- `src/node/bookstore-data-backend-module.ts` — forwards the data channel to the data head’s port
+- `src/common/bookstore-glsp-contribution.ts` — the id the GLSP client and its forwarder share
+- `src/browser/bookstore-glsp-client-contribution.ts` — the GLSP client every diagram shares
+- `src/node/bookstore-glsp-backend-module.ts` — forwards the GLSP channel to the GLSP head’s port
+- `src/browser/bookstore-diagram-frontend-module.ts` — the `Bookstore` diagram editor, over the client package’s diagram
+- `style/diagram.css` — the diagrams’ colours, from the Theia theme
+
+==============================================================================
+theia/tsconfig.json
+==============================================================================
+// The extension, compiled to CommonJS in `lib/`, which the Theia application
+// bundles: `src/browser/` into the page, `src/node/` into the backend. The
+// decorator options are inversify's, and a stylesheet import is left to the
+// bundler, so tsc does not resolve it.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "lib",
+    "strict": true,
+    "strictPropertyInitialization": false,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "noUncheckedSideEffectImports": false,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "declaration": true,
+    "types": ["node"]
+  },
+  "include": ["src"]
+}
+
+==============================================================================
+theia/src/browser/bookstore-connection-preload-module.ts
+==============================================================================
+// The reconnect hardening, browser side: messages sent while the socket is
+// down are buffered and replayed, rather than the page reloading.
+//
+// A `frontendPreload` entry, not a `frontend` one: Theia builds its connection
+// before any frontend module runs, so a rebind there would do nothing. The
+// buffer size is the application's `theia.frontend.config.connectionBufferBytes`.
+
+import { bindConnectionResilience } from '@hydranium/client-theia/browser';
+import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/frontend-application-config-provider';
+import { ContainerModule } from '@theia/core/shared/inversify';
+
+export default new ContainerModule((_bind, _unbind, isBound, rebind) => {
+   const bufferBytes = FrontendApplicationConfigProvider.get()['connectionBufferBytes'];
+   bindConnectionResilience(isBound, rebind, { bufferBytes: typeof bufferBytes === 'number' ? bufferBytes : undefined });
+});
+
+==============================================================================
+theia/src/browser/bookstore-frontend-module.ts
+==============================================================================
+// The Bookstore Theia extension's frontend: the connection’s lifecycle in an
+// Output channel, a warning when an outage outlasts the offline buffer, editor
+// disk sync, the data head’s connection and the Show Model command, and the
+// GLSP client the diagrams share.
+
+import { GLSPClientContribution } from '@eclipse-glsp/theia-integration';
+import { bindChannelLogger, bindConnectionDiagnostics, bindEditorDiskSync } from '@hydranium/client-theia/browser';
+import { bindDataConnection } from '@hydranium/data-client-theia/browser';
+import { CommandContribution } from '@theia/core';
+import { ContainerModule } from '@theia/core/shared/inversify';
+import { BookstoreDataConnection } from './bookstore-data-connection.js';
+import { BookstoreDataPort } from './bookstore-data-port.js';
+import { BookstoreGlspClientContribution } from './bookstore-glsp-client-contribution.js';
+import { BookstoreShowModelCommand } from './bookstore-show-model-command.js';
+
+export default new ContainerModule((bind, _unbind, isBound, rebind) => {
+   bindChannelLogger(bind, { channelName: 'Bookstore Connection' });
+   bindConnectionDiagnostics(bind);
+   // Keeps an editor from writing over a file a head saved while it held the same text unsaved.
+   bindEditorDiskSync(bind, isBound, rebind);
+
+   // The data head: one connection, opened when the command first runs.
+   bind(BookstoreDataPort).toSelf().inSingletonScope();
+   bindDataConnection(bind, isBound, BookstoreDataConnection);
+   bind(BookstoreShowModelCommand).toSelf().inSingletonScope();
+   bind(CommandContribution).toService(BookstoreShowModelCommand);
+
+   // One GLSP client for every diagram, so each diagram module skips binding its own.
+   bind(BookstoreGlspClientContribution).toSelf().inSingletonScope();
+   bind(GLSPClientContribution).toService(BookstoreGlspClientContribution);
+});
+
+==============================================================================
+theia/src/node/bookstore-connection-backend-module.ts
+==============================================================================
+// The reconnect hardening, backend side: the session outlives a dropped socket
+// for the application's `frontendConnectionTimeout`, and messages for the page
+// wait in a buffer of `theia.backend.config.connectionBufferBytes`.
+
+import { bindConnectionResilience } from '@hydranium/client-theia/node';
+import { BackendApplicationConfigProvider } from '@theia/core/lib/node/backend-application-config-provider';
+import { ContainerModule } from '@theia/core/shared/inversify';
+
+export default new ContainerModule((bind, _unbind, isBound, rebind) => {
+   const bufferBytes = BackendApplicationConfigProvider.get()['connectionBufferBytes'];
+   bindConnectionResilience(bind, isBound, rebind, { bufferBytes: typeof bufferBytes === 'number' ? bufferBytes : undefined });
+});
+
+==============================================================================
+theia/src/browser/bookstore-data-port.ts
+==============================================================================
+// The page's end of the data head: a channel to the backend, which forwards it
+// to the port the servers extension answers.
+
+import { ChannelDataPort } from '@hydranium/data-client-theia/browser';
+import { DATA_SERVER_PATH } from '@hydranium/protocol';
+import { injectable } from '@theia/core/shared/inversify';
+
+@injectable()
+export class BookstoreDataPort extends ChannelDataPort {
+   protected readonly servicePath = DATA_SERVER_PATH;
+}
+
+==============================================================================
+theia/src/browser/bookstore-data-connection.ts
+==============================================================================
+// The page's one connection to the data head. Everything that reads the data
+// head takes a session off it: Theia opens one channel per service path.
+
+import { DataConnectionWithEvents } from '@hydranium/protocol';
+import { inject, injectable } from '@theia/core/shared/inversify';
+import type { BookstoreElement } from 'bookstore-protocol';
+import { BookstoreDataPort } from './bookstore-data-port.js';
+
+@injectable()
+export class BookstoreDataConnection extends DataConnectionWithEvents<BookstoreElement> {
+   // The constructor, not a field: the port is needed before `super` returns.
+   constructor(@inject(BookstoreDataPort) port: BookstoreDataPort) {
+      super(port);
+   }
+}
+
+==============================================================================
+theia/src/browser/bookstore-show-model-command.ts
+==============================================================================
+// `Bookstore: Show Model`: the current editor's file, text or diagram, read
+// through the data head, and its root type shown in a notification.
+
+import { Command, type CommandContribution, type CommandRegistry, MessageService, nls } from '@theia/core';
+import { ApplicationShell, NavigatableWidget } from '@theia/core/lib/browser';
+import { inject, injectable } from '@theia/core/shared/inversify';
+import { ALL_LANGUAGES } from 'bookstore-protocol';
+import { BookstoreDataConnection } from './bookstore-data-connection.js';
+
+export const SHOW_MODEL_COMMAND = Command.toLocalizedCommand(
+   { id: 'bookstore.showModel', label: 'Show Model', category: 'Bookstore' },
+   'bookstore/showModel',
+   'bookstore/category'
+);
+
+@injectable()
+export class BookstoreShowModelCommand implements CommandContribution {
+   @inject(BookstoreDataConnection) protected readonly connection: BookstoreDataConnection;
+   @inject(ApplicationShell) protected readonly shell: ApplicationShell;
+   @inject(MessageService) protected readonly messages: MessageService;
+
+   // Opened on the first run and kept: the connection ends it with the page.
+   protected session?: ReturnType<BookstoreDataConnection['createSession']>;
+
+   registerCommands(registry: CommandRegistry): void {
+      registry.registerCommand(SHOW_MODEL_COMMAND, { execute: () => this.showModel() });
+   }
+
+   protected async showModel(): Promise<void> {
+      // The main area's, so focus in a side panel such as the Explorer still finds the editor.
+      const widget = this.shell.getCurrentWidget('main');
+      const uri = NavigatableWidget.is(widget) ? widget.getResourceUri() : undefined;
+      if (
+         uri === undefined ||
+         !ALL_LANGUAGES.some(language => language.fileExtensions.some(extension => uri.path.base.endsWith(extension)))
+      ) {
+         this.messages.info(nls.localize('bookstore/showModel/noFile', 'Open a Bookstore file first.'));
+         return;
+      }
+      this.session ??= this.connection.createSession('bookstore-show-model');
+      const root = await this.session.withOpenDocument({ uri: uri.toString() }, document => document.model?.root.$type);
+      this.messages.info(
+         nls.localize(
+            'bookstore/showModel/holds',
+            '{0} holds a {1}',
+            uri.path.base,
+            root ?? nls.localize('bookstore/showModel/noModel', 'document with no model')
+         )
+      );
+   }
+}
+
+==============================================================================
+theia/src/node/bookstore-data-backend-module.ts
+==============================================================================
+// Forwards the page's data channel to the port the servers extension answers
+// under its host command.
+
+import { createDataServerConnectionContainerModule, DataServerConnectionHandler } from '@hydranium/data-client-theia/node';
+import { injectable } from '@theia/core/shared/inversify';
+import { BOOKSTORE_DATA_SERVER_HOST_COMMAND } from 'bookstore-protocol';
+
+@injectable()
+export class BookstoreDataServerConnectionHandler extends DataServerConnectionHandler {
+   constructor() {
+      super({ portCommand: BOOKSTORE_DATA_SERVER_HOST_COMMAND });
+   }
+}
+
+export default createDataServerConnectionContainerModule(BookstoreDataServerConnectionHandler);
+
+==============================================================================
+theia/src/common/bookstore-glsp-contribution.ts
+==============================================================================
+// The id the page's GLSP client and the backend's forwarder meet under.
+
+export const BOOKSTORE_GLSP_CONTRIBUTION_ID = 'bookstore-glsp';
+
+==============================================================================
+theia/src/browser/bookstore-glsp-client-contribution.ts
+==============================================================================
+// The GLSP client every diagram of this extension shares, as they share one
+// server: the frontend module binds it once, and each diagram module skips it.
+
+import { HydraniumGlspClientContribution } from '@hydranium/glsp-client-theia/browser';
+import { injectable } from '@theia/core/shared/inversify';
+import { BOOKSTORE_GLSP_CONTRIBUTION_ID } from '../common/bookstore-glsp-contribution.js';
+
+@injectable()
+export class BookstoreGlspClientContribution extends HydraniumGlspClientContribution {
+   constructor() {
+      super({ languageContributionId: BOOKSTORE_GLSP_CONTRIBUTION_ID });
+   }
+}
+
+==============================================================================
+theia/src/node/bookstore-glsp-backend-module.ts
+==============================================================================
+// Forwards the page's GLSP channel to the port the servers extension answers
+// under its host command.
+
+import { createGlspConnectionContainerModule, GlspServerConnectionHandler } from '@hydranium/glsp-client-theia/node';
+import { injectable } from '@theia/core/shared/inversify';
+import { BOOKSTORE_GLSP_SERVER_HOST_COMMAND } from 'bookstore-protocol';
+import { BOOKSTORE_GLSP_CONTRIBUTION_ID } from '../common/bookstore-glsp-contribution.js';
+
+@injectable()
+export class BookstoreGlspConnectionHandler extends GlspServerConnectionHandler {
+   constructor() {
+      super({ languageContributionId: BOOKSTORE_GLSP_CONTRIBUTION_ID, portCommand: BOOKSTORE_GLSP_SERVER_HOST_COMMAND });
+   }
+}
+
+export default createGlspConnectionContainerModule(BookstoreGlspConnectionHandler);
+
+==============================================================================
+theia/src/browser/bookstore-diagram-frontend-module.ts
+==============================================================================
+// The Bookstore diagram in Theia: the client package's diagram, opened from
+// the language's files by a diagram manager. Its GLSP client is the one the
+// extension's frontend module binds for every diagram.
+
+import type { ContainerConfiguration } from '@eclipse-glsp/client';
+import type { GLSPDiagramLanguage } from '@eclipse-glsp/theia-integration/lib/common';
+import {
+   AbstractHydraniumGlspDiagramConfiguration,
+   AbstractHydraniumGlspDiagramManager,
+   AbstractHydraniumGlspTheiaFrontendModule,
+   createGlspClientTheiaModule,
+   SkipClientContribution
+} from '@hydranium/glsp-client-theia/browser';
+import { type Container, ContainerModule, injectable } from '@theia/core/shared/inversify';
+import { initializeBookstoreDiagramContainer } from 'bookstore-client';
+import { BOOKSTORE_DIAGRAM_TYPE, BOOKSTORE_LANGUAGE } from 'bookstore-protocol';
+import { BOOKSTORE_GLSP_CONTRIBUTION_ID } from '../common/bookstore-glsp-contribution.js';
+import '../../style/diagram.css';
+
+export const BookstoreDiagramLanguage: GLSPDiagramLanguage = {
+   contributionId: BOOKSTORE_GLSP_CONTRIBUTION_ID,
+   label: 'Bookstore Diagram',
+   diagramType: BOOKSTORE_DIAGRAM_TYPE,
+   fileExtensions: [...BOOKSTORE_LANGUAGE.fileExtensions]
+};
+
+// Theia's host bindings, logging to the language client's Output channel. Passed
+// after GLSP's Theia modules, whose bindings it replaces; a rebind made earlier
+// is overwritten without an error.
+const theiaModule = new ContainerModule((bind, unbind, isBound, rebind) => {
+   createGlspClientTheiaModule({ bind, unbind, isBound, rebind }, { channelLogger: { channelName: 'Bookstore' } });
+});
+
+@injectable()
+export class BookstoreDiagramConfiguration extends AbstractHydraniumGlspDiagramConfiguration {
+   diagramType = BOOKSTORE_DIAGRAM_TYPE;
+   // The LSP head already reports these problems.
+   protected override propagateMarkersToProblemsView = false;
+
+   configureContainer(container: Container, ...containerConfiguration: ContainerConfiguration): Container {
+      return initializeBookstoreDiagramContainer(container, ...containerConfiguration, theiaModule);
+   }
+}
+
+@injectable()
+export class BookstoreDiagramManager extends AbstractHydraniumGlspDiagramManager {
+   protected readonly diagramLanguage = BookstoreDiagramLanguage;
+   protected readonly managerLabel = 'Bookstore Diagram Editor';
+
+   override get id(): string {
+      return 'bookstore-diagram-manager';
+   }
+}
+
+export class BookstoreDiagramModule extends AbstractHydraniumGlspTheiaFrontendModule {
+   readonly diagramLanguage = BookstoreDiagramLanguage;
+   protected readonly diagramConfiguration = BookstoreDiagramConfiguration;
+   protected readonly diagramManager = BookstoreDiagramManager;
+
+   protected override bindClientContribution(): SkipClientContribution {
+      return SkipClientContribution;
+   }
+}
+
+export default new BookstoreDiagramModule();
+
+==============================================================================
+theia/style/diagram.css
+==============================================================================
+/* The diagrams' colours, from Theia's theme rather than GLSP's colours for a
+   light canvas. Theia sizes the editor, so nothing here sets a height. */
+
+.sprotty {
+   background: var(--theia-editor-background);
+   color: var(--theia-editor-foreground);
+   font-family: var(--theia-ui-font-family);
+   font-size: var(--theia-ui-font-size1);
+}
+
+/* GLSP's stylesheet leaves shapes at the SVG defaults: a black fill, and no stroke on an edge. */
+.sprotty-node {
+   fill: var(--theia-editorWidget-background);
+   stroke: var(--theia-focusBorder);
+}
+
+.sprotty-edge {
+   fill: none;
+   stroke: var(--theia-editor-foreground);
 }
 
 ==============================================================================
@@ -2895,7 +3342,7 @@ const builds = await Promise.all([
 if (process.argv.includes('--serve')) {
    await Promise.all(builds.map(build => build.watch()));
    // On this machine only: the directory served holds the sources and `node_modules`.
-   const requested = Number(process.env.PORT ?? 4937);
+   const requested = Number(process.env.PORT || 4937);
    const { port } = await builds[0].serve({ host: 'localhost', servedir: root, port: requested });
    console.log(`Serving http://localhost:${port}`);
 } else {
@@ -2914,7 +3361,7 @@ host-browser/playwright.config.mts
 import { defineConfig, devices } from '@playwright/test';
 
 /** The port `npm start` serves on; set `PORT` to run beside another server. */
-const PORT = Number(process.env.PORT ?? 4937);
+const PORT = Number(process.env.PORT || 4937);
 
 export default defineConfig({
    testDir: './test',
@@ -3475,7 +3922,7 @@ host-vscode/package.json
   "displayName": "Bookstore",
   "version": "0.0.0",
   "private": true,
-  "description": "Bookstore in VS Code: the language client, and a custom editor for each diagram.",
+  "description": "Bookstore in VS Code: the language client, a Show Model command reading a file through the data head, and a custom editor for each diagram.",
   "license": "UNLICENSED",
   "author": "",
   "publisher": "bookstore",
@@ -3494,6 +3941,7 @@ host-vscode/package.json
     "@eclipse-glsp/vscode-integration": "2.7.0",
     "@eclipse-glsp/vscode-integration-webview": "2.7.0",
     "@hydranium/client-vscode": "^__FRAMEWORK_VERSION__",
+    "@hydranium/data-client-vscode": "^__FRAMEWORK_VERSION__",
     "@hydranium/glsp-client": "^__FRAMEWORK_VERSION__",
     "@hydranium/glsp-client-vscode": "^__FRAMEWORK_VERSION__",
     "@hydranium/protocol": "^__FRAMEWORK_VERSION__",
@@ -3514,6 +3962,13 @@ host-vscode/package.json
     "typescript": "^7.0.2"
   },
   "contributes": {
+    "commands": [
+      {
+        "command": "bookstore.showModel",
+        "title": "Show Model",
+        "category": "Bookstore"
+      }
+    ],
     "customEditors": [
       {
         "viewType": "bookstore.diagram",
@@ -3575,9 +4030,9 @@ extension calls, so the two never hand the server different documents. It needs
 a Node extension host: the server is forked, and its socket heads are reached
 over TCP.
 
-The data head runs too, and its port is one `findPort` call away, from
-`@hydranium/client-vscode`, but nothing here reads it yet: see the Host in VS
-Code guide for a webview over it.
+`Bookstore: Show Model`, in the Command Palette, reads the active file through
+the data head over a socket from the extension host, and names its root type. A
+webview reaches the data head too: see the Host in VS Code guide.
 
 ```bash
 npm run build              # copy the server’s grammars, type-check and compile, then bundle
@@ -3588,13 +4043,14 @@ npm run test:e2e           # the smoke test; under `xvfb-run -a` on Linux withou
 
 ## Layout
 
-- `src/extension.ts` — activation: the server, through `../vscode-servers`, and the diagram editors
+- `src/extension.ts` — activation: the server, through `../vscode-servers`, the Show Model command, and the diagram editors
+- `src/show-model-command.ts` — Show Model: the active file, read through the data head
 - `src/bookstore-diagram-editor.ts` — the `Bookstore` diagram’s custom editor; its view type is the one `package.json` declares
 - `src/webview/bookstore-diagram.ts` — the webview it loads, over the client package’s diagram
 - `src/webview/diagram.css` — the webview’s size and colours
 - `esbuild.mjs` — bundles each webview into `out/webview/`
 - `start.mjs` — `npm start`: VS Code with this extension, on `../workspace`
-- `test/smoke.spec.mts` — VS Code opens the workspace, the diagram draws, and the server reports a broken reference
+- `test/smoke.spec.mts` — VS Code opens the workspace, Show Model names the model, the diagram draws, and the server reports a broken reference
 - `test/vscode-version.mts` — the VS Code release the smoke test runs
 
 ==============================================================================
@@ -3689,25 +4145,37 @@ child.on('error', error => {
 host-vscode/src/extension.ts
 ==============================================================================
 // The Bookstore VS Code extension: the language client, started the way the
-// servers extension starts it, and a custom editor for each diagram. Node
-// extension host only: the server is forked and its socket heads reached over
-// TCP.
+// servers extension starts it, a Show Model command reading a file through the
+// data head, and a custom editor for each diagram. Node extension host only:
+// the server is forked and its socket heads reached over TCP.
 
 import { GlspVscodeConnector } from '@eclipse-glsp/vscode-integration';
 import { findPort } from '@hydranium/client-vscode/node';
+import { SocketDataPort } from '@hydranium/data-client-vscode/node';
 import { HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';
-import { ConsoleLogger, describeError } from '@hydranium/protocol';
-import { BOOKSTORE_GLSP_SERVER_PORT_COMMAND } from 'bookstore-protocol';
-import { type ExtensionContext, window } from 'vscode';
+import { ConsoleLogger, DataConnectionWithEvents, describeError, renderFrameworkMessage } from '@hydranium/protocol';
+import { BOOKSTORE_DATA_SERVER_PORT_COMMAND, BOOKSTORE_GLSP_SERVER_PORT_COMMAND, type BookstoreElement } from 'bookstore-protocol';
+import { commands, type ExtensionContext, window } from 'vscode';
 import type { LanguageClient } from 'vscode-languageclient/node';
 import { startBookstoreLanguageClient } from 'bookstore-vscode-servers/out/language-client.js';
 import { BOOKSTORE_DIAGRAM_VIEW_TYPE, BookstoreDiagramEditorProvider } from './bookstore-diagram-editor.js';
+import { showModelCommand } from './show-model-command.js';
 
 let client: LanguageClient | undefined;
 
 export async function activate(context: ExtensionContext): Promise<void> {
    const running = await startBookstoreLanguageClient(context);
    client = running;
+
+   // The data head, read by the Show Model command. Nothing connects until it runs.
+   const dataPort = new SocketDataPort({
+      findPort: () => findPort(running, BOOKSTORE_DATA_SERVER_PORT_COMMAND),
+      logger: new ConsoleLogger().with('data head'),
+      // A failed read shown to the user, not only logged; the message carries the detail.
+      reportError: (_error, reported) => void window.showErrorMessage(renderFrameworkMessage(reported))
+   });
+   const dataConnection = new DataConnectionWithEvents<BookstoreElement>(dataPort);
+   context.subscriptions.push(dataConnection, dataPort, commands.registerCommand('bookstore.showModel', showModelCommand(dataConnection)));
 
    // The GLSP head, and the connector bridging it to every diagram webview. No
    // `messenger` option: the connector's own keeps messages flowing to a hidden tab.
@@ -3739,6 +4207,34 @@ export async function activate(context: ExtensionContext): Promise<void> {
 export async function deactivate(): Promise<void> {
    await client?.stop();
    client = undefined;
+}
+
+==============================================================================
+host-vscode/src/show-model-command.ts
+==============================================================================
+// `Bookstore: Show Model`: the active tab's file, text or diagram, read through
+// the data head, and its root type shown in a notification.
+
+import type { DataConnectionWithEvents } from '@hydranium/protocol';
+import { ALL_LANGUAGES, type BookstoreElement } from 'bookstore-protocol';
+import { TabInputCustom, TabInputText, window } from 'vscode';
+
+/** The command's handler, reading through `connection`. */
+export function showModelCommand(connection: DataConnectionWithEvents<BookstoreElement>): () => Promise<void> {
+   // Opened on the first run and kept until the connection is disposed.
+   let session: ReturnType<typeof connection.createSession> | undefined;
+   return async () => {
+      const input = window.tabGroups.activeTabGroup.activeTab?.input;
+      const uri = input instanceof TabInputText || input instanceof TabInputCustom ? input.uri : undefined;
+      if (uri === undefined || !ALL_LANGUAGES.some(language => language.fileExtensions.some(extension => uri.path.endsWith(extension)))) {
+         void window.showInformationMessage('Open a Bookstore file first.');
+         return;
+      }
+      session ??= connection.createSession('bookstore-show-model');
+      const root = await session.withOpenDocument({ uri: uri.toString() }, document => document.model?.root.$type);
+      const file = uri.path.slice(uri.path.lastIndexOf('/') + 1);
+      void window.showInformationMessage(`${file} holds a ${root ?? 'document with no model'}`);
+   };
 }
 
 ==============================================================================
@@ -3889,9 +4385,9 @@ new BookstoreDiagramStarter();
 ==============================================================================
 host-vscode/test/smoke.spec.mts
 ==============================================================================
-// VS Code opens a copy of the starter workspace with this extension loaded,
-// the diagram file draws in its diagram editor, and the server reports a
-// reference that resolves to nothing.
+// VS Code opens a copy of the starter workspace with this extension loaded, the
+// data head reads the file, the diagram file draws in its diagram editor, and
+// the server reports a reference that resolves to nothing.
 
 import { _electron, expect, test, type Page } from '@playwright/test';
 import { downloadAndUnzipVSCode } from '@vscode/test-electron';
@@ -3903,7 +4399,7 @@ import { VSCODE_CACHE, VSCODE_VERSION } from './vscode-version.mts';
 
 const extensionRoot = fileURLToPath(new URL('..', import.meta.url));
 
-test('draws the diagram and reports a broken reference', async () => {
+test('reads the model, draws the diagram, and reports a broken reference', async () => {
    // A copy, since the server writes its repairs to the folder it opens, and a
    // fresh profile, since a reused one restores the last run's editors.
    const scratch = mkdtempSync(join(tmpdir(), 'bookstore-vscode-'));
@@ -3929,6 +4425,14 @@ test('draws the diagram and reports a broken reference', async () => {
       const page = await app.firstWindow();
       await expect(page.locator('.monaco-workbench')).toBeVisible();
       await quickOpen(page, 'nodes.bookstore');
+      // The data head reads the open file.
+      await page.keyboard.press('ControlOrMeta+Shift+P');
+      await page.locator('.quick-input-widget input').fill('>Bookstore: Show Model');
+      await page
+         .locator('.quick-input-list')
+         .getByRole('option', { name: /^Bookstore: Show Model(,|$)/ })
+         .click();
+      await expect(page.locator('.notification-toast').filter({ hasText: 'nodes.bookstore holds a BookstoreModel' })).toBeVisible();
 
       // The diagram file opens in its diagram, which draws the two starter nodes.
       const webview = page.frameLocator('iframe.webview.ready').frameLocator('#active-frame');
@@ -4003,6 +4507,293 @@ for (let attempt = 1; ; attempt++) {
       console.warn(`Downloading VS Code ${VSCODE_VERSION} failed, attempt ${attempt} of ${ATTEMPTS}.`, error);
       await setTimeout(attempt * 5_000);
    }
+}
+
+==============================================================================
+host-theia-browser/package.json
+==============================================================================
+{
+  "name": "bookstore-host-theia-browser",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Bookstore in a Theia browser application: the Theia extension, and the servers extension sideloaded for the language client.",
+  "license": "UNLICENSED",
+  "author": "",
+  "scripts": {
+    "build": "theia build --mode development && npm run typecheck",
+    "clean": "rimraf lib src-gen plugins gen-esbuild.browser.mjs gen-esbuild.node.mjs smoke-workspace test-results playwright-report",
+    "start": "node start.mjs",
+    "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
+    "test:e2e:install": "playwright install chromium",
+    "typecheck": "tsc --noEmit -p tsconfig.e2e.json"
+  },
+  "dependencies": {
+    "@theia/core": "^1.75.0",
+    "@theia/editor": "^1.75.0",
+    "@theia/filesystem": "^1.75.0",
+    "@theia/markers": "^1.75.0",
+    "@theia/messages": "^1.75.0",
+    "@theia/monaco": "^1.75.0",
+    "@theia/navigator": "^1.75.0",
+    "@theia/output": "^1.75.0",
+    "@theia/plugin-ext": "^1.75.0",
+    "@theia/plugin-ext-vscode": "^1.75.0",
+    "@theia/preferences": "^1.75.0",
+    "@theia/process": "^1.75.0",
+    "@theia/workspace": "^1.75.0",
+    "bookstore-theia": "0.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@theia/cli": "^1.75.0",
+    "@types/node": "^22.0.0",
+    "bookstore-vscode-servers": "0.0.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "theia": {
+    "target": "browser",
+    "frontend": {
+      "config": {
+        "applicationName": "Bookstore",
+        "connectionBufferBytes": 102400,
+        "preferences": {
+          "security.workspace.trust.enabled": false
+        }
+      }
+    },
+    "backend": {
+      "config": {
+        "connectionBufferBytes": 102400,
+        "frontendConnectionTimeout": 60000
+      }
+    }
+  }
+}
+
+==============================================================================
+host-theia-browser/.gitignore
+==============================================================================
+node_modules/
+# What `theia build` generates. Not esbuild.mjs, which it writes only when none
+# is there: kept, it is the place to adjust the bundle.
+lib/
+src-gen/
+gen-esbuild.*.mjs
+plugins/
+smoke-workspace/
+test-results/
+playwright-report/
+
+==============================================================================
+host-theia-browser/README.md
+==============================================================================
+# bookstore-host-theia-browser
+
+Bookstore in a Theia browser application: the Theia extension in `../theia`, and
+`../vscode-servers` sideloaded through `@theia/plugin-ext`, which starts the
+server and its language client. The backend runs the server, so this is a Node
+application; Theia serves the page. The servers extension contributes no editor,
+so a diagram file opens in the Theia diagram editor alone.
+
+```bash
+npm run build              # bundle and type-check; build the members first
+npm start                  # Theia at http://localhost:3000 on ../workspace; THEIA_PORT picks another port
+npm run test:e2e:install   # download the Chromium the smoke test drives, once
+npm run test:e2e           # the smoke test, which starts the application itself
+```
+
+The `theia` block of `package.json` sets `frontendConnectionTimeout`, without
+which Theia ends the session on any dropped socket and the page reloads, and
+`connectionBufferBytes`, the messages kept while the socket is down; the Theia
+extension’s connection modules read both.
+
+## Layout
+
+- `start.mjs` — `npm start`: links `../vscode-servers` into `plugins/`, then starts the backend on `THEIA_PORT`, on a folder given as its argument or `../workspace`
+- `playwright.config.mts` — the smoke tier, on port 4938 or `THEIA_PORT`, on a copy of `../workspace` in `smoke-workspace/`
+- `test/smoke.spec.mts` — Theia opens the workspace and each head answers
+
+==============================================================================
+host-theia-browser/start.mjs
+==============================================================================
+// `npm start`: the Theia backend on `THEIA_PORT`, 3000 when it is unset, on the
+// folder given as the argument, `../workspace` when there is none. A script
+// rather than `--port=${THEIA_PORT:-3000}` in package.json: only a POSIX shell
+// expands that, and npm also runs scripts under cmd.exe.
+
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Paths from this file, not the working directory, which a direct `node` run can set anywhere.
+const here = path.dirname(fileURLToPath(import.meta.url));
+const link = path.join(here, 'plugins', 'bookstore-vscode-servers');
+
+// The servers extension, sideloaded from plugins/ beside any other plugin there.
+// Linked here rather than in the build, which a build cache can replay without
+// it; replaced every time, since a dangling link left by a moved extension
+// fails `symlinkSync`.
+fs.mkdirSync(path.dirname(link), { recursive: true });
+const existing = fs.lstatSync(link, { throwIfNoEntry: false });
+// A link, a junction included, is unlinked, never handed to a recursive remove
+// that might reach `../vscode-servers` through it.
+if (existing?.isSymbolicLink()) {
+   fs.unlinkSync(link);
+} else {
+   fs.rmSync(link, { recursive: true, force: true });
+}
+fs.symlinkSync(path.join(here, '../vscode-servers'), link, 'junction');
+
+const port = Number(process.env.THEIA_PORT || 3000);
+const workspace = path.resolve(process.argv[2] ?? path.join(here, '../workspace'));
+// The CLI run by this Node, with no shell: the workspace path reaches Theia as it is.
+// `local-dir:` relative to `cwd`, since Theia reads an absolute path as a URI.
+const cli = createRequire(import.meta.url).resolve('@theia/cli/bin/theia.js');
+const theia = spawn(process.execPath, [cli, 'start', '--plugins=local-dir:./plugins', `--port=${port}`, workspace], {
+   cwd: here,
+   stdio: 'inherit'
+});
+for (const signal of ['SIGINT', 'SIGTERM']) {
+   process.on(signal, () => theia.kill(signal));
+}
+theia.on('exit', (code, signal) => {
+   if (signal === null) {
+      process.exit(code ?? 1);
+   }
+   // Ended by a signal, so end by it too: Ctrl+C is a stop, not a failure.
+   process.removeAllListeners(signal);
+   process.kill(process.pid, signal);
+});
+
+==============================================================================
+host-theia-browser/playwright.config.mts
+==============================================================================
+// The smoke tier: Playwright starts the application on a copy of the starter
+// workspace, since the server writes its repairs to the folder it opens, and
+// drives it in Chromium, which `npm run test:e2e:install` downloads once.
+// `npm start` serves what `npm run build` bundled, so build first.
+
+import { defineConfig, devices } from '@playwright/test';
+import { cpSync, rmSync } from 'node:fs';
+
+/**
+ * The port the smoke serves on, not `npm start`'s 3000, so a running
+ * application doesn't block it; set `THEIA_PORT` to choose another.
+ */
+const PORT = Number(process.env.THEIA_PORT || 4938);
+
+// Copied once, by the runner: its workers load this file again, and inherit the flag.
+if (process.env.SMOKE_WORKSPACE_COPIED === undefined) {
+   process.env.SMOKE_WORKSPACE_COPIED = 'true';
+   const workspace = new URL('smoke-workspace', import.meta.url);
+   rmSync(workspace, { recursive: true, force: true });
+   cpSync(new URL('../workspace', import.meta.url), workspace, { recursive: true });
+}
+
+export default defineConfig({
+   testDir: './test',
+   // The first request waits for the backend to start the server and build the workspace.
+   timeout: 120_000,
+   expect: { timeout: 60_000 },
+   use: { ...devices['Desktop Chrome'], baseURL: `http://localhost:${PORT}` },
+   webServer: {
+      // Relative to this folder, the server's working directory.
+      command: 'node start.mjs smoke-workspace',
+      url: `http://localhost:${PORT}`,
+      env: { THEIA_PORT: String(PORT) },
+      // A server already on the port fails the run rather than being tested in this one's place.
+      reuseExistingServer: false,
+      timeout: 120_000
+   }
+});
+
+==============================================================================
+host-theia-browser/tsconfig.e2e.json
+==============================================================================
+// The smoke tier, which runs in Node under Playwright. `test:e2e` passes it
+// with `--tsconfig`, since Playwright otherwise looks for a `tsconfig.json` in
+// the directories above.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["test", "playwright.config.mts"]
+}
+
+==============================================================================
+host-theia-browser/test/smoke.spec.mts
+==============================================================================
+// Theia opens a copy of the starter workspace with this application's
+// extensions, the diagram file draws in its diagram editor, the data head reads
+// the file, and the server reports a reference that resolves to nothing.
+
+import { expect, test, type Page } from '@playwright/test';
+
+test('draws the diagram, reads the model, and reports a broken reference', async ({ page }) => {
+   await page.goto('/');
+   // Up once the loading screen is gone; a key pressed before then is lost.
+   await expect(page.locator('.theia-preload')).toHaveCount(0);
+   await page.keyboard.press('ControlOrMeta+Shift+E');
+   await expect(page.locator('.theia-FileTree .theia-TreeNode', { hasText: 'nodes.bookstore' })).toBeVisible();
+   await quickOpen(page, 'nodes.bookstore');
+
+   // The diagram file opens in its diagram, which draws the two starter nodes.
+   // In the editor's copy: sprotty measures shapes in a hidden one on the page.
+   await expect(page.locator('.sprotty:not(.sprotty-hidden) .sprotty-node')).toHaveCount(2);
+
+   // The data head reads the open file, with focus in the Explorer beside it.
+   await page.locator('.theia-FileTree .theia-TreeNode', { hasText: 'nodes.bookstore' }).click();
+   await expect(page.locator('.theia-FileTree:focus-within')).toHaveCount(1);
+   await runCommand(page, 'Bookstore: Show Model');
+   // `first()`: Theia lists a notification in its toast and in the notification centre.
+   await expect(
+      page.locator('.theia-notification-message').filter({ hasText: 'nodes.bookstore holds a BookstoreModel' }).first()
+   ).toBeVisible();
+
+   // Then as text, through the Explorer's Open With.
+   await page.locator('.theia-FileTree .theia-TreeNode', { hasText: 'nodes.bookstore' }).click({ button: 'right' });
+   await page.locator('.lm-Menu-item', { hasText: 'Open With...' }).click();
+   await page.locator('.quick-input-list .monaco-list-row', { hasText: 'Text Editor' }).click();
+   const editor = page.locator('.monaco-editor .view-lines').first();
+   await expect(editor).toContainText('node First');
+   await editor.click();
+   await page.keyboard.press('ControlOrMeta+End');
+   // In one edit: typed key by key, the half-typed reference is reported on the way.
+   await page.keyboard.insertText('\nnode Broken -> Missing');
+   await expect(page.locator('.monaco-editor .squiggly-error').first()).toBeVisible();
+});
+
+/** Open `file` through Quick Open, so it gets the editor a user would. */
+async function quickOpen(page: Page, file: string): Promise<void> {
+   await page.keyboard.press('ControlOrMeta+P');
+   const input = page.locator('.quick-input-widget input');
+   await input.fill(file);
+   await expect(page.locator('.quick-input-list .monaco-list-row').first()).toContainText(file);
+   await input.press('Enter');
+   await expect(page.locator('.quick-input-widget')).toBeHidden();
+}
+
+/** Run the command whose palette entry reads `label`, checked before Enter, since the match is fuzzy. */
+async function runCommand(page: Page, label: string): Promise<void> {
+   await page.keyboard.press('F1');
+   const input = page.locator('.quick-input-widget input');
+   await input.fill(`>${label}`);
+   await expect(page.locator('.quick-input-list .monaco-list-row.focused')).toContainText(label);
+   await input.press('Enter');
+   await expect(page.locator('.quick-input-widget')).toBeHidden();
 }
 
 ==============================================================================

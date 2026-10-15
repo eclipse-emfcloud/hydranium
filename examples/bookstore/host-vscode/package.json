@@ -3,7 +3,7 @@
   "displayName": "Bookstore",
   "version": "0.0.0",
   "private": true,
-  "description": "Bookstore in VS Code: the language client, and a custom editor for each diagram.",
+  "description": "Bookstore in VS Code: the language client, a Show Model command reading a file through the data head, and a custom editor for each diagram.",
   "license": "UNLICENSED",
   "author": "",
   "publisher": "bookstore",
@@ -25,6 +25,7 @@
     "@hydranium/bookstore-client": "0.0.0",
     "@hydranium/bookstore-protocol": "0.0.0",
     "@hydranium/client-vscode": "^1.0.0-next",
+    "@hydranium/data-client-vscode": "^1.0.0-next",
     "@hydranium/glsp-client": "^1.0.0-next",
     "@hydranium/glsp-client-vscode": "^1.0.0-next",
     "@hydranium/protocol": "^1.0.0-next",
@@ -43,6 +44,13 @@
     "typescript": "^7.0.2"
   },
   "contributes": {
+    "commands": [
+      {
+        "command": "bookstore.showModel",
+        "title": "Show Model",
+        "category": "Bookstore"
+      }
+    ],
     "customEditors": [
       {
         "viewType": "bookstore.diagram",

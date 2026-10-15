@@ -8,33 +8,13 @@
  ********************************************************************************/
 
 import { createPostMessageTransport } from '@hydranium/protocol';
-import * as net from 'node:net';
-import { createMessageConnection, SocketMessageReader, SocketMessageWriter, type MessageConnection } from 'vscode-jsonrpc/node';
+import { createMessageConnection } from 'vscode-jsonrpc/node';
 import { HOST_EXTENSION } from 'vscode-messenger-common';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createWebviewSideChannel } from '../src/messenger-channel';
 import { connectDataServer, openSocketTransport } from '../src/node/data-server-connection';
 import { makeMessengerHarness } from '../src/testing/messenger-harness';
-
-/** A socket server answering `echo` on every connection, standing in for the data-server. */
-async function startEchoServer(): Promise<{ port: number; close(): Promise<void> }> {
-   const connections: MessageConnection[] = [];
-   const server = net.createServer(socket => {
-      const connection = createMessageConnection(new SocketMessageReader(socket), new SocketMessageWriter(socket));
-      connection.onRequest('echo', (value: unknown) => value);
-      connection.listen();
-      connections.push(connection);
-   });
-   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-   const address = server.address() as net.AddressInfo;
-   return {
-      port: address.port,
-      close: () => {
-         connections.forEach(connection => connection.dispose());
-         return new Promise<void>(resolve => server.close(() => resolve()));
-      }
-   };
-}
+import { startEchoServer } from './echo-server';
 
 const cleanups: Array<() => unknown> = [];
 afterEach(async () => {

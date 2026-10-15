@@ -22,7 +22,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const port = Number(process.env.PORT ?? 3002);
+const port = Number(process.env.PORT || 3002);
 
 // `.css` earns its entry: a stylesheet served as `application/octet-stream` is
 // DROPPED by the browser in standards mode with only a console warning, so the

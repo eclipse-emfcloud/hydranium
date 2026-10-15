@@ -17,7 +17,7 @@
  * the very defect it is testing for. Both follow `THEIA_PORT`, so a run moved
  * off the default moves all of them together.
  */
-const MAIN_PORT = Number(process.env.THEIA_PORT ?? 3001);
+const MAIN_PORT = Number(process.env.THEIA_PORT || 3001);
 export const APP_PORT = MAIN_PORT + 1;
 export const PROXY_PORT = MAIN_PORT + 2;
 export const CONTROL_PORT = PROXY_PORT + 1000;

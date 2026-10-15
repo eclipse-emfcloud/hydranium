@@ -16,6 +16,8 @@ to it over a `vscode-messenger` hop, and the webview's data port reads it.
 - The webview's `DataPort`, for the connection and sessions from
   `@hydranium/protocol`, which rejects pending requests when the extension host
   reports the relay lost.
+- A `DataPort` over a socket for code in the extension host itself, such as a
+  command, which looks the port up again for every connection.
 
 ## Install
 
@@ -78,6 +80,22 @@ messenger.start();
 const connection = new DataConnectionWithEvents(port);
 ```
 
+For code in the extension host itself, give the connection a `SocketDataPort`
+instead, which opens the socket there; nothing connects until the first
+request:
+
+<!-- snippet-preamble
+declare function findDataServerPort(): Promise<number>;
+-->
+
+```ts
+import { SocketDataPort } from '@hydranium/data-client-vscode/node';
+import { DataConnectionWithEvents } from '@hydranium/protocol';
+
+const port = new SocketDataPort({ findPort: findDataServerPort });
+const connection = new DataConnectionWithEvents(port);
+```
+
 To test a webview's data path in Node, `makeMessengerHarness` from `./testing`
 joins the real extension-side and webview-side messengers through a fake
 panel and a fake `window`, so the test runs their real routing.
@@ -90,7 +108,7 @@ For the whole setup, see *Host in VS Code* in
 | Subpath     | Use it for                                    | Runs in                    |
 | ----------- | --------------------------------------------- | -------------------------- |
 | `.`         | The messenger channel both ends build on      | anywhere                   |
-| `./node`    | The relay from the data-server's socket       | the VS Code extension host |
+| `./node`    | The relay, and the extension host's own port  | the VS Code extension host |
 | `./browser` | The webview's data port                       | a webview                  |
 | `./testing` | The real messenger pair joined in a Node test | a test                     |
 

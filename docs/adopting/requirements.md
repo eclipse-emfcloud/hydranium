@@ -81,10 +81,11 @@ The declarations of Langium and its LSP stack use `NoInfer`, which TypeScript
 an older compiler reports, but those types then resolve to an error type.
 Nothing in your install enforces this floor.
 
-The `client/` package `init` emits with a diagram, and the two VS Code
-extensions `--hosts vscode` emits, need TypeScript 5.8. They are CommonJS, the
-client because GLSP's client is, and require the ES protocol package, which
-TypeScript allows from 5.8 under `nodenext`.
+The `client/` package `init` emits with a diagram, the two VS Code extensions
+`--hosts vscode` emits, and the Theia extension `--hosts theia-browser` emits,
+need TypeScript 5.8. They are CommonJS, the client because GLSP's client is,
+and require the ES protocol package, which TypeScript allows from 5.8 under
+`nodenext`.
 
 ## A resolver that reads `exports`
 

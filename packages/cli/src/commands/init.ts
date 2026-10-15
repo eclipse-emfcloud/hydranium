@@ -35,20 +35,23 @@ export type InitHead = (typeof INIT_HEADS)[number];
 export const DEFAULT_INIT_HEADS: readonly InitHead[] = ['lsp', 'data'];
 
 /** One package of a scaffolded project, in the directory of its name — see {@link initMembers}. */
-export type InitMember = 'protocol' | 'server' | 'client' | 'vscode-servers' | `host-${InitHost}`;
+export type InitMember = 'protocol' | 'server' | 'client' | 'vscode-servers' | 'theia' | `host-${InitHost}`;
 
 /**
  * The packages a scaffold with these heads and hosts emits, in the order a
  * workspace lists them. `client` comes with the `glsp` head, which always
  * brings a diagram, and each host is a package of its own. `vscode-servers`
- * comes with the VS Code host, whose server launch it holds.
+ * comes with the VS Code host, whose server launch it holds, and with a Theia
+ * application, which sideloads it; `theia` is the Theia extension a Theia
+ * application runs.
  */
 export function initMembers(heads: readonly InitHead[], hosts: readonly InitHost[]): InitMember[] {
    return [
       'protocol',
       'server',
       ...(heads.includes('glsp') ? (['client'] as const) : []),
-      ...(hosts.includes('vscode') ? (['vscode-servers'] as const) : []),
+      ...(hosts.includes('vscode') || hosts.includes('theia-browser') ? (['vscode-servers'] as const) : []),
+      ...(hosts.includes('theia-browser') ? (['theia'] as const) : []),
       ...hosts.map(host => `host-${host}` as const)
    ];
 }
@@ -615,8 +618,13 @@ export function runInit(options: InitCommandOptions): void {
          );
          if (composition.hosts.length > 0) {
             // A host's projects compile its page, worker and tests apart, each under options of its own.
-            const servers = composition.hosts.includes('vscode') ? ", as the VS Code servers extension's does" : '';
-            write(`  Each host's tsconfigs stand alone${servers}.\n`);
+            const members = initMembers(composition.heads, composition.hosts);
+            const extensions = [
+               ...(members.includes('vscode-servers') ? ["the VS Code servers extension's"] : []),
+               ...(members.includes('theia') ? ["the Theia extension's"] : [])
+            ];
+            const also = extensions.length === 0 ? '' : `, as ${extensions.join(' and ')} ${extensions.length === 1 ? 'does' : 'do'}`;
+            write(`  Each host's tsconfigs stand alone${also}.\n`);
          }
       } else {
          write("  No root tsconfig carries compilerOptions, so each package's stands alone.\n");
@@ -686,6 +694,12 @@ export function runInit(options: InitCommandOptions): void {
       const vscode = detection === undefined ? 'host-vscode' : `${detection.targetPath}/host-vscode`;
       write(`  npm --prefix ${vscode} start   # VS Code with the extension, on the workspace; needs \`code\` on the PATH\n`);
       write(`  npm --prefix ${vscode} run test:e2e:install && npm --prefix ${vscode} run test:e2e\n`);
+   }
+   if (composition.hosts.includes('theia-browser')) {
+      const theia = detection === undefined ? 'host-theia-browser' : `${detection.targetPath}/host-theia-browser`;
+      write(`  npm --prefix ${theia} start   # Theia at http://localhost:3000 on the workspace, Ctrl+C to stop\n`);
+      // The smoke test starts its own backend, on a port of its own.
+      write(`  npm --prefix ${theia} run test:e2e:install && npm --prefix ${theia} run test:e2e\n`);
    }
    write('\n');
    write('The emitted sources carry no license header — run your own header tool if\n');
