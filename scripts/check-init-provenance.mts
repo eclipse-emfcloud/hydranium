@@ -97,7 +97,13 @@ const HEADER_LINES = 9;
 /** The slice of `packages/cli/lib/commands/init.js` this gate drives; its own types live in a build this script cannot assume. */
 interface InitModule {
    resolveInitPackaging(targetDir: string, options: { monorepo?: boolean; public?: boolean; scope?: string; npmVersion?: string }): unknown;
-   resolveInitComposition(name: string, grammars?: readonly { name: string }[], heads?: readonly string[], packaging?: unknown): unknown;
+   resolveInitComposition(
+      name: string,
+      grammars?: readonly { name: string }[],
+      heads?: readonly string[],
+      packaging?: unknown,
+      hosts?: readonly string[]
+   ): unknown;
    planInitFiles(composition: unknown): InitFile[];
 }
 
@@ -110,6 +116,7 @@ interface Invocation {
    name: string;
    grammars: { name: string }[];
    heads?: string[];
+   hosts?: string[];
    monorepo?: boolean;
    public?: boolean;
    scope?: string;
@@ -354,9 +361,10 @@ const ORDER_FLOW_MANIFEST: Manifest = {
 /**
  * The scaffold invocation `bookstore` was created with.
  *
- * One grammar and the GLSP head: this is the target that pins the seven-file
- * diagram emission plus the starter operation handler, none of which the
- * `order-flow` target reaches. `--diagram` is not recorded as a
+ * One grammar, the GLSP head and the browser host: this is the target that
+ * pins the seven-file diagram emission, the starter operation handler, the
+ * client package and the browser host, none of which the `order-flow` target
+ * reaches. `--diagram` is not recorded as a
  * field because with a single grammar the diagram is DERIVED — `resolveDiagrams`
  * marks the lone grammar when the head set includes `glsp`, so re-deriving the
  * composition here reproduces it without the flag.
@@ -372,6 +380,7 @@ const BOOKSTORE_INVOCATION: Invocation = {
    name: 'Bookstore',
    grammars: [{ name: 'Bookstore' }],
    heads: ['lsp', 'data', 'glsp'],
+   hosts: ['browser'],
    monorepo: true,
    scope: '@hydranium'
 };
@@ -451,6 +460,37 @@ const BOOKSTORE_MANIFEST: Manifest = {
       verdict: 'identical',
       reason: "the scaffolded validation tier, over the framework's own linker diagnostics"
    },
+   'client/package.json': { verdict: 'identical', reason: 'the scaffold names it under the recorded scope' },
+   'client/tsconfig.json': { verdict: 'identical', reason: 'the scaffold derives the extends, the pruned option set and the reference' },
+   'client/.gitignore': { verdict: 'identical', reason: "the scaffold's ignore file, which a member writes too" },
+   'client/README.md': { verdict: 'identical', reason: 'the scaffold README for the client package' },
+   'client/src/index.ts': { verdict: 'identical', reason: 'the scaffolded barrel' },
+   'client/src/bookstore-diagram-module.ts': {
+      verdict: 'identical',
+      reason: 'the emitted element registrations and container initializer'
+   },
+   // The browser host and its smoke test, which the e2e-chromium job runs: the
+   // only place a scaffolded page is loaded in a browser.
+   'host-browser/package.json': { verdict: 'identical', reason: 'the scaffold names it under the recorded scope' },
+   'host-browser/.gitignore': { verdict: 'identical', reason: "the scaffold's ignore file, which a member writes too" },
+   'host-browser/README.md': { verdict: 'identical', reason: 'the scaffold README for the browser host' },
+   'host-browser/index.html': { verdict: 'identical', reason: 'the emitted page' },
+   'host-browser/esbuild.mjs': { verdict: 'identical', reason: 'the emitted bundling and serving' },
+   'host-browser/playwright.config.mts': { verdict: 'identical', reason: 'the emitted smoke-tier configuration' },
+   'host-browser/tsconfig.worker.json': { verdict: 'identical', reason: 'the emitted worker project, self-contained' },
+   'host-browser/tsconfig.page.json': { verdict: 'identical', reason: 'the emitted page project, self-contained' },
+   'host-browser/tsconfig.e2e.json': { verdict: 'identical', reason: 'the emitted smoke-tier project, self-contained' },
+   'host-browser/src/worker.ts': { verdict: 'identical', reason: 'all three heads in one worker, as emitted' },
+   'host-browser/src/page.ts': { verdict: 'identical', reason: "the emitted page, running each head's part" },
+   'host-browser/src/editor.ts': { verdict: 'identical', reason: 'the emitted editor, file switch and Save' },
+   'host-browser/src/data-status.ts': { verdict: 'identical', reason: 'the emitted data-head status line' },
+   'host-browser/src/diagram.ts': { verdict: 'identical', reason: 'the emitted diagram mount' },
+   'host-browser/src/log.ts': { verdict: 'identical', reason: 'the emitted status line and log area' },
+   'host-browser/src/workspace.ts': { verdict: 'identical', reason: 'the emitted workspace root URI' },
+   'host-browser/src/monaco-editor-worker.ts': { verdict: 'identical', reason: "the emitted entry of Monaco's own worker" },
+   'host-browser/src/monaco-editor-core-worker.d.ts': { verdict: 'identical', reason: "the emitted declaration of that entry's import" },
+   'host-browser/src/posix-path-shim.ts': { verdict: 'identical', reason: 'the emitted path shim' },
+   'host-browser/test/smoke.spec.mts': { verdict: 'identical', reason: 'the emitted smoke test' },
    'workspace/nodes.bookstore': { verdict: 'identical', reason: 'the starter model every host and the CLI open' },
    'workspace/references.bookstore': { verdict: 'identical', reason: 'the starter model referencing the other file' }
 };
@@ -695,7 +735,9 @@ function deriveScaffold(init: InitModule, target: ScaffoldTarget): { files: Init
       npmVersion: DECLARED_NPM
    });
    return {
-      files: init.planInitFiles(init.resolveInitComposition(invocation.name, invocation.grammars, invocation.heads, packaging))
+      files: init.planInitFiles(
+         init.resolveInitComposition(invocation.name, invocation.grammars, invocation.heads, packaging, invocation.hosts)
+      )
    };
 }
 
@@ -799,6 +841,15 @@ const SCAFFOLD_PIN_SOURCES: Record<string, PinSource> = {
    // exact version would refuse copies GLSP accepts. `admits` is what relates
    // the two without moving either.
    inversify: { file: 'packages/glsp-server/package.json', path: ['devDependencies', 'inversify'], rule: 'admits' },
+   // The browser host's. Monaco's models live in one copy, which the host shares
+   // with `client-browser`; GLSP's client is the copy `glsp-client` is built on.
+   'monaco-editor-core': { file: 'packages/client-browser/package.json', path: ['devDependencies', 'monaco-editor-core'], rule: 'exact' },
+   '@eclipse-glsp/client': { file: 'packages/glsp-client/package.json', path: ['devDependencies', '@eclipse-glsp/client'], rule: 'exact' },
+   '@playwright/test': { file: 'examples/order-flow/browser/package.json', path: ['devDependencies', '@playwright/test'], rule: 'exact' },
+   // Imported by GLSP's client without a declaration; no manifest here
+   // declares it either, so the copy the repo resolves is the source.
+   '@vscode/codicons': { file: 'package-lock.json', path: ['packages', 'node_modules/@vscode/codicons', 'version'], rule: 'exact' },
+   esbuild: { file: 'package.json', path: ['devDependencies', 'esbuild'], rule: 'exact' },
    '@types/node': { file: 'package.json', path: ['devDependencies', '@types/node'], rule: 'exact' },
    rimraf: { file: 'package.json', path: ['devDependencies', 'rimraf'], rule: 'exact' },
    typescript: { file: 'package.json', path: ['devDependencies', 'typescript'], rule: 'exact' },
@@ -969,7 +1020,7 @@ function comparePins(emitted: Record<string, string | undefined>, sources: Recor
  */
 function emittedPins(init: InitModule): Record<string, string> {
    const packaging = init.resolveInitPackaging(join(REPO_ROOT, 'examples/pin-probe'), { monorepo: true, npmVersion: DECLARED_NPM });
-   const composition = init.resolveInitComposition('PinProbe', undefined, ['lsp', 'data', 'glsp'], packaging);
+   const composition = init.resolveInitComposition('PinProbe', undefined, ['lsp', 'data', 'glsp'], packaging, ['browser']);
    const manifests = init
       .planInitFiles(composition)
       .filter(file => file.path.endsWith('/package.json'))

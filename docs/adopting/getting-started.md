@@ -15,10 +15,10 @@ names.
 ## Scaffold a language
 
 ```bash
-npx @hydranium/cli init ./my-lang --name MyLang --heads lsp,data,glsp
+npx @hydranium/cli init ./my-lang --name MyLang --heads lsp,data,glsp --hosts browser
 ```
 
-`init` writes a complete project: two packages and a starter workspace, each in
+`init` writes a complete project: its packages and a starter workspace, each in
 its own directory.
 
 - `server/` holds a starter grammar in `src/grammar/`, the services wiring, a
@@ -26,14 +26,21 @@ its own directory.
 - `protocol/` holds what the server and its clients both import: language ids,
   wire types and, with a diagram, its type ids. A client depends on it instead
   of the server.
+- `client/`, with a diagram, holds the diagram's client side, which every host
+  mounts.
+- `host-browser/` holds a page that runs every head in a web worker, with no
+  backend.
 - `workspace/` holds two starter model files, one referencing the other.
 
-Two flags shape it:
+Three flags shape it:
 
 - `--heads` picks the heads: LSP serves text editors, data serves forms and
   tools, GLSP serves a diagram. Leave `glsp` out for a language without one.
   Leave `lsp` out and the server entry takes the workspace path as its
   argument and prints the ports of the heads it started.
+- `--hosts` adds host applications around the heads. `browser` emits the page
+  and needs the `lsp` head, which the page saves through. Leave it out for a
+  server you connect to from your own host.
 - Leave `--name` off on a terminal and `init` asks instead, then prints the
   command it composed.
 
@@ -49,6 +56,25 @@ npm test         # the server's tests, starting with one that composes your serv
 ```
 
 Each package's own README describes the files `init` wrote there.
+
+## Open it in a browser
+
+```bash
+npm --prefix host-browser start
+```
+
+Open the URL `npm start` prints. The page shows the starter files in an editor
+with diagnostics, the diagram of `nodes.my-lang`, and a line read through the
+data head. Edit a file and press Save: the worker keeps the file in the
+browser's storage, so it survives a reload.
+
+```bash
+npm --prefix host-browser run test:e2e:install   # once: the Chromium the smoke test drives
+npm --prefix host-browser run test:e2e
+```
+
+The smoke test checks the same things and fails on any console error. It
+serves the page itself, so stop `npm start` first.
 
 ## Validate a model
 

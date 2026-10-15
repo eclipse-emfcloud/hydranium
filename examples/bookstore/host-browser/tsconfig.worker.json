@@ -1,0 +1,16 @@
+// The worker's half: the heads run in a worker, which has no DOM, and the
+// worker and DOM libraries declare conflicting globals, so the page is a
+// project of its own. esbuild emits, so this only type-checks.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "WebWorker"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": []
+  },
+  "files": ["src/worker.ts"]
+}

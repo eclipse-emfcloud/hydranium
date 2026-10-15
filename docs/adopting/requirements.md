@@ -81,6 +81,10 @@ The declarations of Langium and its LSP stack use `NoInfer`, which TypeScript
 an older compiler reports, but those types then resolve to an error type.
 Nothing in your install enforces this floor.
 
+The `client/` package `init` emits with a diagram needs TypeScript 5.8. It is
+CommonJS, as GLSP's client is, and requires the ES protocol package, which
+TypeScript allows from 5.8 under `nodenext`.
+
 ## A resolver that reads `exports`
 
 Every 9.x release of `vscode-jsonrpc` ships an `exports` map and no `main` or
@@ -174,8 +178,11 @@ send by method name on the connections they create. A connection your code
 creates or hands over is yours to cover:
 
 - **Wherever you hand GLSP a connection,** wrap it with `sendByMethodName` from
-  `@hydranium/protocol`. Its return type matches what the receiver expects,
-  such as GLSP's `connectionProvider`, so you need no cast.
+  `@hydranium/protocol`. Its return type matches what the receiver expects, so
+  you need no cast. For a GLSP client's `connectionProvider`, use
+  `glspConnection` from `@hydranium/glsp-client`, which wraps it the same way:
+  that option is a union, which older TypeScript versions cannot infer the
+  wrapper's type from.
 - **In VS Code,** override `createConnection` on GLSP's
   `SocketGlspVscodeServer`. Build the socket connection with
   `createMessageConnection(reader, writer, logger)` and return it wrapped in

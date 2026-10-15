@@ -1,0 +1,34 @@
+{
+  "name": "@hydranium/bookstore-client",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The host-neutral client side of the Bookstore language: what every host of it mounts.",
+  "license": "UNLICENSED",
+  "author": "",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "lint": "oxlint --report-unused-disable-directives --format stylish --config ../../../oxlint.config.cjs src --max-warnings 0",
+    "watch": "tsc -b --watch"
+  },
+  "dependencies": {
+    "@eclipse-glsp/client": "2.7.0",
+    "@hydranium/bookstore-protocol": "0.0.0",
+    "@hydranium/glsp-client": "^1.0.0-next",
+    "@vscode/codicons": "0.0.45",
+    "inversify": "^6.1.3"
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

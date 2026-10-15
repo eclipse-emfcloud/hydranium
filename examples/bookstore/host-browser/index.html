@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+   <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>Bookstore</title>
+      <!-- The stylesheets Monaco and GLSP import, which esbuild writes beside the page bundle. -->
+      <link rel="stylesheet" href="./out/page.css" />
+      <style>
+         html,
+         body {
+            height: 100%;
+            margin: 0;
+         }
+         body {
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr) auto;
+            font-family: system-ui, sans-serif;
+            font-size: 13px;
+         }
+         header,
+         .toolbar {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            padding: 6px 12px;
+         }
+         header {
+            border-bottom: 1px solid #d6d8d9;
+         }
+         h1 {
+            margin: 0;
+            font-size: 15px;
+         }
+         main {
+            display: flex;
+            min-height: 0;
+         }
+         main > section {
+            display: flex;
+            flex: 1 1 0;
+            flex-direction: column;
+            min-width: 0;
+         }
+         main > section[hidden] {
+            display: none;
+         }
+         #editor {
+            flex: 1 1 auto;
+            min-height: 0;
+         }
+         /* The diagram needs a height, `position: relative` for its tool palette, and its `<svg>` sized to it. */
+         #diagram {
+            position: relative;
+            flex: 1 1 auto;
+            min-height: 0;
+            border-left: 1px solid #d6d8d9;
+            touch-action: none;
+         }
+         #diagram svg {
+            width: 100%;
+            height: 100%;
+         }
+         /* The copy sprotty measures shapes in: a zero-sized box whose overflow otherwise covers the page and takes its clicks. */
+         body > .sprotty-hidden {
+            pointer-events: none;
+            overflow: hidden;
+         }
+         /* GLSP's stylesheet leaves shapes at the SVG defaults: a black fill, and no stroke on an edge. */
+         .sprotty-node {
+            fill: #eef3f9;
+            stroke: #4a6fa5;
+         }
+         .sprotty-edge {
+            fill: none;
+            stroke: #4a6fa5;
+         }
+         footer {
+            border-top: 1px solid #d6d8d9;
+         }
+         #data-status {
+            margin: 0;
+            padding: 6px 12px;
+         }
+         #log {
+            height: 120px;
+            margin: 0;
+            padding: 6px 12px;
+            overflow: auto;
+            font-family: ui-monospace, monospace;
+            font-size: 12px;
+         }
+      </style>
+   </head>
+   <body>
+      <header>
+         <h1>Bookstore</h1>
+         <span id="status">starting…</span>
+      </header>
+      <!-- Each pane stays hidden until the page part for its head fills it. -->
+      <main>
+         <section id="editor-pane" hidden>
+            <div class="toolbar">
+               <select id="file" aria-label="File"></select>
+               <button id="save" type="button">Save</button>
+            </div>
+            <div id="editor"></div>
+         </section>
+         <section id="diagram-pane" hidden>
+            <div id="diagram"></div>
+         </section>
+      </main>
+      <footer>
+         <p id="data-status" hidden></p>
+         <pre id="log" aria-label="Log"></pre>
+      </footer>
+      <script src="./out/page.js"></script>
+   </body>
+</html>

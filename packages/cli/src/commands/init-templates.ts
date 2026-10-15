@@ -25,6 +25,9 @@
  * - `__PROTOCOL_PACKAGE__` — the protocol member's package name, scope
  *   included, which the server and every client import ids and wire types
  *   from.
+ * - `__SERVER_PACKAGE__` / `__CLIENT_PACKAGE__` — the server and client
+ *   members' package names, which a host imports the language and the diagram
+ *   definition from.
  *
  * GRAMMAR tokens, substituted once per grammar:
  *
@@ -34,6 +37,8 @@
  * - `__GRAMMAR_ID__` — kebab grammar id: the `.langium` filename.
  * - `__GRAMMAR_ID_CONST__` — SCREAMING_SNAKE grammar id, prefixing the
  *   diagram's type-id constants.
+ * - `__GRAMMAR_CAMEL__` — lowerCamelCase grammar name, naming the client's
+ *   diagram module constant.
  * - `__LANGUAGE_ID__` — kebab routing key: the `langium-config` entry id and
  *   its TextMate output.
  * - `__EXTENSION__` — the grammar's FIRST file extension, without the dot.
@@ -54,11 +59,12 @@
  * generator emits `interface <projectName>Element` as the base type every rule
  * extends, which a rule of that name would collide with.
  *
- * The project is two packages and a starter workspace, each in its own
+ * The project is its packages and a starter workspace, each in its own
  * directory: `server/` (the grammar, the language and its heads), `protocol/`
  * (what the server and its clients both import, so a client never installs
- * Langium), and `workspace/` (starter model files every host and the CLI
- * open). A standalone project adds a root manifest naming them as npm
+ * Langium), `client/` with a diagram (its host-neutral client side),
+ * `host-<name>/` per host, and `workspace/` (starter model files every host
+ * and the CLI open). A standalone project adds a root manifest naming them as npm
  * workspaces; a workspace member joins the surrounding root instead.
  *
  * A file that is fixed text with tokens lives in the `templates/` tree the
@@ -88,7 +94,7 @@
 
 import { readFileSync } from 'node:fs';
 import { readCliVersion } from '../cli-version.js';
-import type { InitComposition, InitFile, InitGrammarNames, InitHead, InitMember } from './init.js';
+import { type InitComposition, type InitFile, type InitGrammarNames, type InitHead, type InitMember, initMembers } from './init.js';
 import type { JsonValue } from './init-workspace.js';
 
 /** One template file: its path (tokens allowed) and its content (tokens allowed). */
@@ -169,7 +175,9 @@ function project(text: string, composition: InitComposition): string {
       .replace(/__NAME__/g, composition.name)
       .replace(/__PROJECT_ID__/g, composition.projectId)
       .replace(/__CONFIG_ROOT_CONST__/g, screamingSnake(composition.projectId))
-      .replace(/__PROTOCOL_PACKAGE__/g, memberPackageName(composition, 'protocol'));
+      .replace(/__PROTOCOL_PACKAGE__/g, memberPackageName(composition, 'protocol'))
+      .replace(/__SERVER_PACKAGE__/g, memberPackageName(composition, 'server'))
+      .replace(/__CLIENT_PACKAGE__/g, memberPackageName(composition, 'client'));
 }
 
 /**
@@ -184,6 +192,7 @@ function grammarTier(text: string, grammar: InitGrammarNames): string {
    return text
       .replace(/__GRAMMAR_ID_CONST__/g, screamingSnake(grammar.grammarId))
       .replace(/__GRAMMAR_ID__/g, grammar.grammarId)
+      .replace(/__GRAMMAR_CAMEL__/g, grammar.grammar.charAt(0).toLowerCase() + grammar.grammar.slice(1))
       .replace(/__GRAMMAR__/g, grammar.grammar)
       .replace(/__LANGUAGE_ID__/g, grammar.languageId)
       .replace(/__EXTENSION__/g, grammar.extensions[0])
@@ -330,22 +339,67 @@ const PROTOCOL_THIRD_PARTY_DEPENDENCIES: Record<InitHead, Readonly<Record<string
    glsp: { '@eclipse-glsp/protocol': '2.7.0' }
 };
 
+/** The client member's packages: the diagram definition and what it registers its elements with. */
+const CLIENT_FRAMEWORK_DEPENDENCIES: readonly string[] = ['@hydranium/glsp-client'];
+const CLIENT_THIRD_PARTY_DEPENDENCIES: Readonly<Record<string, string>> = {
+   '@eclipse-glsp/client': '2.7.0',
+   // GLSP's client imports this package's stylesheet without declaring it, so
+   // a page bundling the diagram does not build without it.
+   '@vscode/codicons': '0.0.45',
+   inversify: '^6.1.3'
+};
+
 /**
- * The exact pins of `heads`, for a workspace root to declare too. npm installs a
- * root's own dependencies at the top of the tree, so another member's version of
- * one nests beneath that member instead of taking the place of the copy this
- * package shares with the framework.
+ * What each head adds to the browser host, which bundles the server into its
+ * worker and the head's client into its page. `base` is the LSP head's, which
+ * the host requires.
+ *
+ * `monaco-editor-core` is exact for the reason `langium` is: Monaco's models
+ * live in one copy, and `@hydranium/client-browser` must reach the page's.
  */
-export function workspaceRootPins(heads: readonly InitHead[]): ReadonlyArray<readonly [string, string]> {
-   return [
+const HOST_BROWSER_FRAMEWORK_DEPENDENCIES: Record<InitHead | 'base', readonly string[]> = {
+   base: ['@hydranium/client-browser', '@hydranium/core', '@hydranium/protocol'],
+   lsp: [],
+   data: ['@hydranium/data-server'],
+   glsp: ['@hydranium/glsp-client', '@hydranium/glsp-server']
+};
+const HOST_BROWSER_THIRD_PARTY_DEPENDENCIES: Record<InitHead | 'base', Readonly<Record<string, string>>> = {
+   base: { 'monaco-editor-core': '0.56.0', 'vscode-jsonrpc': '9.0.0', 'vscode-languageserver-protocol': '3.18.1' },
+   lsp: {},
+   data: {},
+   glsp: { '@eclipse-glsp/server': '2.7.0', 'reflect-metadata': '~0.2.2' }
+};
+
+/** The browser host's tools: the bundler, the smoke tier and the type check. */
+const HOST_BROWSER_DEV_DEPENDENCIES: Readonly<Record<string, string>> = {
+   '@playwright/test': '^1.55.0',
+   '@types/node': '^22.0.0',
+   esbuild: '^0.28.0',
+   rimraf: '^5.0.0',
+   typescript: '^7.0.2'
+};
+
+/**
+ * The exact pins of every member the composition emits, for a workspace root
+ * to declare too. npm installs a root's own dependencies at the top of the
+ * tree, so another member's version of one nests beneath that member instead of
+ * taking the place of the copy this package shares with the framework.
+ */
+export function workspaceRootPins(composition: InitComposition): ReadonlyArray<readonly [string, string]> {
+   const { heads } = composition;
+   const members = initMembers(heads, composition.hosts);
+   const pins = new Map([
       ...Object.entries(HEAD_THIRD_PARTY_DEPENDENCIES.base),
       ...heads.flatMap(head => [
          ...Object.entries(HEAD_THIRD_PARTY_DEPENDENCIES[head]),
          ...Object.entries(PROTOCOL_THIRD_PARTY_DEPENDENCIES[head])
-      ])
-   ]
-      .filter(([, version]) => /^\d+\.\d+\.\d+$/.test(version))
-      .sort(([left], [right]) => left.localeCompare(right));
+      ]),
+      ...(members.includes('client') ? Object.entries(CLIENT_THIRD_PARTY_DEPENDENCIES) : []),
+      ...(members.includes('host-browser')
+         ? (['base', ...heads] as const).flatMap(head => Object.entries(HOST_BROWSER_THIRD_PARTY_DEPENDENCIES[head]))
+         : [])
+   ]);
+   return [...pins].filter(([, version]) => /^\d+\.\d+\.\d+$/.test(version)).sort(([left], [right]) => left.localeCompare(right));
 }
 
 /** Whether an npm version is 11.6.0 or later, the first that installs `vitest` 4.1's peer set; `11.6.0-rc.1` is earlier. */
@@ -691,7 +745,9 @@ function tsconfigJson(
               ...compilerOptions.filter(([key, value]) => !PACKAGE_LOCAL_OPTIONS.includes(key) && !optionEquals(key, base[key], value))
            ];
    const extendsLine = workspace?.baseTsconfig === undefined ? '' : `  "extends": "${workspace.baseTsconfig}",\n`;
-   const body = options.map(([key, value]) => `    "${key}": ${JSON.stringify(value)}`).join(',\n');
+   // An array spaced as a formatter writes it, which `JSON.stringify` does not.
+   const json = (value: JsonValue): string => (Array.isArray(value) ? `[${value.map(json).join(', ')}]` : JSON.stringify(value));
+   const body = options.map(([key, value]) => `    "${key}": ${json(value)}`).join(',\n');
    const referencesLine = references === '' ? '' : `,\n  "references": ${references}`;
    return `{\n${extendsLine}  "compilerOptions": {\n${body}\n  },\n  "include": ${include}${referencesLine}\n}\n`;
 }
@@ -1029,7 +1085,7 @@ const SHEBANG = '#!/usr/bin/env node\n';
  */
 function mainFile(composition: InitComposition): string {
    const columns = columnsFor(composition);
-   const roots = [...composition.grammars.map(grammar => grammar.entryRule)].sort();
+   const roots = composition.grammars.map(grammar => grammar.entryRule).sort();
    const upper = screamingSnake(composition.projectId);
    const lsp = composition.heads.includes('lsp');
    const data = composition.heads.includes('data');
@@ -1256,7 +1312,7 @@ ${portImports === '' ? '' : '\n' + portImports}${lsp ? lspStart : socketStart}${
  */
 function dataServerMainFile(composition: InitComposition): string {
    const columns = columnsFor(composition);
-   const roots = [...composition.grammars.map(grammar => grammar.entryRule)].sort();
+   const roots = composition.grammars.map(grammar => grammar.entryRule).sort();
    const plural = roots.length > 1 ? 's' : '';
 
    const text = `${SHEBANG}// Standalone entry point: a data-server head on **stdio**, with no LSP head in
@@ -2109,6 +2165,452 @@ function workspaceFiles(composition: InitComposition): InitFile[] {
    ]);
 }
 
+/** The client member's compiler options: the protocol's, with the DOM its diagram renders into. */
+const CLIENT_COMPILER_OPTIONS: ReadonlyArray<readonly [string, JsonValue]> = [
+   ['target', 'ES2022'],
+   ['lib', ['ES2022', 'DOM']],
+   ['module', 'NodeNext'],
+   ['moduleResolution', 'NodeNext'],
+   ['rootDir', 'src'],
+   ['outDir', 'lib'],
+   ['strict', true],
+   ['skipLibCheck', true],
+   ['declaration', true],
+   ['types', []],
+   // A base that sets it fails every `import` in this CommonJS member.
+   ['verbatimModuleSyntax', false]
+];
+
+/**
+ * The client member's `package.json`.
+ *
+ * CommonJS, unlike its siblings, as GLSP's client is: inversify ships an ES
+ * build and a CommonJS one, so an ES module here would load the first while
+ * GLSP's client loads the second, giving a page two containers' worth of
+ * classes. Node from 22.12 and `tsc` under `nodenext` both let it require the
+ * ES protocol member.
+ */
+function clientPackageJson(composition: InitComposition): string {
+   const dependencies: Record<string, string> = {
+      [memberPackageName(composition, 'protocol')]: MEMBER_PIN,
+      ...CLIENT_THIRD_PARTY_DEPENDENCIES
+   };
+   for (const framework of CLIENT_FRAMEWORK_DEPENDENCIES) {
+      dependencies[framework] = frameworkPin(composition);
+   }
+   return `{
+  "name": "${memberPackageName(composition, 'client')}",
+  "version": "0.0.0",
+${composition.packaging.private ? '  "private": true,\n' : ''}  "description": "The host-neutral client side of the ${composition.name} language: what every host of it mounts.",
+  "license": "UNLICENSED",
+  "author": "",
+  "files": [
+    "lib",
+    "src"
+  ],
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+${lintScript(forMember(composition, 'client'), 'src')}    "watch": "tsc -b --watch"
+  },
+  "dependencies": {
+${sortedBlock(dependencies, '    ')}
+  },
+  "devDependencies": {
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
+`;
+}
+
+/** The client member's README. */
+function clientReadme(composition: InitComposition): string {
+   const diagrams = composition.grammars.filter(grammar => grammar.diagram);
+   const lines = [
+      `# ${memberPackageName(composition, 'client')}`,
+      '',
+      'The host-neutral client side of the __NAME__ language: what every host of it',
+      'mounts, whatever that host is. It reads the element ids from the protocol',
+      'package and never depends on the server.',
+      '',
+      ...diagrams.map(
+         grammar =>
+            `- \`src/${grammar.grammarId}-diagram-module.ts\` — the \`${grammar.grammar}\` diagram: a registration per element type, its container module, and \`initialize${grammar.grammar}DiagramContainer\``
+      ),
+      '- `src/index.ts` — the package root, re-exporting each module',
+      '',
+      'A host builds a diagram container with the initializer, passing its own',
+      'modules: they go first and the diagram definition last, since GLSP gives an',
+      'element type to whichever module registered it last.',
+      ''
+   ];
+   return project(lines.join('\n'), composition);
+}
+
+/** The client member's root entry, one re-export per diagram module. */
+function clientIndexFile(composition: InitComposition): string {
+   const modules = composition.grammars.filter(grammar => grammar.diagram).map(grammar => `./${grammar.grammarId}-diagram-module.js`);
+   return `// What every host of the ${composition.name} language mounts.
+
+${modules.map(module => `export * from '${module}';`).join('\n')}
+`;
+}
+
+/**
+ * The client member: the host-neutral client side of the language, emitted
+ * when there is a diagram to define. Each host mounts it rather than defining
+ * the diagram again.
+ */
+function clientFiles(composition: InitComposition): InitFile[] {
+   return [
+      { path: 'client/package.json', content: clientPackageJson(composition) },
+      {
+         path: 'client/tsconfig.json',
+         content: tsconfigJson(forMember(composition, 'client'), CLIENT_COMPILER_OPTIONS, '["src"]', '[{ "path": "../protocol" }]')
+      },
+      ignoreFile('client'),
+      { path: 'client/README.md', content: clientReadme(composition) },
+      { path: 'client/src/index.ts', content: clientIndexFile(composition) },
+      ...composition.grammars
+         .filter(grammar => grammar.diagram)
+         .map(grammar => grammarTemplate('client/src/__GRAMMAR_ID__-diagram-module.ts', composition, grammar))
+   ];
+}
+
+/**
+ * The browser host's `package.json`. Always private: it is an application,
+ * which nothing installs as a dependency.
+ */
+function hostBrowserPackageJson(composition: InitComposition): string {
+   const dependencies: Record<string, string> = {
+      [memberPackageName(composition, 'protocol')]: MEMBER_PIN,
+      [memberPackageName(composition, 'server')]: MEMBER_PIN,
+      ...(composition.heads.includes('glsp') ? { [memberPackageName(composition, 'client')]: MEMBER_PIN } : {})
+   };
+   for (const head of ['base', ...composition.heads] as const) {
+      Object.assign(dependencies, HOST_BROWSER_THIRD_PARTY_DEPENDENCIES[head]);
+      for (const framework of HOST_BROWSER_FRAMEWORK_DEPENDENCIES[head]) {
+         dependencies[framework] = frameworkPin(composition);
+      }
+   }
+   return `{
+  "name": "${memberPackageName(composition, 'host-browser')}",
+  "version": "0.0.0",
+  "private": true,
+  "description": "${composition.name} in a browser page, with every head in a web worker and no backend.",
+  "license": "UNLICENSED",
+  "author": "",
+  "type": "module",
+  "scripts": {
+    "build": "npm run typecheck && node esbuild.mjs",
+    "clean": "rimraf out test-results playwright-report",
+${lintScript(forMember(composition, 'host-browser'), 'src test')}    "start": "node esbuild.mjs --serve",
+    "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
+    "test:e2e:install": "playwright install chromium",
+    "typecheck": "tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.page.json && tsc --noEmit -p tsconfig.e2e.json"
+  },
+  "dependencies": {
+${sortedBlock(dependencies, '    ')}
+  },
+  "devDependencies": {
+${sortedBlock(HOST_BROWSER_DEV_DEPENDENCIES, '    ')}
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}
+`;
+}
+
+/** The workspace URI of a grammar's first starter file, as a template literal over `WORKSPACE_ROOT_URI`. */
+function starterUri(grammar: InitGrammarNames): string {
+   return `\`\${WORKSPACE_ROOT_URI}/nodes.${grammar.extensions[0]}\``;
+}
+
+/**
+ * The worker hosting the heads: every head over the one store, with the
+ * workspace seeded from `../workspace` and saved files kept in IndexedDB.
+ */
+function hostWorkerFile(composition: InitComposition): string {
+   const columns = columnsFor(composition);
+   const data = composition.heads.includes('data');
+   const glsp = composition.heads.includes('glsp');
+   const diagrams = composition.grammars.filter(grammar => grammar.diagram);
+   const roots = composition.grammars.map(grammar => grammar.entryRule).sort();
+   const serverSymbols = [`create${composition.name}Services`, ...diagrams.map(grammar => `${grammar.grammar}DiagramModule`)].sort(
+      (left, right) => left.localeCompare(right)
+   );
+
+   const imports = [
+      ...(glsp
+         ? [
+              '// First, before any class carrying a decorator loads: GLSP reads the metadata',
+              '// its decorators emit as each class is defined.',
+              "import 'reflect-metadata';",
+              "import { ServerModule } from '@eclipse-glsp/server/browser.js';"
+           ]
+         : []),
+      "import { persistentFileSystem } from '@hydranium/core';",
+      importList(['hostHeadsInWorker', 'IndexedDbFileSystemStore', 'startLanguageServerInWorker'], '@hydranium/core/browser', columns),
+      ...(data
+         ? [
+              "import { DataServer } from '@hydranium/data-server';",
+              "import { startDataServerInWorker } from '@hydranium/data-server/browser';"
+           ]
+         : []),
+      ...(glsp
+         ? [
+              "import { GlspClientLogger, HydraniumGlspAppModule } from '@hydranium/glsp-server';",
+              "import { startGlspServerInWorker } from '@hydranium/glsp-server/browser';"
+           ]
+         : []),
+      ...(data ? [importList(roots, memberPackageName(composition, 'protocol'), columns, true)] : []),
+      importList(serverSymbols, memberPackageName(composition, 'server'), columns),
+      "import { WORKSPACE_ROOT_URI } from './workspace.js';"
+   ];
+
+   const lspCall = `startLanguageServerInWorker(ports.lsp, connection => create${composition.name}Services({ connection, ...fileSystem }).shared);`;
+   const startLsp =
+      `      const shared = ${lspCall}`.length <= columns
+         ? `const shared = ${lspCall}`
+         : `const shared = startLanguageServerInWorker(
+         ports.lsp,
+         connection => create${composition.name}Services({ connection, ...fileSystem }).shared
+      );`;
+   const dataServer = `connection => new DataServer<${roots.join(' | ')}>(connection, shared)`;
+   const dataCall = `startDataServerInWorker(ports.data, shared, ${dataServer});`;
+   const dataHead = data
+      ? `
+      // The data head serves from the LSP head's store, on its own port.
+      ${
+         `      ${dataCall}`.length <= columns
+            ? dataCall
+            : `startDataServerInWorker(
+         ports.data,
+         shared,
+         ${dataServer}
+      );`
+      }`
+      : '';
+   const glspHead = glsp
+      ? `
+      const glsp = startGlspServerInWorker({
+         context: ports.glsp,
+         createLogger: caller => new GlspClientLogger(shared, { component: caller }),
+         serverModule: new ServerModule()${diagrams.map(grammar => `.configureDiagramModule(new ${grammar.grammar}DiagramModule())`).join('')},
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      // The GLSP head reports a failed start through \`started\`, which the
+      // ready message waits for.
+      return { shared, started: [glsp.started] };`
+      : `
+      return shared;`;
+
+   const text = `// The worker hosting the heads: every head over one store, in the browser and
+// with no backend. The page reaches each head over a \`MessagePort\` of its own.
+
+${imports.join('\n')}
+
+/** The files of \`../workspace\`, read by \`esbuild.mjs\` and keyed by their path below the root. */
+declare const __WORKSPACE_SEED__: Record<string, string>;
+/** This project's directory, hashed by \`esbuild.mjs\`, so that no other project on the origin opens its store. */
+declare const __DIRECTORY_KEY__: string;
+
+// A saved file is kept in IndexedDB and laid over the seed on the next load;
+// the heads start once the stored files are restored.
+const store = new IndexedDbFileSystemStore(\`__PROJECT_ID__-workspace-\${__DIRECTORY_KEY__}\`);
+
+hostHeadsInWorker(
+   persistentFileSystem({ store, seed: __WORKSPACE_SEED__, rootUri: WORKSPACE_ROOT_URI }),
+   (ports, fileSystem) => {
+      // The LSP head composes the services, as the Node entry does around stdio.
+      ${startLsp}${dataHead}${glspHead}
+   },
+   // The ready message then carries the workspace files the page opens.
+   { rootUri: WORKSPACE_ROOT_URI }
+);
+`;
+   return project(text, composition);
+}
+
+/**
+ * The page, and the one place deciding which head's part of it runs: each
+ * part is a module of its own, and this calls the ones the heads serve.
+ */
+function hostPageFile(composition: InitComposition): string {
+   const data = composition.heads.includes('data');
+   const diagram = composition.grammars.find(grammar => grammar.diagram);
+   const parts = [
+      { module: './editor.js', name: 'startEditor', call: 'await startEditor(heads);' },
+      ...(data
+         ? [
+              {
+                 module: './data-status.js',
+                 name: 'showDataStatus',
+                 call: `await showDataStatus(heads.data, ${starterUri(composition.grammars[0])});`
+              }
+           ]
+         : []),
+      ...(diagram === undefined
+         ? []
+         : [{ module: './diagram.js', name: 'mountDiagram', call: `await mountDiagram(heads.glsp, ${starterUri(diagram)}, logger);` }])
+   ];
+   const imports = [
+      ...parts.map(part => `import { ${part.name} } from '${part.module}';`),
+      "import { appendLog, setStatus } from './log.js';",
+      ...(parts.length > 1 ? ["import { WORKSPACE_ROOT_URI } from './workspace.js';"] : [])
+   ].sort((left, right) => left.slice(left.indexOf("'")).localeCompare(right.slice(right.indexOf("'"))));
+
+   return `// The page: it starts the worker, hands each head a channel of its own, and
+// fills the pane of each head the server runs, one after the other.
+
+import { connectWorkerHeads } from '@hydranium/client-browser';
+import { ConsoleLogger, describeError } from '@hydranium/protocol';
+${imports.join('\n')}
+
+/** Where the worker bundle is served, substituted by \`esbuild.mjs\`. */
+declare const __WORKER_BUNDLE_URL__: string;
+
+async function main(): Promise<void> {
+   // The page's end of each head's connection logs to the browser console.
+   const logger = new ConsoleLogger();
+   const heads = connectWorkerHeads(new Worker(__WORKER_BUNDLE_URL__), { logger });
+   heads.onWorkerError(report => appendLog(\`worker error during \${report.phase}: \${report.message}\`));
+   setStatus('starting…');
+${parts.map(part => `   ${part.call}`).join('\n')}
+   setStatus('ready');
+}
+
+main().catch((error: unknown) => setStatus(\`failed: \${describeError(error)}\`));
+`;
+}
+
+/** The smoke test: what each head shows on the page, and an edit that survives a reload. */
+function hostSmokeSpec(composition: InitComposition): string {
+   const data = composition.heads.includes('data');
+   const diagram = composition.grammars.some(grammar => grammar.diagram);
+   const primary = composition.grammars[0];
+   const checks = [
+      ...(data
+         ? [
+              '   // The data head reads the document out of the same store.',
+              `   await expect(page.locator('#data-status')).toHaveText('data head: nodes.${primary.extensions[0]} holds a ${primary.entryRule}');`
+           ]
+         : []),
+      ...(diagram ? ['   // The two starter nodes, drawn.', "   await expect(page.locator('#diagram .sprotty-node')).toHaveCount(2);"] : [])
+   ];
+   return `// The page loads with every head answering, and an edit saved through the
+// LSP head is still there after a reload. Any console error fails it.
+
+import { expect, test } from '@playwright/test';
+
+test('loads every head and keeps a saved edit across a reload', async ({ page }) => {
+   const errors: string[] = [];
+   page.on('pageerror', error => errors.push(error.message));
+   page.on('console', message => {
+      if (message.type() === 'error') {
+         errors.push(message.text());
+      }
+   });
+   const editor = page.locator('#editor .view-lines');
+
+   await page.goto('/');
+   await expect(page.locator('#status')).toHaveText('ready');
+   await expect(editor).toContainText('node First');
+${checks.join('\n')}${checks.length > 0 ? '\n' : ''}
+   await editor.click();
+   await page.keyboard.press('ControlOrMeta+End');
+   await page.keyboard.type('\\nnode Added');
+   await page.locator('#save').click();
+   await expect(page.locator('#status')).toHaveText('saved 1 file(s)');
+
+   await page.reload();
+   await expect(page.locator('#status')).toHaveText('ready');
+   await expect(editor).toContainText('node Added');
+   expect(errors).toEqual([]);
+});
+`;
+}
+
+/** The browser host's README. */
+function hostBrowserReadme(composition: InitComposition): string {
+   const data = composition.heads.includes('data');
+   const diagram = composition.grammars.find(grammar => grammar.diagram);
+   const lines = [
+      `# ${memberPackageName(composition, 'host-browser')}`,
+      '',
+      '__NAME__ in a browser page: every head runs in a web worker, with no backend',
+      'and no Node runtime. The page saves through the LSP head, and the worker',
+      'keeps each saved file in IndexedDB, laid over `../workspace` on the next',
+      'load.',
+      '',
+      '```bash',
+      'npm run build              # type-check and bundle into out/',
+      'npm start                  # serve the page at the URL it prints, rebundled on every source change',
+      'npm run test:e2e:install   # download the Chromium the smoke test drives, once',
+      'npm run test:e2e           # the smoke test, which serves the page itself',
+      '```',
+      '',
+      '`PORT` moves the page to another port, for `npm start` and the smoke test alike;',
+      'stop `npm start` before the smoke test, or give one of them another port.',
+      '`npm start` reads `../workspace` once, so restart it after editing a file',
+      'there.',
+      '',
+      '## Layout',
+      '',
+      '- `index.html` — the page, with a pane for each head that stays hidden until its part fills it',
+      '- `esbuild.mjs` — bundles the page, the worker and Monaco’s worker, reading `../workspace` in as the seed',
+      '- `src/worker.ts` — the worker: the heads over one store, seeded and persisted',
+      '- `src/page.ts` — starts the worker and runs the part of the page each head serves',
+      '- `src/editor.ts` — the LSP part: a Monaco editor, the file switch and Save',
+      ...(data ? ['- `src/data-status.ts` — the data part: one document read through the data head'] : []),
+      ...(diagram === undefined
+         ? []
+         : [`- \`src/diagram.ts\` — the GLSP part: the \`${diagram.grammar}\` diagram, defined in the client package`]),
+      '- `src/log.ts` — the status line and the log area',
+      '- `src/workspace.ts` — the workspace root URI both ends name',
+      '- `src/monaco-editor-worker.ts` — Monaco’s own worker, which hosts no head',
+      '- `src/posix-path-shim.ts` — the `path` function the framework imports, for the bundle',
+      '- `test/smoke.spec.mts` — the page loads, each head answers, and a saved edit survives a reload',
+      ''
+   ];
+   return project(lines.join('\n'), composition);
+}
+
+/** The browser host: a page and a worker, bundled by esbuild and served as static files. */
+function hostBrowserFiles(composition: InitComposition): InitFile[] {
+   const fixed = (file: string): InitFile => projectTemplate(`host-browser/${file}`, composition);
+   const diagram = composition.grammars.find(grammar => grammar.diagram);
+   return [
+      { path: 'host-browser/package.json', content: hostBrowserPackageJson(composition) },
+      ignoreFile('host-browser'),
+      { path: 'host-browser/README.md', content: hostBrowserReadme(composition) },
+      fixed('index.html'),
+      fixed('esbuild.mjs'),
+      fixed('playwright.config.mts'),
+      fixed('tsconfig.worker.json'),
+      fixed('tsconfig.page.json'),
+      fixed('tsconfig.e2e.json'),
+      { path: 'host-browser/src/worker.ts', content: hostWorkerFile(composition) },
+      { path: 'host-browser/src/page.ts', content: hostPageFile(composition) },
+      fixed('src/editor.ts'),
+      ...(composition.heads.includes('data') ? [fixed('src/data-status.ts')] : []),
+      ...(diagram === undefined ? [] : [grammarTemplate('host-browser/src/diagram.ts', composition, diagram)]),
+      fixed('src/log.ts'),
+      fixed('src/workspace.ts'),
+      fixed('src/monaco-editor-worker.ts'),
+      fixed('src/monaco-editor-core-worker.d.ts'),
+      fixed('src/posix-path-shim.ts'),
+      { path: 'host-browser/test/smoke.spec.mts', content: hostSmokeSpec(composition) }
+   ];
+}
+
 /**
  * A standalone project's root: the members as npm workspaces.
  *
@@ -2116,20 +2618,30 @@ function workspaceFiles(composition: InitComposition): InitFile[] {
  * members. npm runs a script across the members in the order listed here, not
  * by their dependencies; listing protocol first is safe because its `build`
  * runs the server's `generate` before compiling.
+ *
+ * It declares the exact pins `--monorepo` prints for a workspace root, for the
+ * same reason: a package ranging over one, such as a framework package's peer,
+ * otherwise takes the top of the tree with the newest match, and each member's
+ * exact copy nests beneath it.
  */
 function rootFiles(composition: InitComposition): InitFile[] {
+   const pins = workspaceRootPins(composition).map(([name, version]) => `    "${name}": "${version}"`);
    const content = `{
   "name": "${composition.projectId}-root",
   "version": "0.0.0",
   "private": true,
   "workspaces": [
-    "protocol",
-    "server"
+${initMembers(composition.heads, composition.hosts)
+   .map(member => `    "${member}"`)
+   .join(',\n')}
   ],
   "scripts": {
     "build": "npm run build --workspaces",
     "clean": "npm run clean --workspaces --if-present",
     "test": "npm test --workspaces --if-present"
+  },
+  "devDependencies": {
+${pins.join(',\n')}
   },
   "engines": {
     "node": ">=22.13"
@@ -2149,6 +2661,8 @@ export function buildInitTemplates(composition: InitComposition): InitFile[] {
       ...(composition.packaging.workspace === undefined ? rootFiles(composition) : []),
       ...protocolFiles(composition),
       ...serverFiles(composition),
+      ...(composition.heads.includes('glsp') ? clientFiles(composition) : []),
+      ...(composition.hosts.includes('browser') ? hostBrowserFiles(composition) : []),
       ...workspaceFiles(composition)
    ];
 }

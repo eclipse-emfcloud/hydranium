@@ -89,7 +89,7 @@
   "devDependencies": {
     "@hydranium/langium": "1.0.0-next",
     "@hydranium/protocol": "1.0.0-next",
-    "@playwright/test": "^1.40.0",
+    "@playwright/test": "^1.55.0",
     "@types/diff": "^5.2.0",
     "fake-indexeddb": "^6.2.5",
     "rimraf": "^5.0.0",

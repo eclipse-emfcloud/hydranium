@@ -1,0 +1,25 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // The build type-checks the smoke tier too and bundles `../workspace` as
+    // the worker's seed. That directory is no npm workspace, so the inherited
+    // inputs miss it, and a model edit would replay a bundle of the old seed.
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "src/**/*",
+        "test/**/*",
+        "package.json",
+        "index.html",
+        "esbuild.mjs",
+        "playwright.config.mts",
+        "tsconfig.worker.json",
+        "tsconfig.page.json",
+        "tsconfig.e2e.json",
+        "$TURBO_ROOT$/examples/bookstore/workspace/**"
+      ],
+      "outputs": ["out/**"]
+    }
+  }
+}

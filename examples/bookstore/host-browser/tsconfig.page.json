@@ -1,0 +1,16 @@
+// The page's half, everything in `src` but the worker, with the DOM library.
+// esbuild emits, so this only type-checks.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": []
+  },
+  "include": ["src"],
+  "exclude": ["src/worker.ts"]
+}

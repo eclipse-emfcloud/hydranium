@@ -28,6 +28,7 @@
 
 import { assertRequired, exitWithUsage, helpRequested, printHelp, type UsageError } from './harness-args.js';
 import { isNonEmptyDir, runInit, type InitHead } from './init.js';
+import type { InitHost } from './init-hosts.js';
 import { createClackPrompt } from './init-prompt.js';
 import { runInitWizard } from './init-wizard.js';
 import { createNodeWorkspaceProbe, detectWorkspace } from './init-workspace.js';
@@ -46,6 +47,7 @@ export interface ParsedInitArgs {
    name?: string;
    force: boolean;
    heads?: InitHead[];
+   hosts?: InitHost[];
    monorepo: boolean;
    scope?: string;
    public: boolean;
@@ -62,6 +64,7 @@ export interface ParsedInitArgs {
 export const INIT_FLAGS: readonly string[] = [
    '--name',
    '--heads',
+   '--hosts',
    '--force',
    '--monorepo',
    '--scope',
@@ -76,7 +79,15 @@ export const INIT_FLAGS: readonly string[] = [
  * The subset that takes a value, so `--help` in a value position reads as data.
  * The rest are presence-only.
  */
-export const INIT_VALUE_FLAGS: readonly string[] = ['--name', '--heads', '--scope', '--grammar', '--extensions', '--language-id'];
+export const INIT_VALUE_FLAGS: readonly string[] = [
+   '--name',
+   '--heads',
+   '--hosts',
+   '--scope',
+   '--grammar',
+   '--extensions',
+   '--language-id'
+];
 
 /**
  * Parse `init`'s flags without deciding whether the result is complete.
@@ -94,6 +105,7 @@ export function parseInitArgs(args: string[], onError: UsageError = exitWithUsag
    let name: string | undefined;
    let force = false;
    let heads: InitHead[] | undefined;
+   let hosts: InitHost[] | undefined;
    let monorepo = false;
    let scope: string | undefined;
    let isPublic = false;
@@ -142,6 +154,9 @@ export function parseInitArgs(args: string[], onError: UsageError = exitWithUsag
             heads = next().split(',') as InitHead[];
             break;
          }
+         case '--hosts':
+            hosts = next().split(',') as InitHost[];
+            break;
          case '--force':
             force = true;
             break;
@@ -169,7 +184,7 @@ export function parseInitArgs(args: string[], onError: UsageError = exitWithUsag
             }
       }
    }
-   return { targetDir, name, force, heads, monorepo, scope, public: isPublic, grammars };
+   return { targetDir, name, force, heads, hosts, monorepo, scope, public: isPublic, grammars };
 }
 
 /**
@@ -180,17 +195,20 @@ export function parseInitArgs(args: string[], onError: UsageError = exitWithUsag
  * authoritative, and a flag missing from it is a capability nobody finds.
  */
 export const INIT_HELP: readonly string[] = [
-   'Usage: hydranium-cli init <target-dir> --name <Name> [--heads <list>] [--force]',
-   '                            [--monorepo] [--scope <@scope>] [--public]',
+   'Usage: hydranium-cli init <target-dir> --name <Name> [--heads <list>]',
+   '                            [--hosts <list>] [--force] [--monorepo]',
+   '                            [--scope <@scope>] [--public]',
    '                            ( --grammar <Name> [--extensions <list>]',
    '                                              [--language-id <id>] [--diagram] )...',
    '',
-   'Scaffold a new Hydranium language project end-to-end: two packages and a',
+   'Scaffold a new Hydranium language project end-to-end: its packages and a',
    'starter workspace, each in its own directory. server/ holds a starter grammar',
    'per --grammar, the `create<Name>Services` DI wiring, a launch of every head',
    'and build scripts; protocol/ holds what the server and its clients both',
-   'import; workspace/ holds two starter model files per grammar. A standalone',
-   'project also gets a root manifest naming the two packages as npm workspaces.',
+   'import; client/, with a diagram, holds its host-neutral client side;',
+   'host-<name>/ holds each --hosts application; workspace/ holds two starter',
+   'model files per grammar. A standalone project also gets a root manifest',
+   'naming the packages as npm workspaces.',
    'Does NOT run `npm install` or `langium generate` — those are printed as next',
    'steps. Refuses a non-empty directory without --force.',
    '',
@@ -208,6 +226,11 @@ export const INIT_HELP: readonly string[] = [
    '                        heads from a workspace path it is given and prints',
    '                        their ports. The emitted dependencies, main.ts and',
    '                        module bindings all follow this set. Default: lsp,data.',
+   '  --hosts <list>        Comma-separated host applications to emit around the',
+   '                        heads: browser, a page running every head in a web',
+   '                        worker, which needs lsp. Without it, the server with',
+   '                        its Node entry points, and with glsp the client/',
+   '                        package a host mounts.',
    '  --force               Scaffold into a non-empty directory anyway.',
    '  --monorepo            Scaffold the packages as members of the surrounding npm',
    '                        workspace, with no root of their own: each tsconfig',
@@ -219,12 +242,13 @@ export const INIT_HELP: readonly string[] = [
    '  --scope <@scope>      npm scope for the package names, e.g. @acme. Not inferred:',
    '                        a root manifest is usually named for the repo, not the',
    '                        scope. The wizard offers the siblings’ scope as a default.',
-   '  --public              Omit "private": true from the server and protocol',
-   '                        packages, so they can be published together. The',
-   '                        scaffold emits it by default, because the manifests',
-   '                        also declare license "UNLICENSED": a package granting',
-   '                        no rights on a public registry contradicts itself. Pass',
-   '                        this once the project has picked a licence.',
+   '  --public              Omit "private": true from the server, protocol and',
+   '                        client packages, so they can be published together;',
+   '                        a host package stays private. The scaffold emits it',
+   '                        by default, because the manifests also declare',
+   '                        license "UNLICENSED": a package granting no rights on',
+   '                        a public registry contradicts itself. Pass this once',
+   '                        the project has picked a licence.',
    '',
    'Grammar options — each applies to the PRECEDING --grammar:',
    '  --grammar <Name>      PascalCase GRAMMAR name; drives the `grammar X` declaration',
@@ -240,6 +264,10 @@ export const INIT_HELP: readonly string[] = [
    '                        `glsp` in --heads. Derived when there is exactly one',
    '                        grammar; required when there are several, because the',
    '                        scaffolded diagram is typed over one grammar’s model.',
+   '',
+   'Example — one grammar, three heads, in a browser page:',
+   '  hydranium-cli init ./bookstore --name Bookstore --heads lsp,data,glsp \\',
+   '    --hosts browser',
    '',
    'Example — three grammars, one with a differing extension, three heads:',
    '  hydranium-cli init ./order-flow --name OrderFlow --heads lsp,data,glsp \\',
@@ -270,6 +298,7 @@ export async function runInitCommand(args: string[]): Promise<void> {
       name: assertRequired(parsed.name, '--name', 'init'),
       grammars: parsed.grammars,
       heads: parsed.heads,
+      hosts: parsed.hosts,
       force: parsed.force,
       monorepo: parsed.monorepo,
       scope: parsed.scope,
