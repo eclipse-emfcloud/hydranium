@@ -66,6 +66,20 @@ export function onProcessEvent(event: ProcessEvent, handler: (...args: unknown[]
 }
 
 /**
+ * Whether a Node-like `process` exposes a writable standard error. A stricter
+ * test for Node than {@link processEnv}, since a bundler can shim
+ * `process.env` into a browser build without a writable stderr. `false`
+ * where reading the stderr throws, as a shim's getter can.
+ */
+export function hasProcessStderr(): boolean {
+   try {
+      return typeof process !== 'undefined' && !!process.stderr && typeof process.stderr.write === 'function';
+   } catch {
+      return false;
+   }
+}
+
+/**
  * Write already-formatted text to the process's standard error, when a
  * Node-like `process` exposes one. Returns `true` when the text was written and
  * `false` in a browser, so a caller can fall back to `console.*`.
@@ -77,7 +91,7 @@ export function onProcessEvent(event: ProcessEvent, handler: (...args: unknown[]
  * process inherits when it spawns a head as a child.
  */
 export function writeStderr(text: string): boolean {
-   if (typeof process === 'undefined' || !process.stderr || typeof process.stderr.write !== 'function') {
+   if (!hasProcessStderr()) {
       return false;
    }
    process.stderr.write(text);

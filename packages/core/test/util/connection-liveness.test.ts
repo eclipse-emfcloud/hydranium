@@ -82,6 +82,21 @@ describe('isConnectionGoneError', () => {
       expect(isConnectionGoneError(Object.assign(new Error('no such file'), { code: 'ENOENT' }))).toBe(false);
    });
 
+   it('answers false rather than throw for an error that throws when read', () => {
+      const { proxy, revoke } = Proxy.revocable({}, {});
+      revoke();
+      const throwingCode = Object.defineProperty(new Error('boom'), 'code', {
+         get: () => {
+            throw new Error('locked');
+         }
+      });
+
+      expect(isConnectionGoneError(proxy)).toBe(false);
+      expect(isConnectionGoneError(throwingCode)).toBe(false);
+      expect(isClientGoneError(proxy)).toBe(false);
+      expect(isClientGoneError(throwingCode)).toBe(false);
+   });
+
    it('does not match an unrelated "disposed" that is not about the connection', () => {
       // Anchoring on `connection` is what keeps a disposed document, model or
       // registry from being read as a dead peer.

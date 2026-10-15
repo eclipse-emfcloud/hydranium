@@ -168,11 +168,51 @@ describe('messageError', () => {
    });
 });
 
+/** A prototype-less object whose `Symbol.toStringTag` getter throws, so neither `String` nor its tag can describe it. */
+function throwingTag(): object {
+   const value: object = Object.create(null);
+   Object.defineProperty(value, Symbol.toStringTag, {
+      get(): never {
+         throw new Error('tag failed');
+      }
+   });
+   return value;
+}
+
+/** A stackless Error carrying `message` as given, which the type does not allow but a thrown value can. */
+function withMessage(message: unknown, cause?: unknown): Error {
+   const error = new Error('placeholder', { cause });
+   error.stack = undefined;
+   Object.defineProperty(error, 'message', { value: message });
+   return error;
+}
+
+/** A revoked proxy, on which `instanceof`, `String` and the tag all throw. */
+function revokedProxy(): object {
+   const { proxy, revoke } = Proxy.revocable({}, {});
+   revoke();
+   return proxy;
+}
+
 describe('describeError', () => {
    it('prefers an Error message and stringifies anything else', () => {
       expect(describeError(new Error('boom'))).toBe('boom');
       expect(describeError('boom')).toBe('boom');
       expect(describeError(undefined)).toBe('undefined');
+   });
+
+   it('describes a value String cannot convert by its tag rather than throwing', () => {
+      expect(describeError(Object.create(null))).toBe('[object Object]');
+   });
+
+   it('describes a value whose tag cannot be read either by its type', () => {
+      expect(describeError(throwingTag())).toBe('[object]');
+      expect(describeError(revokedProxy())).toBe('[object]');
+   });
+
+   it('returns a string for an Error whose message is not one', () => {
+      expect(describeError(withMessage(42))).toBe('42');
+      expect(describeError(withMessage(Object.create(null)))).toBe('[object Error]');
    });
 });
 
@@ -194,6 +234,49 @@ describe('describeErrorWithStack', () => {
       const cyclic = new Error('cyclic');
       cyclic.cause = cyclic;
       expect(describeErrorWithStack(cyclic)).toBe(cyclic.stack);
+   });
+
+   it('describes a cause String cannot convert by its tag rather than throwing', () => {
+      const error = new Error('boom', { cause: Object.create(null) });
+      expect(describeErrorWithStack(error)).toBe(`${error.stack}\nCaused by: [object Object]`);
+   });
+
+   it('describes a value whose tag cannot be read by its type, and keeps what it read before a throwing cause', () => {
+      expect(describeErrorWithStack(throwingTag())).toBe('[object]');
+      expect(describeErrorWithStack(revokedProxy())).toBe('[object]');
+      const error = new Error('boom');
+      Object.defineProperty(error, 'cause', {
+         get(): never {
+            throw new Error('cause failed');
+         }
+      });
+      expect(describeErrorWithStack(error)).toBe(error.stack);
+   });
+
+   it('describes an Error whose message String cannot convert, and still follows its cause', () => {
+      const cause = new Error('disk full');
+      const error = withMessage(Object.create(null), cause);
+      expect(describeErrorWithStack(error)).toBe(`[object Error]\nCaused by: ${cause.stack}`);
+   });
+
+   it('describes an Error whose stack throws when read, or when converted, by its message', () => {
+      const throwingStack = new Error('readable');
+      Object.defineProperty(throwingStack, 'stack', {
+         get(): never {
+            throw new Error('locked');
+         }
+      });
+      const unconvertibleStack = new Error('readable too');
+      Object.defineProperty(unconvertibleStack, 'stack', { value: Object.create(null) });
+      expect(describeErrorWithStack(throwingStack)).toBe('readable');
+      expect(describeErrorWithStack(unconvertibleStack)).toBe('readable too');
+   });
+
+   it('keeps an AggregateError whose errors are not a list, and its cause', () => {
+      const cause = new Error('dial failed');
+      const aggregate = new AggregateError([], 'none', { cause });
+      Object.defineProperty(aggregate, 'errors', { value: 42 });
+      expect(describeErrorWithStack(aggregate)).toBe(`${aggregate.stack}\nCaused by: ${cause.stack}`);
    });
 
    it('reads a null cause as none', () => {

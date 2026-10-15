@@ -375,8 +375,9 @@ fails a spec whose server log holds a `Warn` or `Error` line that
 `serverLogAllowlist` does not match; that allowlist is keyed by the reason
 each line is expected. The order-flow e2e fixtures set it. Unit and
 integration tiers inject faults on purpose, so their output is not gated. The
-check reads the server's log file, which Langium's own `console.error` lines
-do not reach.
+check reads the server's log file, which also receives what a Node server
+writes through `console.error`, `warn`, `info`, `log` and `debug` once its
+logger exists, such as Langium's linker and validator errors.
 
 ## Test support
 
