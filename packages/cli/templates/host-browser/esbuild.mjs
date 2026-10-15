@@ -73,7 +73,7 @@ const builds = await Promise.all([
 if (process.argv.includes('--serve')) {
    await Promise.all(builds.map(build => build.watch()));
    // On this machine only: the directory served holds the sources and `node_modules`.
-   const requested = Number(process.env.PORT ?? 4937);
+   const requested = Number(process.env.PORT || 4937);
    const { port } = await builds[0].serve({ host: 'localhost', servedir: root, port: requested });
    console.log(`Serving http://localhost:${port}`);
 } else {

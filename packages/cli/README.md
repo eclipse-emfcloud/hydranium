@@ -56,7 +56,8 @@ lists each command's flags.
 - **Scaffolding.** `init` writes a project you can build right away: a server
   package, a protocol package its clients share, a client package with a
   diagram, a browser page around the heads with `--hosts browser`, VS Code
-  extensions with `--hosts vscode`, and a starter workspace.
+  extensions with `--hosts vscode`, a Theia extension and browser application
+  with `--hosts theia-browser`, and a starter workspace.
 - **Grammar and workspace.** Boot your built head to reflect its grammar, lint
   it, write a model reference, validate a workspace, or count its AST nodes.
 - **Codegen.** `generate-transfer-model` turns the AST into a transfer model,

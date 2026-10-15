@@ -7,9 +7,9 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-// VS Code opens a copy of the starter workspace with this extension loaded,
-// the diagram file draws in its diagram editor, and the server reports a
-// reference that resolves to nothing.
+// VS Code opens a copy of the starter workspace with this extension loaded, the
+// data head reads the file, the diagram file draws in its diagram editor, and
+// the server reports a reference that resolves to nothing.
 
 import { _electron, expect, test, type Page } from '@playwright/test';
 import { downloadAndUnzipVSCode } from '@vscode/test-electron';
@@ -21,7 +21,7 @@ import { VSCODE_CACHE, VSCODE_VERSION } from './vscode-version.mts';
 
 const extensionRoot = fileURLToPath(new URL('..', import.meta.url));
 
-test('draws the diagram and reports a broken reference', async () => {
+test('reads the model, draws the diagram, and reports a broken reference', async () => {
    // A copy, since the server writes its repairs to the folder it opens, and a
    // fresh profile, since a reused one restores the last run's editors.
    const scratch = mkdtempSync(join(tmpdir(), 'bookstore-vscode-'));
@@ -47,6 +47,14 @@ test('draws the diagram and reports a broken reference', async () => {
       const page = await app.firstWindow();
       await expect(page.locator('.monaco-workbench')).toBeVisible();
       await quickOpen(page, 'nodes.bookstore');
+      // The data head reads the open file.
+      await page.keyboard.press('ControlOrMeta+Shift+P');
+      await page.locator('.quick-input-widget input').fill('>Bookstore: Show Model');
+      await page
+         .locator('.quick-input-list')
+         .getByRole('option', { name: /^Bookstore: Show Model(,|$)/ })
+         .click();
+      await expect(page.locator('.notification-toast').filter({ hasText: 'nodes.bookstore holds a BookstoreModel' })).toBeVisible();
 
       // The diagram file opens in its diagram, which draws the two starter nodes.
       const webview = page.frameLocator('iframe.webview.ready').frameLocator('#active-frame');

@@ -91,7 +91,11 @@ function scriptedPrompt(answers: readonly Answer[]): ScriptedPrompt {
 const BROWSER_HOST = 'Add a browser host (every head in a web worker, no backend)?';
 
 /** The VS Code host question's exact message. */
-const VSCODE_HOST = 'Add a VS Code extension (the language client, and a custom editor per diagram)?';
+const VSCODE_HOST = 'Add a VS Code extension (the language client, Show Model with the data head, and a custom editor per diagram)?';
+
+/** The Theia host question's exact message. */
+const THEIA_HOST =
+   'Add a Theia browser application (the language client, Show Model with the data head, and a diagram editor per diagram)?';
 
 /** The publishability question's exact message, asserted on paths that used not to reach it. */
 const PUBLISHABLE = 'Publishable to npm (the manifest says UNLICENSED)?';
@@ -195,7 +199,7 @@ describe('pascalCase', () => {
 
 describe('runInitWizard', () => {
    it('takes the derived defaults and asks nothing about a workspace when there is none', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, false, 'Bookstore', 'bookstore', false, false]);
+      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, false, false, 'Bookstore', 'bookstore', false, false]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore']);
@@ -214,7 +218,7 @@ describe('runInitWizard', () => {
     * early, and neither of them can be allowed to skip the question with it.
     */
    it('asks about publishability when no workspace was detected at all', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, false, 'Bookstore', 'bookstore', false, true]);
+      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, false, false, 'Bookstore', 'bookstore', false, true]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(prompt.asked).toContain(PUBLISHABLE);
@@ -222,7 +226,7 @@ describe('runInitWizard', () => {
    });
 
    it('asks about publishability when workspace membership was declined', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, false, 'Bookstore', 'bookstore', false, false, true]);
+      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, false, false, 'Bookstore', 'bookstore', false, false, true]);
       const argv = await runInitWizard(prompt, () => DETECTION, { targetDir: './bookstore', isOccupied: () => false });
 
       // The membership question was reached and declined, so the scope question
@@ -235,7 +239,7 @@ describe('runInitWizard', () => {
    });
 
    it('names each package the workspaces entries do not reach', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, false, 'Bookstore', 'bookstore', false, false, true]);
+      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, false, false, 'Bookstore', 'bookstore', false, false, true]);
       await runInitWizard(prompt, () => DETECTION, { targetDir: './bookstore', isOccupied: () => false });
 
       // `packages/*` reaches the project directory, which holds no package.
@@ -248,6 +252,7 @@ describe('runInitWizard', () => {
       const prompt = scriptedPrompt([
          'OrderFlow',
          ['lsp', 'data', 'glsp'],
+         false,
          false,
          false,
          'Domain',
@@ -288,7 +293,7 @@ describe('runInitWizard', () => {
     * would offer a choice whose "no" it would then overrule.
     */
    it('does not ask which grammar the diagram edits when there is only one', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'glsp'], false, false, 'Bookstore', 'bookstore', false, false]);
+      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'glsp'], false, false, false, 'Bookstore', 'bookstore', false, false]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(prompt.asked).not.toContain('Which grammar does the GLSP diagram edit?');
@@ -302,8 +307,9 @@ describe('runInitWizard', () => {
 
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore', '--heads', 'data,glsp']);
       expect(prompt.asked).toContain(BROWSER_HOST);
-      // `init` refuses a VS Code host without lsp.
+      // `init` refuses a VS Code or Theia host without lsp.
       expect(prompt.asked).not.toContain(VSCODE_HOST);
+      expect(prompt.asked).not.toContain(THEIA_HOST);
    });
 
    it('does not offer a host without a head it saves through', async () => {
@@ -311,9 +317,10 @@ describe('runInitWizard', () => {
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore', '--heads', 'data']);
-      // `init` refuses a browser host with neither lsp nor glsp, and a VS Code host without lsp.
+      // `init` refuses a browser host with neither lsp nor glsp, and a VS Code or Theia host without lsp.
       expect(prompt.asked).not.toContain(BROWSER_HOST);
       expect(prompt.asked).not.toContain(VSCODE_HOST);
+      expect(prompt.asked).not.toContain(THEIA_HOST);
    });
 
    it('composes --hosts browser, and names the client and host packages a workspace must list', async () => {
@@ -321,6 +328,7 @@ describe('runInitWizard', () => {
          'Bookstore',
          ['lsp', 'data', 'glsp'],
          true,
+         false,
          false,
          'Bookstore',
          'bookstore',
@@ -350,7 +358,19 @@ describe('runInitWizard', () => {
    });
 
    it('composes --hosts vscode, and names the servers extension and host packages a workspace must list', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'glsp'], false, true, 'Bookstore', 'bookstore', false, true, '@acme', false]);
+      const prompt = scriptedPrompt([
+         'Bookstore',
+         ['lsp', 'glsp'],
+         false,
+         true,
+         false,
+         'Bookstore',
+         'bookstore',
+         false,
+         true,
+         '@acme',
+         false
+      ]);
       const argv = await runInitWizard(prompt, () => DETECTION, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(prompt.asked).toContain(VSCODE_HOST);
@@ -371,10 +391,45 @@ describe('runInitWizard', () => {
       );
    });
 
+   it('composes --hosts theia-browser, and names the servers extension, Theia extension and host packages a workspace must list', async () => {
+      const prompt = scriptedPrompt([
+         'Bookstore',
+         ['lsp', 'glsp'],
+         false,
+         false,
+         true,
+         'Bookstore',
+         'bookstore',
+         false,
+         true,
+         '@acme',
+         false
+      ]);
+      const argv = await runInitWizard(prompt, () => DETECTION, { targetDir: './bookstore', isOccupied: () => false });
+
+      expect(prompt.asked).toContain(THEIA_HOST);
+      expect(argv).toEqual([
+         './bookstore',
+         '--name',
+         'Bookstore',
+         '--heads',
+         'lsp,glsp',
+         '--hosts',
+         'theia-browser',
+         '--monorepo',
+         '--scope',
+         '@acme'
+      ]);
+      expect(prompt.notes.join('\n')).toContain(
+         'no entry covering packages/order-flow/protocol, packages/order-flow/server, packages/order-flow/client, packages/order-flow/vscode-servers, packages/order-flow/theia, packages/order-flow/host-theia-browser'
+      );
+   });
+
    it('re-asks a grammar whose extension differs from a claimed one only in case', async () => {
       const prompt = scriptedPrompt([
          'OrderFlow',
          ['lsp', 'data'],
+         false,
          false,
          false,
          'Domain',
@@ -395,6 +450,7 @@ describe('runInitWizard', () => {
       const prompt = scriptedPrompt([
          'OrderFlow',
          ['lsp', 'data'],
+         false,
          false,
          false,
          'Domain',
@@ -428,7 +484,7 @@ describe('runInitWizard', () => {
     * collects a whole project description and then refuses.
     */
    it('offers --force as the first question when the target is not empty', async () => {
-      const prompt = scriptedPrompt([true, 'Bookstore', ['lsp', 'data'], false, false, 'Bookstore', 'bookstore', false, false]);
+      const prompt = scriptedPrompt([true, 'Bookstore', ['lsp', 'data'], false, false, false, 'Bookstore', 'bookstore', false, false]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => true });
 
       expect(prompt.asked[0]).toBe('./bookstore is not empty — scaffold into it anyway?');
@@ -448,14 +504,14 @@ describe('runInitWizard', () => {
    });
 
    it('says nothing about emptiness when the target is empty', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, false, 'Bookstore', 'bookstore', false, false]);
+      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, false, false, 'Bookstore', 'bookstore', false, false]);
       await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(prompt.asked.some(question => question.includes('not empty'))).toBe(false);
    });
 
    it("treats '-' as declining a package scope", async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, false, 'Bookstore', 'bookstore', false, true, '-', false]);
+      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, false, false, 'Bookstore', 'bookstore', false, true, '-', false]);
       const argv = await runInitWizard(prompt, () => DETECTION, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore', '--monorepo']);

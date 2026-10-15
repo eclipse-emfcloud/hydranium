@@ -8,3 +8,4 @@
  ********************************************************************************/
 
 export * from './data-server-connection';
+export * from './socket-data-port';

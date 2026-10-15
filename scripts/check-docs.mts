@@ -71,9 +71,11 @@ const VERSION_HOME = 'docs/adopting/requirements.md';
 const SCAFFOLD_READMES = new Set([
    'examples/bookstore/client/README.md',
    'examples/bookstore/host-browser/README.md',
+   'examples/bookstore/host-theia-browser/README.md',
    'examples/bookstore/host-vscode/README.md',
    'examples/bookstore/protocol/README.md',
    'examples/bookstore/server/README.md',
+   'examples/bookstore/theia/README.md',
    'examples/bookstore/vscode-servers/README.md'
 ]);
 

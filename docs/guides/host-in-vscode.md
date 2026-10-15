@@ -7,7 +7,8 @@ splits it over two extensions:
 [`vscode`](../../examples/order-flow/vscode/README.md), the editors, and
 [`vscode-servers`](../../examples/order-flow/vscode-servers/README.md), which
 launches the server. `init --hosts vscode` scaffolds the same two extensions
-for your own language, with the language client and a diagram editor, which
+for your own language, with the language client, a command reading a file
+through the data head, and a diagram editor, which
 [bookstore's](../../examples/bookstore/host-vscode/README.md) shows as
 emitted.
 
@@ -65,7 +66,9 @@ webview's messages over one `vscode-messenger` hop shared by every head.
    a data connection; see [Connect a data client](connect-a-data-client.md).
    When the relay's `onClose` fires, tell the webview, which calls
    `connectionLost` on its port; without that, its pending requests wait
-   forever.
+   forever. To read models in the extension host itself, give a data
+   connection a `SocketDataPort` from `@hydranium/data-client-vscode/node`
+   instead, as the scaffold's Show Model command does.
 
 5. **Check that it worked.** Open a diagram file: it opens in your custom
    editor and shows the diagram. A wrong port request shows your `onReady`

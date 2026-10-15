@@ -392,7 +392,7 @@ const BOOKSTORE_INVOCATION: Invocation = {
    name: 'Bookstore',
    grammars: [{ name: 'Bookstore' }],
    heads: ['lsp', 'data', 'glsp'],
-   hosts: ['browser', 'vscode'],
+   hosts: ['browser', 'vscode', 'theia-browser'],
    monorepo: true,
    scope: '@hydranium'
 };
@@ -524,13 +524,43 @@ const BOOKSTORE_MANIFEST: Manifest = {
    'host-vscode/esbuild.mjs': { verdict: 'identical', reason: 'the emitted webview bundling' },
    'host-vscode/playwright.config.mts': { verdict: 'identical', reason: 'the emitted smoke-tier configuration' },
    'host-vscode/start.mjs': { verdict: 'identical', reason: 'the emitted VS Code launch for npm start' },
-   'host-vscode/src/extension.ts': { verdict: 'identical', reason: 'the emitted activation and diagram editor' },
+   'host-vscode/src/extension.ts': { verdict: 'identical', reason: 'the emitted activation, Show Model command and diagram editor' },
    'host-vscode/src/bookstore-diagram-editor.ts': { verdict: 'identical', reason: 'the emitted custom editor' },
    'host-vscode/src/webview/bookstore-diagram.ts': { verdict: 'identical', reason: 'the emitted diagram webview' },
    'host-vscode/src/webview/diagram.css': { verdict: 'identical', reason: "the emitted webview's size and colours" },
    'host-vscode/test/smoke.spec.mts': { verdict: 'identical', reason: 'the emitted smoke test' },
    'host-vscode/test/vscode-version.mts': { verdict: 'identical', reason: 'the emitted VS Code pin' },
    'host-vscode/test/install-vscode.mts': { verdict: 'identical', reason: 'the emitted VS Code download' },
+   'host-vscode/src/show-model-command.ts': { verdict: 'identical', reason: 'the emitted command over the data head' },
+   'theia/package.json': { verdict: 'identical', reason: 'the scaffold names it under the recorded scope' },
+   'theia/.gitignore': { verdict: 'identical', reason: "the scaffold's ignore file, which a member writes too" },
+   'theia/README.md': { verdict: 'identical', reason: 'the scaffold README for the Theia extension' },
+   'theia/tsconfig.json': { verdict: 'identical', reason: 'the emitted extension project, self-contained' },
+   'theia/src/browser/bookstore-connection-preload-module.ts': {
+      verdict: 'identical',
+      reason: 'the emitted reconnect hardening, browser side'
+   },
+   'theia/src/browser/bookstore-frontend-module.ts': { verdict: 'identical', reason: 'the emitted frontend bindings' },
+   'theia/src/browser/bookstore-data-port.ts': { verdict: 'identical', reason: 'the emitted data channel' },
+   'theia/src/browser/bookstore-data-connection.ts': { verdict: 'identical', reason: 'the emitted data connection' },
+   'theia/src/browser/bookstore-show-model-command.ts': { verdict: 'identical', reason: 'the emitted command over the data head' },
+   'theia/src/browser/bookstore-glsp-client-contribution.ts': { verdict: 'identical', reason: 'the emitted shared GLSP client' },
+   'theia/src/browser/bookstore-diagram-frontend-module.ts': { verdict: 'identical', reason: 'the emitted diagram editor' },
+   'theia/src/common/bookstore-glsp-contribution.ts': { verdict: 'identical', reason: 'the emitted GLSP contribution id' },
+   'theia/src/node/bookstore-connection-backend-module.ts': {
+      verdict: 'identical',
+      reason: 'the emitted reconnect hardening, backend side'
+   },
+   'theia/src/node/bookstore-data-backend-module.ts': { verdict: 'identical', reason: 'the emitted data forwarder' },
+   'theia/src/node/bookstore-glsp-backend-module.ts': { verdict: 'identical', reason: 'the emitted GLSP forwarder' },
+   'theia/style/diagram.css': { verdict: 'identical', reason: "the emitted diagrams' colours" },
+   'host-theia-browser/package.json': { verdict: 'identical', reason: 'the scaffold names it under the recorded scope' },
+   'host-theia-browser/.gitignore': { verdict: 'identical', reason: "the scaffold's ignore file, which a member writes too" },
+   'host-theia-browser/README.md': { verdict: 'identical', reason: 'the scaffold README for the Theia application' },
+   'host-theia-browser/tsconfig.e2e.json': { verdict: 'identical', reason: 'the emitted smoke-tier project, self-contained' },
+   'host-theia-browser/playwright.config.mts': { verdict: 'identical', reason: 'the emitted smoke-tier configuration' },
+   'host-theia-browser/start.mjs': { verdict: 'identical', reason: 'the emitted Theia launch for npm start' },
+   'host-theia-browser/test/smoke.spec.mts': { verdict: 'identical', reason: 'the emitted smoke test' },
    'workspace/nodes.bookstore': { verdict: 'identical', reason: 'the starter model every host and the CLI open' },
    'workspace/references.bookstore': { verdict: 'identical', reason: 'the starter model referencing the other file' }
 };
@@ -807,6 +837,9 @@ function checkTarget(init: InitModule, target: ScaffoldTarget): { problems: Prob
    return { problems, count: files.length };
 }
 
+/** The example app the scaffolded Theia app is built like. */
+const THEIA_APP = 'examples/order-flow/theia-app/package.json';
+
 /**
  * Where each version literal the scaffold emits is allowed to come from.
  *
@@ -906,6 +939,26 @@ const SCAFFOLD_PIN_SOURCES: Record<string, PinSource> = {
    'vscode-languageclient': {
       file: 'examples/order-flow/vscode-servers/package.json',
       path: ['dependencies', 'vscode-languageclient'],
+      rule: 'exact'
+   },
+   // The Theia extension and app's, from the example app they are built like.
+   '@theia/core': { file: THEIA_APP, path: ['dependencies', '@theia/core'], rule: 'exact' },
+   '@theia/editor': { file: THEIA_APP, path: ['dependencies', '@theia/editor'], rule: 'exact' },
+   '@theia/filesystem': { file: THEIA_APP, path: ['dependencies', '@theia/filesystem'], rule: 'exact' },
+   '@theia/markers': { file: THEIA_APP, path: ['dependencies', '@theia/markers'], rule: 'exact' },
+   '@theia/messages': { file: THEIA_APP, path: ['dependencies', '@theia/messages'], rule: 'exact' },
+   '@theia/monaco': { file: THEIA_APP, path: ['dependencies', '@theia/monaco'], rule: 'exact' },
+   '@theia/navigator': { file: THEIA_APP, path: ['dependencies', '@theia/navigator'], rule: 'exact' },
+   '@theia/output': { file: THEIA_APP, path: ['dependencies', '@theia/output'], rule: 'exact' },
+   '@theia/plugin-ext': { file: THEIA_APP, path: ['dependencies', '@theia/plugin-ext'], rule: 'exact' },
+   '@theia/plugin-ext-vscode': { file: THEIA_APP, path: ['dependencies', '@theia/plugin-ext-vscode'], rule: 'exact' },
+   '@theia/preferences': { file: THEIA_APP, path: ['dependencies', '@theia/preferences'], rule: 'exact' },
+   '@theia/process': { file: THEIA_APP, path: ['dependencies', '@theia/process'], rule: 'exact' },
+   '@theia/workspace': { file: THEIA_APP, path: ['dependencies', '@theia/workspace'], rule: 'exact' },
+   '@theia/cli': { file: THEIA_APP, path: ['devDependencies', '@theia/cli'], rule: 'exact' },
+   '@eclipse-glsp/theia-integration': {
+      file: 'packages/glsp-client-theia/package.json',
+      path: ['devDependencies', '@eclipse-glsp/theia-integration'],
       rule: 'exact'
    },
    // Imported by GLSP's client without a declaration; no manifest here
@@ -1090,7 +1143,11 @@ function comparePins(emitted: Record<string, string | undefined>, sources: Recor
  */
 function emittedPins(init: InitModule): Record<string, string> {
    const packaging = init.resolveInitPackaging(join(REPO_ROOT, 'examples/pin-probe'), { monorepo: true, npmVersion: DECLARED_NPM });
-   const composition = init.resolveInitComposition('PinProbe', undefined, ['lsp', 'data', 'glsp'], packaging, ['browser', 'vscode']);
+   const composition = init.resolveInitComposition('PinProbe', undefined, ['lsp', 'data', 'glsp'], packaging, [
+      'browser',
+      'vscode',
+      'theia-browser'
+   ]);
    const manifests = init
       .planInitFiles(composition)
       .filter(file => file.path.endsWith('/package.json'))

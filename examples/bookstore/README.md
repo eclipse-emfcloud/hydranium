@@ -2,7 +2,8 @@
 
 Exactly what `hydranium-cli init` scaffolds, checked in and built by CI: one
 grammar, three heads, a graphical editor, a browser page, a VS Code extension,
-and no adopter overrides. Read it beside your own scaffold.
+a Theia application, and no adopter overrides. Read it beside your own
+scaffold.
 
 ```
 protocol/       what the server and its clients both import: ids, port
@@ -12,16 +13,22 @@ server/         the grammar, the language and its heads, plus the generated
 client/         the diagram's client side, which every host mounts
 host-browser/   a page running every head in a web worker, and its smoke test
 vscode-servers/ a VS Code extension that starts the server, with no editor
-host-vscode/    the VS Code extension: the language client, the diagram
-                editor, and its smoke test
+host-vscode/    the VS Code extension: the language client, the Show Model
+                command, the diagram editor, and its smoke test
+theia/          the Theia extension: the data and GLSP heads forwarded, the
+                Show Model command and the diagram editor
+host-theia-browser/
+                the Theia browser application running both extensions, and
+                its smoke test
 workspace/      the two starter `.bookstore` files it is exercised against
 ```
 
 Each package's README is the scaffold's own:
 [server](server/README.md), [protocol](protocol/README.md),
 [client](client/README.md), [host-browser](host-browser/README.md),
-[vscode-servers](vscode-servers/README.md) and
-[host-vscode](host-vscode/README.md).
+[vscode-servers](vscode-servers/README.md),
+[host-vscode](host-vscode/README.md), [theia](theia/README.md) and
+[host-theia-browser](host-theia-browser/README.md).
 
 It was created by exactly this; the few files it holds that `init` does not
 write are named under "Changing this example":
@@ -29,7 +36,7 @@ write are named under "Changing this example":
 ```bash
 npx hydranium-cli init examples/bookstore \
    --name Bookstore --heads lsp,data,glsp --grammar Bookstore --diagram \
-   --hosts browser,vscode --scope @hydranium --monorepo
+   --hosts browser,vscode,theia-browser --scope @hydranium --monorepo
 ```
 
 ## Running it
@@ -66,9 +73,20 @@ npm --prefix examples/bookstore/host-vscode run test:e2e:install
 npm --prefix examples/bookstore/host-vscode run test:e2e
 ```
 
-CI runs that smoke test in its VS Code job, under `xvfb-run`. It opens the
-diagram of `nodes.bookstore` and checks that the server reports a broken
-reference.
+CI runs that smoke test in its VS Code job, under `xvfb-run`. It reads the
+model through Show Model, opens the diagram of `nodes.bookstore` and checks
+that the server reports a broken reference.
+
+In Theia, after `npm run build:all`:
+
+```bash
+npm --prefix examples/bookstore/host-theia-browser start      # http://localhost:3000
+npm --prefix examples/bookstore/host-theia-browser run test:e2e
+```
+
+CI runs that smoke test in its Chromium job. It opens the diagram of
+`nodes.bookstore`, reads the model through Show Model, and checks that the
+server reports a broken reference in the text editor.
 
 The server's `build` runs `generate` first, which writes the protocol
 package's `src/generated-hydranium/` from the grammar, then compiles both.
@@ -144,7 +162,9 @@ The files `init` does not emit are the generated trees each `build` writes and
 the `turbo.json` files. The server's and the protocol's order the protocol
 package's build after the server's `generate` in this repo's task runner; the
 browser host's adds `../workspace`, which its bundle reads, to its build
-inputs, and the VS Code host's adds the projects its build type-checks.
+inputs, the VS Code host's adds the projects its build type-checks, and the
+Theia application's does the same. The Theia application's `esbuild.mjs` is
+the one `theia build` writes when there is none.
 
 Anything else `init` does not emit belongs in
 [order-flow](../order-flow/README.md), or teach `init` to emit it. The package

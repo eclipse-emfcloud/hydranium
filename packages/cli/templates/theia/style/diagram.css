@@ -1,0 +1,20 @@
+/* The diagrams' colours, from Theia's theme rather than GLSP's colours for a
+   light canvas. Theia sizes the editor, so nothing here sets a height. */
+
+.sprotty {
+   background: var(--theia-editor-background);
+   color: var(--theia-editor-foreground);
+   font-family: var(--theia-ui-font-family);
+   font-size: var(--theia-ui-font-size1);
+}
+
+/* GLSP's stylesheet leaves shapes at the SVG defaults: a black fill, and no stroke on an edge. */
+.sprotty-node {
+   fill: var(--theia-editorWidget-background);
+   stroke: var(--theia-focusBorder);
+}
+
+.sprotty-edge {
+   fill: none;
+   stroke: var(--theia-editor-foreground);
+}

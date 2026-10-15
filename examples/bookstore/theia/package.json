@@ -1,0 +1,62 @@
+{
+  "name": "@hydranium/bookstore-theia",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Bookstore Theia extension: reconnect hardening, a Show Model command reading a file through the data head, and a diagram editor for each diagram.",
+  "license": "UNLICENSED",
+  "author": "",
+  "files": [
+    "lib",
+    "src",
+    "style"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "lint": "oxlint --report-unused-disable-directives --format stylish --config ../../../oxlint.config.cjs src --max-warnings 0",
+    "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "@eclipse-glsp/client": "2.7.0",
+    "@eclipse-glsp/theia-integration": "2.7.0",
+    "@hydranium/bookstore-client": "0.0.0",
+    "@hydranium/bookstore-protocol": "0.0.0",
+    "@hydranium/client-theia": "^1.0.0-next",
+    "@hydranium/data-client-theia": "^1.0.0-next",
+    "@hydranium/glsp-client": "^1.0.0-next",
+    "@hydranium/glsp-client-theia": "^1.0.0-next",
+    "@hydranium/protocol": "^1.0.0-next",
+    "@theia/core": "^1.75.0",
+    "@theia/editor": "^1.75.0",
+    "@theia/filesystem": "^1.75.0",
+    "@theia/output": "^1.75.0",
+    "@theia/process": "^1.75.0",
+    "@theia/workspace": "^1.75.0",
+    "inversify": "^6.1.3",
+    "vscode-jsonrpc": "9.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "theiaExtensions": [
+    {
+      "frontendPreload": "lib/browser/bookstore-connection-preload-module",
+      "frontend": "lib/browser/bookstore-frontend-module",
+      "backend": "lib/node/bookstore-connection-backend-module"
+    },
+    {
+      "backend": "lib/node/bookstore-data-backend-module"
+    },
+    {
+      "backend": "lib/node/bookstore-glsp-backend-module"
+    },
+    {
+      "frontend": "lib/browser/bookstore-diagram-frontend-module"
+    }
+  ]
+}

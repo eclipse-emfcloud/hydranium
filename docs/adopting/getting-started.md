@@ -30,9 +30,14 @@ its own directory.
   mounts.
 - `host-browser/` holds a page that runs every head in a web worker, with no
   backend.
-- `host-vscode/` holds a VS Code extension: the language client and a custom
-  editor for the diagram. It starts the server through `vscode-servers/`, an
-  extension with no editor that a Theia app can sideload too.
+- `host-vscode/` holds a VS Code extension: the language client, a Show Model
+  command reading a file through the data head, and a custom editor for the
+  diagram. It starts the server through `vscode-servers/`, an extension with
+  no editor.
+- `theia/` and `host-theia-browser/`, with `--hosts theia-browser`, hold a
+  Theia extension forwarding the data and GLSP heads, with the same command
+  and the diagram editor, and the Theia browser application running it, with
+  `vscode-servers/` sideloaded for the language client.
 - `workspace/` holds two starter model files, one referencing the other.
 
 Three flags shape it:
@@ -44,9 +49,9 @@ Three flags shape it:
 - `--hosts` adds host applications around the heads. `browser` emits the page
   and needs the `lsp` head or the `glsp` head, which the page saves through:
   without `lsp` it has no editor and saves through the diagram. `vscode` emits
-  the two extensions and needs the `lsp` head, since its language client
-  starts the server. Leave `--hosts` out for a server you connect to from
-  your own host.
+  the two extensions and `theia-browser` the Theia extension and
+  application; both need the `lsp` head, since the language client starts the
+  server. Leave `--hosts` out for a server you connect to from your own host.
 - Leave `--name` off on a terminal and `init` asks instead, then prints the
   command it composed.
 
@@ -97,8 +102,30 @@ npm --prefix host-vscode run test:e2e:install   # once: the VS Code the smoke te
 npm --prefix host-vscode run test:e2e
 ```
 
-The smoke test opens the diagram and checks that the server reports a broken
-reference. On Linux without a display, run it under `xvfb-run -a`.
+The smoke test runs Show Model, opens the diagram and checks that the server
+reports a broken reference. On Linux without a display, run it under
+`xvfb-run -a`.
+
+## Open it in Theia
+
+Scaffolded with `--hosts theia-browser`:
+
+```bash
+npm --prefix host-theia-browser start
+```
+
+Theia serves `workspace/` at http://localhost:3000; `THEIA_PORT` picks
+another port. `nodes.my-lang` opens as its diagram, Open With offers the text
+editor, and `MyLang: Show Model` in the Command Palette reads the active file
+through the data head.
+
+```bash
+npm --prefix host-theia-browser run test:e2e:install   # once: the Chromium the smoke test drives
+npm --prefix host-theia-browser run test:e2e
+```
+
+The smoke test starts the application itself, on a port of its own, so
+`npm start` can keep running.
 
 ## Validate a model
 

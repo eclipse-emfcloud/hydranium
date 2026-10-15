@@ -40,7 +40,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /** Overridable for a concurrent run; the default must match `scripts/serve.mts`. */
-const PORT = Number(process.env.PORT ?? 3002);
+const PORT = Number(process.env.PORT || 3002);
 
 export default defineConfig({
    testDir: './test/e2e',

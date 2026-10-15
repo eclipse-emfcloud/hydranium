@@ -8,25 +8,41 @@
  ********************************************************************************/
 
 // The Bookstore VS Code extension: the language client, started the way the
-// servers extension starts it, and a custom editor for each diagram. Node
-// extension host only: the server is forked and its socket heads reached over
-// TCP.
+// servers extension starts it, a Show Model command reading a file through the
+// data head, and a custom editor for each diagram. Node extension host only:
+// the server is forked and its socket heads reached over TCP.
 
 import { GlspVscodeConnector } from '@eclipse-glsp/vscode-integration';
 import { findPort } from '@hydranium/client-vscode/node';
+import { SocketDataPort } from '@hydranium/data-client-vscode/node';
 import { HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';
-import { ConsoleLogger, describeError } from '@hydranium/protocol';
-import { BOOKSTORE_GLSP_SERVER_PORT_COMMAND } from '@hydranium/bookstore-protocol';
-import { type ExtensionContext, window } from 'vscode';
+import { ConsoleLogger, DataConnectionWithEvents, describeError, renderFrameworkMessage } from '@hydranium/protocol';
+import {
+   BOOKSTORE_DATA_SERVER_PORT_COMMAND,
+   BOOKSTORE_GLSP_SERVER_PORT_COMMAND,
+   type BookstoreElement
+} from '@hydranium/bookstore-protocol';
+import { commands, type ExtensionContext, window } from 'vscode';
 import type { LanguageClient } from 'vscode-languageclient/node';
 import { startBookstoreLanguageClient } from 'bookstore-vscode-servers/out/language-client.js';
 import { BOOKSTORE_DIAGRAM_VIEW_TYPE, BookstoreDiagramEditorProvider } from './bookstore-diagram-editor.js';
+import { showModelCommand } from './show-model-command.js';
 
 let client: LanguageClient | undefined;
 
 export async function activate(context: ExtensionContext): Promise<void> {
    const running = await startBookstoreLanguageClient(context);
    client = running;
+
+   // The data head, read by the Show Model command. Nothing connects until it runs.
+   const dataPort = new SocketDataPort({
+      findPort: () => findPort(running, BOOKSTORE_DATA_SERVER_PORT_COMMAND),
+      logger: new ConsoleLogger().with('data head'),
+      // A failed read shown to the user, not only logged; the message carries the detail.
+      reportError: (_error, reported) => void window.showErrorMessage(renderFrameworkMessage(reported))
+   });
+   const dataConnection = new DataConnectionWithEvents<BookstoreElement>(dataPort);
+   context.subscriptions.push(dataConnection, dataPort, commands.registerCommand('bookstore.showModel', showModelCommand(dataConnection)));
 
    // The GLSP head, and the connector bridging it to every diagram webview. No
    // `messenger` option: the connector's own keeps messages flowing to a hidden tab.

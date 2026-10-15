@@ -1048,11 +1048,73 @@ describe('planInitFiles with hosts', () => {
       expect(contentOf(files, 'vscode-servers/src/extension.ts')).not.toContain('registerPortCommands');
    });
 
-   it('tells a data head without a diagram to add the package its README points to', () => {
+   it('gives the VS Code host a Show Model command over the data head, with the packages it imports', () => {
       const files = filesFor(['lsp', 'data'], ['vscode']);
       const host = JSON.parse(contentOf(files, 'host-vscode/package.json') ?? '{}') as Record<string, Record<string, unknown>>;
-      expect(host.dependencies).not.toHaveProperty('@hydranium/client-vscode');
-      expect(contentOf(files, 'host-vscode/README.md')).toMatch(/Add\s+`@hydranium\/client-vscode`\s+as\s+a\s+dependency/);
+      expect(Object.keys(host.dependencies)).toEqual(
+         expect.arrayContaining(['@hydranium/client-vscode', '@hydranium/data-client-vscode', 'bookstore-protocol'])
+      );
+      expect(host.contributes.commands).toEqual([{ command: 'bookstore.showModel', title: 'Show Model', category: 'Bookstore' }]);
+      expect(contentOf(files, 'host-vscode/src/extension.ts')).toContain('findPort(running, BOOKSTORE_DATA_SERVER_PORT_COMMAND)');
+      expect(pathsUnder(files, 'host-vscode')).toContain('src/show-model-command.ts');
+      expect(pathsUnder(filesFor(['lsp'], ['vscode']), 'host-vscode')).not.toContain('src/show-model-command.ts');
+   });
+
+   it('refuses a Theia host without the LSP head, whose client starts the server', () => {
+      expect(() => resolveInitComposition('Bookstore', undefined, ['data', 'glsp'], undefined, ['theia-browser'])).toThrow(
+         "--hosts theia-browser needs the 'lsp' head, but the head set is 'data,glsp'."
+      );
+   });
+
+   it('emits the servers extension and the Theia extension for a Theia host alone, before the application', () => {
+      const files = filesFor(['lsp', 'data', 'glsp'], ['theia-browser']);
+      const root = JSON.parse(contentOf(files, 'package.json') ?? '{}') as { workspaces: string[] };
+      expect(root.workspaces).toEqual(['protocol', 'server', 'client', 'vscode-servers', 'theia', 'host-theia-browser']);
+      expect(contentOf(files, 'protocol/src/head-ports.ts')).toContain('BOOKSTORE_GLSP_SERVER_HOST_COMMAND');
+      expect(contentOf(files, 'vscode-servers/README.md')).not.toContain('host-vscode');
+   });
+
+   it('registers a Theia extension entry per forwarded head and per diagram', () => {
+      const entriesFor = (heads: InitHead[]): Array<Record<string, string>> =>
+         (
+            JSON.parse(contentOf(filesFor(heads, ['theia-browser']), 'theia/package.json') ?? '{}') as {
+               theiaExtensions: Array<Record<string, string>>;
+            }
+         ).theiaExtensions;
+      expect(entriesFor(['lsp'])).toEqual([
+         {
+            frontendPreload: 'lib/browser/bookstore-connection-preload-module',
+            frontend: 'lib/browser/bookstore-frontend-module',
+            backend: 'lib/node/bookstore-connection-backend-module'
+         }
+      ]);
+      expect(entriesFor(['lsp', 'data', 'glsp']).slice(1)).toEqual([
+         { backend: 'lib/node/bookstore-data-backend-module' },
+         { backend: 'lib/node/bookstore-glsp-backend-module' },
+         { frontend: 'lib/browser/bookstore-diagram-frontend-module' }
+      ]);
+   });
+
+   it('emits only the hardening and editor sync in a Theia extension over the LSP head alone', () => {
+      const files = filesFor(['lsp'], ['theia-browser']);
+      expect(pathsUnder(files, 'theia').filter(path => /data|glsp|diagram|show-model/.test(path))).toEqual([]);
+      expect(contentOf(files, 'theia/src/browser/bookstore-frontend-module.ts')).not.toMatch(/Data|Glsp|ShowModel/);
+      const theia = JSON.parse(contentOf(files, 'theia/package.json') ?? '{}') as Record<string, Record<string, unknown>>;
+      expect(Object.keys(theia.dependencies).filter(name => name.startsWith('@hydranium/'))).toEqual([
+         '@hydranium/client-theia',
+         '@hydranium/protocol'
+      ]);
+      // No socket head: nothing forwarded, no protocol member to build first.
+      expect(contentOf(files, 'theia/README.md')).not.toMatch(/forward|protocol/);
+   });
+
+   it('keeps a Theia session through a dropped socket, and buffers what the page sends meanwhile', () => {
+      const app = JSON.parse(contentOf(filesFor(['lsp'], ['theia-browser']), 'host-theia-browser/package.json') ?? '{}') as {
+         theia: { target: string; backend: { config: Record<string, number> }; frontend: { config: Record<string, unknown> } };
+      };
+      expect(app.theia.target).toBe('browser');
+      expect(app.theia.backend.config.frontendConnectionTimeout).toBeGreaterThan(0);
+      expect(app.theia.backend.config.connectionBufferBytes).toBe(app.theia.frontend.config.connectionBufferBytes);
    });
 
    it('wraps the VS Code host README prose at 80 columns in every head set, a lone link aside', () => {

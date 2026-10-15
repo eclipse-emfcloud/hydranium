@@ -410,6 +410,15 @@ const HOST_VSCODE_GLSP_THIRD_PARTY_DEPENDENCIES: Readonly<Record<string, string>
    'vscode-jsonrpc': '9.0.0'
 };
 
+/** What the data head adds to the VS Code extension: the Show Model command's socket to it. */
+const HOST_VSCODE_DATA_FRAMEWORK_DEPENDENCIES: readonly string[] = [
+   '@hydranium/client-vscode',
+   '@hydranium/data-client-vscode',
+   '@hydranium/protocol'
+];
+// Exact, as the server's is: the socket's connection and the framework's must be one copy.
+const HOST_VSCODE_DATA_THIRD_PARTY_DEPENDENCIES: Readonly<Record<string, string>> = { 'vscode-jsonrpc': '9.0.0' };
+
 /** The VS Code extension's tools: the smoke tier, the download it runs in and the type check. */
 const HOST_VSCODE_DEV_DEPENDENCIES: Readonly<Record<string, string>> = {
    '@playwright/test': '^1.55.0',
@@ -439,7 +448,9 @@ export function workspaceRootPins(composition: InitComposition): ReadonlyArray<r
       ...(members.includes('host-browser')
          ? (['base', ...heads] as const).flatMap(head => Object.entries(HOST_BROWSER_THIRD_PARTY_DEPENDENCIES[head]))
          : []),
-      ...(members.includes('host-vscode') && heads.includes('glsp') ? Object.entries(HOST_VSCODE_GLSP_THIRD_PARTY_DEPENDENCIES) : [])
+      ...(members.includes('host-vscode') && heads.includes('glsp') ? Object.entries(HOST_VSCODE_GLSP_THIRD_PARTY_DEPENDENCIES) : []),
+      ...(members.includes('host-vscode') && heads.includes('data') ? Object.entries(HOST_VSCODE_DATA_THIRD_PARTY_DEPENDENCIES) : []),
+      ...(members.includes('theia') ? theiaThirdPartyDependencies(heads) : [])
    ]);
    return [...pins].filter(([, version]) => /^\d+\.\d+\.\d+$/.test(version)).sort(([left], [right]) => left.localeCompare(right));
 }
@@ -1058,12 +1069,17 @@ function socketHeads(composition: InitComposition) {
    ];
 }
 
+/** Whether the composition emits the servers-only extension, which VS Code starts the server through and a Theia app sideloads. */
+function emitsVscodeServers(composition: InitComposition): boolean {
+   return initMembers(composition.heads, composition.hosts).includes('vscode-servers');
+}
+
 /**
- * The host commands the VS Code host's servers extension answers each socket
- * head's port under, for a host without a language client of its own.
+ * The host commands the servers extension answers each socket head's port
+ * under, for a host without a language client of its own.
  */
 function hostCommandConstants(composition: InitComposition): HeadPortConstant[] {
-   if (!composition.hosts.includes('vscode')) {
+   if (!emitsVscodeServers(composition)) {
       return [];
    }
    const upper = screamingSnake(composition.projectId);
@@ -1099,7 +1115,7 @@ function headPortsFile(composition: InitComposition): string {
       : `// The server reads them and a process that starts it sets them; both import
 // them from here. A variable retyped with a typo is never read, and the head
 // then listens on whichever port is free.`;
-   const hostCommands = composition.hosts.includes('vscode')
+   const hostCommands = emitsVscodeServers(composition)
       ? `
 //
 // The host commands are the same ports for a host with no language client,
@@ -3011,24 +3027,32 @@ export async function start${composition.name}LanguageClient(context: ExtensionC
 
 /** The servers-only extension's README. */
 function vscodeServersReadme(composition: InitComposition): string {
+   const vscode = composition.hosts.includes('vscode');
+   const intro = [
+      'A VS Code extension that starts the __NAME__ server and contributes no editor, view or command: the languages, their grammars and the server.',
+      `With a socket head, it also answers each head’s port under a host command, which a host without a language client of its own runs${
+         composition.hosts.includes('theia-browser')
+            ? ': the Theia application in `../host-theia-browser`, which sideloads this extension.'
+            : ', such as a Theia app sideloading this extension.'
+      }`,
+      ...(vscode
+         ? [
+              'The VS Code extension in `../host-vscode` starts the server through the same function.',
+              'Both work side by side, but each starts its own server and language client, so diagnostics may show twice: install one.'
+           ]
+         : [])
+   ];
    const lines = [
       `# ${memberPackageName(composition, 'vscode-servers')}`,
       '',
-      'A VS Code extension that starts the __NAME__ server and contributes no',
-      'editor, view or command: the languages, their grammars and the server.',
-      'With a socket head, it also answers each head’s port under a host command,',
-      'which a host without a language client of its own runs, such as a Theia app',
-      'sideloading this extension. The VS Code extension in `../host-vscode` starts',
-      'the server through the same function. Both work side by side, but each',
-      'starts its own server and language client, so diagnostics may show twice:',
-      'install one.',
+      ...wrapProse(intro.join(' ')),
       '',
       '```bash',
       'npm run build   # copy the server’s grammars and compile into out/; build the server first',
       '```',
       '',
       '- `src/extension.ts` — activation, which starts the server and, with a socket head, registers its port commands',
-      '- `src/language-client.ts` — the server launch, shared with `../host-vscode`',
+      `- \`src/language-client.ts\` — the server launch${vscode ? ', shared with `../host-vscode`' : ''}`,
       ''
    ];
    return project(lines.join('\n'), composition);
@@ -3076,8 +3100,18 @@ function hostVscodePackageJson(composition: InitComposition): string {
          dependencies[framework] = frameworkPin(composition);
       }
    }
+   if (composition.heads.includes('data')) {
+      dependencies[memberPackageName(composition, 'protocol')] = MEMBER_PIN;
+      Object.assign(dependencies, HOST_VSCODE_DATA_THIRD_PARTY_DEPENDENCIES);
+      for (const framework of HOST_VSCODE_DATA_FRAMEWORK_DEPENDENCIES) {
+         dependencies[framework] = frameworkPin(composition);
+      }
+   }
    const devDependencies = { ...HOST_VSCODE_DEV_DEPENDENCIES, ...(diagrams.length > 0 ? { esbuild: '^0.28.0' } : {}) };
    const contributes = {
+      ...(composition.heads.includes('data')
+         ? { commands: [{ command: `${composition.projectId}.showModel`, title: 'Show Model', category: composition.name }] }
+         : {}),
       ...(diagrams.length > 0
          ? {
               customEditors: diagrams.map(grammar => ({
@@ -3098,7 +3132,7 @@ function hostVscodePackageJson(composition: InitComposition): string {
   "displayName": "${composition.name}",
   "version": "0.0.0",
   "private": true,
-  "description": "${composition.name} in VS Code: the language client${diagrams.length > 0 ? ', and a custom editor for each diagram' : ''}.",
+  "description": "${composition.name} in VS Code: ${hostVscodeParts(composition)}.",
   "license": "UNLICENSED",
   "author": "",
   "publisher": "${composition.projectId}",
@@ -3130,32 +3164,31 @@ ${sortedBlock(devDependencies, '    ')}
 `;
 }
 
-/** The VS Code extension's entry: the shared server launch, then a diagram editor per diagram grammar. */
+/** What the VS Code extension brings, as one phrase; `started` follows the language client. */
+function hostVscodeParts(composition: InitComposition, started = ''): string {
+   const parts = [
+      `the language client${started}`,
+      ...(composition.heads.includes('data') ? ['a Show Model command reading a file through the data head'] : []),
+      ...(composition.grammars.some(grammar => grammar.diagram) ? ['a custom editor for each diagram'] : [])
+   ];
+   return listPhrase(parts);
+}
+
+/** `parts` as one English list: `a`, `a and b`, `a, b, and c`. */
+function listPhrase(parts: readonly string[]): string {
+   return parts.length === 1 ? parts[0] : `${parts.slice(0, -1).join(', ')}${parts.length > 2 ? ',' : ''} and ${parts.at(-1)}`;
+}
+
+/**
+ * The VS Code extension's entry: the shared server launch, then the Show Model
+ * command over the data head and a diagram editor per diagram grammar.
+ */
 function hostVscodeExtensionFile(composition: InitComposition): string {
    const columns = columnsFor(composition);
    const diagrams = composition.grammars.filter(grammar => grammar.diagram);
+   const data = composition.heads.includes('data');
    const start = `start${composition.name}LanguageClient`;
    const servers = `${memberPackageName(composition, 'vscode-servers')}/out/language-client.js`;
-   if (diagrams.length === 0) {
-      return `// The ${composition.name} VS Code extension: the language client, started the way the
-// servers extension starts it.
-
-import type { ExtensionContext } from 'vscode';
-import type { LanguageClient } from 'vscode-languageclient/node';
-import { ${start} } from '${servers}';
-
-let client: LanguageClient | undefined;
-
-export async function activate(context: ExtensionContext): Promise<void> {
-   client = await ${start}(context);
-}
-
-export async function deactivate(): Promise<void> {
-   await client?.stop();
-   client = undefined;
-}
-`;
-   }
    const upper = screamingSnake(composition.projectId);
    const editors = diagrams.map(grammar => ({
       module: `./${grammar.grammarId}-diagram-editor.js`,
@@ -3174,26 +3207,56 @@ export async function deactivate(): Promise<void> {
       })
    );`
    );
-   return `// The ${composition.name} VS Code extension: the language client, started the way the
-// servers extension starts it, and a custom editor for each diagram. Node
-// extension host only: the server is forked and its socket heads reached over
-// TCP.
+   const sockets = data || diagrams.length > 0;
+   const protocolSymbols = [
+      ...(data ? [`${upper}_DATA_SERVER_PORT_COMMAND`] : []),
+      ...(diagrams.length > 0 ? [`${upper}_GLSP_SERVER_PORT_COMMAND`] : []),
+      ...(data ? [`type ${composition.name}Element`] : [])
+   ];
+   const imports = [
+      ...(diagrams.length > 0 ? ["import { GlspVscodeConnector } from '@eclipse-glsp/vscode-integration';"] : []),
+      ...(sockets ? ["import { findPort } from '@hydranium/client-vscode/node';"] : []),
+      ...(data ? ["import { SocketDataPort } from '@hydranium/data-client-vscode/node';"] : []),
+      ...(diagrams.length > 0 ? ["import { HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';"] : []),
+      ...(sockets
+         ? [
+              importList(
+                 [
+                    'ConsoleLogger',
+                    ...(data ? ['DataConnectionWithEvents'] : []),
+                    ...(diagrams.length > 0 ? ['describeError'] : []),
+                    ...(data ? ['renderFrameworkMessage'] : [])
+                 ],
+                 '@hydranium/protocol',
+                 columns
+              )
+           ]
+         : []),
+      ...(sockets ? [importList(protocolSymbols, memberPackageName(composition, 'protocol'), columns)] : []),
+      ...(sockets
+         ? [`import { ${[...(data ? ['commands'] : []), 'type ExtensionContext', 'window'].join(', ')} } from 'vscode';`]
+         : ["import type { ExtensionContext } from 'vscode';"]),
+      "import type { LanguageClient } from 'vscode-languageclient/node';",
+      `import { ${start} } from '${servers}';`,
+      ...editors.map(editor => importList([editor.viewType, editor.provider], editor.module, columns)),
+      ...(data ? ["import { showModelCommand } from './show-model-command.js';"] : [])
+   ];
+   const dataBlock = data
+      ? `
 
-import { GlspVscodeConnector } from '@eclipse-glsp/vscode-integration';
-import { findPort } from '@hydranium/client-vscode/node';
-import { HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';
-import { ConsoleLogger, describeError } from '@hydranium/protocol';
-import { ${upper}_GLSP_SERVER_PORT_COMMAND } from '${memberPackageName(composition, 'protocol')}';
-import { type ExtensionContext, window } from 'vscode';
-import type { LanguageClient } from 'vscode-languageclient/node';
-import { ${start} } from '${servers}';
-${editors.map(editor => importList([editor.viewType, editor.provider], editor.module, columns)).join('\n')}
-
-let client: LanguageClient | undefined;
-
-export async function activate(context: ExtensionContext): Promise<void> {
-   const running = await ${start}(context);
-   client = running;
+   // The data head, read by the Show Model command. Nothing connects until it runs.
+   const dataPort = new SocketDataPort({
+      findPort: () => findPort(running, ${upper}_DATA_SERVER_PORT_COMMAND),
+      logger: new ConsoleLogger().with('data head'),
+      // A failed read shown to the user, not only logged; the message carries the detail.
+      reportError: (_error, reported) => void window.showErrorMessage(renderFrameworkMessage(reported))
+   });
+   const dataConnection = new DataConnectionWithEvents<${composition.name}Element>(dataPort);
+   context.subscriptions.push(dataConnection, dataPort, commands.registerCommand('${composition.projectId}.showModel', showModelCommand(dataConnection)));`
+      : '';
+   const glspBlock =
+      diagrams.length > 0
+         ? `
 
    // The GLSP head, and the connector bridging it to every diagram webview. No
    // \`messenger\` option: the connector's own keeps messages flowing to a hidden tab.
@@ -3211,7 +3274,23 @@ export async function activate(context: ExtensionContext): Promise<void> {
    void glspServer.onReady.catch((error: unknown) => {
       void window.showErrorMessage(\`${composition.name} diagram unavailable: \${describeError(error)}\`);
    });
-${registrations.join('\n')}
+${registrations.join('\n')}`
+         : '';
+   const opening = wrapComment(
+      `The ${composition.name} VS Code extension: ${hostVscodeParts(composition, ', started the way the servers extension starts it')}.${sockets ? ' Node extension host only: the server is forked and its socket heads reached over TCP.' : ''}`
+   );
+   const activation = sockets
+      ? `   const running = await ${start}(context);
+   client = running;${dataBlock}${glspBlock}`
+      : `   client = await ${start}(context);`;
+   return `${opening}
+
+${imports.join('\n')}
+
+let client: LanguageClient | undefined;
+
+export async function activate(context: ExtensionContext): Promise<void> {
+${activation}
 }
 
 export async function deactivate(): Promise<void> {
@@ -3221,9 +3300,19 @@ export async function deactivate(): Promise<void> {
 `;
 }
 
+/** A smoke test's title: what it checks of each head the composition has. */
+function hostVscodeSmokeTitle(composition: InitComposition): string {
+   return listPhrase([
+      ...(composition.heads.includes('data') ? ['reads the model'] : []),
+      ...(composition.grammars.some(grammar => grammar.diagram) ? ['draws the diagram'] : []),
+      'reports a broken reference'
+   ]);
+}
+
 /**
  * The smoke test: VS Code opens the starter workspace with the extension
- * loaded, each diagram file draws, and the server reports a broken reference.
+ * loaded, Show Model names the model with the data head, each diagram file
+ * draws, and the server reports a broken reference.
  */
 function hostVscodeSmokeSpec(composition: InitComposition): string {
    const diagram = composition.grammars.find(grammar => grammar.diagram);
@@ -3244,12 +3333,25 @@ function hostVscodeSmokeSpec(composition: InitComposition): string {
          .click();
 `
       : '';
-   const opening = diagram
-      ? `// VS Code opens a copy of the starter workspace with this extension loaded,
-// the diagram file draws in its diagram editor, and the server reports a
-// reference that resolves to nothing.`
-      : `// VS Code opens a copy of the starter workspace with this extension loaded,
-// and the server reports a reference that resolves to nothing.`;
+   const primary = diagram ?? composition.grammars[0];
+   const showModelSteps = composition.heads.includes('data')
+      ? `      // The data head reads the open file.
+      await page.keyboard.press('ControlOrMeta+Shift+P');
+      await page.locator('.quick-input-widget input').fill('>${composition.name}: Show Model');
+      await page
+         .locator('.quick-input-list')
+         .getByRole('option', { name: /^${composition.name}: Show Model(,|$)/ })
+         .click();
+      await expect(page.locator('.notification-toast').filter({ hasText: '${file} holds a ${primary.entryRule}' })).toBeVisible();
+`
+      : '';
+   const opening = wrapComment(
+      `VS Code opens a copy of the starter workspace with this extension loaded, ${listPhrase([
+         ...(composition.heads.includes('data') ? ['the data head reads the file'] : []),
+         ...(diagram ? ['the diagram file draws in its diagram editor'] : []),
+         'the server reports a reference that resolves to nothing'
+      ])}.`
+   );
    return `${opening}
 
 import { _electron, expect, test, type Page } from '@playwright/test';
@@ -3262,7 +3364,7 @@ import { VSCODE_CACHE, VSCODE_VERSION } from './vscode-version.mts';
 
 const extensionRoot = fileURLToPath(new URL('..', import.meta.url));
 
-test('${diagram ? 'draws the diagram and ' : ''}reports a broken reference', async () => {
+test('${hostVscodeSmokeTitle(composition)}', async () => {
    // A copy, since the server writes its repairs to the folder it opens, and a
    // fresh profile, since a reused one restores the last run's editors.
    const scratch = mkdtempSync(join(tmpdir(), '${composition.projectId}-vscode-'));
@@ -3288,7 +3390,7 @@ test('${diagram ? 'draws the diagram and ' : ''}reports a broken reference', asy
       const page = await app.firstWindow();
       await expect(page.locator('.monaco-workbench')).toBeVisible();
       await quickOpen(page, '${file}');
-${diagramSteps}
+${showModelSteps}${diagramSteps}
       const editor = page.locator('.monaco-editor .view-lines').first();
       await expect(editor).toContainText('node First');
       await editor.click();
@@ -3319,17 +3421,24 @@ async function quickOpen(page: Page, file: string): Promise<void> {
  * `check:docs` holds Markdown to. A link or code span stays whole, and runs
  * long on a line of its own.
  */
-function wrapProse(text: string): string[] {
+function wrapProse(text: string, width = 80): string[] {
    const lines: string[] = [];
    for (const piece of text.match(/!?\[[^\]]*\]\([^)]*\)\S*|`+[^`]*`+\S*|\S+/g) ?? []) {
       const last = lines.at(-1);
-      if (last !== undefined && last.length + 1 + piece.length <= 80) {
+      if (last !== undefined && last.length + 1 + piece.length <= width) {
          lines[lines.length - 1] = `${last} ${piece}`;
       } else {
          lines.push(piece);
       }
    }
    return lines;
+}
+
+/** `text` as a `//` comment of lines at most 80 columns wide. */
+function wrapComment(text: string): string {
+   return wrapProse(text, 77)
+      .map(line => `// ${line}`)
+      .join('\n');
 }
 
 /** The VS Code extension's README. */
@@ -3345,10 +3454,7 @@ function hostVscodeReadme(composition: InitComposition): string {
          ? 'It needs a Node extension host: the server is forked, and its socket heads are reached over TCP.'
          : 'It needs a Node extension host, since the server is forked.'
    ];
-   const dataNote =
-      diagrams.length > 0
-         ? `The data head runs too, and its port is one \`findPort\` call away, from \`@hydranium/client-vscode\`, but nothing here reads it yet: see the Host in VS Code guide for a webview over it.`
-         : `The data head runs too, but nothing here reads its port yet. Add \`@hydranium/client-vscode\` as a dependency and its \`findPort\` returns it; the Host in VS Code guide shows a webview over it.`;
+   const dataNote = `\`${composition.name}: Show Model\`, in the Command Palette, reads the active file through the data head over a socket from the extension host, and names its root type. A webview reaches the data head too: see the Host in VS Code guide.`;
    const lines = [
       `# ${memberPackageName(composition, 'host-vscode')}`,
       '',
@@ -3364,8 +3470,12 @@ function hostVscodeReadme(composition: InitComposition): string {
       '',
       '## Layout',
       '',
-      '- `src/extension.ts` — activation: the server, through `../vscode-servers`' +
-         (diagrams.length > 0 ? ', and the diagram editors' : ''),
+      `- \`src/extension.ts\` — activation: ${listPhrase([
+         'the server, through `../vscode-servers`',
+         ...(data ? ['the Show Model command'] : []),
+         ...(diagrams.length > 0 ? ['the diagram editors'] : [])
+      ])}`,
+      ...(data ? ['- `src/show-model-command.ts` — Show Model: the active file, read through the data head'] : []),
       ...diagrams.flatMap(grammar => [
          `- \`src/${grammar.grammarId}-diagram-editor.ts\` — the \`${grammar.grammar}\` diagram’s custom editor; its view type is the one \`package.json\` declares`,
          `- \`src/webview/${grammar.grammarId}-diagram.ts\` — the webview it loads, over the client package’s diagram`
@@ -3375,6 +3485,7 @@ function hostVscodeReadme(composition: InitComposition): string {
          : []),
       '- `start.mjs` — `npm start`: VS Code with this extension, on `../workspace`',
       '- `test/smoke.spec.mts` — VS Code opens the workspace, ' +
+         (composition.heads.includes('data') ? 'Show Model names the model, ' : '') +
          (diagrams.length > 0 ? 'the diagram draws, ' : '') +
          'and the server reports a broken reference',
       '- `test/vscode-version.mts` — the VS Code release the smoke test runs',
@@ -3396,6 +3507,7 @@ function hostVscodeFiles(composition: InitComposition): InitFile[] {
       fixed('playwright.config.mts'),
       fixed('start.mjs'),
       { path: 'host-vscode/src/extension.ts', content: hostVscodeExtensionFile(composition) },
+      ...(composition.heads.includes('data') ? [fixed('src/show-model-command.ts')] : []),
       ...(diagrams.length > 0 ? [fixed('tsconfig.webview.json'), fixed('esbuild.mjs'), fixed('src/webview/diagram.css')] : []),
       ...diagrams.flatMap(grammar => [
          grammarTemplate('host-vscode/src/__GRAMMAR_ID__-diagram-editor.ts', composition, grammar),
@@ -3404,6 +3516,484 @@ function hostVscodeFiles(composition: InitComposition): InitFile[] {
       { path: 'host-vscode/test/smoke.spec.mts', content: hostVscodeSmokeSpec(composition) },
       fixed('test/vscode-version.mts'),
       fixed('test/install-vscode.mts')
+   ];
+}
+
+/**
+ * The Theia release range of both Theia members, the one the framework's own
+ * Theia example takes, so a scaffold builds against what the repo tests. 1.75
+ * is the first that bundles with esbuild, which the application's files assume.
+ */
+const THEIA_RANGE = '^1.75.0';
+
+/**
+ * What each head adds to the Theia extension; `base` is the connection hardening
+ * and editor sync every one gets. With the third-party entries below, they name
+ * the peers of the framework's Theia packages, so an installer that adds no peers
+ * still finds them.
+ */
+const THEIA_FRAMEWORK_DEPENDENCIES: Record<InitHead | 'base', readonly string[]> = {
+   base: ['@hydranium/client-theia', '@hydranium/protocol'],
+   lsp: [],
+   data: ['@hydranium/data-client-theia'],
+   glsp: ['@hydranium/glsp-client', '@hydranium/glsp-client-theia']
+};
+const THEIA_THIRD_PARTY_DEPENDENCIES: Record<InitHead | 'base', Readonly<Record<string, string>>> = {
+   base: {
+      '@theia/core': THEIA_RANGE,
+      '@theia/editor': THEIA_RANGE,
+      '@theia/filesystem': THEIA_RANGE,
+      '@theia/output': THEIA_RANGE,
+      inversify: '^6.1.3',
+      'vscode-jsonrpc': '9.0.0'
+   },
+   lsp: {},
+   data: { '@theia/workspace': THEIA_RANGE },
+   glsp: {
+      '@eclipse-glsp/client': '2.7.0',
+      '@eclipse-glsp/theia-integration': '2.7.0',
+      '@theia/process': THEIA_RANGE,
+      '@theia/workspace': THEIA_RANGE
+   }
+};
+
+/** The Theia extension's third-party pins for `heads`, for its manifest and a workspace root's. */
+function theiaThirdPartyDependencies(heads: readonly InitHead[]): Array<[string, string]> {
+   return (['base', ...heads] as const).flatMap(head => Object.entries(THEIA_THIRD_PARTY_DEPENDENCIES[head]));
+}
+
+/**
+ * The Theia packages the application assembles: the workbench a user expects,
+ * and `plugin-ext` with its VS Code API to sideload the servers extension.
+ */
+const HOST_THEIA_BROWSER_DEPENDENCIES: readonly string[] = [
+   '@theia/core',
+   '@theia/editor',
+   '@theia/filesystem',
+   '@theia/markers',
+   '@theia/messages',
+   '@theia/monaco',
+   '@theia/navigator',
+   '@theia/output',
+   '@theia/plugin-ext',
+   '@theia/plugin-ext-vscode',
+   '@theia/preferences',
+   '@theia/process',
+   '@theia/workspace'
+];
+
+/** The Theia extension's `theiaExtensions` entries: one per head it forwards, and one per diagram. */
+function theiaExtensionEntries(composition: InitComposition): Array<Record<string, string>> {
+   const id = composition.projectId;
+   return [
+      {
+         frontendPreload: `lib/browser/${id}-connection-preload-module`,
+         frontend: `lib/browser/${id}-frontend-module`,
+         backend: `lib/node/${id}-connection-backend-module`
+      },
+      ...(composition.heads.includes('data') ? [{ backend: `lib/node/${id}-data-backend-module` }] : []),
+      ...(composition.heads.includes('glsp') ? [{ backend: `lib/node/${id}-glsp-backend-module` }] : []),
+      ...composition.grammars
+         .filter(grammar => grammar.diagram)
+         .map(grammar => ({ frontend: `lib/browser/${grammar.grammarId}-diagram-frontend-module` }))
+   ];
+}
+
+/** The Theia extension's `package.json`. Private unless `--public`, as the client member is. */
+function theiaPackageJson(composition: InitComposition): string {
+   const dependencies: Record<string, string> = {
+      // The socket heads' host commands, and the data head's model type.
+      ...(socketHeads(composition).length > 0 ? { [memberPackageName(composition, 'protocol')]: MEMBER_PIN } : {}),
+      ...(composition.heads.includes('glsp') ? { [memberPackageName(composition, 'client')]: MEMBER_PIN } : {}),
+      ...Object.fromEntries(theiaThirdPartyDependencies(composition.heads))
+   };
+   for (const head of ['base', ...composition.heads] as const) {
+      for (const framework of THEIA_FRAMEWORK_DEPENDENCIES[head]) {
+         dependencies[framework] = frameworkPin(composition);
+      }
+   }
+   return `{
+  "name": "${memberPackageName(composition, 'theia')}",
+  "version": "0.0.0",
+${composition.packaging.private ? '  "private": true,\n' : ''}  "description": "The ${composition.name} Theia extension: ${theiaParts(composition)}.",
+  "license": "UNLICENSED",
+  "author": "",
+  "files": [
+    "lib",
+    "src",
+    "style"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf lib tsconfig.tsbuildinfo",
+${lintScript(forMember(composition, 'theia'), 'src')}    "watch": "tsc --watch"
+  },
+  "dependencies": {
+${sortedBlock(dependencies, '    ')}
+  },
+  "devDependencies": {
+${sortedBlock({ '@types/node': '^22.0.0', rimraf: '^5.0.0', typescript: '^7.0.2' }, '    ')}
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "theiaExtensions": ${jsonAt(theiaExtensionEntries(composition), '  ')}
+}
+`;
+}
+
+/** What the Theia extension brings, as one phrase. */
+function theiaParts(composition: InitComposition): string {
+   return listPhrase([
+      'reconnect hardening',
+      ...(composition.heads.includes('data') ? ['a Show Model command reading a file through the data head'] : []),
+      ...(composition.grammars.some(grammar => grammar.diagram) ? ['a diagram editor for each diagram'] : [])
+   ]);
+}
+
+/** The extension's one frontend module: the logger, the connection diagnostics and editor sync, and each head's client. */
+function theiaFrontendModuleFile(composition: InitComposition): string {
+   const id = composition.projectId;
+   const name = composition.name;
+   const data = composition.heads.includes('data');
+   const glsp = composition.heads.includes('glsp');
+   const imports = [
+      ...(glsp ? ["import { GLSPClientContribution } from '@eclipse-glsp/theia-integration';"] : []),
+      "import { bindChannelLogger, bindConnectionDiagnostics, bindEditorDiskSync } from '@hydranium/client-theia/browser';",
+      ...(data
+         ? [
+              "import { bindDataConnection } from '@hydranium/data-client-theia/browser';",
+              "import { CommandContribution } from '@theia/core';"
+           ]
+         : []),
+      "import { ContainerModule } from '@theia/core/shared/inversify';",
+      ...(data
+         ? [
+              `import { ${name}DataConnection } from './${id}-data-connection.js';`,
+              `import { ${name}DataPort } from './${id}-data-port.js';`
+           ]
+         : []),
+      ...(glsp ? [`import { ${name}GlspClientContribution } from './${id}-glsp-client-contribution.js';`] : []),
+      ...(data ? [`import { ${name}ShowModelCommand } from './${id}-show-model-command.js';`] : [])
+   ];
+   const dataBlock = data
+      ? `
+
+   // The data head: one connection, opened when the command first runs.
+   bind(${name}DataPort).toSelf().inSingletonScope();
+   bindDataConnection(bind, isBound, ${name}DataConnection);
+   bind(${name}ShowModelCommand).toSelf().inSingletonScope();
+   bind(CommandContribution).toService(${name}ShowModelCommand);`
+      : '';
+   const glspBlock = glsp
+      ? `
+
+   // One GLSP client for every diagram, so each diagram module skips binding its own.
+   bind(${name}GlspClientContribution).toSelf().inSingletonScope();
+   bind(GLSPClientContribution).toService(${name}GlspClientContribution);`
+      : '';
+   return `${wrapComment(
+      `The ${name} Theia extension's frontend: ${listPhrase([
+         'the connection’s lifecycle in an Output channel',
+         'a warning when an outage outlasts the offline buffer',
+         'editor disk sync',
+         ...(data ? ['the data head’s connection and the Show Model command'] : []),
+         ...(glsp ? ['the GLSP client the diagrams share'] : [])
+      ])}.`
+   )}
+
+${imports.join('\n')}
+
+export default new ContainerModule((bind, _unbind, isBound, rebind) => {
+   bindChannelLogger(bind, { channelName: '${name} Connection' });
+   bindConnectionDiagnostics(bind);
+   // Keeps an editor from writing over a file a head saved while it held the same text unsaved.
+   bindEditorDiskSync(bind, isBound, rebind);${dataBlock}${glspBlock}
+});
+`;
+}
+
+/** The Theia extension's README. */
+function theiaReadme(composition: InitComposition): string {
+   const id = composition.projectId;
+   const data = composition.heads.includes('data');
+   const glsp = composition.heads.includes('glsp');
+   const diagrams = composition.grammars.filter(grammar => grammar.diagram);
+   const intro = [
+      `The ${composition.name} Theia extension: ${theiaParts(composition)}.`,
+      socketHeads(composition).length > 0
+         ? 'The language client is not here: the application sideloads `../vscode-servers`, which starts the server and answers each socket head’s port under a host command, and the backend modules forward the page’s channels to those ports.'
+         : 'The language client is not here: the application sideloads `../vscode-servers`, which starts the server.',
+      'The application in `../host-theia-browser` runs it.'
+   ];
+   const before = [...(socketHeads(composition).length > 0 ? ['protocol'] : []), ...(glsp ? ['client'] : [])];
+   const lines = [
+      `# ${memberPackageName(composition, 'theia')}`,
+      '',
+      ...wrapProse(intro.join(' ')),
+      '',
+      '```bash',
+      'npm run build   # compile into lib/' +
+         (before.length > 0 ? `; build the ${before.join(' and ')} package${before.length > 1 ? 's' : ''} first` : ''),
+      '```',
+      '',
+      '## Layout',
+      '',
+      `- \`src/browser/${id}-connection-preload-module.ts\` and \`src/node/${id}-connection-backend-module.ts\` — reconnect hardening, sized by the application’s \`connectionBufferBytes\``,
+      `- \`src/browser/${id}-frontend-module.ts\` — the frontend bindings`,
+      ...(data
+         ? [
+              `- \`src/browser/${id}-data-port.ts\` and \`${id}-data-connection.ts\` — the data head’s connection`,
+              `- \`src/browser/${id}-show-model-command.ts\` — \`${composition.name}: Show Model\`, reading the current file through the data head`,
+              `- \`src/node/${id}-data-backend-module.ts\` — forwards the data channel to the data head’s port`
+           ]
+         : []),
+      ...(glsp
+         ? [
+              `- \`src/common/${id}-glsp-contribution.ts\` — the id the GLSP client and its forwarder share`,
+              `- \`src/browser/${id}-glsp-client-contribution.ts\` — the GLSP client every diagram shares`,
+              `- \`src/node/${id}-glsp-backend-module.ts\` — forwards the GLSP channel to the GLSP head’s port`
+           ]
+         : []),
+      ...diagrams.map(
+         grammar =>
+            `- \`src/browser/${grammar.grammarId}-diagram-frontend-module.ts\` — the \`${grammar.grammar}\` diagram editor, over the client package’s diagram`
+      ),
+      ...(diagrams.length > 0 ? ['- `style/diagram.css` — the diagrams’ colours, from the Theia theme'] : []),
+      ''
+   ];
+   return project(lines.join('\n'), composition);
+}
+
+/** The Theia extension: what a Theia application runs of the language, beside the sideloaded servers extension. */
+function theiaFiles(composition: InitComposition): InitFile[] {
+   const fixed = (file: string): InitFile => ({
+      path: project(`theia/${file}`, composition),
+      content: project(template(`theia/${file}`), composition)
+   });
+   const id = composition.projectId;
+   const data = composition.heads.includes('data');
+   const glsp = composition.heads.includes('glsp');
+   const diagrams = composition.grammars.filter(grammar => grammar.diagram);
+   return [
+      { path: 'theia/package.json', content: theiaPackageJson(composition) },
+      ignoreFile('theia'),
+      { path: 'theia/README.md', content: theiaReadme(composition) },
+      fixed('tsconfig.json'),
+      fixed('src/browser/__PROJECT_ID__-connection-preload-module.ts'),
+      { path: `theia/src/browser/${id}-frontend-module.ts`, content: theiaFrontendModuleFile(composition) },
+      fixed('src/node/__PROJECT_ID__-connection-backend-module.ts'),
+      ...(data
+         ? [
+              fixed('src/browser/__PROJECT_ID__-data-port.ts'),
+              fixed('src/browser/__PROJECT_ID__-data-connection.ts'),
+              fixed('src/browser/__PROJECT_ID__-show-model-command.ts'),
+              fixed('src/node/__PROJECT_ID__-data-backend-module.ts')
+           ]
+         : []),
+      ...(glsp
+         ? [
+              fixed('src/common/__PROJECT_ID__-glsp-contribution.ts'),
+              fixed('src/browser/__PROJECT_ID__-glsp-client-contribution.ts'),
+              fixed('src/node/__PROJECT_ID__-glsp-backend-module.ts')
+           ]
+         : []),
+      ...diagrams.map(grammar => grammarTemplate('theia/src/browser/__GRAMMAR_ID__-diagram-frontend-module.ts', composition, grammar)),
+      ...(diagrams.length > 0 ? [fixed('style/diagram.css')] : [])
+   ];
+}
+
+/**
+ * The Theia application's `package.json`. Always private, as every host is.
+ *
+ * Theia's default `frontendConnectionTimeout` of 0 ends the session on any
+ * dropped socket, and the page reloads; a minute lets the reconnect hardening
+ * resume it.
+ */
+function hostTheiaBrowserPackageJson(composition: InitComposition): string {
+   const dependencies: Record<string, string> = {
+      [memberPackageName(composition, 'theia')]: MEMBER_PIN,
+      ...Object.fromEntries(HOST_THEIA_BROWSER_DEPENDENCIES.map(name => [name, THEIA_RANGE]))
+   };
+   const devDependencies: Record<string, string> = {
+      // Built before this application, whose start links it into plugins/.
+      [memberPackageName(composition, 'vscode-servers')]: MEMBER_PIN,
+      '@playwright/test': '^1.55.0',
+      '@theia/cli': THEIA_RANGE,
+      '@types/node': '^22.0.0',
+      rimraf: '^5.0.0',
+      typescript: '^7.0.2'
+   };
+   const theia = {
+      target: 'browser',
+      frontend: {
+         config: {
+            applicationName: composition.name,
+            connectionBufferBytes: 102400,
+            preferences: { 'security.workspace.trust.enabled': false }
+         }
+      },
+      backend: { config: { connectionBufferBytes: 102400, frontendConnectionTimeout: 60000 } }
+   };
+   return `{
+  "name": "${memberPackageName(composition, 'host-theia-browser')}",
+  "version": "0.0.0",
+  "private": true,
+  "description": "${composition.name} in a Theia browser application: the Theia extension, and the servers extension sideloaded for the language client.",
+  "license": "UNLICENSED",
+  "author": "",
+  "scripts": {
+    "build": "theia build --mode development && npm run typecheck",
+    "clean": "rimraf lib src-gen plugins gen-esbuild.browser.mjs gen-esbuild.node.mjs smoke-workspace test-results playwright-report",
+${lintScript(forMember(composition, 'host-theia-browser'), 'test')}    "start": "node start.mjs",
+    "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
+    "test:e2e:install": "playwright install chromium",
+    "typecheck": "tsc --noEmit -p tsconfig.e2e.json"
+  },
+  "dependencies": {
+${sortedBlock(dependencies, '    ')}
+  },
+  "devDependencies": {
+${sortedBlock(devDependencies, '    ')}
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "theia": ${jsonAt(theia, '  ')}
+}
+`;
+}
+
+/**
+ * The Theia smoke test: the application opens a copy of the starter
+ * workspace, and each head answers.
+ */
+function hostTheiaBrowserSmokeSpec(composition: InitComposition): string {
+   const data = composition.heads.includes('data');
+   const diagram = composition.grammars.find(grammar => grammar.diagram);
+   const primary = diagram ?? composition.grammars[0];
+   const file = `nodes.${primary.extensions[0]}`;
+   const showModelSteps = data
+      ? `
+   // The data head reads the open file, with focus in the Explorer beside it.
+   await page.locator('.theia-FileTree .theia-TreeNode', { hasText: '${file}' }).click();
+   await expect(page.locator('.theia-FileTree:focus-within')).toHaveCount(1);
+   await runCommand(page, '${composition.name}: Show Model');
+   // \`first()\`: Theia lists a notification in its toast and in the notification centre.
+   await expect(
+      page.locator('.theia-notification-message').filter({ hasText: '${file} holds a ${primary.entryRule}' }).first()
+   ).toBeVisible();
+`
+      : '';
+   const diagramSteps = diagram
+      ? `
+   // The diagram file opens in its diagram, which draws the two starter nodes.
+   // In the editor's copy: sprotty measures shapes in a hidden one on the page.
+   await expect(page.locator('.sprotty:not(.sprotty-hidden) .sprotty-node')).toHaveCount(2);
+`
+      : '';
+   const textSteps = diagram
+      ? `   // Then as text, through the Explorer's Open With.
+   await page.locator('.theia-FileTree .theia-TreeNode', { hasText: '${file}' }).click({ button: 'right' });
+   await page.locator('.lm-Menu-item', { hasText: 'Open With...' }).click();
+   await page.locator('.quick-input-list .monaco-list-row', { hasText: 'Text Editor' }).click();
+`
+      : '';
+   return `${wrapComment(
+      `Theia opens a copy of the starter workspace with this application's extensions, ${listPhrase([
+         ...(diagram ? ['the diagram file draws in its diagram editor'] : []),
+         ...(data ? ['the data head reads the file'] : []),
+         'the server reports a reference that resolves to nothing'
+      ])}.`
+   )}
+
+import { expect, test, type Page } from '@playwright/test';
+
+test('${listPhrase([...(diagram ? ['draws the diagram'] : []), ...(data ? ['reads the model'] : []), 'reports a broken reference'])}', async ({ page }) => {
+   await page.goto('/');
+   // Up once the loading screen is gone; a key pressed before then is lost.
+   await expect(page.locator('.theia-preload')).toHaveCount(0);
+   await page.keyboard.press('ControlOrMeta+Shift+E');
+   await expect(page.locator('.theia-FileTree .theia-TreeNode', { hasText: '${file}' })).toBeVisible();
+   await quickOpen(page, '${file}');
+${diagramSteps}${showModelSteps}
+${textSteps}   const editor = page.locator('.monaco-editor .view-lines').first();
+   await expect(editor).toContainText('node First');
+   await editor.click();
+   await page.keyboard.press('ControlOrMeta+End');
+   // In one edit: typed key by key, the half-typed reference is reported on the way.
+   await page.keyboard.insertText('\\nnode Broken -> Missing');
+   await expect(page.locator('.monaco-editor .squiggly-error').first()).toBeVisible();
+});
+
+/** Open \`file\` through Quick Open, so it gets the editor a user would. */
+async function quickOpen(page: Page, file: string): Promise<void> {
+   await page.keyboard.press('ControlOrMeta+P');
+   const input = page.locator('.quick-input-widget input');
+   await input.fill(file);
+   await expect(page.locator('.quick-input-list .monaco-list-row').first()).toContainText(file);
+   await input.press('Enter');
+   await expect(page.locator('.quick-input-widget')).toBeHidden();
+}
+
+/** Run the command whose palette entry reads \`label\`, checked before Enter, since the match is fuzzy. */
+async function runCommand(page: Page, label: string): Promise<void> {
+   await page.keyboard.press('F1');
+   const input = page.locator('.quick-input-widget input');
+   await input.fill(\`>\${label}\`);
+   await expect(page.locator('.quick-input-list .monaco-list-row.focused')).toContainText(label);
+   await input.press('Enter');
+   await expect(page.locator('.quick-input-widget')).toBeHidden();
+}
+`;
+}
+
+/** The Theia application's README. */
+function hostTheiaBrowserReadme(composition: InitComposition): string {
+   const intro = [
+      `${composition.name} in a Theia browser application: the Theia extension in \`../theia\`, and \`../vscode-servers\` sideloaded through \`@theia/plugin-ext\`, which starts the server and its language client.`,
+      'The backend runs the server, so this is a Node application; Theia serves the page.',
+      ...(composition.grammars.some(grammar => grammar.diagram)
+         ? ['The servers extension contributes no editor, so a diagram file opens in the Theia diagram editor alone.']
+         : [])
+   ];
+   const lines = [
+      `# ${memberPackageName(composition, 'host-theia-browser')}`,
+      '',
+      ...wrapProse(intro.join(' ')),
+      '',
+      '```bash',
+      'npm run build              # bundle and type-check; build the members first',
+      'npm start                  # Theia at http://localhost:3000 on ../workspace; THEIA_PORT picks another port',
+      'npm run test:e2e:install   # download the Chromium the smoke test drives, once',
+      'npm run test:e2e           # the smoke test, which starts the application itself',
+      '```',
+      '',
+      ...wrapProse(
+         'The `theia` block of `package.json` sets `frontendConnectionTimeout`, without which Theia ends the session on any dropped socket and the page reloads, and `connectionBufferBytes`, the messages kept while the socket is down; the Theia extension’s connection modules read both.'
+      ),
+      '',
+      '## Layout',
+      '',
+      '- `start.mjs` — `npm start`: links `../vscode-servers` into `plugins/`, then starts the backend on `THEIA_PORT`, on a folder given as its argument or `../workspace`',
+      '- `playwright.config.mts` — the smoke tier, on port 4938 or `THEIA_PORT`, on a copy of `../workspace` in `smoke-workspace/`',
+      '- `test/smoke.spec.mts` — Theia opens the workspace and each head answers',
+      ''
+   ];
+   return project(lines.join('\n'), composition);
+}
+
+/** The Theia browser application: the Theia extension and the sideloaded servers extension. */
+function hostTheiaBrowserFiles(composition: InitComposition): InitFile[] {
+   const fixed = (file: string): InitFile => projectTemplate(`host-theia-browser/${file}`, composition);
+   return [
+      { path: 'host-theia-browser/package.json', content: hostTheiaBrowserPackageJson(composition) },
+      ignoreFile('host-theia-browser'),
+      { path: 'host-theia-browser/README.md', content: hostTheiaBrowserReadme(composition) },
+      fixed('start.mjs'),
+      fixed('playwright.config.mts'),
+      fixed('tsconfig.e2e.json'),
+      { path: 'host-theia-browser/test/smoke.spec.mts', content: hostTheiaBrowserSmokeSpec(composition) }
    ];
 }
 
@@ -3458,9 +4048,11 @@ export function buildInitTemplates(composition: InitComposition): InitFile[] {
       ...protocolFiles(composition),
       ...serverFiles(composition),
       ...(composition.heads.includes('glsp') ? clientFiles(composition) : []),
-      ...(composition.hosts.includes('vscode') ? vscodeServersFiles(composition) : []),
+      ...(emitsVscodeServers(composition) ? vscodeServersFiles(composition) : []),
+      ...(composition.hosts.includes('theia-browser') ? theiaFiles(composition) : []),
       ...(composition.hosts.includes('browser') ? hostBrowserFiles(composition) : []),
       ...(composition.hosts.includes('vscode') ? hostVscodeFiles(composition) : []),
+      ...(composition.hosts.includes('theia-browser') ? hostTheiaBrowserFiles(composition) : []),
       ...workspaceFiles(composition)
    ];
 }

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // `theia build` assembles the app from `package.json` and `esbuild.mjs`,
+    // and type-checks the smoke tier, whose files the inherited inputs miss.
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "test/**/*",
+        "package.json",
+        "esbuild.mjs",
+        "playwright.config.mts",
+        "tsconfig.e2e.json"
+      ],
+      "outputs": ["lib/**", "src-gen/**"]
+    }
+  }
+}

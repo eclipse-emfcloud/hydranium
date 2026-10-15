@@ -1,0 +1,24 @@
+// The extension, compiled to CommonJS in `lib/`, which the Theia application
+// bundles: `src/browser/` into the page, `src/node/` into the backend. The
+// decorator options are inversify's, and a stylesheet import is left to the
+// bundler, so tsc does not resolve it.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "lib",
+    "strict": true,
+    "strictPropertyInitialization": false,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "noUncheckedSideEffectImports": false,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "declaration": true,
+    "types": ["node"]
+  },
+  "include": ["src"]
+}

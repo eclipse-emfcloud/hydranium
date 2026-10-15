@@ -6,7 +6,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 /** The port `npm start` serves on; set `PORT` to run beside another server. */
-const PORT = Number(process.env.PORT ?? 4937);
+const PORT = Number(process.env.PORT || 4937);
 
 export default defineConfig({
    testDir: './test',
