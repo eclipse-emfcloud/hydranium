@@ -84,19 +84,20 @@ describe('init scaffold golden', () => {
    });
 
    /**
-    * The three-head shape with a browser host, pinned because it is the largest
+    * The three-head shape with both hosts, pinned because it is the largest
     * thing `init` emits — DI wiring, type ids, an AST→GModel walk, the starter
-    * operation handler and the test that runs it, the client package, and the
-    * page and worker around them — and because it is the only golden where the
-    * derived dependency blocks carry the `@eclipse-glsp/*` set.
+    * operation handler and the test that runs it, the client package, the page
+    * and worker around them, and both VS Code extensions — and because it is
+    * the only golden where the derived dependency blocks carry the
+    * `@eclipse-glsp/*` set.
     *
     * Single-grammar deliberately: with one grammar the diagram is derived rather
     * than marked, which is the shape a new adopter starting from `--heads
     * lsp,data,glsp` gets. What the host leaves out for fewer heads is the unit
     * tier's to pin.
     */
-   it('renders the pinned three-head scaffold with a browser host', async () => {
-      await expect(renderScaffold('Bookstore', undefined, ['lsp', 'data', 'glsp'], ['browser'])).toMatchFileSnapshot(
+   it('renders the pinned three-head scaffold with the browser and VS Code hosts', async () => {
+      await expect(renderScaffold('Bookstore', undefined, ['lsp', 'data', 'glsp'], ['browser', 'vscode'])).toMatchFileSnapshot(
          'fixtures/init-scaffold-glsp.txt'
       );
    });

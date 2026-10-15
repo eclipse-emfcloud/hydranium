@@ -19,7 +19,8 @@ import * as vscode from 'vscode';
 import { ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE } from '../../src/process-diagram-editor';
 import { OrderFlowPropertiesPanel } from '../../src/properties-panel';
 
-const EXTENSION_NAME = '@hydranium/example-order-flow-vscode';
+/** The extension under test, and the servers extension the run loads beside it. */
+const EXTENSION_NAMES = ['@hydranium/example-order-flow-vscode', '@hydranium/example-order-flow-vscode-servers'];
 
 /** URI of `relativePath` in the workspace the run opened. */
 function workspaceUri(relativePath: string): vscode.Uri {
@@ -75,15 +76,17 @@ describe('order-flow extension in a VS Code host', () => {
       await vscode.commands.executeCommand('workbench.action.closeAllEditors');
    });
 
-   it('activates', async () => {
-      const extension = vscode.extensions.all.find(candidate => candidate.packageJSON.name === EXTENSION_NAME);
-      assert.ok(extension, `${EXTENSION_NAME} is loaded as the extension under development`);
-      // Rejects with whatever `activate` threw.
-      await extension.activate();
-      assert.equal(extension.isActive, true);
+   it('activates beside the servers extension', async () => {
+      for (const name of EXTENSION_NAMES) {
+         const extension = vscode.extensions.all.find(candidate => candidate.packageJSON.name === name);
+         assert.ok(extension, `${name} is loaded as an extension under development`);
+         // Rejects with whatever `activate` threw, such as a command id the other one registered too.
+         await extension.activate();
+         assert.equal(extension.isActive, true, `${name} is active`);
+      }
    });
 
-   it('answers each head-port command with a port that accepts a connection', async () => {
+   it('answers each head-port command from the servers extension with a port that accepts a connection', async () => {
       for (const command of Object.values(ORDER_FLOW_HOST_PORT_COMMANDS)) {
          const port = await vscode.commands.executeCommand<number>(command);
          assert.ok(typeof port === 'number' && port > 0, `${command} answers with a port, got ${String(port)}`);

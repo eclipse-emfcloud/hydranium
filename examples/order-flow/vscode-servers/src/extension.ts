@@ -29,7 +29,9 @@
  * contributes an editor, a view, or a command palette entry.
  */
 
-import { startOrderFlowLanguageClient } from './language-client';
+import { registerPortCommands } from '@hydranium/client-vscode/node';
+import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_SERVER_PORT_COMMAND } from '@hydranium/example-order-flow-protocol';
+import { ORDER_FLOW_HOST_PORT_COMMANDS, startOrderFlowLanguageClient } from './language-client';
 import type { ExtensionContext } from 'vscode';
 import type { LanguageClient } from 'vscode-languageclient/node';
 
@@ -37,6 +39,13 @@ let client: LanguageClient | undefined;
 
 export async function activate(context: ExtensionContext): Promise<void> {
    client = await startOrderFlowLanguageClient(context);
+
+   // Here and not in the shared launch: VS Code throws on a second registration
+   // of one id, so the VS Code shell would fail to activate beside this one.
+   registerPortCommands(context, client, {
+      [ORDER_FLOW_HOST_PORT_COMMANDS.dataServer]: ORDER_FLOW_DATA_SERVER_PORT_COMMAND,
+      [ORDER_FLOW_HOST_PORT_COMMANDS.glsp]: ORDER_FLOW_GLSP_SERVER_PORT_COMMAND
+   });
 }
 
 export async function deactivate(): Promise<void> {

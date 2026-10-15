@@ -15,7 +15,7 @@
 import type { InitHead } from './init.js';
 
 /** The hosts a scaffold can emit, in the order a workspace lists them. */
-export const INIT_HOSTS = ['browser'] as const;
+export const INIT_HOSTS = ['browser', 'vscode'] as const;
 
 /** One host application — see {@link INIT_HOSTS}. */
 export type InitHost = (typeof INIT_HOSTS)[number];
@@ -23,11 +23,14 @@ export type InitHost = (typeof INIT_HOSTS)[number];
 /**
  * The heads a host needs at least one of: those whose client edits and saves
  * the files. The browser page has no filesystem of its own, so it saves through
- * the LSP head's editor or the GLSP head's diagram; every other head is
- * optional, and a head the host does not know is left unused.
+ * the LSP head's editor or the GLSP head's diagram. VS Code owns the files and
+ * reaches the server through its language client, so it needs the LSP head.
+ * Every other head is optional, and a head the host does not know is left
+ * unused.
  */
 const EDITING_HEADS: Record<InitHost, readonly InitHead[]> = {
-   browser: ['lsp', 'glsp']
+   browser: ['lsp', 'glsp'],
+   vscode: ['lsp']
 };
 
 /** True for a string naming one of {@link INIT_HOSTS}. */

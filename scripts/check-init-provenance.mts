@@ -392,7 +392,7 @@ const BOOKSTORE_INVOCATION: Invocation = {
    name: 'Bookstore',
    grammars: [{ name: 'Bookstore' }],
    heads: ['lsp', 'data', 'glsp'],
-   hosts: ['browser'],
+   hosts: ['browser', 'vscode'],
    monorepo: true,
    scope: '@hydranium'
 };
@@ -412,7 +412,7 @@ const BOOKSTORE_MANIFEST: Manifest = {
    'protocol/.gitignore': { verdict: 'identical', reason: "the scaffold's ignore file, which a member writes too" },
    'protocol/README.md': { verdict: 'identical', reason: 'the scaffold README for the shared package' },
    'protocol/src/index.ts': { verdict: 'identical', reason: 'the scaffolded barrel' },
-   'protocol/src/head-ports.ts': { verdict: 'identical', reason: 'both socket-head port commands, as emitted' },
+   'protocol/src/head-ports.ts': { verdict: 'identical', reason: 'both socket-head port requests and host commands, as emitted' },
    'protocol/src/bookstore-diagram-types.ts': { verdict: 'identical', reason: 'the emitted diagram type ids' },
    'server/package.json': { verdict: 'identical', reason: 'the scaffold names it under the recorded scope' },
    // The scaffold's rules. This repo's root covers them all too, so bookstore is
@@ -507,6 +507,30 @@ const BOOKSTORE_MANIFEST: Manifest = {
    'host-browser/src/monaco-editor-core-worker.d.ts': { verdict: 'identical', reason: "the emitted declaration of that entry's import" },
    'host-browser/src/posix-path-shim.ts': { verdict: 'identical', reason: 'the emitted path shim' },
    'host-browser/test/smoke.spec.mts': { verdict: 'identical', reason: 'the emitted smoke test' },
+   // The VS Code extensions and the smoke test the e2e-vscode job runs: the only
+   // place a scaffolded extension is loaded in VS Code.
+   'vscode-servers/package.json': { verdict: 'identical', reason: 'the scaffold names it unscoped, as vsce requires' },
+   'vscode-servers/.gitignore': { verdict: 'identical', reason: "the scaffold's ignore file, which a member writes too" },
+   'vscode-servers/README.md': { verdict: 'identical', reason: 'the scaffold README for the servers-only extension' },
+   'vscode-servers/tsconfig.json': { verdict: 'identical', reason: 'the emitted extension project, self-contained' },
+   'vscode-servers/src/extension.ts': { verdict: 'identical', reason: 'the emitted activation and port commands' },
+   'vscode-servers/src/language-client.ts': { verdict: 'identical', reason: 'the emitted server launch' },
+   'host-vscode/package.json': { verdict: 'identical', reason: 'the scaffold names it unscoped, as vsce requires' },
+   'host-vscode/.gitignore': { verdict: 'identical', reason: "the scaffold's ignore file, which a member writes too" },
+   'host-vscode/README.md': { verdict: 'identical', reason: 'the scaffold README for the VS Code extension' },
+   'host-vscode/tsconfig.json': { verdict: 'identical', reason: 'the emitted extension project, self-contained' },
+   'host-vscode/tsconfig.webview.json': { verdict: 'identical', reason: 'the emitted webview project, self-contained' },
+   'host-vscode/tsconfig.e2e.json': { verdict: 'identical', reason: 'the emitted smoke-tier project, self-contained' },
+   'host-vscode/esbuild.mjs': { verdict: 'identical', reason: 'the emitted webview bundling' },
+   'host-vscode/playwright.config.mts': { verdict: 'identical', reason: 'the emitted smoke-tier configuration' },
+   'host-vscode/start.mjs': { verdict: 'identical', reason: 'the emitted VS Code launch for npm start' },
+   'host-vscode/src/extension.ts': { verdict: 'identical', reason: 'the emitted activation and diagram editor' },
+   'host-vscode/src/bookstore-diagram-editor.ts': { verdict: 'identical', reason: 'the emitted custom editor' },
+   'host-vscode/src/webview/bookstore-diagram.ts': { verdict: 'identical', reason: 'the emitted diagram webview' },
+   'host-vscode/src/webview/diagram.css': { verdict: 'identical', reason: "the emitted webview's size and colours" },
+   'host-vscode/test/smoke.spec.mts': { verdict: 'identical', reason: 'the emitted smoke test' },
+   'host-vscode/test/vscode-version.mts': { verdict: 'identical', reason: 'the emitted VS Code pin' },
+   'host-vscode/test/install-vscode.mts': { verdict: 'identical', reason: 'the emitted VS Code download' },
    'workspace/nodes.bookstore': { verdict: 'identical', reason: 'the starter model every host and the CLI open' },
    'workspace/references.bookstore': { verdict: 'identical', reason: 'the starter model referencing the other file' }
 };
@@ -862,6 +886,28 @@ const SCAFFOLD_PIN_SOURCES: Record<string, PinSource> = {
    'monaco-editor-core': { file: 'packages/client-browser/package.json', path: ['devDependencies', 'monaco-editor-core'], rule: 'exact' },
    '@eclipse-glsp/client': { file: 'packages/glsp-client/package.json', path: ['devDependencies', '@eclipse-glsp/client'], rule: 'exact' },
    '@playwright/test': { file: 'examples/order-flow/browser/package.json', path: ['devDependencies', '@playwright/test'], rule: 'exact' },
+   // The VS Code extension's, from the packages and the example it is built like.
+   '@eclipse-glsp/vscode-integration': {
+      file: 'packages/glsp-client-vscode/package.json',
+      path: ['devDependencies', '@eclipse-glsp/vscode-integration'],
+      rule: 'exact'
+   },
+   '@eclipse-glsp/vscode-integration-webview': {
+      file: 'packages/glsp-client-vscode/package.json',
+      path: ['devDependencies', '@eclipse-glsp/vscode-integration-webview'],
+      rule: 'exact'
+   },
+   '@types/vscode': { file: 'examples/order-flow/vscode/package.json', path: ['devDependencies', '@types/vscode'], rule: 'exact' },
+   '@vscode/test-electron': {
+      file: 'examples/order-flow/vscode/package.json',
+      path: ['devDependencies', '@vscode/test-electron'],
+      rule: 'exact'
+   },
+   'vscode-languageclient': {
+      file: 'examples/order-flow/vscode-servers/package.json',
+      path: ['dependencies', 'vscode-languageclient'],
+      rule: 'exact'
+   },
    // Imported by GLSP's client without a declaration; no manifest here
    // declares it either, so the copy the repo resolves is the source.
    '@vscode/codicons': { file: 'package-lock.json', path: ['packages', 'node_modules/@vscode/codicons', 'version'], rule: 'exact' },
@@ -871,6 +917,14 @@ const SCAFFOLD_PIN_SOURCES: Record<string, PinSource> = {
    typescript: { file: 'package.json', path: ['devDependencies', 'typescript'], rule: 'exact' },
    vitest: { file: 'package.json', path: ['devDependencies', 'vitest'], rule: 'exact' }
 };
+
+/** The template pinning the VS Code release a scaffold's smoke test downloads. */
+const VSCODE_VERSION_TEMPLATE = 'packages/cli/templates/host-vscode/test/vscode-version.mts';
+
+/** The `VSCODE_VERSION` literal of a `vscode-version.mts`, or `undefined` when it has none. */
+function readVscodeVersion(file: string): string | undefined {
+   return /export const VSCODE_VERSION = '([^']+)';/.exec(readFileSync(file, 'utf-8'))?.[1];
+}
 
 /** Strip a range operator, then keep `major.minor`. */
 function majorMinor(version: string): string {
@@ -1036,7 +1090,7 @@ function comparePins(emitted: Record<string, string | undefined>, sources: Recor
  */
 function emittedPins(init: InitModule): Record<string, string> {
    const packaging = init.resolveInitPackaging(join(REPO_ROOT, 'examples/pin-probe'), { monorepo: true, npmVersion: DECLARED_NPM });
-   const composition = init.resolveInitComposition('PinProbe', undefined, ['lsp', 'data', 'glsp'], packaging, ['browser']);
+   const composition = init.resolveInitComposition('PinProbe', undefined, ['lsp', 'data', 'glsp'], packaging, ['browser', 'vscode']);
    const manifests = init
       .planInitFiles(composition)
       .filter(file => file.path.endsWith('/package.json'))
@@ -1408,6 +1462,19 @@ async function main() {
       cliProblems.forEach(problem => console.error(`  - ${problem}`));
    } else {
       console.log('✓ packages/cli declares every package `init` scaffolds, at versions the scaffold admits');
+   }
+
+   // The VS Code release a scaffold's smoke test runs, held to the one order-flow's tiers run.
+   const vscodeVersions = [VSCODE_VERSION_TEMPLATE, 'examples/order-flow/vscode/test/vscode-version.mts'].map(file =>
+      readVscodeVersion(join(REPO_ROOT, file))
+   );
+   if (vscodeVersions[0] === undefined || vscodeVersions[0] !== vscodeVersions[1]) {
+      failed = true;
+      console.error(
+         `✗ ${VSCODE_VERSION_TEMPLATE} pins VS Code ${vscodeVersions[0]}, but order-flow's VS Code tiers run ${vscodeVersions[1]}. Move them together.`
+      );
+   } else {
+      console.log(`✓ the scaffold's VS Code smoke test runs the VS Code order-flow's tiers run, ${vscodeVersions[0]}`);
    }
 
    for (const target of TARGETS) {

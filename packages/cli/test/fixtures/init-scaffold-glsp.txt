@@ -9,7 +9,9 @@ package.json
     "protocol",
     "server",
     "client",
-    "host-browser"
+    "vscode-servers",
+    "host-browser",
+    "host-vscode"
   ],
   "scripts": {
     "build": "npm run build --workspaces",
@@ -22,6 +24,8 @@ package.json
     "@eclipse-glsp/graph": "2.7.0",
     "@eclipse-glsp/protocol": "2.7.0",
     "@eclipse-glsp/server": "2.7.0",
+    "@eclipse-glsp/vscode-integration": "2.7.0",
+    "@eclipse-glsp/vscode-integration-webview": "2.7.0",
     "@vscode/codicons": "0.0.45",
     "langium": "4.3.1",
     "monaco-editor-core": "0.56.0",
@@ -148,12 +152,22 @@ protocol/src/head-ports.ts
 // reach the head; both import them from here. A shell that retypes the literal
 // gets no error when it drifts: the framework's port poll retries indefinitely
 // by default.
+//
+// The host commands are the same ports for a host with no language client,
+// such as a Theia app sideloading the servers extension: it runs the command
+// and the extension sends the request.
 
 /** LSP request the host queries to discover the data-server socket port. */
 export const BOOKSTORE_DATA_SERVER_PORT_COMMAND = 'bookstore/data-server/port';
 
 /** LSP request the host queries to discover the GLSP socket port. */
 export const BOOKSTORE_GLSP_SERVER_PORT_COMMAND = 'bookstore/glsp-server/port';
+
+/** Host command the servers extension answers with the data-server socket port. */
+export const BOOKSTORE_DATA_SERVER_HOST_COMMAND = 'bookstore.port.dataServer';
+
+/** Host command the servers extension answers with the GLSP socket port. */
+export const BOOKSTORE_GLSP_SERVER_HOST_COMMAND = 'bookstore.port.glsp';
 
 ==============================================================================
 protocol/src/bookstore-diagram-types.ts
@@ -2193,6 +2207,188 @@ export function initializeBookstoreDiagramContainer(container: Container, ...mod
 }
 
 ==============================================================================
+vscode-servers/package.json
+==============================================================================
+{
+  "name": "bookstore-vscode-servers",
+  "displayName": "Bookstore Servers",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Starts the Bookstore server and publishes its socket heads' ports as host commands, with no editor of its own.",
+  "license": "UNLICENSED",
+  "author": "",
+  "publisher": "bookstore",
+  "main": "./out/extension.js",
+  "scripts": {
+    "build": "npm run copy:syntaxes && tsc",
+    "clean": "rimraf out syntaxes tsconfig.tsbuildinfo",
+    "copy:syntaxes": "node -e \"require('node:fs').cpSync('../server/syntaxes', 'syntaxes', { recursive: true })\"",
+    "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "@hydranium/client-vscode": "^__FRAMEWORK_VERSION__",
+    "bookstore-protocol": "0.0.0",
+    "bookstore-server": "0.0.0",
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.101.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "contributes": {
+    "grammars": [
+      {
+        "language": "bookstore",
+        "scopeName": "source.bookstore",
+        "path": "./syntaxes/bookstore.tmLanguage.json"
+      }
+    ],
+    "languages": [
+      {
+        "id": "bookstore",
+        "aliases": [
+          "Bookstore"
+        ],
+        "extensions": [
+          ".bookstore"
+        ]
+      }
+    ]
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "engines": {
+    "vscode": "^1.101.0"
+  }
+}
+
+==============================================================================
+vscode-servers/.gitignore
+==============================================================================
+node_modules/
+out/
+syntaxes/
+*.tsbuildinfo
+
+==============================================================================
+vscode-servers/README.md
+==============================================================================
+# bookstore-vscode-servers
+
+A VS Code extension that starts the Bookstore server and contributes no
+editor, view or command: the languages, their grammars and the server.
+With a socket head, it also answers each head’s port under a host command,
+which a host without a language client of its own runs, such as a Theia app
+sideloading this extension. The VS Code extension in `../host-vscode` starts
+the server through the same function. Both work side by side, but each
+starts its own server and language client, so diagnostics may show twice:
+install one.
+
+```bash
+npm run build   # copy the server’s grammars and compile into out/; build the server first
+```
+
+- `src/extension.ts` — activation, which starts the server and, with a socket head, registers its port commands
+- `src/language-client.ts` — the server launch, shared with `../host-vscode`
+
+==============================================================================
+vscode-servers/tsconfig.json
+==============================================================================
+// The extension, compiled to CommonJS in `out/`, which the extension host
+// loads. It runs in Node, so it has no DOM. The declarations are for the VS
+// Code extension, which imports the launch from `out/`.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "out",
+    "strict": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "declaration": true,
+    "types": ["node"]
+  },
+  "include": ["src"]
+}
+
+==============================================================================
+vscode-servers/src/extension.ts
+==============================================================================
+// The servers-only extension: it starts the Bookstore server and contributes no
+// editor, view or command. A Theia app sideloads this one rather than the VS
+// Code extension, whose diagram editors would give its files a second editor.
+
+import { registerPortCommands } from '@hydranium/client-vscode/node';
+import {
+   BOOKSTORE_DATA_SERVER_HOST_COMMAND,
+   BOOKSTORE_DATA_SERVER_PORT_COMMAND,
+   BOOKSTORE_GLSP_SERVER_HOST_COMMAND,
+   BOOKSTORE_GLSP_SERVER_PORT_COMMAND
+} from 'bookstore-protocol';
+import type { ExtensionContext } from 'vscode';
+import type { LanguageClient } from 'vscode-languageclient/node';
+import { startBookstoreLanguageClient } from './language-client.js';
+
+let client: LanguageClient | undefined;
+
+export async function activate(context: ExtensionContext): Promise<void> {
+   client = await startBookstoreLanguageClient(context);
+
+   // Each socket head's port as a host command, for a host with no language
+   // client of its own. Not in the shared launch: VS Code throws on a second
+   // registration of one id, so the VS Code extension beside this one would fail
+   // to activate. A pass-through: awaiting anything else in it would hang a
+   // Theia backend on a user dismissing a notification.
+   registerPortCommands(context, client, {
+      [BOOKSTORE_DATA_SERVER_HOST_COMMAND]: BOOKSTORE_DATA_SERVER_PORT_COMMAND,
+      [BOOKSTORE_GLSP_SERVER_HOST_COMMAND]: BOOKSTORE_GLSP_SERVER_PORT_COMMAND
+   });
+}
+
+export async function deactivate(): Promise<void> {
+   await client?.stop();
+   client = undefined;
+}
+
+==============================================================================
+vscode-servers/src/language-client.ts
+==============================================================================
+// Starts the Bookstore server for VS Code, and for a Theia app that sideloads
+// this extension: one launch, so both hand the server the same documents.
+
+import { ALL_LANGUAGES } from 'bookstore-protocol';
+import { type ExtensionContext, workspace } from 'vscode';
+import { LanguageClient, TransportKind } from 'vscode-languageclient/node';
+
+/** Fork the server, start its language client and return it once started. */
+export async function startBookstoreLanguageClient(context: ExtensionContext): Promise<LanguageClient> {
+   // Resolved through the package, so it works from the workspace and from an
+   // installed extension alike. Over IPC, which keeps the server's stdout free.
+   const serverModule = require.resolve('bookstore-server/lib/main.js');
+   const extensions = ALL_LANGUAGES.flatMap(language => language.fileExtensions).join(',');
+   const client = new LanguageClient(
+      'bookstore',
+      'Bookstore',
+      { module: serverModule, transport: TransportKind.ipc },
+      {
+         documentSelector: ALL_LANGUAGES.map(({ languageId }) => ({ scheme: 'file', language: languageId })),
+         // Changes on disk the editor does not hold, such as a file another tool writes.
+         synchronize: { fileEvents: workspace.createFileSystemWatcher(`**/*{${extensions}}`) }
+      }
+   );
+   context.subscriptions.push(client);
+   await client.start();
+
+   return client;
+}
+
+==============================================================================
 host-browser/package.json
 ==============================================================================
 {
@@ -3270,6 +3466,544 @@ test('loads every head and keeps a saved edit across a reload', async ({ page })
    await expect(editor).toContainText('node Added');
    expect(errors).toEqual([]);
 });
+
+==============================================================================
+host-vscode/package.json
+==============================================================================
+{
+  "name": "bookstore-host-vscode",
+  "displayName": "Bookstore",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Bookstore in VS Code: the language client, and a custom editor for each diagram.",
+  "license": "UNLICENSED",
+  "author": "",
+  "publisher": "bookstore",
+  "main": "./out/extension.js",
+  "scripts": {
+    "build": "npm run copy:syntaxes && npm run typecheck && tsc && node esbuild.mjs",
+    "clean": "rimraf out syntaxes tsconfig.tsbuildinfo test-results playwright-report",
+    "copy:syntaxes": "node -e \"require('node:fs').cpSync('../server/syntaxes', 'syntaxes', { recursive: true })\"",
+    "start": "node start.mjs",
+    "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
+    "test:e2e:install": "node --experimental-strip-types test/install-vscode.mts",
+    "typecheck": "tsc --noEmit -p tsconfig.webview.json && tsc --noEmit -p tsconfig.e2e.json"
+  },
+  "dependencies": {
+    "@eclipse-glsp/client": "2.7.0",
+    "@eclipse-glsp/vscode-integration": "2.7.0",
+    "@eclipse-glsp/vscode-integration-webview": "2.7.0",
+    "@hydranium/client-vscode": "^__FRAMEWORK_VERSION__",
+    "@hydranium/glsp-client": "^__FRAMEWORK_VERSION__",
+    "@hydranium/glsp-client-vscode": "^__FRAMEWORK_VERSION__",
+    "@hydranium/protocol": "^__FRAMEWORK_VERSION__",
+    "bookstore-client": "0.0.0",
+    "bookstore-protocol": "0.0.0",
+    "bookstore-vscode-servers": "0.0.0",
+    "inversify": "^6.1.3",
+    "vscode-jsonrpc": "9.0.0",
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.101.0",
+    "@vscode/test-electron": "^3.1.0",
+    "esbuild": "^0.28.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "bookstore.diagram",
+        "displayName": "Bookstore Diagram",
+        "selector": [
+          {
+            "filenamePattern": "*.bookstore"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "bookstore",
+        "scopeName": "source.bookstore",
+        "path": "./syntaxes/bookstore.tmLanguage.json"
+      }
+    ],
+    "languages": [
+      {
+        "id": "bookstore",
+        "aliases": [
+          "Bookstore"
+        ],
+        "extensions": [
+          ".bookstore"
+        ]
+      }
+    ]
+  },
+  "activationEvents": [
+    "onLanguage:bookstore"
+  ],
+  "engines": {
+    "vscode": "^1.101.0"
+  }
+}
+
+==============================================================================
+host-vscode/.gitignore
+==============================================================================
+node_modules/
+out/
+syntaxes/
+*.tsbuildinfo
+.vscode-test/
+test-results/
+playwright-report/
+
+==============================================================================
+host-vscode/README.md
+==============================================================================
+# bookstore-host-vscode
+
+Bookstore in VS Code: the language client, and a custom editor drawing each
+diagram file. The server is started by `../vscode-servers`, whose launch this
+extension calls, so the two never hand the server different documents. It needs
+a Node extension host: the server is forked, and its socket heads are reached
+over TCP.
+
+The data head runs too, and its port is one `findPort` call away, from
+`@hydranium/client-vscode`, but nothing here reads it yet: see the Host in VS
+Code guide for a webview over it.
+
+```bash
+npm run build              # copy the server’s grammars, type-check and compile, then bundle
+npm start                  # VS Code with this extension, on ../workspace; needs `code` on the PATH
+npm run test:e2e:install   # download the VS Code the smoke test drives, once
+npm run test:e2e           # the smoke test; under `xvfb-run -a` on Linux without a display
+```
+
+## Layout
+
+- `src/extension.ts` — activation: the server, through `../vscode-servers`, and the diagram editors
+- `src/bookstore-diagram-editor.ts` — the `Bookstore` diagram’s custom editor; its view type is the one `package.json` declares
+- `src/webview/bookstore-diagram.ts` — the webview it loads, over the client package’s diagram
+- `src/webview/diagram.css` — the webview’s size and colours
+- `esbuild.mjs` — bundles each webview into `out/webview/`
+- `start.mjs` — `npm start`: VS Code with this extension, on `../workspace`
+- `test/smoke.spec.mts` — VS Code opens the workspace, the diagram draws, and the server reports a broken reference
+- `test/vscode-version.mts` — the VS Code release the smoke test runs
+
+==============================================================================
+host-vscode/tsconfig.json
+==============================================================================
+// The extension, compiled to CommonJS in `out/`, which the extension host
+// loads. It runs in Node, so it has no DOM; a diagram webview under
+// `src/webview/` is a project of its own, bundled by esbuild.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "out",
+    "strict": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "types": ["node"]
+  },
+  "include": ["src"],
+  "exclude": ["src/webview"]
+}
+
+==============================================================================
+host-vscode/tsconfig.e2e.json
+==============================================================================
+// The smoke tier's half, which runs in Node under Playwright. `test:e2e` passes
+// it with `--tsconfig`, since Playwright otherwise looks for a `tsconfig.json`
+// in the directories above.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["test", "playwright.config.mts"]
+}
+
+==============================================================================
+host-vscode/playwright.config.mts
+==============================================================================
+// The smoke tier: each test launches the VS Code `npm run test:e2e:install`
+// downloaded, with this extension loaded from `out/`, so build first. On Linux
+// without a display, run it under `xvfb-run -a`.
+
+import { defineConfig } from '@playwright/test';
+
+export default defineConfig({
+   testDir: './test',
+   // The first request waits for the server to build the workspace.
+   timeout: 120_000,
+   expect: { timeout: 60_000 },
+   // One VS Code at a time.
+   workers: 1
+});
+
+==============================================================================
+host-vscode/start.mjs
+==============================================================================
+// Starts VS Code with this extension on `../workspace`. VS Code reads a
+// relative `--extensionDevelopmentPath` against its own working directory
+// rather than this one, so both paths are made absolute here.
+
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const args = [
+   `--extensionDevelopmentPath=${fileURLToPath(new URL('.', import.meta.url))}`,
+   fileURLToPath(new URL('../workspace', import.meta.url))
+];
+// On Windows `code` is a `.cmd`, which only a shell runs. The shell gets one
+// command line, as Node deprecates arguments beside `shell: true`, and each
+// path is quoted so the shell does not split one with a space.
+const child =
+   process.platform === 'win32'
+      ? spawn(['code', ...args.map(arg => `"${arg}"`)].join(' '), { stdio: 'inherit', shell: true })
+      : spawn('code', args, { stdio: 'inherit' });
+child.on('error', error => {
+   console.error(`Could not start VS Code: ${error.message}. npm start needs \`code\` on the PATH.`);
+   process.exitCode = 1;
+});
+
+==============================================================================
+host-vscode/src/extension.ts
+==============================================================================
+// The Bookstore VS Code extension: the language client, started the way the
+// servers extension starts it, and a custom editor for each diagram. Node
+// extension host only: the server is forked and its socket heads reached over
+// TCP.
+
+import { GlspVscodeConnector } from '@eclipse-glsp/vscode-integration';
+import { findPort } from '@hydranium/client-vscode/node';
+import { HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';
+import { ConsoleLogger, describeError } from '@hydranium/protocol';
+import { BOOKSTORE_GLSP_SERVER_PORT_COMMAND } from 'bookstore-protocol';
+import { type ExtensionContext, window } from 'vscode';
+import type { LanguageClient } from 'vscode-languageclient/node';
+import { startBookstoreLanguageClient } from 'bookstore-vscode-servers/out/language-client.js';
+import { BOOKSTORE_DIAGRAM_VIEW_TYPE, BookstoreDiagramEditorProvider } from './bookstore-diagram-editor.js';
+
+let client: LanguageClient | undefined;
+
+export async function activate(context: ExtensionContext): Promise<void> {
+   const running = await startBookstoreLanguageClient(context);
+   client = running;
+
+   // The GLSP head, and the connector bridging it to every diagram webview. No
+   // `messenger` option: the connector's own keeps messages flowing to a hidden tab.
+   const glspServer = new HydraniumGlspVscodeServer({
+      clientId: 'bookstore-glsp',
+      clientName: 'Bookstore',
+      findPort: () => findPort(running, BOOKSTORE_GLSP_SERVER_PORT_COMMAND),
+      logger: new ConsoleLogger().with('GLSP head')
+   });
+   const glspConnector = new GlspVscodeConnector({ server: glspServer, logging: false });
+   context.subscriptions.push(glspServer, glspConnector);
+   // Not awaited, so a session that opens no diagram does not wait on the port.
+   // `start()` resolves either way; a failure is reported off `onReady`.
+   void glspServer.start();
+   void glspServer.onReady.catch((error: unknown) => {
+      void window.showErrorMessage(`Bookstore diagram unavailable: ${describeError(error)}`);
+   });
+   const bookstoreEditor = new BookstoreDiagramEditorProvider(glspConnector, context.extensionUri);
+   context.subscriptions.push(
+      window.registerCustomEditorProvider(BOOKSTORE_DIAGRAM_VIEW_TYPE, bookstoreEditor, {
+         // A hidden tab keeps its diagram session rather than repeating the handshake.
+         webviewOptions: { retainContextWhenHidden: true },
+         // Two views of one document would be two GLSP clients racing on one model.
+         supportsMultipleEditorsPerDocument: false
+      })
+   );
+}
+
+export async function deactivate(): Promise<void> {
+   await client?.stop();
+   client = undefined;
+}
+
+==============================================================================
+host-vscode/tsconfig.webview.json
+==============================================================================
+// The diagram webviews' half: a browser page, so it has the DOM. esbuild
+// emits, so this only type-checks, and the stylesheet imports are esbuild's to
+// resolve.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "noUncheckedSideEffectImports": false,
+    "types": []
+  },
+  "include": ["src/webview"]
+}
+
+==============================================================================
+host-vscode/esbuild.mjs
+==============================================================================
+// Bundles each diagram webview in `src/webview/` into `out/webview/`, its
+// stylesheet beside it. The extension itself is `tsc`'s, since the extension
+// host loads it with its `node_modules`.
+//
+// At `platform: 'browser'` esbuild refuses a `node:*` import rather than
+// shimming it, so a Node import reaching a webview fails here rather than in
+// the webview's own console.
+
+import { build } from 'esbuild';
+import { readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const root = fileURLToPath(new URL('.', import.meta.url));
+
+await build({
+   absWorkingDir: root,
+   entryPoints: readdirSync(new URL('src/webview/', import.meta.url))
+      .filter(file => file.endsWith('.ts'))
+      .map(file => `src/webview/${file}`),
+   outdir: 'out/webview',
+   bundle: true,
+   platform: 'browser',
+   // The editor loads the bundle with a plain `<script>`.
+   format: 'iife',
+   target: 'es2022',
+   sourcemap: true,
+   // The icon font GLSP imports, inlined: a webview loads only the URIs the
+   // extension mints at runtime, which a bundled `url()` cannot name.
+   loader: { '.ttf': 'dataurl' },
+   logLevel: 'info'
+});
+
+==============================================================================
+host-vscode/src/webview/diagram.css
+==============================================================================
+/* The diagram webviews' size and colours, bundled after GLSP's stylesheet so
+   these rules win on equal specificity. */
+
+/* A webview has no layout above the document, so each element down to the
+   SVG needs a height, or the diagram draws at zero height. */
+html,
+body {
+   height: 100%;
+   width: 100%;
+   margin: 0;
+   padding: 0;
+   overflow: hidden;
+}
+
+.hydranium-diagram-container,
+.hydranium-diagram-container > .sprotty,
+.hydranium-diagram-container > .sprotty > svg {
+   height: 100%;
+   width: 100%;
+   display: block;
+}
+
+/* The editor's theme, rather than GLSP's colours for a light canvas. */
+.sprotty {
+   background: var(--vscode-editor-background);
+   color: var(--vscode-editor-foreground);
+   font-family: var(--vscode-font-family);
+   font-size: var(--vscode-font-size);
+}
+
+/* GLSP's stylesheet leaves shapes at the SVG defaults: a black fill, and no stroke on an edge. */
+.sprotty-node {
+   fill: var(--vscode-editorWidget-background);
+   stroke: var(--vscode-focusBorder);
+}
+
+.sprotty-edge {
+   fill: none;
+   stroke: var(--vscode-editor-foreground);
+}
+
+==============================================================================
+host-vscode/src/bookstore-diagram-editor.ts
+==============================================================================
+// The Bookstore diagram's custom editor: a webview over the diagram bundle
+// esbuild writes to `out/webview/`.
+
+import { HydraniumGlspEditorProvider } from '@hydranium/glsp-client-vscode/node';
+import { BOOKSTORE_DIAGRAM_TYPE } from 'bookstore-protocol';
+
+/**
+ * The view type `contributes.customEditors` in `package.json` declares. VS Code
+ * reads the manifest statically, so the two are kept equal by hand, and a
+ * mismatch leaves the file with no diagram editor.
+ */
+export const BOOKSTORE_DIAGRAM_VIEW_TYPE = 'bookstore.diagram';
+
+export class BookstoreDiagramEditorProvider extends HydraniumGlspEditorProvider {
+   override diagramType = BOOKSTORE_DIAGRAM_TYPE;
+   protected override readonly scriptPath = 'out/webview/bookstore-diagram.js';
+   protected override readonly stylePath = 'out/webview/bookstore-diagram.css';
+   protected override readonly title = 'Bookstore Diagram';
+}
+
+==============================================================================
+host-vscode/src/webview/bookstore-diagram.ts
+==============================================================================
+// The Bookstore diagram webview: GLSP's handshake with the extension host,
+// over the diagram the client package defines. Never import this from the
+// extension: its graph reaches stylesheets, which Node cannot load.
+
+import type { ContainerConfiguration } from '@eclipse-glsp/client';
+import { HydraniumGlspStarter } from '@hydranium/glsp-client-vscode/browser';
+import { Container } from 'inversify';
+import { initializeBookstoreDiagramContainer } from 'bookstore-client';
+// Last, so its rules follow GLSP's stylesheet in the bundle.
+import './diagram.css';
+
+class BookstoreDiagramStarter extends HydraniumGlspStarter {
+   createContainer(...containerConfiguration: ContainerConfiguration): Container {
+      return initializeBookstoreDiagramContainer(new Container(), ...containerConfiguration);
+   }
+}
+
+new BookstoreDiagramStarter();
+
+==============================================================================
+host-vscode/test/smoke.spec.mts
+==============================================================================
+// VS Code opens a copy of the starter workspace with this extension loaded,
+// the diagram file draws in its diagram editor, and the server reports a
+// reference that resolves to nothing.
+
+import { _electron, expect, test, type Page } from '@playwright/test';
+import { downloadAndUnzipVSCode } from '@vscode/test-electron';
+import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { VSCODE_CACHE, VSCODE_VERSION } from './vscode-version.mts';
+
+const extensionRoot = fileURLToPath(new URL('..', import.meta.url));
+
+test('draws the diagram and reports a broken reference', async () => {
+   // A copy, since the server writes its repairs to the folder it opens, and a
+   // fresh profile, since a reused one restores the last run's editors.
+   const scratch = mkdtempSync(join(tmpdir(), 'bookstore-vscode-'));
+   const workspace = join(scratch, 'workspace');
+   cpSync(fileURLToPath(new URL('../../workspace', import.meta.url)), workspace, { recursive: true });
+   const app = await _electron.launch({
+      executablePath: await downloadAndUnzipVSCode({ version: VSCODE_VERSION, cachePath: VSCODE_CACHE }),
+      args: [
+         '--no-sandbox',
+         '--disable-gpu-sandbox',
+         '--disable-updates',
+         '--skip-welcome',
+         '--skip-release-notes',
+         '--disable-workspace-trust',
+         '--disable-extensions',
+         `--extensionDevelopmentPath=${extensionRoot}`,
+         `--user-data-dir=${join(scratch, 'user-data')}`,
+         `--extensions-dir=${join(scratch, 'extensions')}`,
+         workspace
+      ]
+   });
+   try {
+      const page = await app.firstWindow();
+      await expect(page.locator('.monaco-workbench')).toBeVisible();
+      await quickOpen(page, 'nodes.bookstore');
+
+      // The diagram file opens in its diagram, which draws the two starter nodes.
+      const webview = page.frameLocator('iframe.webview.ready').frameLocator('#active-frame');
+      // In the editor's container: sprotty measures shapes in a hidden copy beside it.
+      await expect(webview.locator('.hydranium-diagram-container .sprotty-node')).toHaveCount(2);
+      // Then as text. The row is clicked, since Enter runs the best fuzzy match,
+      // and its name ends in its keybinding, if it has one.
+      await page.keyboard.press('ControlOrMeta+Shift+P');
+      await page.locator('.quick-input-widget input').fill('>View: Reopen Editor with Text Editor');
+      await page
+         .locator('.quick-input-list')
+         .getByRole('option', { name: /^View: Reopen Editor with Text Editor(,|$)/ })
+         .click();
+
+      const editor = page.locator('.monaco-editor .view-lines').first();
+      await expect(editor).toContainText('node First');
+      await editor.click();
+      await page.keyboard.press('ControlOrMeta+End');
+      // In one edit: typed key by key, the half-typed reference is reported on the way.
+      await page.keyboard.insertText('\nnode Broken -> Missing');
+      await expect(page.locator('.monaco-editor .squiggly-error').first()).toBeVisible();
+   } finally {
+      await app.close();
+      rmSync(scratch, { recursive: true, force: true });
+   }
+});
+
+/** Open `file` through Quick Open, so it gets the editor a user would. */
+async function quickOpen(page: Page, file: string): Promise<void> {
+   await page.keyboard.press('ControlOrMeta+P');
+   const input = page.locator('.quick-input-widget input');
+   await input.fill(file);
+   await expect(page.locator('.quick-input-list .monaco-list-row').first()).toContainText(file);
+   await input.press('Enter');
+   await expect(page.locator('.quick-input-widget')).toBeHidden();
+}
+
+==============================================================================
+host-vscode/test/vscode-version.mts
+==============================================================================
+import { fileURLToPath } from 'node:url';
+
+/**
+ * The VS Code build the smoke test downloads and runs. Pinned rather than
+ * `stable`, so a VS Code release cannot fail a run with no change here.
+ */
+export const VSCODE_VERSION = '1.141.0';
+
+/** Where `@vscode/test-electron` keeps the download, below this package. */
+export const VSCODE_CACHE = fileURLToPath(new URL('../.vscode-test', import.meta.url));
+
+==============================================================================
+host-vscode/test/install-vscode.mts
+==============================================================================
+// Downloads the pinned VS Code into `.vscode-test/`, retrying, so the smoke
+// test finds it there and asks the update server nothing.
+
+import { downloadAndUnzipVSCode } from '@vscode/test-electron';
+import { setTimeout } from 'node:timers/promises';
+import { VSCODE_CACHE, VSCODE_VERSION } from './vscode-version.mts';
+
+const ATTEMPTS = 3;
+
+for (let attempt = 1; ; attempt++) {
+   try {
+      await downloadAndUnzipVSCode({ version: VSCODE_VERSION, cachePath: VSCODE_CACHE });
+      break;
+   } catch (error: unknown) {
+      if (attempt === ATTEMPTS) {
+         throw error;
+      }
+      console.warn(`Downloading VS Code ${VSCODE_VERSION} failed, attempt ${attempt} of ${ATTEMPTS}.`, error);
+      await setTimeout(attempt * 5_000);
+   }
+}
 
 ==============================================================================
 workspace/nodes.bookstore

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // The build type-checks the webview and the smoke tier too, whose projects
+    // and files the inherited inputs miss.
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "src/**/*",
+        "test/**/*",
+        "package.json",
+        "esbuild.mjs",
+        "playwright.config.mts",
+        "tsconfig.json",
+        "tsconfig.webview.json",
+        "tsconfig.e2e.json"
+      ],
+      "outputs": ["out/**", "syntaxes/**"]
+    }
+  }
+}

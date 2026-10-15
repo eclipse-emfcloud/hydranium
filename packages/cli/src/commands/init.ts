@@ -35,15 +35,22 @@ export type InitHead = (typeof INIT_HEADS)[number];
 export const DEFAULT_INIT_HEADS: readonly InitHead[] = ['lsp', 'data'];
 
 /** One package of a scaffolded project, in the directory of its name — see {@link initMembers}. */
-export type InitMember = 'protocol' | 'server' | 'client' | `host-${InitHost}`;
+export type InitMember = 'protocol' | 'server' | 'client' | 'vscode-servers' | `host-${InitHost}`;
 
 /**
  * The packages a scaffold with these heads and hosts emits, in the order a
  * workspace lists them. `client` comes with the `glsp` head, which always
- * brings a diagram, and each host is a package of its own.
+ * brings a diagram, and each host is a package of its own. `vscode-servers`
+ * comes with the VS Code host, whose server launch it holds.
  */
 export function initMembers(heads: readonly InitHead[], hosts: readonly InitHost[]): InitMember[] {
-   return ['protocol', 'server', ...(heads.includes('glsp') ? (['client'] as const) : []), ...hosts.map(host => `host-${host}` as const)];
+   return [
+      'protocol',
+      'server',
+      ...(heads.includes('glsp') ? (['client'] as const) : []),
+      ...(hosts.includes('vscode') ? (['vscode-servers'] as const) : []),
+      ...hosts.map(host => `host-${host}` as const)
+   ];
 }
 
 /** A member's path relative to the workspace root, and the `workspaces` entry already covering it. */
@@ -404,7 +411,8 @@ function resolveHosts(hosts: readonly InitHost[], heads: readonly InitHead[]): r
    for (const host of hosts) {
       const editing = editingHeads(host);
       if (!editing.some(head => heads.includes(head))) {
-         throw new Error(`--hosts ${host} needs one of the '${editing.join(', ')}' heads, but the head set is '${heads.join(',')}'.`);
+         const needed = editing.length === 1 ? `the '${editing[0]}' head` : `one of the '${editing.join(', ')}' heads`;
+         throw new Error(`--hosts ${host} needs ${needed}, but the head set is '${heads.join(',')}'.`);
       }
    }
    return INIT_HOSTS.filter(host => hosts.includes(host));
@@ -607,7 +615,8 @@ export function runInit(options: InitCommandOptions): void {
          );
          if (composition.hosts.length > 0) {
             // A host's projects compile its page, worker and tests apart, each under options of its own.
-            write("  Each host's tsconfigs stand alone.\n");
+            const servers = composition.hosts.includes('vscode') ? ", as the VS Code servers extension's does" : '';
+            write(`  Each host's tsconfigs stand alone${servers}.\n`);
          }
       } else {
          write("  No root tsconfig carries compilerOptions, so each package's stands alone.\n");
@@ -672,6 +681,11 @@ export function runInit(options: InitCommandOptions): void {
       write(`  ${start}   # serve the page at http://localhost:4937, Ctrl+C to stop\n`);
       // The smoke test serves the page itself, on the same port.
       write(`  npm --prefix ${browser} run test:e2e:install && npm --prefix ${browser} run test:e2e   # with start stopped\n`);
+   }
+   if (composition.hosts.includes('vscode')) {
+      const vscode = detection === undefined ? 'host-vscode' : `${detection.targetPath}/host-vscode`;
+      write(`  npm --prefix ${vscode} start   # VS Code with the extension, on the workspace; needs \`code\` on the PATH\n`);
+      write(`  npm --prefix ${vscode} run test:e2e:install && npm --prefix ${vscode} run test:e2e\n`);
    }
    write('\n');
    write('The emitted sources carry no license header — run your own header tool if\n');

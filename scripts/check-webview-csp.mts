@@ -38,7 +38,8 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 /** Every built webview bundle, with what its document's CSP allows. */
 const BUNDLES = [
    { file: 'examples/order-flow/vscode/out/webview/properties.js', grantsUnsafeEval: false },
-   { file: 'examples/order-flow/vscode/out/webview/diagram.js', grantsUnsafeEval: false }
+   { file: 'examples/order-flow/vscode/out/webview/diagram.js', grantsUnsafeEval: false },
+   { file: 'examples/bookstore/host-vscode/out/webview/bookstore-diagram.js', grantsUnsafeEval: false }
 ];
 
 /**

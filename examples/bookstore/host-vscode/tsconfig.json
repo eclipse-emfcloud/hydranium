@@ -1,0 +1,19 @@
+// The extension, compiled to CommonJS in `out/`, which the extension host
+// loads. It runs in Node, so it has no DOM; a diagram webview under
+// `src/webview/` is a project of its own, bundled by esbuild.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "out",
+    "strict": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "types": ["node"]
+  },
+  "include": ["src"],
+  "exclude": ["src/webview"]
+}

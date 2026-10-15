@@ -1,0 +1,56 @@
+{
+  "name": "bookstore-vscode-servers",
+  "displayName": "Bookstore Servers",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Starts the Bookstore server and publishes its socket heads' ports as host commands, with no editor of its own.",
+  "license": "UNLICENSED",
+  "author": "",
+  "publisher": "bookstore",
+  "main": "./out/extension.js",
+  "scripts": {
+    "build": "npm run copy:syntaxes && tsc",
+    "clean": "rimraf out syntaxes tsconfig.tsbuildinfo",
+    "copy:syntaxes": "node -e \"require('node:fs').cpSync('../server/syntaxes', 'syntaxes', { recursive: true })\"",
+    "lint": "oxlint --report-unused-disable-directives --format stylish --config ../../../oxlint.config.cjs src --max-warnings 0",
+    "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "@hydranium/bookstore-protocol": "0.0.0",
+    "@hydranium/bookstore-server": "0.0.0",
+    "@hydranium/client-vscode": "^1.0.0-next",
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.101.0",
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "contributes": {
+    "grammars": [
+      {
+        "language": "bookstore",
+        "scopeName": "source.bookstore",
+        "path": "./syntaxes/bookstore.tmLanguage.json"
+      }
+    ],
+    "languages": [
+      {
+        "id": "bookstore",
+        "aliases": [
+          "Bookstore"
+        ],
+        "extensions": [
+          ".bookstore"
+        ]
+      }
+    ]
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "engines": {
+    "vscode": "^1.101.0"
+  }
+}

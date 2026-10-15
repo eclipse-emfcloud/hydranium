@@ -838,12 +838,15 @@ jobs:
         run: npm ci --no-fund --no-audit
 
       - name: Build
-        run: npm run build:all -w @hydranium/example-order-flow-vscode
+        run: npm run build:all -- --filter=@hydranium/example-order-flow-vscode... --filter=bookstore-host-vscode...
 
       # Downloads the pinned VS Code with retries, so the tiers below find it
-      # cached and make no request of their own to the update server.
+      # cached and make no request of their own to the update server. Each
+      # package keeps its own copy, as an adopter's scaffold does.
       - name: Install VS Code
-        run: npm run test:e2e:install -w @hydranium/example-order-flow-vscode
+        run: |
+          npm run test:e2e:install -w @hydranium/example-order-flow-vscode
+          npm run test:e2e:install -w bookstore-host-vscode
 
       # Both tiers launch a real VS Code, which needs a display the runner does
       # not have; `xvfb-run` provides one.
@@ -853,6 +856,16 @@ jobs:
       - name: VS Code e2e (webview tier)
         if: ${{ !cancelled() }}
         run: xvfb-run -a npm run test:e2e -w @hydranium/example-order-flow-vscode
+
+      # The extension `init --hosts vscode` emits, as bookstore carries it. The
+      # emitted config names no reporter, so the step adds the ones the other
+      # tiers report with, as the bookstore browser step does.
+      - name: Bookstore VS Code e2e
+        if: ${{ !cancelled() }}
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/junit.xml
+        run: xvfb-run -a npm run test:e2e -w bookstore-host-vscode -- --reporter=list,github,html,junit
 
       - name: Summarize test results
         if: always()
@@ -866,6 +879,8 @@ jobs:
           path: |
             examples/order-flow/vscode/test-results/
             examples/order-flow/vscode/playwright-report/
+            examples/bookstore/host-vscode/test-results/
+            examples/bookstore/host-vscode/playwright-report/
           retention-days: 7
           if-no-files-found: ignore
 

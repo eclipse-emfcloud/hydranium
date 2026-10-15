@@ -7,12 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { registerPortCommands } from '@hydranium/client-vscode/node';
-import {
-   ALL_LANGUAGES,
-   ORDER_FLOW_DATA_SERVER_PORT_COMMAND,
-   ORDER_FLOW_GLSP_SERVER_PORT_COMMAND
-} from '@hydranium/example-order-flow-protocol';
+import { ALL_LANGUAGES } from '@hydranium/example-order-flow-protocol';
 import type { ExtensionContext } from 'vscode';
 import { workspace } from 'vscode';
 import { LanguageClient, type LanguageClientOptions, type ServerOptions, TransportKind } from 'vscode-languageclient/node';
@@ -40,7 +35,7 @@ export const ORDER_FLOW_LANGUAGE_CLIENT_NAME = 'Order Flow';
  *  These are the ids a HOST executes, as distinct from the LSP request ids the
  *  server answers (`order-flow/glsp-server/port` and its sibling). A Theia backend
  *  connection handler reaches the port through `CommandService`, so the id it
- *  polls has to be one registered here — and because
+ *  polls has to be one `extension.ts` registers — and because
  *  `AbstractSocketForwardingConnectionHandler` retries indefinitely by default, a
  *  mismatch never errors, it just never connects. */
 export const ORDER_FLOW_HOST_PORT_COMMANDS = {
@@ -49,9 +44,11 @@ export const ORDER_FLOW_HOST_PORT_COMMANDS = {
 } as const;
 
 /**
- * Fork the language server, start the client, and expose both head ports as
- * host commands. Returns the started client so a caller can drive the other
- * heads off it.
+ * Fork the language server and start the client. Returns the started client so
+ * a caller can drive the other heads off it. The host commands are not
+ * registered here: VS Code throws on a second registration of one id, so the
+ * VS Code shell, which runs this launch too, would fail to activate beside the
+ * servers extension.
  */
 export async function startOrderFlowLanguageClient(context: ExtensionContext): Promise<LanguageClient> {
    // Resolved through the package layout, so this works both in the F5 dev host
@@ -80,11 +77,6 @@ export async function startOrderFlowLanguageClient(context: ExtensionContext): P
    const client = new LanguageClient('order-flow', ORDER_FLOW_LANGUAGE_CLIENT_NAME, serverOptions, clientOptions);
    context.subscriptions.push(client);
    await client.start();
-
-   registerPortCommands(context, client, {
-      [ORDER_FLOW_HOST_PORT_COMMANDS.dataServer]: ORDER_FLOW_DATA_SERVER_PORT_COMMAND,
-      [ORDER_FLOW_HOST_PORT_COMMANDS.glsp]: ORDER_FLOW_GLSP_SERVER_PORT_COMMAND
-   });
 
    return client;
 }

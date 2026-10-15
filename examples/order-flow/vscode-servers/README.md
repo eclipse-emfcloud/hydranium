@@ -13,8 +13,8 @@ guide says why a Theia app sideloads this instead of the full VS Code shell.
 
 | Concern                                        | Files                                                   |
 | ---------------------------------------------- | ------------------------------------------------------- |
-| the server launch and the port commands        | [`src/language-client.ts`](src/language-client.ts)      |
-| activation                                     | [`src/extension.ts`](src/extension.ts)                  |
+| the server launch                              | [`src/language-client.ts`](src/language-client.ts)      |
+| activation and the port commands               | [`src/extension.ts`](src/extension.ts)                  |
 | activation event, languages and grammars       | [`package.json`](package.json)                          |
 
 ## What is specific to this package
@@ -22,7 +22,9 @@ guide says why a Theia app sideloads this instead of the full VS Code shell.
 - **One launch, two hosts.** The VS Code shell imports `src/language-client.ts`
   too, because a drift here is invisible: a different `documentSelector` or
   file watcher changes which documents the server sees, and the feature just
-  goes quiet in one host.
+  goes quiet in one host. The port commands stay out of it: VS Code throws on
+  a second registration of one id, so the shell would fail to activate beside
+  this extension.
 - **The port command handlers are thin pass-throughs, and must stay so.**
   Awaiting a VS Code notification inside one would make the return value wait
   on a human dismissing a popup, which in Theia hangs the backend with nothing
@@ -57,5 +59,5 @@ Nothing here runs on its own. To see it work, start
 [`../theia-app`](../theia-app/README.md) or press F5 on
 [`../vscode`](../vscode/README.md). It has no test script: the Theia app's
 Playwright suite and the port-command unit test in `../theia` cover it in
-Theia, and `../vscode`'s `test:host` runs its language client and port
-commands in VS Code.
+Theia, and `../vscode`'s `test:host` loads it beside the VS Code shell and runs
+its port commands.

@@ -50,7 +50,7 @@ const SCAFFOLD_NPM = '10.9.2';
  */
 const TYPESCRIPT_FLOOR = '5.4.5';
 
-/** The client member's floor: it is CommonJS and requires the ES protocol, which TypeScript allows from 5.8. */
+/** The floor of the CommonJS members, the client and the VS Code extensions: they require the ES protocol, which TypeScript allows from 5.8. */
 const CLIENT_TYPESCRIPT_FLOOR = '5.8.3';
 
 /** A scaffold smoke starts a server and makes a handful of requests; one that hangs fails at this. */
@@ -89,8 +89,8 @@ const packageDirs = [
    'core',
    'data-server',
    'glsp-server',
-   // The client package and the browser host's page need these.
-   ...(initScaffold ? ['cli', 'client-browser', 'glsp-client'] : [])
+   // The client package and the browser and VS Code hosts need these.
+   ...(initScaffold ? ['cli', 'client-browser', 'glsp-client', 'client-vscode', 'glsp-client-vscode'] : [])
 ];
 const env = { ...process.env, npm_config_workspaces: 'false' };
 
@@ -368,12 +368,12 @@ interface ScaffoldShape {
    readonly vitest: string;
    /** `--grammar` arguments; the smoke drives the first, so it keeps the `my-lang` language id. */
    readonly grammars?: readonly string[];
-   /** `--hosts`; a browser host is built and its smoke test run in Chromium. */
+   /** `--hosts`; a host is built and its smoke test run, the browser's in Chromium and the VS Code one's in VS Code. */
    readonly hosts?: string;
 }
 
 const SCAFFOLD_SHAPES: readonly ScaffoldShape[] = [
-   { label: 'standalone, all heads', heads: 'lsp,data,glsp', hosts: 'browser', production: true, vitest: '~4.0.18' },
+   { label: 'standalone, all heads', heads: 'lsp,data,glsp', hosts: 'browser,vscode', production: true, vitest: '~4.0.18' },
    {
       label: 'standalone, LSP and data, two grammars',
       heads: 'lsp,data',
@@ -384,7 +384,7 @@ const SCAFFOLD_SHAPES: readonly ScaffoldShape[] = [
    // No LSP head: main.ts serves the socket heads from a workspace path, and
    // the page mounts the diagram alone and saves through it.
    { label: 'standalone, data and GLSP', heads: 'data,glsp', hosts: 'browser', vitest: '~4.0.18' },
-   { label: 'standalone, LSP only', heads: 'lsp', hosts: 'browser', vitest: '~4.0.18' },
+   { label: 'standalone, LSP only', heads: 'lsp', hosts: 'browser,vscode', vitest: '~4.0.18' },
    { label: 'workspace member, all heads', heads: 'lsp,data,glsp', hosts: 'browser', monorepo: true, vitest: '~4.0.18' },
    { label: 'workspace member under its root npm, LSP only', heads: 'lsp', monorepo: true, npm: WORKSPACE_NPM, vitest: '^4.0.0' },
    // npm 11.6 or later, because the root's own `vitest` 4.1 crashes an earlier one.
@@ -483,7 +483,7 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
       .devDependencies?.vitest;
    if (vitest !== shape.vitest) throw new Error(`${shape.label}: init emitted vitest ${vitest}, expected ${shape.vitest}`);
    // Every member declaring a framework package, so none of them fetches it from the registry.
-   const members = ['server', 'client', 'host-browser']
+   const members = ['server', 'client', 'vscode-servers', 'host-browser', 'host-vscode']
       .map(name => (projectPath === undefined ? name : `${projectPath}/${name}`))
       .filter(path => existsSync(join(installRoot, path, 'package.json')));
    const repointedBy = new Map(members.map(path => [path, repointFramework(join(installRoot, path, 'package.json'), candidates)]));
@@ -531,7 +531,9 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
       ['protocol', 'tsconfig.json', TYPESCRIPT_FLOOR],
       ['server', 'tsconfig.json', TYPESCRIPT_FLOOR],
       ['client', 'tsconfig.json', CLIENT_TYPESCRIPT_FLOOR],
-      ...['worker', 'page', 'e2e'].map(name => ['host-browser', `tsconfig.${name}.json`, TYPESCRIPT_FLOOR] as const)
+      ...['worker', 'page', 'e2e'].map(name => ['host-browser', `tsconfig.${name}.json`, TYPESCRIPT_FLOOR] as const),
+      ['vscode-servers', 'tsconfig.json', CLIENT_TYPESCRIPT_FLOOR],
+      ...['', '.webview', '.e2e'].map(name => ['host-vscode', `tsconfig${name}.json`, CLIENT_TYPESCRIPT_FLOOR] as const)
    ];
    for (const [name, tsconfig, version] of floorCompiles) {
       const directory = join(installRoot, projectPath === undefined ? name : `${projectPath}/${name}`);
@@ -561,6 +563,14 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
       const host = join(project, 'host-browser');
       run(`${shape.label}: browser install`, 'npm', ['run', 'test:e2e:install'], host, installEnv);
       run(`${shape.label}: browser smoke`, 'npm', ['run', 'test:e2e'], host, installEnv);
+   }
+   if (shape.hosts?.split(',').includes('vscode')) {
+      // Downloaded and driven the way the e2e-vscode job does, with a virtual display on a Linux without one.
+      const host = join(project, 'host-vscode');
+      run(`${shape.label}: VS Code install`, 'npm', ['run', 'test:e2e:install'], host, installEnv);
+      const headless = process.platform === 'linux' && !process.env.DISPLAY;
+      const [program, args] = headless ? ['xvfb-run', ['-a', 'npm', 'run', 'test:e2e']] : ['npm', ['run', 'test:e2e']];
+      run(`${shape.label}: VS Code smoke`, program, args, host, installEnv);
    }
    if (shape.production) {
       rmSync(join(installRoot, 'node_modules'), { recursive: true, force: true });

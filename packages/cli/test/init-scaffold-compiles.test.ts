@@ -67,15 +67,16 @@ interface CompileCase {
 const CASES: readonly CompileCase[] = [
    { label: 'the single-grammar default', name: 'Bookshelf', grammars: [{ name: 'Bookshelf', extensions: ['book'] }] },
    // The largest emission: further files the other shapes never reach, the
-   // client package, and a browser host running every head.
-   { label: 'the GLSP head', name: 'Shelf', heads: ['lsp', 'data', 'glsp'], hosts: ['browser'] },
+   // client package, a browser host running every head and a VS Code host
+   // with a diagram editor.
+   { label: 'the GLSP head', name: 'Shelf', heads: ['lsp', 'data', 'glsp'], hosts: ['browser', 'vscode'] },
    // The only shape emitting common.langium and the additionalLanguages wiring,
-   // and a browser host with no diagram.
+   // and both hosts with no diagram.
    {
       label: 'three grammars',
       name: 'Depot',
       grammars: [{ name: 'Domain' }, { name: 'Process' }, { name: 'Layout' }],
-      hosts: ['browser']
+      hosts: ['browser', 'vscode']
    },
    // The only main.ts that brings the workspace up itself and prints its ports,
    // and a browser host that saves through the diagram.
@@ -247,6 +248,31 @@ describe('the emitted scaffold compiles', () => {
                // Monaco's own worker only for the editor, which the LSP head brings.
                const lsp = heads?.includes('lsp') ?? true;
                expect(bundles.sort()).toEqual([...(lsp ? ['monaco-editor-worker.js'] : []), 'page.css', 'page.js', 'worker.js']);
+            }
+
+            // Both VS Code extensions, the servers one first, since the other
+            // imports its launch from `out/`; a diagram webview bundles at
+            // `platform: 'browser'` like the page.
+            const servers = path.join(targetDir, 'vscode-servers');
+            const vscodeHost = path.join(targetDir, 'host-vscode');
+            expect(fs.existsSync(vscodeHost)).toBe(hosts?.includes('vscode') ?? false);
+            if (fs.existsSync(vscodeHost)) {
+               link(servers, protocol);
+               expect(() => runTool(servers, 'typescript', 'tsc', ['-p', path.join(servers, 'tsconfig.json')])).not.toThrow();
+               for (const member of [protocol, servers, ...(fs.existsSync(client) ? [client] : [])]) {
+                  link(vscodeHost, member);
+               }
+               const webview = fs.existsSync(path.join(vscodeHost, 'tsconfig.webview.json'));
+               expect(webview).toBe(fs.existsSync(client));
+               for (const project of ['tsconfig.json', 'tsconfig.e2e.json', ...(webview ? ['tsconfig.webview.json'] : [])]) {
+                  expect(() => runTool(vscodeHost, 'typescript', 'tsc', ['-p', path.join(vscodeHost, project)])).not.toThrow();
+               }
+               if (webview) {
+                  execFileSync(process.execPath, ['esbuild.mjs'], { cwd: vscodeHost, stdio: 'pipe' });
+                  expect(fs.readdirSync(path.join(vscodeHost, 'out/webview')).sort()).toEqual(
+                     expect.arrayContaining([`${name.toLowerCase()}-diagram.css`, `${name.toLowerCase()}-diagram.js`])
+                  );
+               }
             }
 
             // Without an LSP head only main.ts names the workspace and reports

@@ -213,7 +213,8 @@ async function askHeads(prompt: PromptPort): Promise<InitHead[]> {
 
 /** What the wizard asks about each host. */
 const HOST_QUESTIONS: Record<InitHost, string> = {
-   browser: 'Add a browser host (every head in a web worker, no backend)?'
+   browser: 'Add a browser host (every head in a web worker, no backend)?',
+   vscode: 'Add a VS Code extension (the language client, and a custom editor per diagram)?'
 };
 
 /**

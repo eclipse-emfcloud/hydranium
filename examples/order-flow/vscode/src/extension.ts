@@ -35,11 +35,11 @@ import type { LanguageClient } from 'vscode-languageclient/node';
 let client: LanguageClient | undefined;
 
 export async function activate(context: ExtensionContext): Promise<void> {
-   // The server launch, and the host commands that expose each head's port, live
-   // in the servers-only extension a Theia app sideloads. Sharing the launch is
-   // what keeps the two hosts from drifting on `documentSelector` or the file
-   // watcher — a divergence there changes which documents the server ever sees
-   // and fails silently in one host only.
+   // The server launch lives in the servers-only extension a Theia app
+   // sideloads, which alone registers the host commands that expose each head's
+   // port. Sharing the launch is what keeps the two hosts from drifting on
+   // `documentSelector` or the file watcher — a divergence there changes which
+   // documents the server ever sees and fails silently in one host only.
    // Bound to a local first, so the two heads below see a non-optional client;
    // the module-level `client` exists only for `deactivate`.
    const running = await startOrderFlowLanguageClient(context);

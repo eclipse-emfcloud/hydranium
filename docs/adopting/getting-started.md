@@ -15,7 +15,7 @@ names.
 ## Scaffold a language
 
 ```bash
-npx @hydranium/cli init ./my-lang --name MyLang --heads lsp,data,glsp --hosts browser
+npx @hydranium/cli init ./my-lang --name MyLang --heads lsp,data,glsp --hosts browser,vscode
 ```
 
 `init` writes a complete project: its packages and a starter workspace, each in
@@ -30,6 +30,9 @@ its own directory.
   mounts.
 - `host-browser/` holds a page that runs every head in a web worker, with no
   backend.
+- `host-vscode/` holds a VS Code extension: the language client and a custom
+  editor for the diagram. It starts the server through `vscode-servers/`, an
+  extension with no editor that a Theia app can sideload too.
 - `workspace/` holds two starter model files, one referencing the other.
 
 Three flags shape it:
@@ -40,8 +43,10 @@ Three flags shape it:
   argument and prints the ports of the heads it started.
 - `--hosts` adds host applications around the heads. `browser` emits the page
   and needs the `lsp` head or the `glsp` head, which the page saves through:
-  without `lsp` it has no editor and saves through the diagram. Leave it out
-  for a server you connect to from your own host.
+  without `lsp` it has no editor and saves through the diagram. `vscode` emits
+  the two extensions and needs the `lsp` head, since its language client
+  starts the server. Leave `--hosts` out for a server you connect to from
+  your own host.
 - Leave `--name` off on a terminal and `init` asks instead, then prints the
   command it composed.
 
@@ -76,6 +81,24 @@ npm --prefix host-browser run test:e2e
 
 The smoke test checks the same things and fails on any console error. It
 serves the page itself, so stop `start:browser` first.
+
+## Open it in VS Code
+
+```bash
+npm --prefix host-vscode start
+```
+
+VS Code opens `workspace/` with the extension loaded; `npm start` needs `code`
+on your `PATH`. `nodes.my-lang` opens as its diagram, and Reopen Editor With
+offers the text editor, where the server reports problems as you type.
+
+```bash
+npm --prefix host-vscode run test:e2e:install   # once: the VS Code the smoke test drives
+npm --prefix host-vscode run test:e2e
+```
+
+The smoke test opens the diagram and checks that the server reports a broken
+reference. On Linux without a display, run it under `xvfb-run -a`.
 
 ## Validate a model
 
