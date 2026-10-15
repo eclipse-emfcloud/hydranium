@@ -27,6 +27,10 @@ const serverLog = captureServerLog({ dir: resolve(import.meta.dirname, 'test-res
 export default defineConfig({
    files: 'out/host-test/test/host/**/*.test.js',
    version: VSCODE_VERSION,
+   // The servers extension beside this one, as a user may install both: each
+   // forks its own server, and a command id both registered would fail the
+   // second activation.
+   extensionDevelopmentPath: [import.meta.dirname, resolve(import.meta.dirname, '../vscode-servers')],
    workspaceFolder: workspace.root,
    // Other installed extensions would share the host and its activation events;
    // the extension under development loads regardless.

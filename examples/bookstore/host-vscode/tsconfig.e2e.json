@@ -1,0 +1,17 @@
+// The smoke tier's half, which runs in Node under Playwright. `test:e2e` passes
+// it with `--tsconfig`, since Playwright otherwise looks for a `tsconfig.json`
+// in the directories above.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["test", "playwright.config.mts"]
+}

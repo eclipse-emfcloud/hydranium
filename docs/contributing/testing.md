@@ -221,10 +221,11 @@ Order-flow has one Playwright suite per host: the Theia app
 extension ([README](../../examples/order-flow/vscode/README.md)), which adds an
 extension-host tier on `@vscode/test-cli` for what the extension API can see.
 The bookstore's browser host
-([README](../../examples/bookstore/host-browser/README.md)) carries the smoke
-test `init --hosts browser` emits. Each README owns its commands. No suite is
-wired to `test`, so `npm run check` never depends on a downloaded browser or
-editor binary. Three traps:
+([README](../../examples/bookstore/host-browser/README.md)) and VS Code host
+([README](../../examples/bookstore/host-vscode/README.md)) carry the smoke
+tests `init --hosts browser,vscode` emits. Each README owns its commands. No
+suite is wired to `test`, so `npm run check` never depends on a downloaded
+browser or editor binary. Three traps:
 
 - The Theia app's `test:e2e` and `test:e2e:headed` skip every `@restart` spec,
   so running only those never executes them; `test:e2e:restart` does.
@@ -251,9 +252,11 @@ install. `HYDRANIUM_KEEP_PACKED_CONSUMER=1` keeps the disposable project.
   adopter's `npx` does, in each supported shape, then builds, tests and drives
   every head; a shape with a browser host also runs its smoke test, in the
   Chromium the scaffold's own Playwright downloads, which needs that browser's
-  system libraries installed. It shows what an adopter's first install meets,
-  which the hand-assembled bookstore consumer cannot. CI runs it as its own job
-  on every pull request that changes more than prose.
+  system libraries installed, and a shape with a VS Code host runs its smoke
+  test in the VS Code it downloads, under `xvfb-run` when there is no display.
+  It shows what an adopter's first install meets, which the hand-assembled
+  bookstore consumer cannot. CI runs it as its own job on every pull request
+  that changes more than prose.
 - `check:published-baseline` runs the consumer smoke against the published
   prerelease. The consumer is this tree's bookstore server, so an example
   already using an unpublished API fails it with no published package at fault.

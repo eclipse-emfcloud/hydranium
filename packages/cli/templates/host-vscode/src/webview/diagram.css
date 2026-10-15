@@ -1,0 +1,40 @@
+/* The diagram webviews' size and colours, bundled after GLSP's stylesheet so
+   these rules win on equal specificity. */
+
+/* A webview has no layout above the document, so each element down to the
+   SVG needs a height, or the diagram draws at zero height. */
+html,
+body {
+   height: 100%;
+   width: 100%;
+   margin: 0;
+   padding: 0;
+   overflow: hidden;
+}
+
+.hydranium-diagram-container,
+.hydranium-diagram-container > .sprotty,
+.hydranium-diagram-container > .sprotty > svg {
+   height: 100%;
+   width: 100%;
+   display: block;
+}
+
+/* The editor's theme, rather than GLSP's colours for a light canvas. */
+.sprotty {
+   background: var(--vscode-editor-background);
+   color: var(--vscode-editor-foreground);
+   font-family: var(--vscode-font-family);
+   font-size: var(--vscode-font-size);
+}
+
+/* GLSP's stylesheet leaves shapes at the SVG defaults: a black fill, and no stroke on an edge. */
+.sprotty-node {
+   fill: var(--vscode-editorWidget-background);
+   stroke: var(--vscode-focusBorder);
+}
+
+.sprotty-edge {
+   fill: none;
+   stroke: var(--vscode-editor-foreground);
+}

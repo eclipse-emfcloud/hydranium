@@ -66,6 +66,8 @@ const rootManifest = readJson(join(root, 'package.json'));
 
 /** Workspaces whose `src` runs inside a host that provides a devDependency-typed module at runtime. */
 const HOST_PROVIDED = new Set([
+   'examples/bookstore/host-vscode',
+   'examples/bookstore/vscode-servers',
    'examples/order-flow/vscode',
    'examples/order-flow/vscode-servers',
    'packages/client-vscode',

@@ -1,0 +1,19 @@
+// The extension, compiled to CommonJS in `out/`, which the extension host
+// loads. It runs in Node, so it has no DOM. The declarations are for the VS
+// Code extension, which imports the launch from `out/`.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "out",
+    "strict": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "declaration": true,
+    "types": ["node"]
+  },
+  "include": ["src"]
+}

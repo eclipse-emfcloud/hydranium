@@ -989,13 +989,15 @@ describe('planInitFiles with hosts', () => {
          ['glsp'],
          ['data', 'glsp']
       ] as InitHead[][]) {
-         for (const file of filesFor(heads)) {
+         // The VS Code host needs lsp.
+         for (const file of filesFor(heads, heads.includes('lsp') ? ['browser', 'vscode'] : ['browser'])) {
             expect(file.content, `${heads.join(',')} ${file.path} still has a token`).not.toMatch(token);
          }
       }
       const several = planInitFiles(
          resolveInitComposition('OrderFlow', [{ name: 'Domain' }, { name: 'Process', diagram: true }], ['lsp', 'data', 'glsp'], undefined, [
-            'browser'
+            'browser',
+            'vscode'
          ])
       );
       for (const file of several) {
@@ -1005,6 +1007,125 @@ describe('planInitFiles with hosts', () => {
       expect(several.find(file => file.path === 'host-browser/test/smoke.spec.mts')?.content).toContain(
          "selectOption('references.process')"
       );
+   });
+
+   it('refuses a VS Code host without the LSP head, whose client starts the server', () => {
+      expect(() => resolveInitComposition('Bookstore', undefined, ['data', 'glsp'], undefined, ['vscode'])).toThrow(
+         "--hosts vscode needs the 'lsp' head, but the head set is 'data,glsp'."
+      );
+   });
+
+   it('lists the servers extension before the hosts, since the VS Code one builds on its launch', () => {
+      const root = JSON.parse(contentOf(filesFor(['lsp', 'glsp'], ['browser', 'vscode']), 'package.json') ?? '{}') as {
+         workspaces: string[];
+      };
+      expect(root.workspaces).toEqual(['protocol', 'server', 'client', 'vscode-servers', 'host-browser', 'host-vscode']);
+   });
+
+   it('names the host commands in the protocol with the VS Code host only, and keeps them out of the server', () => {
+      const withVscode = filesFor(['lsp', 'data', 'glsp'], ['vscode']);
+      const ports = contentOf(withVscode, 'protocol/src/head-ports.ts') ?? '';
+      expect(ports).toContain("export const BOOKSTORE_DATA_SERVER_HOST_COMMAND = 'bookstore.port.dataServer';");
+      expect(ports).toContain("export const BOOKSTORE_GLSP_SERVER_HOST_COMMAND = 'bookstore.port.glsp';");
+      expect(contentOf(withVscode, 'server/src/main.ts')).not.toContain('HOST_COMMAND');
+      expect(contentOf(withVscode, 'vscode-servers/src/extension.ts')).toContain(
+         '[BOOKSTORE_GLSP_SERVER_HOST_COMMAND]: BOOKSTORE_GLSP_SERVER_PORT_COMMAND'
+      );
+      // VS Code throws on a second registration of one id, so the launch both extensions run registers none.
+      expect(contentOf(withVscode, 'vscode-servers/src/language-client.ts')).not.toContain('registerPortCommands');
+      expect(contentOf(filesFor(['lsp', 'data', 'glsp'], ['browser']), 'protocol/src/head-ports.ts')).not.toContain('HOST_COMMAND');
+   });
+
+   it('emits the VS Code host for --heads lsp without a diagram, a webview or port commands', () => {
+      const files = filesFor(['lsp'], ['vscode']);
+      expect(pathsUnder(files, 'host-vscode').filter(path => /webview|esbuild|diagram/.test(path))).toEqual([]);
+      const host = JSON.parse(contentOf(files, 'host-vscode/package.json') ?? '{}') as Record<string, Record<string, unknown>>;
+      expect(Object.keys(host.dependencies)).toEqual(['bookstore-vscode-servers', 'vscode-languageclient']);
+      expect(host.contributes).not.toHaveProperty('customEditors');
+      expect(contentOf(files, 'host-vscode/src/extension.ts')).not.toMatch(/Glsp|findPort/);
+      const servers = JSON.parse(contentOf(files, 'vscode-servers/package.json') ?? '{}') as Record<string, Record<string, unknown>>;
+      expect(servers.dependencies).not.toHaveProperty('@hydranium/client-vscode');
+      expect(contentOf(files, 'vscode-servers/src/extension.ts')).not.toContain('registerPortCommands');
+   });
+
+   it('tells a data head without a diagram to add the package its README points to', () => {
+      const files = filesFor(['lsp', 'data'], ['vscode']);
+      const host = JSON.parse(contentOf(files, 'host-vscode/package.json') ?? '{}') as Record<string, Record<string, unknown>>;
+      expect(host.dependencies).not.toHaveProperty('@hydranium/client-vscode');
+      expect(contentOf(files, 'host-vscode/README.md')).toMatch(/Add\s+`@hydranium\/client-vscode`\s+as\s+a\s+dependency/);
+   });
+
+   it('wraps the VS Code host README prose at 80 columns in every head set, a lone link aside', () => {
+      for (const heads of [['lsp'], ['lsp', 'data'], ['lsp', 'glsp'], ['lsp', 'data', 'glsp']] as InitHead[][]) {
+         const prose = (contentOf(filesFor(heads, ['vscode']), 'host-vscode/README.md') ?? '').split('```')[0];
+         const overlong = prose.split('\n').filter(line => line.length > 80 && !/^\[[^\]]*\]\([^)]*\)$/.test(line));
+         expect(overlong, heads.join(',')).toEqual([]);
+         // A paragraph fills its lines rather than breaking after a sentence.
+         expect(prose, heads.join(',')).not.toMatch(/\.\n(?!\n)/);
+      }
+   });
+
+   it('declares the diagram editor under the view type the editor module registers', () => {
+      const files = filesFor(['lsp', 'glsp'], ['vscode']);
+      const manifest = JSON.parse(contentOf(files, 'host-vscode/package.json') ?? '{}') as {
+         contributes: { customEditors: Array<{ viewType: string; selector: Array<{ filenamePattern: string }> }> };
+      };
+      expect(manifest.contributes.customEditors).toEqual([
+         expect.objectContaining({ viewType: 'bookstore.diagram', selector: [{ filenamePattern: '*.bookstore' }] })
+      ]);
+      expect(contentOf(files, 'host-vscode/src/bookstore-diagram-editor.ts')).toContain(
+         "export const BOOKSTORE_DIAGRAM_VIEW_TYPE = 'bookstore.diagram';"
+      );
+      expect(pathsUnder(files, 'host-vscode')).toEqual(expect.arrayContaining(['src/webview/bookstore-diagram.ts', 'esbuild.mjs']));
+   });
+
+   it('qualifies the view type by the project where the language id is, since VS Code keys it across extensions', () => {
+      const files = planInitFiles(
+         resolveInitComposition('OrderFlow', [{ name: 'Domain' }, { name: 'Process', diagram: true }], ['lsp', 'glsp'], undefined, [
+            'vscode'
+         ])
+      );
+      const manifest = JSON.parse(contentOf(files, 'host-vscode/package.json') ?? '{}') as {
+         contributes: { customEditors: Array<{ viewType: string }> };
+      };
+      expect(manifest.contributes.customEditors.map(editor => editor.viewType)).toEqual(['order-flow-process.diagram']);
+      expect(contentOf(files, 'host-vscode/src/process-diagram-editor.ts')).toContain(
+         "export const PROCESS_DIAGRAM_VIEW_TYPE = 'order-flow-process.diagram';"
+      );
+   });
+
+   it('leaves the VS Code extensions unscoped under --scope, since vsce refuses a scoped name', () => {
+      const files = filesFor(['lsp', 'glsp'], ['vscode'], { scope: '@acme', private: true });
+      const nameOf = (member: string): unknown =>
+         (JSON.parse(contentOf(files, `${member}/package.json`) ?? '{}') as { name?: unknown }).name;
+      expect([nameOf('vscode-servers'), nameOf('host-vscode'), nameOf('server')]).toEqual([
+         'bookstore-vscode-servers',
+         'bookstore-host-vscode',
+         '@acme/bookstore-server'
+      ]);
+      expect(contentOf(files, 'host-vscode/src/extension.ts')).toContain("from 'bookstore-vscode-servers/out/language-client.js'");
+   });
+
+   it('keeps both VS Code extensions private under --public', () => {
+      const files = filesFor(['lsp', 'glsp'], ['vscode'], { private: false });
+      for (const member of ['vscode-servers', 'host-vscode']) {
+         expect(JSON.parse(contentOf(files, `${member}/package.json`) ?? '{}')).toMatchObject({ private: true });
+      }
+   });
+
+   it('prints how to start and test the VS Code host', () => {
+      const lines: string[] = [];
+      runInit({
+         targetDir: 'out/bookstore',
+         name: 'Bookstore',
+         heads: ['lsp'],
+         hosts: ['vscode'],
+         write: line => lines.push(line),
+         __writeFilesForTest: () => undefined
+      });
+      const output = lines.join('');
+      expect(output).toContain('npm --prefix host-vscode start');
+      expect(output).toContain('npm --prefix host-vscode run test:e2e');
    });
 
    it('prints how to serve and test the browser host', () => {

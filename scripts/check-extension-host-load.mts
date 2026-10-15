@@ -44,7 +44,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 
 /** Every package whose `main` the VS Code extension host loads. */
-const EXTENSIONS = ['examples/order-flow/vscode'];
+const EXTENSIONS = ['examples/order-flow/vscode', 'examples/bookstore/host-vscode', 'examples/bookstore/vscode-servers'];
 
 /** What `activate` is expected to export, so a truncated module is not "loaded". */
 const REQUIRED_EXPORTS = ['activate'];

@@ -1,8 +1,8 @@
 # bookstore
 
 Exactly what `hydranium-cli init` scaffolds, checked in and built by CI: one
-grammar, three heads, a graphical editor, a browser page, and no adopter
-overrides. Read it beside your own scaffold.
+grammar, three heads, a graphical editor, a browser page, a VS Code extension,
+and no adopter overrides. Read it beside your own scaffold.
 
 ```
 protocol/       what the server and its clients both import: ids, port
@@ -11,12 +11,17 @@ server/         the grammar, the language and its heads, plus the generated
                 tree its own `build` writes
 client/         the diagram's client side, which every host mounts
 host-browser/   a page running every head in a web worker, and its smoke test
+vscode-servers/ a VS Code extension that starts the server, with no editor
+host-vscode/    the VS Code extension: the language client, the diagram
+                editor, and its smoke test
 workspace/      the two starter `.bookstore` files it is exercised against
 ```
 
 Each package's README is the scaffold's own:
 [server](server/README.md), [protocol](protocol/README.md),
-[client](client/README.md) and [host-browser](host-browser/README.md).
+[client](client/README.md), [host-browser](host-browser/README.md),
+[vscode-servers](vscode-servers/README.md) and
+[host-vscode](host-vscode/README.md).
 
 It was created by exactly this; the few files it holds that `init` does not
 write are named under "Changing this example":
@@ -24,7 +29,7 @@ write are named under "Changing this example":
 ```bash
 npx hydranium-cli init examples/bookstore \
    --name Bookstore --heads lsp,data,glsp --grammar Bookstore --diagram \
-   --hosts browser --scope @hydranium --monorepo
+   --hosts browser,vscode --scope @hydranium --monorepo
 ```
 
 ## Running it
@@ -52,6 +57,18 @@ npm --prefix examples/bookstore/host-browser run test:e2e
 
 CI runs that smoke test in its Chromium job. It loads the page, checks what
 each head shows, and saves an edit that has to survive a reload.
+
+In VS Code, after `npm run build:all`:
+
+```bash
+npm --prefix examples/bookstore/host-vscode start      # needs `code` on the PATH
+npm --prefix examples/bookstore/host-vscode run test:e2e:install
+npm --prefix examples/bookstore/host-vscode run test:e2e
+```
+
+CI runs that smoke test in its VS Code job, under `xvfb-run`. It opens the
+diagram of `nodes.bookstore` and checks that the server reports a broken
+reference.
 
 The server's `build` runs `generate` first, which writes the protocol
 package's `src/generated-hydranium/` from the grammar, then compiles both.
@@ -124,9 +141,10 @@ them the scaffold's own. That includes `server/vitest.config.ts`, which keeps
 the scaffold's own config rather than the repo's shared helper.
 
 The files `init` does not emit are the generated trees each `build` writes and
-the three `turbo.json` files. Two order the protocol package's build after the
-server's `generate` in this repo's task runner; the browser host's adds
-`../workspace`, which its bundle reads, to its build inputs.
+the `turbo.json` files. The server's and the protocol's order the protocol
+package's build after the server's `generate` in this repo's task runner; the
+browser host's adds `../workspace`, which its bundle reads, to its build
+inputs, and the VS Code host's adds the projects its build type-checks.
 
 Anything else `init` does not emit belongs in
 [order-flow](../order-flow/README.md), or teach `init` to emit it. The package

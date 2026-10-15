@@ -112,10 +112,11 @@ this package's `test:e2e:install` has downloaded the build with retries. Once
 it is cached, neither tier makes a request to VS Code's update server.
 
 - **`test:host`** runs `test/host` with Mocha inside the extension host,
-  through `@vscode/test-cli` and `.vscode-test.mjs`. It sees what the extension
-  API exposes: activation, the editor a `.process` opens in, the server's
-  diagnostics, the port commands and the properties panel's tab. It cannot see
-  inside a webview.
+  through `@vscode/test-cli` and `.vscode-test.mjs`, with `../vscode-servers`
+  loaded beside this extension, as a user may install both. It sees what the
+  extension API exposes: that both activate, the port commands, the editor a
+  `.process` opens in, the server's diagnostics and the properties panel's
+  tab. It cannot see inside a webview.
 - **`test:e2e`** drives the VS Code window with Playwright's Electron support
   and asserts inside the webviews. Its selectors reach into the workbench DOM,
   which is not a VS Code API, so a version bump can break them.

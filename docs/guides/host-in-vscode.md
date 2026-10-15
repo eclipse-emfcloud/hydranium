@@ -6,7 +6,10 @@ diagrams through the GLSP head in a custom editor. The order-flow example
 splits it over two extensions:
 [`vscode`](../../examples/order-flow/vscode/README.md), the editors, and
 [`vscode-servers`](../../examples/order-flow/vscode-servers/README.md), which
-launches the server.
+launches the server. `init --hosts vscode` scaffolds the same two extensions
+for your own language, with the language client and a diagram editor, which
+[bookstore's](../../examples/bookstore/host-vscode/README.md) shows as
+emitted.
 
 Heads: LSP · data · GLSP
 
@@ -33,6 +36,9 @@ webview's messages over one `vscode-messenger` hop shared by every head.
    sideloads the extension, publish each socket head's port as a host command
    with `registerPortCommands`, and keep that launch in an extension that
    contributes nothing else, so Theia does not get your custom editors too.
+   Register the commands in that extension's activation, not in a launch your
+   VS Code extension shares: VS Code throws on a second registration of one
+   command id, so with both installed one would fail to activate.
 
 2. **Connect the diagram.** Create a `HydraniumGlspVscodeServer`, with a
    `findPort` that calls `findPort` on your language client and the head's

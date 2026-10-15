@@ -63,9 +63,11 @@
  * directory: `server/` (the grammar, the language and its heads), `protocol/`
  * (what the server and its clients both import, so a client never installs
  * Langium), `client/` with a diagram (its host-neutral client side),
- * `host-<name>/` per host, and `workspace/` (starter model files every host
- * and the CLI open). A standalone project adds a root manifest naming them as npm
- * workspaces; a workspace member joins the surrounding root instead.
+ * `host-<name>/` per host, `vscode-servers/` with the VS Code host (the server
+ * launch it shares with a Theia app), and `workspace/` (starter model files
+ * every host and the CLI open). A standalone project adds a root manifest
+ * naming them as npm workspaces; a workspace member joins the surrounding root
+ * instead.
  *
  * A file that is fixed text with tokens lives in the `templates/` tree the
  * package ships beside `lib`, at the path it is emitted at, tokens included
@@ -133,8 +135,12 @@ function screamingSnake(projectId: string): string {
    return projectId.replace(/-/g, '_').toUpperCase();
 }
 
+const VSCODE_EXTENSION_MEMBERS: readonly InitMember[] = ['vscode-servers', 'host-vscode'];
+
 /**
- * A member's package name: `<id>-<member>`, under the scope when there is one.
+ * A member's package name: `<id>-<member>`, under the scope when there is one,
+ * except for the VS Code extensions, whose scoped name `vsce` refuses to
+ * package.
  *
  * Suffixed even for the server, because a project of several packages has no
  * member entitled to the bare id, and a later client or host would otherwise
@@ -143,7 +149,7 @@ function screamingSnake(projectId: string): string {
 export function memberPackageName(composition: InitComposition, member: InitMember): string {
    const { scope } = composition.packaging;
    const name = `${composition.projectId}-${member}`;
-   return scope === undefined ? name : `${scope}/${name}`;
+   return scope === undefined || VSCODE_EXTENSION_MEMBERS.includes(member) ? name : `${scope}/${name}`;
 }
 
 /**
@@ -379,6 +385,41 @@ const HOST_BROWSER_DEV_DEPENDENCIES: Readonly<Record<string, string>> = {
    typescript: '^7.0.2'
 };
 
+/** The language client both VS Code extensions start the server with. */
+const VSCODE_LANGUAGE_CLIENT: Readonly<Record<string, string>> = { 'vscode-languageclient': '^9.0.1' };
+
+/** The VS Code API's types, at the oldest VS Code both extensions run in, which `engines` names too. */
+const VSCODE_ENGINE = '^1.101.0';
+
+/**
+ * What the GLSP head adds to the VS Code extension: the connector in the
+ * extension host and the diagram webview's starter, which bundles the client
+ * member.
+ */
+const HOST_VSCODE_GLSP_FRAMEWORK_DEPENDENCIES: readonly string[] = [
+   '@hydranium/client-vscode',
+   '@hydranium/glsp-client',
+   '@hydranium/glsp-client-vscode',
+   '@hydranium/protocol'
+];
+const HOST_VSCODE_GLSP_THIRD_PARTY_DEPENDENCIES: Readonly<Record<string, string>> = {
+   '@eclipse-glsp/client': '2.7.0',
+   '@eclipse-glsp/vscode-integration': '2.7.0',
+   '@eclipse-glsp/vscode-integration-webview': '2.7.0',
+   inversify: '^6.1.3',
+   'vscode-jsonrpc': '9.0.0'
+};
+
+/** The VS Code extension's tools: the smoke tier, the download it runs in and the type check. */
+const HOST_VSCODE_DEV_DEPENDENCIES: Readonly<Record<string, string>> = {
+   '@playwright/test': '^1.55.0',
+   '@types/node': '^22.0.0',
+   '@types/vscode': VSCODE_ENGINE,
+   '@vscode/test-electron': '^3.1.0',
+   rimraf: '^5.0.0',
+   typescript: '^7.0.2'
+};
+
 /**
  * The exact pins of every member the composition emits, for a workspace root
  * to declare too. npm installs a root's own dependencies at the top of the
@@ -397,7 +438,8 @@ export function workspaceRootPins(composition: InitComposition): ReadonlyArray<r
       ...(members.includes('client') ? Object.entries(CLIENT_THIRD_PARTY_DEPENDENCIES) : []),
       ...(members.includes('host-browser')
          ? (['base', ...heads] as const).flatMap(head => Object.entries(HOST_BROWSER_THIRD_PARTY_DEPENDENCIES[head]))
-         : [])
+         : []),
+      ...(members.includes('host-vscode') && heads.includes('glsp') ? Object.entries(HOST_VSCODE_GLSP_THIRD_PARTY_DEPENDENCIES) : [])
    ]);
    return [...pins].filter(([, version]) => /^\d+\.\d+\.\d+$/.test(version)).sort(([left], [right]) => left.localeCompare(right));
 }
@@ -991,11 +1033,7 @@ interface HeadPortConstant {
 function headPortConstants(composition: InitComposition): HeadPortConstant[] {
    const upper = screamingSnake(composition.projectId);
    const lsp = composition.heads.includes('lsp');
-   const heads = [
-      ...(composition.heads.includes('data') ? [{ key: 'DATA_SERVER', path: 'data-server', label: 'data-server' }] : []),
-      ...(composition.heads.includes('glsp') ? [{ key: 'GLSP_SERVER', path: 'glsp-server', label: 'GLSP' }] : [])
-   ];
-   return heads.map(head =>
+   return socketHeads(composition).map(head =>
       lsp
          ? {
               name: `${upper}_${head.key}_PORT_COMMAND`,
@@ -1010,6 +1048,32 @@ function headPortConstants(composition: InitComposition): HeadPortConstant[] {
    );
 }
 
+/** The socket heads of the composition, as `head-ports.ts` names them. */
+function socketHeads(composition: InitComposition) {
+   return [
+      ...(composition.heads.includes('data')
+         ? [{ key: 'DATA_SERVER', path: 'data-server', command: 'dataServer', label: 'data-server' }]
+         : []),
+      ...(composition.heads.includes('glsp') ? [{ key: 'GLSP_SERVER', path: 'glsp-server', command: 'glsp', label: 'GLSP' }] : [])
+   ];
+}
+
+/**
+ * The host commands the VS Code host's servers extension answers each socket
+ * head's port under, for a host without a language client of its own.
+ */
+function hostCommandConstants(composition: InitComposition): HeadPortConstant[] {
+   if (!composition.hosts.includes('vscode')) {
+      return [];
+   }
+   const upper = screamingSnake(composition.projectId);
+   return socketHeads(composition).map(head => ({
+      name: `${upper}_${head.key}_HOST_COMMAND`,
+      value: `${composition.projectId}.port.${head.command}`,
+      doc: `Host command the servers extension answers with the ${head.label} socket port.`
+   }));
+}
+
 /**
  * The socket heads' port commands or variables, in the protocol member.
  *
@@ -1020,9 +1084,10 @@ function headPortConstants(composition: InitComposition): HeadPortConstant[] {
  * failing, and a wrong variable is never read.
  */
 function headPortsFile(composition: InitComposition): string {
-   const constants = headPortConstants(composition);
+   const constants = [...headPortConstants(composition), ...hostCommandConstants(composition)];
    const blocks = constants.map(constant => `/** ${constant.doc} */\nexport const ${constant.name} = '${constant.value}';`);
-   const heads = `socket head${blocks.length > 1 ? 's' : ''}`;
+   const socketHeadCount = socketHeads(composition).length;
+   const heads = `socket head${socketHeadCount > 1 ? 's' : ''}`;
    const opening = composition.heads.includes('lsp')
       ? `// The LSP requests a host queries to discover this server's ${heads}.`
       : `// The environment variables that name the ports of this server's ${heads}.`;
@@ -1034,13 +1099,20 @@ function headPortsFile(composition: InitComposition): string {
       : `// The server reads them and a process that starts it sets them; both import
 // them from here. A variable retyped with a typo is never read, and the head
 // then listens on whichever port is free.`;
+   const hostCommands = composition.hosts.includes('vscode')
+      ? `
+//
+// The host commands are the same ports for a host with no language client,
+// such as a Theia app sideloading the servers extension: it runs the command
+// and the extension sends the request.`
+      : '';
    return `${opening}
 //
-// ${blocks.length > 1 ? 'Both are' : 'It is'} keyed by the PROJECT, not the language: one server of each kind per
+// ${socketHeadCount > 1 ? 'Both are' : 'It is'} keyed by the PROJECT, not the language: one server of each kind per
 // process serves every registered grammar, so a language-derived name would tie
 // a project-level endpoint to whichever grammar was scaffolded first.
 //
-${usage}
+${usage}${hostCommands}
 
 ${blocks.join('\n\n')}
 `;
@@ -2776,6 +2848,565 @@ function hostBrowserFiles(composition: InitComposition): InitFile[] {
    ];
 }
 
+/** A JSON value as it sits at `indent` in a manifest npm writes. */
+function jsonAt(value: unknown, indent: string): string {
+   return JSON.stringify(value, null, 2).replace(/\n/g, `\n${indent}`);
+}
+
+/**
+ * The languages and grammars a VS Code extension contributes. Each extension
+ * declares its own, since either may be installed without the other; the
+ * grammars are the server's, copied in by `copy:syntaxes`.
+ */
+function vscodeLanguageContributions(composition: InitComposition): Record<string, unknown> {
+   return {
+      grammars: composition.grammars.map(grammar => ({
+         language: grammar.languageId,
+         scopeName: `source.${grammar.languageId}`,
+         path: `./syntaxes/${grammar.languageId}.tmLanguage.json`
+      })),
+      languages: composition.grammars.map(grammar => ({
+         id: grammar.languageId,
+         aliases: [grammar.grammar],
+         extensions: grammar.extensions.map(extension => `.${extension}`)
+      }))
+   };
+}
+
+/** VS Code finds the grammars only inside the extension, so the build copies the server's. */
+const COPY_SYNTAXES = `node -e \\"require('node:fs').cpSync('../server/syntaxes', 'syntaxes', { recursive: true })\\"`;
+
+/**
+ * The servers-only extension's `package.json`. Always private, like a host:
+ * it is installed into an application, never as a dependency.
+ *
+ * `onStartupFinished` rather than `onLanguage`, since a Theia backend asks for
+ * a port before any document is open.
+ */
+function vscodeServersPackageJson(composition: InitComposition): string {
+   const dependencies: Record<string, string> = {
+      [memberPackageName(composition, 'protocol')]: MEMBER_PIN,
+      [memberPackageName(composition, 'server')]: MEMBER_PIN,
+      ...VSCODE_LANGUAGE_CLIENT
+   };
+   if (socketHeads(composition).length > 0) {
+      dependencies['@hydranium/client-vscode'] = frameworkPin(composition);
+   }
+   return `{
+  "name": "${memberPackageName(composition, 'vscode-servers')}",
+  "displayName": "${composition.name} Servers",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Starts the ${composition.name} server${socketHeads(composition).length > 0 ? " and publishes its socket heads' ports as host commands" : ''}, with no editor of its own.",
+  "license": "UNLICENSED",
+  "author": "",
+  "publisher": "${composition.projectId}",
+  "main": "./out/extension.js",
+  "scripts": {
+    "build": "npm run copy:syntaxes && tsc",
+    "clean": "rimraf out syntaxes tsconfig.tsbuildinfo",
+    "copy:syntaxes": "${COPY_SYNTAXES}",
+${lintScript(forMember(composition, 'vscode-servers'), 'src')}    "watch": "tsc --watch"
+  },
+  "dependencies": {
+${sortedBlock(dependencies, '    ')}
+  },
+  "devDependencies": {
+${sortedBlock({ '@types/node': '^22.0.0', '@types/vscode': VSCODE_ENGINE, rimraf: '^5.0.0', typescript: '^7.0.2' }, '    ')}
+  },
+  "contributes": ${jsonAt(vscodeLanguageContributions(composition), '  ')},
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "engines": {
+    "vscode": "${VSCODE_ENGINE}"
+  }
+}
+`;
+}
+
+/**
+ * The servers-only extension's activation: the shared launch, and with a socket
+ * head the port commands, which only this extension registers.
+ */
+function vscodeServersExtensionFile(composition: InitComposition): string {
+   const upper = screamingSnake(composition.projectId);
+   const heads = socketHeads(composition).map(head => head.key);
+   const protocolSymbols = heads.flatMap(head => [`${upper}_${head}_HOST_COMMAND`, `${upper}_${head}_PORT_COMMAND`]);
+   const imports =
+      heads.length === 0
+         ? ''
+         : `import { registerPortCommands } from '@hydranium/client-vscode/node';
+${importList(protocolSymbols, memberPackageName(composition, 'protocol'), columnsFor(composition))}
+`;
+   const portCommands =
+      heads.length === 0
+         ? ''
+         : `
+
+   // Each socket head's port as a host command, for a host with no language
+   // client of its own. Not in the shared launch: VS Code throws on a second
+   // registration of one id, so the VS Code extension beside this one would fail
+   // to activate. A pass-through: awaiting anything else in it would hang a
+   // Theia backend on a user dismissing a notification.
+   registerPortCommands(context, client, {
+${heads.map(head => `      [${upper}_${head}_HOST_COMMAND]: ${upper}_${head}_PORT_COMMAND`).join(',\n')}
+   });`;
+   return `// The servers-only extension: it starts the ${composition.name} server and contributes no
+// editor, view or command. A Theia app sideloads this one rather than the VS
+// Code extension, whose diagram editors would give its files a second editor.
+
+${imports}import type { ExtensionContext } from 'vscode';
+import type { LanguageClient } from 'vscode-languageclient/node';
+import { start${composition.name}LanguageClient } from './language-client.js';
+
+let client: LanguageClient | undefined;
+
+export async function activate(context: ExtensionContext): Promise<void> {
+   client = await start${composition.name}LanguageClient(context);${portCommands}
+}
+
+export async function deactivate(): Promise<void> {
+   await client?.stop();
+   client = undefined;
+}
+`;
+}
+
+/**
+ * The server launch both extensions share: one launch, so VS Code and a Theia
+ * app sideloading the servers extension hand the server the same documents.
+ */
+function vscodeLanguageClientFile(composition: InitComposition): string {
+   return `// Starts the ${composition.name} server for VS Code, and for a Theia app that sideloads
+// this extension: one launch, so both hand the server the same documents.
+
+import { ALL_LANGUAGES } from '${memberPackageName(composition, 'protocol')}';
+import { type ExtensionContext, workspace } from 'vscode';
+import { LanguageClient, TransportKind } from 'vscode-languageclient/node';
+
+/** Fork the server, start its language client and return it once started. */
+export async function start${composition.name}LanguageClient(context: ExtensionContext): Promise<LanguageClient> {
+   // Resolved through the package, so it works from the workspace and from an
+   // installed extension alike. Over IPC, which keeps the server's stdout free.
+   const serverModule = require.resolve('${memberPackageName(composition, 'server')}/lib/main.js');
+   const extensions = ALL_LANGUAGES.flatMap(language => language.fileExtensions).join(',');
+   const client = new LanguageClient(
+      '${composition.projectId}',
+      '${composition.name}',
+      { module: serverModule, transport: TransportKind.ipc },
+      {
+         documentSelector: ALL_LANGUAGES.map(({ languageId }) => ({ scheme: 'file', language: languageId })),
+         // Changes on disk the editor does not hold, such as a file another tool writes.
+         synchronize: { fileEvents: workspace.createFileSystemWatcher(\`**/*{\${extensions}}\`) }
+      }
+   );
+   context.subscriptions.push(client);
+   await client.start();
+
+   return client;
+}
+`;
+}
+
+/** The servers-only extension's README. */
+function vscodeServersReadme(composition: InitComposition): string {
+   const lines = [
+      `# ${memberPackageName(composition, 'vscode-servers')}`,
+      '',
+      'A VS Code extension that starts the __NAME__ server and contributes no',
+      'editor, view or command: the languages, their grammars and the server.',
+      'With a socket head, it also answers each head’s port under a host command,',
+      'which a host without a language client of its own runs, such as a Theia app',
+      'sideloading this extension. The VS Code extension in `../host-vscode` starts',
+      'the server through the same function. Both work side by side, but each',
+      'starts its own server and language client, so diagnostics may show twice:',
+      'install one.',
+      '',
+      '```bash',
+      'npm run build   # copy the server’s grammars and compile into out/; build the server first',
+      '```',
+      '',
+      '- `src/extension.ts` — activation, which starts the server and, with a socket head, registers its port commands',
+      '- `src/language-client.ts` — the server launch, shared with `../host-vscode`',
+      ''
+   ];
+   return project(lines.join('\n'), composition);
+}
+
+/** The servers-only extension: the server's launch, without an editor. */
+function vscodeServersFiles(composition: InitComposition): InitFile[] {
+   return [
+      { path: 'vscode-servers/package.json', content: vscodeServersPackageJson(composition) },
+      ignoreFile('vscode-servers'),
+      { path: 'vscode-servers/README.md', content: vscodeServersReadme(composition) },
+      projectTemplate('vscode-servers/tsconfig.json', composition),
+      { path: 'vscode-servers/src/extension.ts', content: vscodeServersExtensionFile(composition) },
+      { path: 'vscode-servers/src/language-client.ts', content: vscodeLanguageClientFile(composition) }
+   ];
+}
+
+/**
+ * The custom-editor view type of a grammar's diagram, as the editor module
+ * declares it. VS Code keys custom editors by view type alone, across every
+ * installed extension, so it carries the language id, which `init` qualifies
+ * by the project wherever the grammar is named apart from it.
+ */
+function diagramViewType(grammar: InitGrammarNames): string {
+   return `${grammar.languageId}.diagram`;
+}
+
+/**
+ * The VS Code extension's `package.json`. Always private, as every host is.
+ *
+ * A diagram file opens in its diagram by default; `Reopen Editor With` reaches
+ * the text.
+ */
+function hostVscodePackageJson(composition: InitComposition): string {
+   const diagrams = composition.grammars.filter(grammar => grammar.diagram);
+   const dependencies: Record<string, string> = {
+      [memberPackageName(composition, 'vscode-servers')]: MEMBER_PIN,
+      ...VSCODE_LANGUAGE_CLIENT
+   };
+   if (diagrams.length > 0) {
+      dependencies[memberPackageName(composition, 'client')] = MEMBER_PIN;
+      dependencies[memberPackageName(composition, 'protocol')] = MEMBER_PIN;
+      Object.assign(dependencies, HOST_VSCODE_GLSP_THIRD_PARTY_DEPENDENCIES);
+      for (const framework of HOST_VSCODE_GLSP_FRAMEWORK_DEPENDENCIES) {
+         dependencies[framework] = frameworkPin(composition);
+      }
+   }
+   const devDependencies = { ...HOST_VSCODE_DEV_DEPENDENCIES, ...(diagrams.length > 0 ? { esbuild: '^0.28.0' } : {}) };
+   const contributes = {
+      ...(diagrams.length > 0
+         ? {
+              customEditors: diagrams.map(grammar => ({
+                 viewType: diagramViewType(grammar),
+                 displayName: `${grammar.grammar} Diagram`,
+                 selector: grammar.extensions.map(extension => ({ filenamePattern: `*.${extension}` })),
+                 priority: 'default'
+              }))
+           }
+         : {}),
+      ...vscodeLanguageContributions(composition)
+   };
+   const typecheck = [...(diagrams.length > 0 ? ['tsconfig.webview.json'] : []), 'tsconfig.e2e.json']
+      .map(project => `tsc --noEmit -p ${project}`)
+      .join(' && ');
+   return `{
+  "name": "${memberPackageName(composition, 'host-vscode')}",
+  "displayName": "${composition.name}",
+  "version": "0.0.0",
+  "private": true,
+  "description": "${composition.name} in VS Code: the language client${diagrams.length > 0 ? ', and a custom editor for each diagram' : ''}.",
+  "license": "UNLICENSED",
+  "author": "",
+  "publisher": "${composition.projectId}",
+  "main": "./out/extension.js",
+  "scripts": {
+    "build": "npm run copy:syntaxes && npm run typecheck && tsc${diagrams.length > 0 ? ' && node esbuild.mjs' : ''}",
+    "clean": "rimraf out syntaxes tsconfig.tsbuildinfo test-results playwright-report",
+    "copy:syntaxes": "${COPY_SYNTAXES}",
+${lintScript(forMember(composition, 'host-vscode'), 'src test')}    "start": "node start.mjs",
+    "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
+    "test:e2e:install": "node --experimental-strip-types test/install-vscode.mts",
+    "typecheck": "${typecheck}"
+  },
+  "dependencies": {
+${sortedBlock(dependencies, '    ')}
+  },
+  "devDependencies": {
+${sortedBlock(devDependencies, '    ')}
+  },
+  "contributes": ${jsonAt(contributes, '  ')},
+  "activationEvents": ${jsonAt(
+     composition.grammars.map(grammar => `onLanguage:${grammar.languageId}`),
+     '  '
+  )},
+  "engines": {
+    "vscode": "${VSCODE_ENGINE}"
+  }
+}
+`;
+}
+
+/** The VS Code extension's entry: the shared server launch, then a diagram editor per diagram grammar. */
+function hostVscodeExtensionFile(composition: InitComposition): string {
+   const columns = columnsFor(composition);
+   const diagrams = composition.grammars.filter(grammar => grammar.diagram);
+   const start = `start${composition.name}LanguageClient`;
+   const servers = `${memberPackageName(composition, 'vscode-servers')}/out/language-client.js`;
+   if (diagrams.length === 0) {
+      return `// The ${composition.name} VS Code extension: the language client, started the way the
+// servers extension starts it.
+
+import type { ExtensionContext } from 'vscode';
+import type { LanguageClient } from 'vscode-languageclient/node';
+import { ${start} } from '${servers}';
+
+let client: LanguageClient | undefined;
+
+export async function activate(context: ExtensionContext): Promise<void> {
+   client = await ${start}(context);
+}
+
+export async function deactivate(): Promise<void> {
+   await client?.stop();
+   client = undefined;
+}
+`;
+   }
+   const upper = screamingSnake(composition.projectId);
+   const editors = diagrams.map(grammar => ({
+      module: `./${grammar.grammarId}-diagram-editor.js`,
+      viewType: `${screamingSnake(grammar.grammarId)}_DIAGRAM_VIEW_TYPE`,
+      provider: `${grammar.grammar}DiagramEditorProvider`,
+      local: `${grammar.grammar.charAt(0).toLowerCase()}${grammar.grammar.slice(1)}Editor`
+   }));
+   const registrations = editors.map(
+      editor => `   const ${editor.local} = new ${editor.provider}(glspConnector, context.extensionUri);
+   context.subscriptions.push(
+      window.registerCustomEditorProvider(${editor.viewType}, ${editor.local}, {
+         // A hidden tab keeps its diagram session rather than repeating the handshake.
+         webviewOptions: { retainContextWhenHidden: true },
+         // Two views of one document would be two GLSP clients racing on one model.
+         supportsMultipleEditorsPerDocument: false
+      })
+   );`
+   );
+   return `// The ${composition.name} VS Code extension: the language client, started the way the
+// servers extension starts it, and a custom editor for each diagram. Node
+// extension host only: the server is forked and its socket heads reached over
+// TCP.
+
+import { GlspVscodeConnector } from '@eclipse-glsp/vscode-integration';
+import { findPort } from '@hydranium/client-vscode/node';
+import { HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';
+import { ConsoleLogger, describeError } from '@hydranium/protocol';
+import { ${upper}_GLSP_SERVER_PORT_COMMAND } from '${memberPackageName(composition, 'protocol')}';
+import { type ExtensionContext, window } from 'vscode';
+import type { LanguageClient } from 'vscode-languageclient/node';
+import { ${start} } from '${servers}';
+${editors.map(editor => importList([editor.viewType, editor.provider], editor.module, columns)).join('\n')}
+
+let client: LanguageClient | undefined;
+
+export async function activate(context: ExtensionContext): Promise<void> {
+   const running = await ${start}(context);
+   client = running;
+
+   // The GLSP head, and the connector bridging it to every diagram webview. No
+   // \`messenger\` option: the connector's own keeps messages flowing to a hidden tab.
+   const glspServer = new HydraniumGlspVscodeServer({
+      clientId: '${composition.projectId}-glsp',
+      clientName: '${composition.name}',
+      findPort: () => findPort(running, ${upper}_GLSP_SERVER_PORT_COMMAND),
+      logger: new ConsoleLogger().with('GLSP head')
+   });
+   const glspConnector = new GlspVscodeConnector({ server: glspServer, logging: false });
+   context.subscriptions.push(glspServer, glspConnector);
+   // Not awaited, so a session that opens no diagram does not wait on the port.
+   // \`start()\` resolves either way; a failure is reported off \`onReady\`.
+   void glspServer.start();
+   void glspServer.onReady.catch((error: unknown) => {
+      void window.showErrorMessage(\`${composition.name} diagram unavailable: \${describeError(error)}\`);
+   });
+${registrations.join('\n')}
+}
+
+export async function deactivate(): Promise<void> {
+   await client?.stop();
+   client = undefined;
+}
+`;
+}
+
+/**
+ * The smoke test: VS Code opens the starter workspace with the extension
+ * loaded, each diagram file draws, and the server reports a broken reference.
+ */
+function hostVscodeSmokeSpec(composition: InitComposition): string {
+   const diagram = composition.grammars.find(grammar => grammar.diagram);
+   const file = `nodes.${(diagram ?? composition.grammars[0]).extensions[0]}`;
+   const diagramSteps = diagram
+      ? `
+      // The diagram file opens in its diagram, which draws the two starter nodes.
+      const webview = page.frameLocator('iframe.webview.ready').frameLocator('#active-frame');
+      // In the editor's container: sprotty measures shapes in a hidden copy beside it.
+      await expect(webview.locator('.hydranium-diagram-container .sprotty-node')).toHaveCount(2);
+      // Then as text. The row is clicked, since Enter runs the best fuzzy match,
+      // and its name ends in its keybinding, if it has one.
+      await page.keyboard.press('ControlOrMeta+Shift+P');
+      await page.locator('.quick-input-widget input').fill('>View: Reopen Editor with Text Editor');
+      await page
+         .locator('.quick-input-list')
+         .getByRole('option', { name: /^View: Reopen Editor with Text Editor(,|$)/ })
+         .click();
+`
+      : '';
+   const opening = diagram
+      ? `// VS Code opens a copy of the starter workspace with this extension loaded,
+// the diagram file draws in its diagram editor, and the server reports a
+// reference that resolves to nothing.`
+      : `// VS Code opens a copy of the starter workspace with this extension loaded,
+// and the server reports a reference that resolves to nothing.`;
+   return `${opening}
+
+import { _electron, expect, test, type Page } from '@playwright/test';
+import { downloadAndUnzipVSCode } from '@vscode/test-electron';
+import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { VSCODE_CACHE, VSCODE_VERSION } from './vscode-version.mts';
+
+const extensionRoot = fileURLToPath(new URL('..', import.meta.url));
+
+test('${diagram ? 'draws the diagram and ' : ''}reports a broken reference', async () => {
+   // A copy, since the server writes its repairs to the folder it opens, and a
+   // fresh profile, since a reused one restores the last run's editors.
+   const scratch = mkdtempSync(join(tmpdir(), '${composition.projectId}-vscode-'));
+   const workspace = join(scratch, 'workspace');
+   cpSync(fileURLToPath(new URL('../../workspace', import.meta.url)), workspace, { recursive: true });
+   const app = await _electron.launch({
+      executablePath: await downloadAndUnzipVSCode({ version: VSCODE_VERSION, cachePath: VSCODE_CACHE }),
+      args: [
+         '--no-sandbox',
+         '--disable-gpu-sandbox',
+         '--disable-updates',
+         '--skip-welcome',
+         '--skip-release-notes',
+         '--disable-workspace-trust',
+         '--disable-extensions',
+         \`--extensionDevelopmentPath=\${extensionRoot}\`,
+         \`--user-data-dir=\${join(scratch, 'user-data')}\`,
+         \`--extensions-dir=\${join(scratch, 'extensions')}\`,
+         workspace
+      ]
+   });
+   try {
+      const page = await app.firstWindow();
+      await expect(page.locator('.monaco-workbench')).toBeVisible();
+      await quickOpen(page, '${file}');
+${diagramSteps}
+      const editor = page.locator('.monaco-editor .view-lines').first();
+      await expect(editor).toContainText('node First');
+      await editor.click();
+      await page.keyboard.press('ControlOrMeta+End');
+      // In one edit: typed key by key, the half-typed reference is reported on the way.
+      await page.keyboard.insertText('\\nnode Broken -> Missing');
+      await expect(page.locator('.monaco-editor .squiggly-error').first()).toBeVisible();
+   } finally {
+      await app.close();
+      rmSync(scratch, { recursive: true, force: true });
+   }
+});
+
+/** Open \`file\` through Quick Open, so it gets the editor a user would. */
+async function quickOpen(page: Page, file: string): Promise<void> {
+   await page.keyboard.press('ControlOrMeta+P');
+   const input = page.locator('.quick-input-widget input');
+   await input.fill(file);
+   await expect(page.locator('.quick-input-list .monaco-list-row').first()).toContainText(file);
+   await input.press('Enter');
+   await expect(page.locator('.quick-input-widget')).toBeHidden();
+}
+`;
+}
+
+/**
+ * `text` broken at spaces into lines of at most 80 columns, the width
+ * `check:docs` holds Markdown to. A link or code span stays whole, and runs
+ * long on a line of its own.
+ */
+function wrapProse(text: string): string[] {
+   const lines: string[] = [];
+   for (const piece of text.match(/!?\[[^\]]*\]\([^)]*\)\S*|`+[^`]*`+\S*|\S+/g) ?? []) {
+      const last = lines.at(-1);
+      if (last !== undefined && last.length + 1 + piece.length <= 80) {
+         lines[lines.length - 1] = `${last} ${piece}`;
+      } else {
+         lines.push(piece);
+      }
+   }
+   return lines;
+}
+
+/** The VS Code extension's README. */
+function hostVscodeReadme(composition: InitComposition): string {
+   const diagrams = composition.grammars.filter(grammar => grammar.diagram);
+   const data = composition.heads.includes('data');
+   const intro = [
+      diagrams.length > 0
+         ? `${composition.name} in VS Code: the language client, and a custom editor drawing each diagram file.`
+         : `${composition.name} in VS Code: the language client.`,
+      'The server is started by `../vscode-servers`, whose launch this extension calls, so the two never hand the server different documents.',
+      socketHeads(composition).length > 0
+         ? 'It needs a Node extension host: the server is forked, and its socket heads are reached over TCP.'
+         : 'It needs a Node extension host, since the server is forked.'
+   ];
+   const dataNote =
+      diagrams.length > 0
+         ? `The data head runs too, and its port is one \`findPort\` call away, from \`@hydranium/client-vscode\`, but nothing here reads it yet: see the Host in VS Code guide for a webview over it.`
+         : `The data head runs too, but nothing here reads its port yet. Add \`@hydranium/client-vscode\` as a dependency and its \`findPort\` returns it; the Host in VS Code guide shows a webview over it.`;
+   const lines = [
+      `# ${memberPackageName(composition, 'host-vscode')}`,
+      '',
+      ...wrapProse(intro.join(' ')),
+      ...(data ? ['', ...wrapProse(dataNote)] : []),
+      '',
+      '```bash',
+      `npm run build              # copy the server’s grammars, type-check and compile${diagrams.length > 0 ? ', then bundle' : ''}`,
+      'npm start                  # VS Code with this extension, on ../workspace; needs `code` on the PATH',
+      'npm run test:e2e:install   # download the VS Code the smoke test drives, once',
+      'npm run test:e2e           # the smoke test; under `xvfb-run -a` on Linux without a display',
+      '```',
+      '',
+      '## Layout',
+      '',
+      '- `src/extension.ts` — activation: the server, through `../vscode-servers`' +
+         (diagrams.length > 0 ? ', and the diagram editors' : ''),
+      ...diagrams.flatMap(grammar => [
+         `- \`src/${grammar.grammarId}-diagram-editor.ts\` — the \`${grammar.grammar}\` diagram’s custom editor; its view type is the one \`package.json\` declares`,
+         `- \`src/webview/${grammar.grammarId}-diagram.ts\` — the webview it loads, over the client package’s diagram`
+      ]),
+      ...(diagrams.length > 0
+         ? ['- `src/webview/diagram.css` — the webview’s size and colours', '- `esbuild.mjs` — bundles each webview into `out/webview/`']
+         : []),
+      '- `start.mjs` — `npm start`: VS Code with this extension, on `../workspace`',
+      '- `test/smoke.spec.mts` — VS Code opens the workspace, ' +
+         (diagrams.length > 0 ? 'the diagram draws, ' : '') +
+         'and the server reports a broken reference',
+      '- `test/vscode-version.mts` — the VS Code release the smoke test runs',
+      ''
+   ];
+   return project(lines.join('\n'), composition);
+}
+
+/** The VS Code extension: the language client and a diagram editor per diagram grammar. */
+function hostVscodeFiles(composition: InitComposition): InitFile[] {
+   const fixed = (file: string): InitFile => projectTemplate(`host-vscode/${file}`, composition);
+   const diagrams = composition.grammars.filter(grammar => grammar.diagram);
+   return [
+      { path: 'host-vscode/package.json', content: hostVscodePackageJson(composition) },
+      ignoreFile('host-vscode'),
+      { path: 'host-vscode/README.md', content: hostVscodeReadme(composition) },
+      fixed('tsconfig.json'),
+      fixed('tsconfig.e2e.json'),
+      fixed('playwright.config.mts'),
+      fixed('start.mjs'),
+      { path: 'host-vscode/src/extension.ts', content: hostVscodeExtensionFile(composition) },
+      ...(diagrams.length > 0 ? [fixed('tsconfig.webview.json'), fixed('esbuild.mjs'), fixed('src/webview/diagram.css')] : []),
+      ...diagrams.flatMap(grammar => [
+         grammarTemplate('host-vscode/src/__GRAMMAR_ID__-diagram-editor.ts', composition, grammar),
+         grammarTemplate('host-vscode/src/webview/__GRAMMAR_ID__-diagram.ts', composition, grammar)
+      ]),
+      { path: 'host-vscode/test/smoke.spec.mts', content: hostVscodeSmokeSpec(composition) },
+      fixed('test/vscode-version.mts'),
+      fixed('test/install-vscode.mts')
+   ];
+}
+
 /**
  * A standalone project's root: the members as npm workspaces.
  *
@@ -2827,7 +3458,9 @@ export function buildInitTemplates(composition: InitComposition): InitFile[] {
       ...protocolFiles(composition),
       ...serverFiles(composition),
       ...(composition.heads.includes('glsp') ? clientFiles(composition) : []),
+      ...(composition.hosts.includes('vscode') ? vscodeServersFiles(composition) : []),
       ...(composition.hosts.includes('browser') ? hostBrowserFiles(composition) : []),
+      ...(composition.hosts.includes('vscode') ? hostVscodeFiles(composition) : []),
       ...workspaceFiles(composition)
    ];
 }

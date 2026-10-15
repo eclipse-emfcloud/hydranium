@@ -1,0 +1,17 @@
+// The diagram webviews' half: a browser page, so it has the DOM. esbuild
+// emits, so this only type-checks, and the stylesheet imports are esbuild's to
+// resolve.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "noUncheckedSideEffectImports": false,
+    "types": []
+  },
+  "include": ["src/webview"]
+}
