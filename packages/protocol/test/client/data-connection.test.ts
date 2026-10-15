@@ -143,6 +143,8 @@ interface ServerBehaviour {
    createGate?: Promise<void>;
    /** Held before an update answers. */
    updateGate?: Promise<void>;
+   /** Held before a set of updates answers. */
+   updatesGate?: Promise<void>;
    /** Held before a save answers. */
    saveGate?: Promise<void>;
    /** Per URI, the version a persist answers it wrote; absent, the version the server holds. */
@@ -356,6 +358,7 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
          updates: { uri: string; baseVersion: unknown; model: unknown }[];
       }): Promise<unknown> => {
          record('updates', args);
+         await behaviour.updatesGate;
          return args.updates.map(update =>
             document(answered(update.uri), moveOn(update.uri), undefined, written(update.uri, update.model))
          );
@@ -517,6 +520,16 @@ function harness(
 function closeEnds(pair: ReturnType<typeof makeDuplexConnectionPair>): void {
    pair.left.dispose();
    pair.right.dispose();
+}
+
+/** A session with the default bounds, on `clock`. */
+class ClockedSession extends DataSession<ProbeElement> {
+   protected override readonly clock: Clock;
+
+   constructor(clientId: string, host: DataSessionHost<ProbeElement, DataServerProtocol<ProbeElement>>, label: string, clock: Clock) {
+      super(clientId, host, label);
+      this.clock = clock;
+   }
 }
 
 /** A session with its own in-flight bound, on `clock` if given, handed out through `sessionFactory`. */
@@ -1587,6 +1600,68 @@ describe('DataSession after a dropped connection', () => {
          await panel.connected();
          expect(of(calls.slice(again), 'update').map(call => call.model)).toEqual(['edited']);
          expect(port.reported).toHaveLength(1);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('counts a write a restore sends again as in flight until it answers', async () => {
+      const texts = new Map([[URI_A, 'clean']]);
+      const behaviour: ServerBehaviour = { texts };
+      const { connection, calls, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const opened = await panel.openDocument({ uri: URI_A });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         const before = calls.length;
+         const held = gate();
+         behaviour.updateGate = held.promise;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         const restoring = panel.connected();
+         await waitFor(() => of(calls.slice(before), 'update').length === 1, { message: 'the restore never wrote again' });
+         expect(panel.hasWritesInFlight).toBe(true);
+
+         held.release();
+         await restoring;
+         expect(panel.hasWritesInFlight).toBe(false);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('counts a set a restore sends again as in flight until it answers', async () => {
+      const texts = new Map([
+         [URI_A, 'clean'],
+         [URI_B, 'clean']
+      ]);
+      const behaviour: ServerBehaviour = { texts };
+      const { connection, calls, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const openedA = await panel.openDocument({ uri: URI_A });
+         const openedB = await panel.openDocument({ uri: URI_B });
+         await panel.updateDocuments({
+            updates: [
+               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version },
+               { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version }
+            ]
+         });
+         const before = calls.length;
+         const held = gate();
+         behaviour.updatesGate = held.promise;
+
+         dropTransport();
+         texts.set(URI_A, 'clean');
+         texts.set(URI_B, 'clean');
+         const restoring = panel.connected();
+         await waitFor(() => of(calls.slice(before), 'updates').length === 1, { message: 'the restore never wrote the set again' });
+         expect(panel.hasWritesInFlight).toBe(true);
+
+         held.release();
+         await restoring;
+         expect(panel.hasWritesInFlight).toBe(false);
       } finally {
          dispose();
       }
@@ -4082,6 +4157,112 @@ describe('DataSession disposal', () => {
          await writing;
       } finally {
          update.release();
+         dispose();
+      }
+   });
+
+   it('reports an update in flight until it answers, for a page whose editor shows it only then', async () => {
+      const update = gate();
+      const { connection, dispose } = harness({ updateGate: update.promise });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         expect(panel.hasWritesInFlight).toBe(false);
+
+         const writing = panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: 'any' });
+         expect(panel.hasWritesInFlight).toBe(true);
+         let settled = false;
+         const waiting = panel.whenWritesSettled().then(result => {
+            settled = true;
+            return result;
+         });
+         await tick(5);
+         expect(settled).toBe(false);
+
+         update.release();
+         await writing;
+         await expect(waiting).resolves.toBe(true);
+         expect(panel.hasWritesInFlight).toBe(false);
+         await expect(panel.whenWritesSettled()).resolves.toBe(true);
+      } finally {
+         update.release();
+         dispose();
+      }
+   });
+
+   it('waits for an update past the close bound, as the server answers it only after its own bounded settle', async () => {
+      const update = gate();
+      const clock = makeFakeClock();
+      const { connection, dispose } = harness(
+         { updateGate: update.promise },
+         undefined,
+         undefined,
+         undefined,
+         undefined,
+         (clientId, host, label) => new ClockedSession(clientId, host, label, clock)
+      );
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         void panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: 'any' }).catch(() => undefined);
+         let result: boolean | undefined;
+         void panel.whenWritesSettled().then(settled => (result = settled));
+
+         clock.advance(10_000);
+         await tick(5);
+         expect(result).toBeUndefined();
+         // Past the server's settle bound too, with room for the update itself.
+         clock.advance(19_000);
+         await tick(5);
+         expect(result).toBeUndefined();
+         clock.advance(1_000);
+
+         await waitFor(() => result !== undefined, { message: 'the write bound never released the wait' });
+         expect(result).toBe(false);
+         expect(panel.hasWritesInFlight).toBe(true);
+         update.release();
+         await waitFor(() => !panel.hasWritesInFlight);
+      } finally {
+         update.release();
+         dispose();
+      }
+   });
+
+   it('reports a set of updates in flight until it answers', async () => {
+      const { connection, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         await panel.openDocument({ uri: URI_B });
+
+         const writing = panel.updateDocuments({
+            updates: [
+               { uri: URI_A, model: MODEL, baseVersion: 'any' },
+               { uri: URI_B, model: MODEL, baseVersion: 'any' }
+            ]
+         });
+         expect(panel.hasWritesInFlight).toBe(true);
+         await writing;
+         expect(panel.hasWritesInFlight).toBe(false);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('counts a save in flight as no update, which hasSavesInFlight reports', async () => {
+      const save = gate();
+      const { connection, dispose } = harness({ saveGate: save.promise });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+
+         const saving = panel.saveDocument({ uri: URI_A, model: MODEL, baseVersion: 'any' });
+
+         expect(panel.hasWritesInFlight).toBe(false);
+         save.release();
+         await saving;
+      } finally {
+         save.release();
          dispose();
       }
    });

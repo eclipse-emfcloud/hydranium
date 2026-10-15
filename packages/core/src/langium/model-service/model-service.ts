@@ -73,8 +73,9 @@ export const MODEL_UPDATE_EDIT = defineMessage('hydranium/core/model-update-edit
 
 /**
  * Max time {@link ModelService.settleLanguageClient} waits. A save answers up to
- * this long after its persist, so a client timing out one save's answer must
- * allow it plus the persist.
+ * this long after its persist, and a data-head update or a diagram's settle
+ * request after its write, so a client timing out one of those answers must
+ * allow it plus the work before.
  */
 const LANGUAGE_CLIENT_SETTLE_TIMEOUT_MS = 10_000;
 
@@ -870,8 +871,10 @@ export class DefaultModelService<
     * timeout. A failed wait is logged at `error`, at `debug` when cancelled and
     * at `warn` when the document is gone.
     *
-    * The framework's save handlers call this after their persist; an adopter's
-    * own save path that answers a client calls it after its `save` too.
+    * The framework's save handlers call this after their persist, the data
+    * head's updates after their write and the GLSP head's settle request for
+    * each document a save writes; an adopter's own save path that answers a
+    * client calls it after its `save` too.
     */
    async settleLanguageClient(uri: string, cancelToken?: CancellationToken): Promise<void> {
       const canonical = this.uriPolicy.canonicalUri(uri);

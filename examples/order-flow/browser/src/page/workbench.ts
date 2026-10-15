@@ -47,6 +47,7 @@
 
 import { connectWorkerHeads, initializeLanguageClient, WORKER_ERROR_EVENT_PHASE, type WorkerHeads } from '@hydranium/client-browser';
 import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient } from '@hydranium/client-browser/monaco';
+import type { GlspDiagramMount } from '@hydranium/glsp-client';
 import { type PublishDiagnosticsParams, PublishDiagnosticsNotification } from 'vscode-languageserver-protocol';
 import {
    ConsoleLogger,
@@ -208,6 +209,33 @@ function setStatus(text: string): void {
  */
 let unsavedDocuments: () => readonly string[] = () => [];
 
+/** The process diagram once mounted, whose unanswered edits the unload guard and a save account for. */
+let processDiagram: GlspDiagramMount | undefined;
+
+/** The properties panel, whose unanswered field edits the unload guard and a save account for. */
+let propertiesPanel: PropertiesPanel | undefined;
+
+/** The document the properties panel shows, once it is up. */
+let propertiesDocument: () => string | undefined = () => undefined;
+
+/**
+ * What a reload would drop: the unsaved documents, the diagram's document
+ * while an edit to it is in flight, and the panel's while a write of it is,
+ * which no dirty set shows until the server answers.
+ */
+function unsavedWork(): readonly string[] {
+   const unsaved = new Set(unsavedDocuments());
+   if ((processDiagram?.editsInFlight ?? 0) > 0) {
+      unsaved.add(GLSP_HEAD_DOCUMENT);
+   }
+   // The document shown now, which a focus change during the write misnames.
+   const written = propertiesDocument();
+   if (propertiesPanel?.hasWritesInFlight && written !== undefined) {
+      unsaved.add(written);
+   }
+   return [...unsaved];
+}
+
 /**
  * Whether the navigation about to happen is one the reader confirmed.
  *
@@ -253,7 +281,7 @@ async function confirmReset(): Promise<boolean> {
  */
 function wireUnloadGuard(): void {
    window.addEventListener('beforeunload', event => {
-      if (navigationConfirmed || unsavedDocuments().length === 0) {
+      if (navigationConfirmed || unsavedWork().length === 0) {
          return;
       }
       event.preventDefault();
@@ -307,7 +335,7 @@ function wireLocaleSwitch(current: string | undefined): void {
  * just before navigating, or both would ask.
  */
 async function switchLocale(locale: PageLocale): Promise<void> {
-   const unsaved = unsavedDocuments();
+   const unsaved = unsavedWork();
    if (unsaved.length > 0) {
       const answer = await askAboutUnsaved(unsaved);
       if (answer === 'cancel') {
@@ -316,9 +344,9 @@ async function switchLocale(locale: PageLocale): Promise<void> {
       if (answer === 'save') {
          await saveEverything();
          // A failed save reports and leaves its document unsaved, and a
-         // keystroke during the save is as unsaved: either keeps the page on
-         // the work rather than reloading over it.
-         if (unsavedDocuments().length > 0) {
+         // keystroke or diagram edit during the save is as unsaved: any of
+         // them keeps the page on the work rather than reloading over it.
+         if (unsavedWork().length > 0) {
             return;
          }
       }
@@ -631,11 +659,17 @@ async function watchLayoutThroughDataHead({ session, connection }: DataHead): Pr
  * on the client: `didSave` tells the server a save has happened and writes
  * nothing. A page has no filesystem, so the worker writes, on the save request
  * the LSP head advertises. A diagram drag reaches the buffer as a
- * `workspace/applyEdit` first, so one save covers both directions.
+ * `workspace/applyEdit` once the server has answered it, which the save waits
+ * for, so one save covers both directions.
  */
 async function saveWorkspace(client: MonacoLspClient, editors: EditorArea, only?: string): Promise<void> {
    setWorkspaceReport('saving…');
    try {
+      const settled = await Promise.all([processDiagram?.whenEditsSettled(), propertiesPanel?.whenWritesSettled()]);
+      // The waits are bounded; a save past one would miss the edit yet report success.
+      if (settled.includes(false)) {
+         throw new Error('the server has not answered an edit yet, so nothing was saved');
+      }
       const saved = only === undefined ? await client.saveAll() : [await client.save(only)].filter(document => document !== undefined);
       editors.refreshDirtyMarks();
       setWorkspaceReport(saved.length === 0 ? 'nothing to save' : `saved ${saved.length} document(s) — a reload restores them`);
@@ -928,6 +962,8 @@ export async function main(locale: Locale | undefined): Promise<void> {
    // sessions at all: it holds its own documents open and reads its own writes
    // back as echoes rather than as foreign edits.
    properties.panel = new PropertiesPanel(dataHead.connection.createSession(PROPERTIES_SESSION_LABEL), dataHead.connection.events);
+   propertiesPanel = properties.panel;
+   propertiesDocument = () => properties.panel?.documentUri;
 
    // The panel's first document is established by FOCUSING one, not by opening
    // it directly: an initial document chosen here would be a second answer to
@@ -956,7 +992,9 @@ export async function main(locale: Locale | undefined): Promise<void> {
       // The callback keeps the line current as elements are created and deleted;
       // the resolved value is the first reading. A report written once would go
       // stale on the first palette gesture, beside a layout report that does not.
-      setGlspReport(await mountProcessDiagram(channels.heads.glsp, GLSP_HEAD_DOCUMENT, setGlspReport, pageLogger.with('GLSP client')));
+      const diagram = await mountProcessDiagram(channels.heads.glsp, GLSP_HEAD_DOCUMENT, setGlspReport, pageLogger.with('GLSP client'));
+      setGlspReport(diagram.report);
+      processDiagram = diagram.mount;
       // AFTER the mount, and the ordering is the whole of it: a listener put on
       // this element before the diagram takes it over never fires — measured,
       // the same registration moved above this line stops working.

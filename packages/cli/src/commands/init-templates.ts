@@ -2541,7 +2541,25 @@ function hostPageFile(composition: InitComposition): string {
          imports: 'startShownFile',
          call: `const shownFile = await startShownFile(heads, ${diagramLanguage === undefined ? shownLanguage : `[${diagramLanguage}]`});`
       },
-      ...(lsp ? [{ module: './editor.js', imports: 'startEditor', call: 'await startEditor(heads, shownFile);' }] : []),
+      // Save is armed with the editor, so it works before the other panes load;
+      // with a diagram it waits for the edits of the one shown, once mounted.
+      ...(lsp
+         ? [
+              {
+                 module: './editor.js',
+                 imports: 'armEditorSave, startEditor',
+                 call: [
+                    'const editor = await startEditor(heads, shownFile);',
+                    ...(diagram === undefined
+                       ? ['armEditorSave(editor);']
+                       : [
+                            'let shownDiagram: Awaited<ReturnType<typeof mountDiagram>> | undefined = undefined;',
+                            'armEditorSave(editor, () => settleDiagramEdits(shownDiagram?.()));'
+                         ])
+                 ].join('\n   ')
+              }
+           ]
+         : []),
       ...(data
          ? [
               {
@@ -2556,10 +2574,8 @@ function hostPageFile(composition: InitComposition): string {
          : [
               {
                  module: './diagram.js',
-                 imports: 'mountDiagram',
-                 call: lsp
-                    ? 'await mountDiagram(heads.glsp, shownFile, logger);'
-                    : 'const shownDiagram = await mountDiagram(heads.glsp, shownFile, logger, saveBeforeLeaving);'
+                 imports: lsp ? 'mountDiagram, settleDiagramEdits' : 'mountDiagram',
+                 call: `${lsp ? 'shownDiagram' : 'const shownDiagram'} = await mountDiagram(heads.glsp, shownFile, logger, ${lsp ? 'settleDiagramEdits' : 'saveBeforeLeaving'});`
               }
            ]),
       // Without the editor, the diagram is what the page saves through.
@@ -2598,7 +2614,9 @@ main().catch((error: unknown) => setStatus(\`failed: \${describeError(error)}\`)
 
 /**
  * The smoke test: what each head shows on the page, and an edit that survives
- * a reload, typed in the editor or, with no LSP head, made in the diagram.
+ * a reload, typed in the editor or, with no LSP head, made in the diagram. With
+ * a diagram, also a diagram edit the reload guard and Save catch before the
+ * server has answered it.
  */
 function hostSmokeSpec(composition: InitComposition): string {
    const lsp = composition.heads.includes('lsp');
@@ -2657,12 +2675,60 @@ function hostSmokeSpec(composition: InitComposition): string {
    await page.reload();
    await expect(page.locator('#status')).toHaveText('ready');
    await expect(nodes).toHaveCount(4);`;
+   const guardTest =
+      diagram === undefined
+         ? ''
+         : `
+test('asks before a reload drops a diagram edit the server has not answered, and saves it with Save at once', async ({ page }) => {
+   const nodes = page.locator('#diagram .sprotty-node');
+   const askGuard = (): Promise<boolean> =>
+      page.evaluate(() => {
+         const event = new Event('beforeunload', { cancelable: true });
+         window.dispatchEvent(event);
+         return event.defaultPrevented;
+      });
+   await page.goto('/');
+   await expect(page.locator('#status')).toHaveText('ready');
+   await page.locator('#file').selectOption('nodes.${diagram.extensions[0]}');
+   await expect(nodes).toHaveCount(2);
+
+   const canvas = page.locator('#diagram');
+   await page.locator('#diagram .tool-button', { hasText: '${diagram.nodeRule}' }).click();
+   const size = await canvas.evaluate(element => ({ width: element.clientWidth, height: element.clientHeight }));
+   // Asked and clicked right after the click's own handlers, in the same turn
+   // of the page, so the server's answer cannot have marked anything unsaved.
+   await page.evaluate(() => {
+      window.addEventListener(
+         'mouseup',
+         () =>
+            queueMicrotask(() => {
+               const event = new Event('beforeunload', { cancelable: true });
+               window.dispatchEvent(event);
+               document.getElementById('save')?.click();
+               Reflect.set(window, 'guardedOnCreate', event.defaultPrevented);
+            }),
+         { once: true }
+      );
+   });
+   await canvas.click({ position: { x: size.width * 0.4, y: size.height * 0.85 } });
+   expect(await page.evaluate(() => Reflect.get(window, 'guardedOnCreate'))).toBe(true);
+   await expect(page.locator('#status')).toHaveText('${lsp ? 'saved 1 file(s)' : 'saved the diagram'}');
+   expect(await askGuard()).toBe(false);
+
+   await page.reload();
+   await expect(page.locator('#status')).toHaveText('ready');
+   await page.locator('#file').selectOption('nodes.${diagram.extensions[0]}');
+   await expect(nodes).toHaveCount(3);
+});
+`;
    const locators = [
       ...(lsp ? ["   const editor = page.locator('#editor .view-lines');"] : []),
       ...(lsp ? [] : ["   const nodes = page.locator('#diagram .sprotty-node');"])
    ];
    return `// The page loads with every head answering, and an edit saved through the
-// ${lsp ? 'LSP head' : 'GLSP head'} is still there after a reload. Any console error fails it.
+// ${lsp ? 'LSP head' : 'GLSP head'} is still there after a reload; any console error fails that
+// test. The other asks before a reload drops a diagram edit the server has not
+// answered yet, and keeps it when Save is clicked at once.
 
 import { expect, test } from '@playwright/test';
 
@@ -2683,7 +2749,7 @@ ${checks.join('\n')}
 ${edit}
    expect(errors).toEqual([]);
 });
-`;
+${guardTest}`;
 }
 
 /** The browser host's README. */

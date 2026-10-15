@@ -22,6 +22,7 @@ import {
 } from '@eclipse-glsp/client';
 import { type Disposable, DisposableCollection, type Logger } from '@hydranium/protocol';
 import { Container, ContainerModule } from 'inversify';
+import { HydraniumGlspActionDispatcher } from './action-dispatcher';
 import { type DiagramLoadOutcome, HydraniumDiagramLoader } from './diagram-loader';
 import type { HydraniumGlspClient } from './glsp-client';
 import { createGlspClientModule } from './glsp-client-module';
@@ -59,6 +60,23 @@ export interface GlspDiagramMount extends Disposable {
     *  the caller learns of it; when the failure is not `surfaced`, no overlay
     *  shows it and the caller is the only report left. */
    readonly loadOutcome: DiagramLoadOutcome;
+   /**
+    * How many edits the server has not answered yet, as
+    * {@link HydraniumGlspActionDispatcher.editsInFlight} counts them, for a
+    * page that asks before a reload drops one: the diagram's dirty state is
+    * set only once the server has answered. None after a failed load, or
+    * when the dispatcher is not the framework's. None once disposed either:
+    * the server drops the edits the ended session still had queued, though
+    * one it was handling still lands.
+    */
+   readonly editsInFlight: number;
+   /**
+    * Resolves to `true` once the edits in flight now have been answered or
+    * rejected, or to `false` once the dispatcher's bound has passed first, as
+    * {@link HydraniumGlspActionDispatcher.whenEditsSettled} does. `true` at
+    * once wherever {@link editsInFlight} reads none.
+    */
+   whenEditsSettled(): Promise<boolean>;
    /** Ends the client session on the server and stops watching the element;
     *  what is drawn in it is left to the host to remove. */
    dispose(): void;
@@ -130,7 +148,7 @@ export async function mountGlspDiagram(options: GlspDiagramMountOptions): Promis
    // After the standalone modules, since every class the binder binds replaces
    // a token those modules bind.
    const hydraniumModule = new ContainerModule((bind, unbind, isBound, rebind) => {
-      createGlspClientModule({ bind, unbind, isBound, rebind }, { logger: options.logger });
+      createGlspClientModule({ bind, unbind, isBound, rebind }, { logger: options.logger, trackEditsInFlight: true });
    });
    const container = options.initializeDiagramContainer(
       new Container(),
@@ -148,7 +166,21 @@ export async function mountGlspDiagram(options: GlspDiagramMountOptions): Promis
    // Pushed first, so it runs last: `unbindAll` reaches `disposeClientSession`
    // through the model source's pre-destroy hook, after the listeners are gone.
    toDispose.push({ dispose: () => container.unbindAll() });
-   const dispose = (): void => toDispose.dispose();
+   // Set once the mount loaded with the framework's dispatcher, until disposed.
+   let editsDispatcher: HydraniumGlspActionDispatcher | undefined;
+   const dispose = (): void => {
+      editsDispatcher = undefined;
+      toDispose.dispose();
+   };
+   const mountWith = (loadOutcome: DiagramLoadOutcome): GlspDiagramMount => ({
+      container,
+      loadOutcome,
+      get editsInFlight() {
+         return editsDispatcher?.editsInFlight ?? 0;
+      },
+      whenEditsSettled: () => editsDispatcher?.whenEditsSettled() ?? Promise.resolve(true),
+      dispose
+   });
    try {
       const loader = container.get(DiagramLoader);
       await loader.load();
@@ -157,7 +189,7 @@ export async function mountGlspDiagram(options: GlspDiagramMountOptions): Promis
       // A model that never arrived has no use for the accommodations, and when
       // the dispatcher is what failed, every later dispatch rejects too.
       if (loadOutcome.status === 'failed') {
-         return { container, loadOutcome, dispose };
+         return mountWith(loadOutcome);
       }
       const dispatcher = container.get<GLSPActionDispatcher>(TYPES.IActionDispatcher);
       // The bounds the fit measures come from the hidden rendering pass inside
@@ -175,7 +207,10 @@ export async function mountGlspDiagram(options: GlspDiagramMountOptions): Promis
          trackCanvasBounds(live, dispatcher, container.get(EditorContextService), container.get<Logger>(HydraniumClientTypes.Logger))
       );
       toDispose.push(enableTouchDragging(live));
-      return { container, loadOutcome, dispose };
+      if (dispatcher instanceof HydraniumGlspActionDispatcher) {
+         editsDispatcher = dispatcher;
+      }
+      return mountWith(loadOutcome);
    } catch (err: unknown) {
       // The caller gets no mount to dispose, so the session would outlive it.
       toDispose.dispose();

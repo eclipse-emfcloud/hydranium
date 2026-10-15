@@ -8,7 +8,9 @@
  ********************************************************************************/
 
 // The page loads with every head answering, and an edit saved through the
-// LSP head is still there after a reload. Any console error fails it.
+// LSP head is still there after a reload; any console error fails that
+// test. The other asks before a reload drops a diagram edit the server has not
+// answered yet, and keeps it when Save is clicked at once.
 
 import { expect, test } from '@playwright/test';
 
@@ -46,4 +48,46 @@ test('loads every head and keeps a saved edit across a reload', async ({ page })
    await expect(page.locator('#status')).toHaveText('ready');
    await expect(editor).toContainText('node Added');
    expect(errors).toEqual([]);
+});
+
+test('asks before a reload drops a diagram edit the server has not answered, and saves it with Save at once', async ({ page }) => {
+   const nodes = page.locator('#diagram .sprotty-node');
+   const askGuard = (): Promise<boolean> =>
+      page.evaluate(() => {
+         const event = new Event('beforeunload', { cancelable: true });
+         window.dispatchEvent(event);
+         return event.defaultPrevented;
+      });
+   await page.goto('/');
+   await expect(page.locator('#status')).toHaveText('ready');
+   await page.locator('#file').selectOption('nodes.bookstore');
+   await expect(nodes).toHaveCount(2);
+
+   const canvas = page.locator('#diagram');
+   await page.locator('#diagram .tool-button', { hasText: 'BookstoreNode' }).click();
+   const size = await canvas.evaluate(element => ({ width: element.clientWidth, height: element.clientHeight }));
+   // Asked and clicked right after the click's own handlers, in the same turn
+   // of the page, so the server's answer cannot have marked anything unsaved.
+   await page.evaluate(() => {
+      window.addEventListener(
+         'mouseup',
+         () =>
+            queueMicrotask(() => {
+               const event = new Event('beforeunload', { cancelable: true });
+               window.dispatchEvent(event);
+               document.getElementById('save')?.click();
+               Reflect.set(window, 'guardedOnCreate', event.defaultPrevented);
+            }),
+         { once: true }
+      );
+   });
+   await canvas.click({ position: { x: size.width * 0.4, y: size.height * 0.85 } });
+   expect(await page.evaluate(() => Reflect.get(window, 'guardedOnCreate'))).toBe(true);
+   await expect(page.locator('#status')).toHaveText('saved 1 file(s)');
+   expect(await askGuard()).toBe(false);
+
+   await page.reload();
+   await expect(page.locator('#status')).toHaveText('ready');
+   await page.locator('#file').selectOption('nodes.bookstore');
+   await expect(nodes).toHaveCount(3);
 });

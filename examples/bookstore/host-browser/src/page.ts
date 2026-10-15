@@ -14,8 +14,8 @@ import { connectWorkerHeads } from '@hydranium/client-browser';
 import { ConsoleLogger, describeError } from '@hydranium/protocol';
 import { ALL_LANGUAGES } from '@hydranium/bookstore-protocol';
 import { showDataStatus } from './data-status.js';
-import { mountDiagram } from './diagram.js';
-import { startEditor } from './editor.js';
+import { mountDiagram, settleDiagramEdits } from './diagram.js';
+import { armEditorSave, startEditor } from './editor.js';
 import { appendLog, setStatus } from './log.js';
 import { startShownFile } from './shown-file.js';
 import { WORKSPACE_ROOT_URI } from './workspace.js';
@@ -30,9 +30,11 @@ async function main(): Promise<void> {
    heads.onWorkerError(report => appendLog(`worker error during ${report.phase}: ${report.message}`));
    setStatus('starting…');
    const shownFile = await startShownFile(heads, ALL_LANGUAGES);
-   await startEditor(heads, shownFile);
+   const editor = await startEditor(heads, shownFile);
+   let shownDiagram: Awaited<ReturnType<typeof mountDiagram>> | undefined = undefined;
+   armEditorSave(editor, () => settleDiagramEdits(shownDiagram?.()));
    await showDataStatus(heads.data, `${WORKSPACE_ROOT_URI}/nodes.bookstore`);
-   await mountDiagram(heads.glsp, shownFile, logger);
+   shownDiagram = await mountDiagram(heads.glsp, shownFile, logger, settleDiagramEdits);
    setStatus('ready');
 }
 

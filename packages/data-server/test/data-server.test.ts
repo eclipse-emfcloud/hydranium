@@ -437,6 +437,66 @@ describe('DataServer', () => {
             pair.dispose();
          }
       });
+
+      it('answers once the language client has the written text, so a page reading the editor does not miss the write', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         const settled = new Deferred<void>();
+         const settle = vi.spyOn(bundle.services.model.ModelService, 'settleLanguageClient').mockReturnValue(settled.promise);
+         const { proxy, pair } = makeHarness(bundle.services);
+         try {
+            await openAs(proxy, bundle, 'editor-1');
+            let answered = false;
+            const update = proxy
+               .updateModelDocument({ uri: URI_A, clientId: 'editor-1', model: 'name:held', baseVersion: 'any' })
+               .then(() => {
+                  answered = true;
+               });
+            await waitFor(() => settle.mock.calls.length > 0);
+            await tick();
+            expect(answered).toBe(false);
+            expect(settle.mock.calls.map(call => call[0])).toEqual([URI_A]);
+            settled.resolve();
+            await update;
+         } finally {
+            pair.dispose();
+         }
+      });
+   });
+
+   describe('updateModelDocuments', () => {
+      it('answers once the language client has the text of every document written', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         bundle.documents.set(URI_B, { $type: 'FakeRoot', name: 'B' });
+         const settled = new Deferred<void>();
+         const settle = vi.spyOn(bundle.services.model.ModelService, 'settleLanguageClient').mockReturnValue(settled.promise);
+         const { proxy, pair } = makeHarness(bundle.services);
+         try {
+            await openAs(proxy, bundle, 'editor-1');
+            bundle.textDocuments.seedOpen(URI_B, 'name:B', 'editor-1');
+            let answered = false;
+            const updates = proxy
+               .updateModelDocuments({
+                  clientId: 'editor-1',
+                  updates: [
+                     { uri: URI_A, model: 'name:held-a', baseVersion: 'any' },
+                     { uri: URI_B, model: 'name:held-b', baseVersion: 'any' }
+                  ]
+               })
+               .then(() => {
+                  answered = true;
+               });
+            await waitFor(() => settle.mock.calls.length === 2);
+            await tick();
+            expect(answered).toBe(false);
+            expect(settle.mock.calls.map(call => call[0])).toEqual([URI_A, URI_B]);
+            settled.resolve();
+            await updates;
+         } finally {
+            pair.dispose();
+         }
+      });
    });
 
    describe('persistModelDocument', () => {

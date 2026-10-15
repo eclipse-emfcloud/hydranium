@@ -9,6 +9,7 @@
 
 import 'reflect-metadata';
 import {
+   type Action,
    type ContainerConfiguration,
    DiagramLoader,
    EditorContextService,
@@ -22,9 +23,11 @@ import {
    StatusOverlay,
    TYPES
 } from '@eclipse-glsp/client';
-import { NoopLogger } from '@hydranium/protocol';
+import { Deferred, NoopLogger } from '@hydranium/protocol';
+import { tick } from '@hydranium/protocol/testing';
 import { Container, type ContainerModule, type interfaces } from 'inversify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { HydraniumGlspActionDispatcher } from '../src/action-dispatcher';
 import { type DiagramLoadOutcome, HydraniumDiagramLoader } from '../src/diagram-loader';
 import { DIAGRAM_FIT_PADDING, type GlspDiagramMountOptions, mountGlspDiagram } from '../src/diagram-mount';
 import type { HydraniumGlspClient } from '../src/glsp-client';
@@ -64,6 +67,30 @@ class DiagramLoaderDouble extends HydraniumDiagramLoader {
    }
 }
 
+/** A framework dispatcher that records what it dispatches and reports the edits in flight, and their settle, a test sets. */
+class DispatcherDouble extends HydraniumGlspActionDispatcher {
+   constructor(
+      readonly record: (action: Action) => void,
+      readonly fails: () => boolean,
+      readonly inFlight: () => number,
+      readonly settled: () => Promise<boolean>
+   ) {
+      super();
+   }
+   override async dispatch(action: Action): Promise<void> {
+      this.record(action);
+      if (this.fails()) {
+         throw new Error('dispatcher failed to initialize');
+      }
+   }
+   override get editsInFlight(): number {
+      return this.inFlight();
+   }
+   override whenEditsSettled(): Promise<boolean> {
+      return this.settled();
+   }
+}
+
 /** What dispose tore down, in order. */
 let teardown: string[] = [];
 
@@ -83,6 +110,8 @@ describe('mountGlspDiagram', () => {
    let calls: Call[];
    let loadOutcome: DiagramLoadOutcome;
    let dispatchFails: boolean;
+   let editsInFlight: number;
+   let editsSettled: Deferred<boolean>;
    let box: { left: number; top: number; width: number; height: number };
    interface ElementDouble {
       id: string;
@@ -112,14 +141,14 @@ describe('mountGlspDiagram', () => {
    function initializeDiagramContainer(target: Container, ...modules: ContainerConfiguration): Container {
       configuration = modules;
       target.bind(DiagramLoader).toConstantValue(new DiagramLoaderDouble(calls, loadOutcome));
-      target.bind(TYPES.IActionDispatcher).toConstantValue({
-         dispatch: async (action: unknown) => {
-            calls.push(['dispatch', action]);
-            if (dispatchFails) {
-               throw new Error('dispatcher failed to initialize');
-            }
-         }
-      });
+      target.bind(TYPES.IActionDispatcher).toConstantValue(
+         new DispatcherDouble(
+            action => calls.push(['dispatch', action]),
+            () => dispatchFails,
+            () => editsInFlight,
+            () => editsSettled.promise
+         )
+      );
       target.bind(HydraniumClientTypes.Logger).toConstantValue(logger);
       target.bind(EditorContextService).toConstantValue({
          get canvasBounds() {
@@ -145,6 +174,8 @@ describe('mountGlspDiagram', () => {
       calls = [];
       loadOutcome = { status: 'loaded' };
       dispatchFails = false;
+      editsInFlight = 0;
+      editsSettled = new Deferred<boolean>();
       teardown = [];
       box = { left: 5, top: 7, width: 300, height: 200 };
       modelBounds = { x: -1, y: -1, width: -1, height: -1 };
@@ -195,6 +226,16 @@ describe('mountGlspDiagram', () => {
       }
       binderContainer.load(configuration[2] as ContainerModule);
       expect(binderContainer.get(HydraniumClientTypes.Logger)).toBe(logger);
+   });
+
+   it('asks the framework binder to count edits in flight, which the mount reads', async () => {
+      await mountGlspDiagram(options());
+      const binderContainer = new Container();
+      for (const token of GLSP_DEFAULT_TOKENS) {
+         binderContainer.bind(token).toConstantValue({});
+      }
+      binderContainer.load(configuration[2] as ContainerModule);
+      expect(binderContainer.get(HydraniumClientTypes.TrackEditsInFlight)).toBe(true);
    });
 
    it('loads the model and then fits it without zooming in, before it resolves', async () => {
@@ -340,5 +381,63 @@ describe('mountGlspDiagram', () => {
          'pointermove',
          'pointerup'
       ]);
+   });
+
+   it("reads the edits in flight from the diagram's dispatcher, so a page can ask before a reload drops one", async () => {
+      const mounted = await mountGlspDiagram(options());
+      editsInFlight = 2;
+      expect(mounted.editsInFlight).toBe(2);
+      editsInFlight = 0;
+      expect(mounted.editsInFlight).toBe(0);
+   });
+
+   it('reports no edits in flight after a failed load, which has no model to edit', async () => {
+      loadOutcome = { status: 'failed', error: new Error('no model'), surfaced: true };
+      editsInFlight = 2;
+      const mounted = await mountGlspDiagram(options());
+      expect(mounted.editsInFlight).toBe(0);
+   });
+
+   it('reports no edits in flight once disposed, whose queued edits the server drops', async () => {
+      const mounted = await mountGlspDiagram(options());
+      editsInFlight = 2;
+      mounted.dispose();
+      expect(mounted.editsInFlight).toBe(0);
+   });
+
+   it("waits for the edits in flight to settle as the diagram's dispatcher does, so a save or a switch does not run ahead of one", async () => {
+      const mounted = await mountGlspDiagram(options());
+      let settled = false;
+      const waiting = mounted.whenEditsSettled().then(result => {
+         settled = true;
+         return result;
+      });
+      await tick();
+      expect(settled).toBe(false);
+      // The dispatcher's answer, a timeout here, passes through.
+      editsSettled.resolve(false);
+      await expect(waiting).resolves.toBe(false);
+   });
+
+   it('settles the edits at once after a failed load and once disposed, where none count', async () => {
+      loadOutcome = { status: 'failed', error: new Error('no model'), surfaced: true };
+      await expect((await mountGlspDiagram(options())).whenEditsSettled()).resolves.toBe(true);
+      loadOutcome = { status: 'loaded' };
+      const mounted = await mountGlspDiagram(options());
+      mounted.dispose();
+      await expect(mounted.whenEditsSettled()).resolves.toBe(true);
+   });
+
+   it("reports no edits in flight when the host bound a dispatcher that is not the framework's, which counts none", async () => {
+      const mounted = await mountGlspDiagram(
+         options({
+            initializeDiagramContainer: (target, ...modules) => {
+               const built = initializeDiagramContainer(target, ...modules);
+               built.rebind(TYPES.IActionDispatcher).toConstantValue({ dispatch: async () => undefined, editsInFlight: 2 });
+               return built;
+            }
+         })
+      );
+      expect(mounted.editsInFlight).toBe(0);
    });
 });

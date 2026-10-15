@@ -24,6 +24,7 @@ import { inject, injectable } from 'inversify';
 import { logActionFailure } from './diagram-edit-dropped-error.js';
 import { HydraniumGlspOperationCommand, openOperationOf, runOperation } from './hydranium-glsp-operation-command.js';
 import { type HydraniumGlspRecordingState } from './hydranium-glsp-recording-command.js';
+import { trackQueuedDelivery } from './queued-deliveries.js';
 
 /**
  * GLSP's operation action handler, running each operation as a
@@ -52,15 +53,23 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
    @inject(Logger) protected readonly logger!: Logger;
    @inject(GLSPClientProxy) protected readonly clientProxy!: GLSPClientProxy;
 
+   /**
+    * Runs `operation`, or queues it behind the open one and tracks its delivery,
+    * which a settle request waits for. An override must call this one, or a
+    * settle answers before what the queued operation sends.
+    */
    protected override executeHandler(operation: Operation, handler: OperationHandler): Promise<Action[]> {
       const queued = openOperationOf(this.modelState) !== undefined;
       const run = this.modelState.runExclusive(() => this.runOperation(operation, handler));
       if (!queued) {
          return run;
       }
-      run.then(
-         actions => this.deliverQueued(actions),
-         (error: unknown) => this.reportFailure(operation, error)
+      trackQueuedDelivery(
+         this.modelState,
+         run.then(
+            actions => this.deliverQueued(actions),
+            (error: unknown) => this.reportFailure(operation, error)
+         )
       );
       return Promise.resolve([]);
    }
@@ -91,12 +100,12 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
     * Deliver what a queued operation answered: a message straight to the
     * client, as {@link reportFailure} sends one, the rest through the
     * dispatcher. A failure to deliver is logged, not reported as the
-    * operation's.
+    * operation's. Resolves once delivered, and never rejects.
     */
-   protected deliverQueued(actions: Action[]): void {
+   protected deliverQueued(actions: Action[]): Promise<void> {
       const messages = actions.filter(action => MessageAction.is(action));
       messages.forEach(message => this.sendToClient(message));
-      this.actionDispatcher
+      return this.actionDispatcher
          .dispatchAll(actions.filter(action => !MessageAction.is(action)))
          .catch((error: unknown) =>
             this.logger.warn(`Could not deliver the result of a queued operation: ${describeErrorWithStack(error)}`)

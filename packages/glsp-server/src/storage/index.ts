@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+export * from './hydranium-glsp-request-edits-settled-action-handler.js';
 export * from './hydranium-glsp-request-save-model-action-handler.js';
 export * from './hydranium-glsp-storage.js';
 export * from './save-delivery-policy.js';

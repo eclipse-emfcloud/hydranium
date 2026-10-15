@@ -12,9 +12,9 @@ import type { ShownFile } from './shown-file.js';
 /**
  * Show the diagram of the file the page shows, and of each file it switches
  * to, and hand back what reads the mount shown now, if it loaded. A file of
- * another language hides the pane. `beforeLeave` runs on the shown mount before a switch
- * disposes it; when it throws, that mount stays shown and the page switches
- * back to its file.
+ * another language hides the pane. `beforeLeave` runs on the shown mount
+ * before a switch disposes it, while the diagram takes no input; when it
+ * throws, that mount stays shown and the page switches back to its file.
  */
 export async function mountDiagram(
    connection: WorkerHeads['glsp'],
@@ -34,12 +34,17 @@ export async function mountDiagram(
       // Only a mount that loaded: one that failed has no edits to lose, and its
       // dispatcher may refuse every save, which would keep it shown for good.
       if (mounted !== undefined && mountedUri !== undefined && beforeLeave !== undefined) {
+         // Inert, since an edit made while it runs would outlast its wait and be dropped with the mount.
+         const shown = document.getElementById('diagram') as HTMLElement;
+         shown.inert = true;
          try {
             await beforeLeave(mounted);
          } catch (error: unknown) {
             // The diagram stays on its file, so the switch goes back to it.
             shownFile.show(mountedUri);
             throw error;
+         } finally {
+            shown.inert = false;
          }
          // Switched again while it ran: the show queued for that file takes over.
          if (uri !== shownFile.current()) {
@@ -88,6 +93,26 @@ export async function mountDiagram(
    // A first file that fails to load is logged as a later switch's is, so the
    // page still arms what follows and the switch can reach a file that loads.
    await follow(shownFile.current()).catch((error: unknown) => appendLog(describeError(error)));
+   // Asks before a reload or a closed tab drops an edit the server has not
+   // answered yet, which neither dirty state nor the editor shows until then.
+   window.addEventListener('beforeunload', event => {
+      if ((mounted?.editsInFlight ?? 0) > 0) {
+         event.preventDefault();
+      }
+   });
    // Only a mount that loaded: one that failed has nothing to save.
    return () => (mountedUri === undefined ? undefined : mounted);
+}
+
+/**
+ * Wait for the edits of `diagram` the server has not answered yet, before a
+ * save, which would miss them, or before a switch disposes it, as the server
+ * drops what an ended session still had queued and the reload guard reads only
+ * the diagram shown. Throws when one stays unanswered, so the save does not
+ * report success and the switch keeps the diagram shown.
+ */
+export async function settleDiagramEdits(diagram: GlspDiagramMount | undefined): Promise<void> {
+   if ((await diagram?.whenEditsSettled()) === false) {
+      throw new Error('the server has not answered an edit of this diagram yet');
+   }
 }

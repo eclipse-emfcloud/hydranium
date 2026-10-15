@@ -9,7 +9,7 @@
 
 import { type Disposable, Emitter, type Event } from 'vscode-jsonrpc';
 import { UNKNOWN_CLIENT_ID } from '../client-ids';
-import { type Clock, SystemClock } from '../clock';
+import { type Clock, SystemClock, TIMED_OUT } from '../clock';
 import type {
    DataServerProtocol,
    DiagnosticOf,
@@ -22,6 +22,7 @@ import type { Logger } from '../logger';
 import { type BaseVersion, isModelVersion, type ModelVersion, type TextVersion, UNRECORDED_VERSION } from '../model-service/base-version';
 import { type ResolvedMessage, defineMessage, describeError, resolve } from '../messages/primitives';
 import { NoopLogger } from '../noop-logger';
+import { PendingWorkTracker } from '../pending-work-tracker';
 import { randomUuid } from '../random-uuid';
 import type { MaybePromise } from '../util';
 import type { RpcProxy } from '../rpc';
@@ -333,6 +334,13 @@ export class DataSession<
     */
    protected readonly settleBeforeCloseMs: number = 10_000;
    /**
+    * How long {@link whenWritesSettled} waits before going on anyway: well past
+    * the server's bound on the language-client settle it runs before answering
+    * an update. The update itself has no bound, so a server slower than that is
+    * taken as lost.
+    */
+   protected readonly settleWritesMs: number = 30_000;
+   /**
     * The clock {@link settleBeforeCloseMs} runs on. {@link DataSessionHost}
     * carries no {@link Clock}, so a subclass replaces this field as it
     * replaces the bound.
@@ -381,9 +389,11 @@ export class DataSession<
     */
    protected readonly createdUris = new Set<string>();
    /** Per URI, this session's calls still in flight on it, which a close or delete waits for. */
-   protected readonly inFlight = new Map<string, Set<Promise<unknown>>>();
+   protected readonly inFlight = new Map<string, PendingWorkTracker>();
    /** This session's saves, persists and deletes still in flight, which a host's exit waits for; see {@link hasSavesInFlight}. */
-   protected readonly savesInFlight = new Set<Promise<unknown>>();
+   protected readonly savesInFlight = new PendingWorkTracker();
+   /** This session's updates still in flight, which a page's unload guard and save account for; see {@link hasWritesInFlight}. */
+   protected readonly writesInFlight = new PendingWorkTracker();
    protected readonly disposeEmitter = new Emitter<void>();
    /**
     * Fires once when the session ends, by {@link dispose} or {@link detach}, as
@@ -618,7 +628,7 @@ export class DataSession<
       // An open called after this close waits for it instead, see `trackOpen`.
       const underWay = [...(this.openings.get(args.uri) ?? [])];
       await this.trackEnding(args.uri, async () => {
-         await this.settle(this.inFlight.get(args.uri));
+         await this.settle([this.inFlight.get(args.uri)]);
          // Forgotten before the close is sent, so a reconnect in between does
          // not re-open a document the caller has closed. Every open of it that
          // was under way when the close was called is marked, so it neither
@@ -696,7 +706,7 @@ export class DataSession<
 
    /** Write `args.model` back as this session. The session must have `args.uri` open. */
    updateDocument(args: DataSessionUpdateArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
-      return this.track([args.uri], async () => {
+      return this.trackWrite([args.uri], async () => {
          const server = await this.connected();
          const update = { ...args };
          const baseHash = await this.baseHashOf(server, args.uri, args.baseVersion);
@@ -713,7 +723,7 @@ export class DataSession<
     * open. Resolves to the documents in the order given.
     */
    updateDocuments(args: DataSessionUpdatesArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>[]> {
-      return this.track(
+      return this.trackWrite(
          args.updates.map(update => update.uri),
          async () => {
             // One copy for the whole call: the copy's identity is what ties its
@@ -759,7 +769,7 @@ export class DataSession<
       const deleting = this.trackEnding(args.uri, () =>
          this.track([args.uri], async () => {
             this.assertLive();
-            await this.settle(this.inFlight.get(args.uri));
+            await this.settle([this.inFlight.get(args.uri)]);
             const server = await this.connected();
             const open = this.opens.get(args.uri);
             await server.deleteModelDocument({ ...args, clientId: this.clientId });
@@ -771,10 +781,7 @@ export class DataSession<
             }
          })
       );
-      this.savesInFlight.add(deleting);
-      const done = (): boolean => this.savesInFlight.delete(deleting);
-      deleting.then(done, done);
-      return deleting;
+      return this.savesInFlight.track(deleting);
    }
 
    /** Run a save or persist of `uri` and record what it answered as saved. */
@@ -807,10 +814,7 @@ export class DataSession<
          }
          return document;
       });
-      this.savesInFlight.add(saving);
-      const done = (): boolean => this.savesInFlight.delete(saving);
-      saving.then(done, done);
-      return saving;
+      return this.savesInFlight.track(saving);
    }
 
    /** Whether the session has ended, by {@link dispose} or {@link detach}. */
@@ -824,7 +828,7 @@ export class DataSession<
     * as Theia's `onWillStop`.
     */
    get hasSavesInFlight(): boolean {
-      return this.savesInFlight.size > 0;
+      return !this.savesInFlight.isIdle;
    }
 
    /**
@@ -833,7 +837,31 @@ export class DataSession<
     * answered too.
     */
    whenSavesSettled(): Promise<void> {
-      return this.settle(this.savesInFlight);
+      return this.settle([this.savesInFlight]);
+   }
+
+   /**
+    * Whether an update of this session, one a restore sends again included,
+    * has not answered yet. The server answers once an editor on the language
+    * client holds the text, so a page that reads unsaved work from its editor
+    * guards a reload on this too. Synchronous, for an unload guard that must
+    * decide within the tick.
+    */
+   get hasWritesInFlight(): boolean {
+      return !this.writesInFlight.isIdle;
+   }
+
+   /**
+    * Resolves to `true` once the updates in flight now have answered, so a
+    * save of the editor's documents started after it includes them, or to
+    * `false` once {@link settleWritesMs} has passed first. An update sent while
+    * it waits is not waited for. Never rejects.
+    */
+   async whenWritesSettled(): Promise<boolean> {
+      if (this.writesInFlight.isIdle) {
+         return true;
+      }
+      return (await this.clock.raceTimer(this.writesInFlight.whenSettled(), this.settleWritesMs)) !== TIMED_OUT;
    }
 
    /**
@@ -864,9 +892,9 @@ export class DataSession<
       }
       this.disposed = true;
       this.fireDispose();
-      const pending = [...this.inFlight.values()].flatMap(calls => [...calls]);
+      const settled = this.settle([...this.inFlight.values()]);
       void (async () => {
-         await this.settle(pending);
+         await settled;
          await this.registration;
          // The proxy the session registered on, never a fresh connection: a
          // connection that dropped already ended the session on the server.
@@ -1325,17 +1353,23 @@ export class DataSession<
       try {
          const { call } = resend[0].write;
          if ('update' in call) {
-            documents = [await server.updateModelDocument({ ...call.update, baseVersion: resend[0].baseVersion, clientId: this.clientId })];
+            documents = [
+               await this.writesInFlight.track(
+                  server.updateModelDocument({ ...call.update, baseVersion: resend[0].baseVersion, clientId: this.clientId })
+               )
+            ];
          } else {
             const baseVersion = new Map(resend.map(member => [indexOf(member.write), member.baseVersion]));
-            documents = await server.updateModelDocuments({
-               ...call.updates,
-               clientId: this.clientId,
-               updates: call.updates.updates.flatMap((update, index) => {
-                  const version = baseVersion.get(index);
-                  return version === undefined ? [] : [{ ...update, baseVersion: version }];
+            documents = await this.writesInFlight.track(
+               server.updateModelDocuments({
+                  ...call.updates,
+                  clientId: this.clientId,
+                  updates: call.updates.updates.flatMap((update, index) => {
+                     const version = baseVersion.get(index);
+                     return version === undefined ? [] : [{ ...update, baseVersion: version }];
+                  })
                })
-            });
+            );
          }
       } catch (error: unknown) {
          if (isConflictError(error)) {
@@ -1453,11 +1487,19 @@ export class DataSession<
    protected track<T>(uris: readonly string[], call: () => Promise<T>): Promise<T> {
       const running = call();
       for (const uri of uris) {
-         this.inFlight.set(uri, (this.inFlight.get(uri) ?? new Set<Promise<unknown>>()).add(running));
+         let tracker = this.inFlight.get(uri);
+         if (tracker === undefined) {
+            tracker = new PendingWorkTracker();
+            this.inFlight.set(uri, tracker);
+         }
+         tracker.track(running);
       }
-      const done = (): void => uris.forEach(uri => this.inFlight.get(uri)?.delete(running));
-      running.then(done, done);
       return running;
+   }
+
+   /** {@link track} an update of `uris`, counted in {@link writesInFlight} too. */
+   protected trackWrite<T>(uris: readonly string[], call: () => Promise<T>): Promise<T> {
+      return this.writesInFlight.track(this.track(uris, call));
    }
 
    /**
@@ -1501,13 +1543,13 @@ export class DataSession<
       return ending;
    }
 
-   /** Wait until `calls` have settled, or {@link settleBeforeCloseMs} has passed. */
-   protected async settle(calls: Iterable<Promise<unknown>> | undefined): Promise<void> {
-      const pending = [...(calls ?? [])];
+   /** Wait until the work `trackers` hold now has settled, or {@link settleBeforeCloseMs} has passed. */
+   protected async settle(trackers: Iterable<PendingWorkTracker | undefined>): Promise<void> {
+      const pending = [...trackers].filter((tracker): tracker is PendingWorkTracker => tracker !== undefined && !tracker.isIdle);
       if (pending.length === 0) {
          return;
       }
-      await this.clock.raceTimer(Promise.allSettled(pending), this.settleBeforeCloseMs);
+      await this.clock.raceTimer(Promise.all(pending.map(tracker => tracker.whenSettled())), this.settleBeforeCloseMs);
    }
 
    protected assertLive(): void {

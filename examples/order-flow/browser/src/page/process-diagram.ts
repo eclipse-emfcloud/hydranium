@@ -24,7 +24,7 @@
  */
 
 import { EditorContextService, GEdge, type GParentElement, GNode } from '@eclipse-glsp/client';
-import { glspConnection, HydraniumGlspClient, mountGlspDiagram } from '@hydranium/glsp-client';
+import { glspConnection, type GlspDiagramMount, HydraniumGlspClient, mountGlspDiagram } from '@hydranium/glsp-client';
 import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
 import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-protocol';
 import type { Container } from 'inversify';
@@ -60,7 +60,8 @@ const RENDER_DEADLINE_MS = 15_000;
  *
  * Resolves with a one-line report of the same shape as the data head's line, so
  * the three heads read as three answers about one store rather than as three
- * unrelated widgets.
+ * unrelated widgets, and with the mount, whose edits in flight the page's
+ * guards read.
  *
  * The logger carries the framework's client classes under a tag of the page's
  * own, so a load failure the page itself reports does not read as a line the
@@ -71,13 +72,13 @@ export async function mountProcessDiagram(
    sourceUri: string,
    onReport: (report: string) => void,
    logger: Logger
-): Promise<string> {
+): Promise<{ report: string; mount: GlspDiagramMount }> {
    // No `connection.listen()` here: `BaseJsonrpcGLSPClient.start` calls it, and
    // a second call throws. GLSP's client sends message types built by its own
    // copy of `vscode-jsonrpc`, which this connection's copy rejects unless they
    // go by method name.
    const glspClient = new HydraniumGlspClient({ id: PROCESS_DIAGRAM_ELEMENT_ID, connectionProvider: glspConnection(connection) });
-   const { container, loadOutcome } = await mountGlspDiagram({
+   const mount = await mountGlspDiagram({
       mount: requireElement(PROCESS_DIAGRAM_ELEMENT_ID),
       diagramType: PROCESS_DIAGRAM_TYPE,
       sourceUri,
@@ -88,8 +89,9 @@ export async function mountProcessDiagram(
    // Reported here and not left to the poll, which would wait out its deadline
    // and then blame an unregistered element type; when the dispatcher is what
    // failed, this line is the only report the page shows.
+   const { container, loadOutcome } = mount;
    if (loadOutcome.status === 'failed') {
-      return `failed: ${describeError(loadOutcome.error)}`;
+      return { report: `failed: ${describeError(loadOutcome.error)}`, mount };
    }
    // The mount resolves once the model is framed, so the report this resolves
    // with is the only signal a caller needs: everything observable about the
@@ -105,7 +107,7 @@ export async function mountProcessDiagram(
       ? describeGraph(countGraph(container.get(EditorContextService).modelRoot))
       : nothingDrawnReport();
    trackGraphCount(container, onReport);
-   return report;
+   return { report, mount };
 }
 
 /**

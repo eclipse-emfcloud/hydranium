@@ -24,6 +24,7 @@ import {
 } from '@eclipse-glsp/server';
 import { injectable, type interfaces } from 'inversify';
 import { HydraniumGlspServerActionDispatcher } from '../dispatcher/server-action-dispatcher.js';
+import { HydraniumGlspRequestEditsSettledActionHandler } from '../storage/hydranium-glsp-request-edits-settled-action-handler.js';
 import { HydraniumGlspRequestSaveModelActionHandler } from '../storage/hydranium-glsp-request-save-model-action-handler.js';
 import { HydraniumGlspCommandStack } from '../command/hydranium-glsp-command-stack.js';
 import { HydraniumGlspOperationActionHandler } from '../command/hydranium-glsp-operation-action-handler.js';
@@ -87,9 +88,11 @@ export abstract class AbstractHydraniumGlspDiagramModule extends DiagramModule {
 
    /**
     * Adds {@link HydraniumGlspRequestSaveModelActionHandler}, the save the
-    * Theia client sends, beside GLSP's own save handler; replaces the GLSP
-    * handlers that write the client's status or edit mode with ones that set a
-    * diagram status instead; and runs operations, undo and redo through
+    * Theia client sends, beside GLSP's own save handler, and
+    * {@link HydraniumGlspRequestEditsSettledActionHandler}, which tells a
+    * client its edits are answered; replaces the GLSP handlers that write the
+    * client's status or edit mode with ones that set a diagram status instead;
+    * and runs operations, undo and redo through
     * {@link HydraniumGlspOperationActionHandler} and
     * {@link HydraniumGlspUndoRedoActionHandler}, without which handlers edit
     * the built root every reader shares.
@@ -97,6 +100,7 @@ export abstract class AbstractHydraniumGlspDiagramModule extends DiagramModule {
    protected override configureActionHandlers(binding: InstanceMultiBinding<ActionHandlerConstructor>): void {
       super.configureActionHandlers(binding);
       binding.add(HydraniumGlspRequestSaveModelActionHandler);
+      binding.add(HydraniumGlspRequestEditsSettledActionHandler);
       binding.rebind(RequestModelActionHandler, HydraniumGlspRequestModelActionHandler);
       binding.rebind(SetEditModeActionHandler, HydraniumGlspSetEditModeActionHandler);
       binding.rebind(OperationActionHandler, HydraniumGlspOperationActionHandler);

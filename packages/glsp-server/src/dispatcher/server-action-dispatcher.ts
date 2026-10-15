@@ -64,6 +64,14 @@ export class HydraniumGlspServerActionDispatcher extends DefaultActionDispatcher
       return `edgeType=${action.edgeType} source=${action.sourceElementId} target=${action.targetElementId ?? 'none'} isValid=${action.isValid}`;
    }
 
+   /**
+    * Whether a request this dispatcher sent, under `requestId`, still awaits
+    * its response: not yet answered, and not given up on at its timeout.
+    */
+   awaitsResponse(requestId: string): boolean {
+      return this.pendingRequests.has(requestId);
+   }
+
    override dispatch(action: Action): Promise<void> {
       if (!Logger.isLevelEnabled('debug') || (this.loggedKinds && !this.loggedKinds.has(action.kind))) {
          return super.dispatch(action);

@@ -81,9 +81,9 @@ hold the text it last saw; an answer without text leaves that count as it
 was. The data head's persist request waits for the build after the write, so
 it can fail with the text already on disk.
 
-The data head's save and persist, and a diagram's save, answer only once
-`ModelService.settleLanguageClient` has seen the language client answer the
-push of the saved text, or its bound passed, so a client acting on the answer
+The data head's updates, saves and persists, and a diagram's save, answer only
+once `ModelService.settleLanguageClient` has seen the language client answer
+the push of the text, or its bound passed, so a client acting on the answer
 does not race that push; a session ending meanwhile does not fail them. While
 the client has not answered a push a settle gave up on, later settles of the
 document do not wait for it, so saves queued behind a silent client do not
