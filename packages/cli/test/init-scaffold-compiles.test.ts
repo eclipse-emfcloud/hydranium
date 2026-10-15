@@ -77,8 +77,9 @@ const CASES: readonly CompileCase[] = [
       grammars: [{ name: 'Domain' }, { name: 'Process' }, { name: 'Layout' }],
       hosts: ['browser']
    },
-   // The only main.ts that brings the workspace up itself and prints its ports.
-   { label: 'no LSP head', name: 'Rack', heads: ['data', 'glsp'] }
+   // The only main.ts that brings the workspace up itself and prints its ports,
+   // and a browser host that saves through the diagram.
+   { label: 'no LSP head', name: 'Rack', heads: ['data', 'glsp'], hosts: ['browser'] }
 ];
 
 /**
@@ -242,9 +243,10 @@ describe('the emitted scaffold compiles', () => {
                }
                // A failure's message carries esbuild's own report, from stderr.
                execFileSync(process.execPath, ['esbuild.mjs'], { cwd: host, stdio: 'pipe' });
-               expect(fs.readdirSync(path.join(host, 'out')).sort()).toEqual(
-                  expect.arrayContaining(['monaco-editor-worker.js', 'page.css', 'page.js', 'worker.js'])
-               );
+               const bundles = fs.readdirSync(path.join(host, 'out')).filter(file => file.endsWith('.js') || file.endsWith('.css'));
+               // Monaco's own worker only for the editor, which the LSP head brings.
+               const lsp = heads?.includes('lsp') ?? true;
+               expect(bundles.sort()).toEqual([...(lsp ? ['monaco-editor-worker.js'] : []), 'page.css', 'page.js', 'worker.js']);
             }
 
             // Without an LSP head only main.ts names the workspace and reports

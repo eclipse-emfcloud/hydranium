@@ -2010,10 +2010,7 @@ describe('Bookstore serialization', () => {
    it('emits the same text from a transfer model, whose references are plain strings', async () => {
       const { Bookstore } = createServices();
       const model = transferNode(TransferBookstoreModel, {
-         nodes: [
-            transferNode(BookstoreNode, { name: 'first', target: 'second' }),
-            transferNode(BookstoreNode, { name: 'second' })
-         ]
+         nodes: [transferNode(BookstoreNode, { name: 'first', target: 'second' }), transferNode(BookstoreNode, { name: 'second' })]
       });
 
       expect(await Bookstore.serializer.Serializer.serializeTransfer(model)).toBe(source);
@@ -2279,9 +2276,10 @@ there.
 - `esbuild.mjs` — bundles the page, the worker and Monaco’s worker, reading `../workspace` in as the seed
 - `src/worker.ts` — the worker: the heads over one store, seeded and persisted
 - `src/page.ts` — starts the worker and runs the part of the page each head serves
-- `src/editor.ts` — the LSP part: a Monaco editor, the file switch and Save
+- `src/shown-file.ts` — the file switch above the panes, which every part follows
+- `src/editor.ts` — the LSP part: a Monaco editor and Save
 - `src/data-status.ts` — the data part: one document read through the data head
-- `src/diagram.ts` — the GLSP part: the `Bookstore` diagram of the file the editor shows, defined in the client package
+- `src/diagram.ts` — the GLSP part: the `Bookstore` diagram of the file the page shows, defined in the client package
 - `src/log.ts` — the status line and the log area
 - `src/workspace.ts` — the workspace root URI both ends name
 - `src/monaco-editor-worker.ts` — Monaco’s own worker, which hosts no head
@@ -2326,14 +2324,11 @@ host-browser/index.html
             font-size: 13px;
             color: var(--text);
          }
-         header,
-         .toolbar {
+         /* The page's toolbar: its name, then the file switch, Save and the status they report to. */
+         header {
             display: flex;
             gap: 12px;
             align-items: center;
-            padding: 6px 12px;
-         }
-         header {
             padding: 10px 16px;
             background: var(--accent);
             color: #ffffff;
@@ -2349,24 +2344,24 @@ host-browser/index.html
             background: rgb(255 255 255 / 0.18);
             font-size: 12px;
          }
-         .toolbar {
-            background: var(--surface);
-            border-bottom: 1px solid var(--border);
-         }
          select,
          button {
             padding: 4px 10px;
             border: 1px solid var(--border);
             border-radius: 4px;
             background: #ffffff;
-            color: inherit;
+            color: var(--text);
             font: inherit;
          }
+         /* On the toolbar's accent: white, with the accent as its text. */
          button {
-            border-color: var(--accent);
-            background: var(--accent);
-            color: #ffffff;
+            border-color: #ffffff;
+            color: var(--accent);
+            font-weight: 600;
             cursor: pointer;
+         }
+         button:hover {
+            background: #e8eef6;
          }
          /* One column per shown pane, its title, hint and body rows shared, so the titles and hints line up. */
          main {
@@ -2418,6 +2413,7 @@ host-browser/index.html
          }
          /* The diagram needs a height, `position: relative` for its tool palette, and its `<svg>` sized to it. */
          #diagram {
+            flex: 1 1 auto;
             position: relative;
             min-height: 0;
             background: var(--surface) radial-gradient(#d5dae1 1px, transparent 1px) 0 0 / 16px 16px;
@@ -2541,36 +2537,39 @@ host-browser/index.html
    <body>
       <header>
          <h1>Bookstore</h1>
-         <span id="status">starting…</span>
+         <!-- Each control stays hidden until the part it belongs to is up: the switch once the worker has sent its files, Save once
+              the part that saves (the editor, or the diagram without one) is armed. -->
+         <select id="file" aria-label="File" hidden></select>
+         <button id="save" type="button" title="Save (Ctrl+S)" hidden>Save</button>
+         <span id="status" role="status">starting…</span>
       </header>
       <!-- Each pane stays hidden until the page part for its head fills it. -->
       <main>
          <section id="editor-pane" hidden>
             <h2 class="pane-title">Monaco Editor</h2>
             <p class="hint">
-               Pick a file to edit it with completion, hover and diagnostics. Save (Ctrl+S) keeps it in this browser, over the files in
-               <code>../workspace</code>.
+               Edit the file picked above with completion, hover and diagnostics. Save (Ctrl+S) keeps every edit in this browser, over the
+               files in <code>../workspace</code>.
             </p>
             <div class="pane-body">
-               <div class="toolbar">
-                  <select id="file" aria-label="File"></select>
-                  <button id="save" type="button">Save</button>
-               </div>
                <div id="editor"></div>
             </div>
          </section>
          <section id="diagram-pane" hidden>
             <h2 class="pane-title">Diagram Editor</h2>
             <p class="hint">
-               The diagram of the file in the editor. An arrow runs from a node to the node it references; a dashed node is declared in
+               The diagram of the file picked above. An arrow runs from a node to the node it references; a dashed node is declared in
                another file. Create a node from the palette; the file stores no positions, so each node is placed above the node it
                references rather than where you drop it.
             </p>
-            <div id="diagram"></div>
+            <div class="pane-body">
+               <div id="diagram"></div>
+            </div>
          </section>
       </main>
       <footer>
          <h2 class="pane-title">Log View</h2>
+         <p class="hint">What the server logs over the LSP head, and the errors the page reports.</p>
          <p id="data-status" hidden></p>
          <pre id="log" aria-label="Log"></pre>
       </footer>
@@ -2625,9 +2624,9 @@ host-browser/hydranium-mark.svg
 ==============================================================================
 host-browser/esbuild.mjs
 ==============================================================================
-// Bundles the page, the worker hosting the heads and Monaco's own worker into
-// `out/`: once with `npm run build`, and on every change, served, with
-// `npm start`.
+// Bundles the page, the worker hosting the heads and, with an editor, Monaco's
+// own worker into `out/`: once with `npm run build`, and on every change,
+// served, with `npm start`.
 //
 // At `platform: 'browser'` esbuild refuses a `node:*` import rather than
 // shimming it, so a Node import anywhere the worker reaches fails here rather
@@ -2635,7 +2634,7 @@ host-browser/esbuild.mjs
 
 import { context } from 'esbuild';
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -2679,6 +2678,11 @@ const common = {
    logLevel: 'info'
 };
 
+// Monaco's own worker, on a page with an editor: `init` emits its source only
+// with the LSP head.
+const monacoEntry = 'src/monaco-editor-worker.ts';
+const monacoWorker = existsSync(join(root, monacoEntry)) ? { 'monaco-editor-worker': monacoEntry } : {};
+
 const builds = await Promise.all([
    context({
       ...common,
@@ -2689,13 +2693,14 @@ const builds = await Promise.all([
       // the worker fails its bundle.
       loader: { '.ttf': 'dataurl' }
    }),
-   context({ ...common, entryPoints: { worker: 'src/worker.ts', 'monaco-editor-worker': 'src/monaco-editor-worker.ts' } })
+   context({ ...common, entryPoints: { worker: 'src/worker.ts', ...monacoWorker } })
 ]);
 
 if (process.argv.includes('--serve')) {
    await Promise.all(builds.map(build => build.watch()));
    // On this machine only: the directory served holds the sources and `node_modules`.
-   const { port } = await builds[0].serve({ host: 'localhost', servedir: root, port: Number(process.env.PORT ?? 4937) });
+   const requested = Number(process.env.PORT ?? 4937);
+   const { port } = await builds[0].serve({ host: 'localhost', servedir: root, port: requested });
    console.log(`Serving http://localhost:${port}`);
 } else {
    await Promise.all(builds.map(build => build.rebuild()));
@@ -2823,10 +2828,7 @@ hostHeadsInWorker(
    persistentFileSystem({ store, seed: __WORKSPACE_SEED__, rootUri: WORKSPACE_ROOT_URI }),
    (ports, fileSystem) => {
       // The LSP head composes the services, as the Node entry does around stdio.
-      const shared = startLanguageServerInWorker(
-         ports.lsp,
-         connection => createBookstoreServices({ connection, ...fileSystem }).shared
-      );
+      const shared = startLanguageServerInWorker(ports.lsp, connection => createBookstoreServices({ connection, ...fileSystem }).shared);
       // The data head serves from the LSP head's store, on its own port.
       startDataServerInWorker(ports.data, shared, connection => new DataServer<BookstoreModel>(connection, shared));
       const glsp = startGlspServerInWorker({
@@ -2851,10 +2853,12 @@ host-browser/src/page.ts
 
 import { connectWorkerHeads } from '@hydranium/client-browser';
 import { ConsoleLogger, describeError } from '@hydranium/protocol';
+import { ALL_LANGUAGES } from 'bookstore-protocol';
 import { showDataStatus } from './data-status.js';
 import { mountDiagram } from './diagram.js';
 import { startEditor } from './editor.js';
 import { appendLog, setStatus } from './log.js';
+import { startShownFile } from './shown-file.js';
 import { WORKSPACE_ROOT_URI } from './workspace.js';
 
 /** Where the worker bundle is served, substituted by `esbuild.mjs`. */
@@ -2866,7 +2870,8 @@ async function main(): Promise<void> {
    const heads = connectWorkerHeads(new Worker(__WORKER_BUNDLE_URL__), { logger });
    heads.onWorkerError(report => appendLog(`worker error during ${report.phase}: ${report.message}`));
    setStatus('starting…');
-   const shownFile = await startEditor(heads);
+   const shownFile = await startShownFile(heads, ALL_LANGUAGES);
+   await startEditor(heads, shownFile);
    await showDataStatus(heads.data, `${WORKSPACE_ROOT_URI}/nodes.bookstore`);
    await mountDiagram(heads.glsp, shownFile, logger);
    setStatus('ready');
@@ -2875,12 +2880,76 @@ async function main(): Promise<void> {
 main().catch((error: unknown) => setStatus(`failed: ${describeError(error)}`));
 
 ==============================================================================
+host-browser/src/shown-file.ts
+==============================================================================
+// The file the page shows: the switch above the panes, between the workspace
+// files the worker holds. Each part follows it, and any part can switch it, so
+// a page with one part fewer still has it.
+
+import type { WorkerHeads } from '@hydranium/client-browser';
+import { WORKSPACE_ROOT_URI } from './workspace.js';
+
+/** The file the page shows, for each part that follows it. */
+export interface ShownFile {
+   /** Each workspace file a language claims, by URI, with the text the worker holds. */
+   readonly files: ReadonlyMap<string, string>;
+   /** The URI of the file shown now. */
+   current(): string;
+   /** Switch the page to `uri`, one of {@link files}. */
+   show(uri: string): void;
+   /** Call `listener` with the URI of each file the page switches to. */
+   onDidChange(listener: (uri: string) => void): void;
+}
+
+/**
+ * Fill the switch with the files of `languages` the worker sent once its heads
+ * were up, and show the first.
+ */
+export async function startShownFile(
+   heads: WorkerHeads,
+   languages: ReadonlyArray<{ readonly fileExtensions: readonly string[] }>
+): Promise<ShownFile> {
+   // The text comes from the worker rather than the seed, since a saved edit
+   // is laid over the seed there.
+   const { workspace } = await heads.ready;
+   if (workspace === undefined) {
+      throw new Error('the worker sent no workspace files');
+   }
+   // Only the files a part of the page can show: one of another language would show nothing.
+   const claimed = (path: string): boolean =>
+      languages.some(language => language.fileExtensions.some(extension => path.endsWith(extension)));
+   const paths = Object.keys(workspace.files).filter(claimed).sort();
+   if (paths.length === 0) {
+      throw new Error('no workspace file has an extension the page shows');
+   }
+   const files = new Map(paths.map(path => [`${WORKSPACE_ROOT_URI}/${path}`, workspace.files[path]]));
+
+   const select = document.getElementById('file') as HTMLSelectElement;
+   // The worker keys each file by its encoded path, as in its URI: shown decoded.
+   select.append(...paths.map(path => new Option(decodeURIComponent(path), `${WORKSPACE_ROOT_URI}/${path}`)));
+   let shown = select.value;
+   const listeners: Array<(uri: string) => void> = [];
+   const show = (uri: string): void => {
+      if (!files.has(uri)) {
+         throw new Error(`${uri} is not a workspace file the page shows`);
+      }
+      select.value = uri;
+      if (uri !== shown) {
+         shown = uri;
+         listeners.forEach(listener => listener(uri));
+      }
+   };
+   select.addEventListener('change', () => show(select.value));
+   select.hidden = false;
+   return { files, current: () => shown, show, onDidChange: listener => listeners.push(listener) };
+}
+
+==============================================================================
 host-browser/src/editor.ts
 ==============================================================================
-// The LSP part of the page: one Monaco editor over the LSP head, a switch
-// between the workspace files, which the rest of the page can follow, and
-// Save. The worker holds the files, so the page saves through the LSP head and
-// the worker writes them to IndexedDB.
+// The LSP part of the page: one Monaco editor over the LSP head, showing the
+// file the page shows, and Save. The worker holds the files, so the page saves
+// through the LSP head and the worker writes them to IndexedDB.
 
 import { initializeLanguageClient, type WorkerHeads } from '@hydranium/client-browser';
 import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient } from '@hydranium/client-browser/monaco';
@@ -2888,6 +2957,7 @@ import { describeError } from '@hydranium/protocol';
 import { ALL_LANGUAGES } from 'bookstore-protocol';
 import { PublishDiagnosticsNotification } from 'vscode-languageserver-protocol';
 import { appendLog, setStatus } from './log.js';
+import type { ShownFile } from './shown-file.js';
 import { WORKSPACE_ROOT_URI } from './workspace.js';
 
 /** Where Monaco's own worker bundle is served, substituted by `esbuild.mjs`. */
@@ -2903,16 +2973,8 @@ const LANGUAGES = ALL_LANGUAGES.map(language => ({
    extensions: [...language.fileExtensions]
 }));
 
-/** The file the editor shows, for a part of the page that follows it. */
-export interface ShownFile {
-   /** The URI of the file shown now. */
-   current(): string;
-   /** Call `listener` with the URI of each file the editor switches to. */
-   onDidChange(listener: (uri: string) => void): void;
-}
-
-/** Run the LSP handshake, then show the first workspace file in the editor. */
-export async function startEditor(heads: WorkerHeads): Promise<ShownFile> {
+/** Run the LSP handshake, then show the page's shown file in the editor, following each switch. */
+export async function startEditor(heads: WorkerHeads, shownFile: ShownFile): Promise<void> {
    let client!: MonacoLspClient;
    await initializeLanguageClient(heads.lsp, {
       rootUri: WORKSPACE_ROOT_URI,
@@ -2925,50 +2987,21 @@ export async function startEditor(heads: WorkerHeads): Promise<ShownFile> {
       }
    });
 
-   // The text comes from the worker rather than the seed, since a saved edit
-   // is laid over the seed there.
-   const { workspace } = await heads.ready;
-   if (workspace === undefined) {
-      throw new Error('the worker sent no workspace files');
-   }
-   // Only the files a language claims: the client refuses to open any other.
-   const paths = Object.keys(workspace.files)
-      .filter(path => LANGUAGES.some(language => language.extensions.some(extension => path.endsWith(extension))))
-      .sort();
-   if (paths.length === 0) {
-      throw new Error('no workspace file has a language extension');
-   }
-   const uriOf = (path: string): string => `${WORKSPACE_ROOT_URI}/${path}`;
-   const modelOf = (path: string) => client.openDocument(uriOf(path), workspace.files[path]);
-
-   const select = document.getElementById('file') as HTMLSelectElement;
-   // The worker keys each file by its encoded path, as in its URI: shown decoded.
-   select.append(...paths.map(path => new Option(decodeURIComponent(path), path)));
-   const editor = client.createEditor(document.getElementById('editor') as HTMLElement, modelOf(paths[0]), {
+   const modelOf = (uri: string) => client.openDocument(uri, shownFile.files.get(uri) as string);
+   const editor = client.createEditor(document.getElementById('editor') as HTMLElement, modelOf(shownFile.current()), {
       automaticLayout: true,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       wordWrap: 'on'
    });
-   let shown = paths[0];
-   const listeners: Array<(uri: string) => void> = [];
-   const show = (path: string): void => {
-      select.value = path;
-      if (path !== shown) {
-         shown = path;
-         editor.setModel(modelOf(path));
-         listeners.forEach(listener => listener(uriOf(path)));
-      }
-   };
-   select.addEventListener('change', () => show(select.value));
+   shownFile.onDidChange(uri => editor.setModel(modelOf(uri)));
 
    // Go to definition across files switches the editor to the target file.
    client.registerEditorOpener((uri, position) => {
-      const path = paths.find(candidate => uriOf(candidate) === uri);
-      if (path === undefined) {
+      if (!shownFile.files.has(uri)) {
          return false;
       }
-      show(path);
+      shownFile.show(uri);
       editor.setPosition(position);
       editor.revealPositionInCenter(position);
       return true;
@@ -2980,7 +3013,8 @@ export async function startEditor(heads: WorkerHeads): Promise<ShownFile> {
          (error: unknown) => setStatus(`save failed: ${describeError(error)}`)
       );
    };
-   (document.getElementById('save') as HTMLButtonElement).addEventListener('click', save);
+   const saveButton = document.getElementById('save') as HTMLButtonElement;
+   saveButton.addEventListener('click', save);
    // Ctrl+S (Cmd+S) saves too, in place of the browser's "Save page as".
    window.addEventListener('keydown', event => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
@@ -2994,32 +3028,33 @@ export async function startEditor(heads: WorkerHeads): Promise<ShownFile> {
          event.preventDefault();
       }
    });
+   saveButton.hidden = false;
    (document.getElementById('editor-pane') as HTMLElement).hidden = false;
-   return { current: () => uriOf(shown), onDidChange: listener => listeners.push(listener) };
 }
 
 ==============================================================================
 host-browser/src/data-status.ts
 ==============================================================================
 // The data part of the page: one document read through the data head, out of
-// the same store the editor's LSP head serves.
+// the same store the other heads serve.
 
 import { DataConnectionWithEvents, type DataPort } from '@hydranium/protocol';
 import type { BookstoreElement } from 'bookstore-protocol';
 
-/** Open `uri` through the data head and say what it holds on the status line below the editor. */
+/** Open `uri` through the data head and say what it holds on the status line below the panes. */
 export async function showDataStatus(port: DataPort, uri: string): Promise<void> {
    const session = new DataConnectionWithEvents<BookstoreElement>(port).createSession('bookstore-page');
    const opened = await session.openDocument({ uri });
    const line = document.getElementById('data-status') as HTMLElement;
-   line.textContent = `data head: ${uri.slice(uri.lastIndexOf('/') + 1)} holds a ${opened.model?.root.$type ?? 'document with no model'}`;
+   const file = uri.slice(uri.lastIndexOf('/') + 1);
+   line.textContent = `data head: ${file} holds a ${opened.model?.root.$type ?? 'document with no model'}`;
    line.hidden = false;
 }
 
 ==============================================================================
 host-browser/src/diagram.ts
 ==============================================================================
-// The GLSP part of the page: the Bookstore diagram of the file the editor
+// The GLSP part of the page: the Bookstore diagram of the file the page
 // shows, drawn by the client module every host of this project mounts.
 
 import type { WorkerHeads } from '@hydranium/client-browser';
@@ -3027,14 +3062,22 @@ import { glspConnection, type GlspDiagramMount, HydraniumGlspClient, mountGlspDi
 import { describeError, type Logger } from '@hydranium/protocol';
 import { initializeBookstoreDiagramContainer } from 'bookstore-client';
 import { BOOKSTORE_DIAGRAM_TYPE, BOOKSTORE_LANGUAGE } from 'bookstore-protocol';
-import type { ShownFile } from './editor.js';
 import { appendLog } from './log.js';
+import type { ShownFile } from './shown-file.js';
 
 /**
- * Show the diagram of the file the editor shows, and of each file it switches
- * to. A file of another language hides the pane.
+ * Show the diagram of the file the page shows, and of each file it switches
+ * to, and hand back what reads the mount shown now, if it loaded. A file of
+ * another language hides the pane. `beforeLeave` runs on the shown mount before a switch
+ * disposes it; when it throws, that mount stays shown and the page switches
+ * back to its file.
  */
-export async function mountDiagram(connection: WorkerHeads['glsp'], shownFile: ShownFile, logger: Logger): Promise<void> {
+export async function mountDiagram(
+   connection: WorkerHeads['glsp'],
+   shownFile: ShownFile,
+   logger: Logger,
+   beforeLeave?: (mount: GlspDiagramMount) => Promise<void>
+): Promise<() => GlspDiagramMount | undefined> {
    const glspClient = new HydraniumGlspClient({ id: 'diagram', connectionProvider: glspConnection(connection) });
    let mounted: GlspDiagramMount | undefined;
    let mountedUri: string | undefined;
@@ -3043,6 +3086,21 @@ export async function mountDiagram(connection: WorkerHeads['glsp'], shownFile: S
       // Switched back before the switch away ran: its diagram is still the one shown.
       if (uri !== shownFile.current() || uri === mountedUri) {
          return;
+      }
+      // Only a mount that loaded: one that failed has no edits to lose, and its
+      // dispatcher may refuse every save, which would keep it shown for good.
+      if (mounted !== undefined && mountedUri !== undefined && beforeLeave !== undefined) {
+         try {
+            await beforeLeave(mounted);
+         } catch (error: unknown) {
+            // The diagram stays on its file, so the switch goes back to it.
+            shownFile.show(mountedUri);
+            throw error;
+         }
+         // Switched again while it ran: the show queued for that file takes over.
+         if (uri !== shownFile.current()) {
+            return;
+         }
       }
       mounted?.dispose();
       mounted = undefined;
@@ -3079,18 +3137,22 @@ export async function mountDiagram(connection: WorkerHeads['glsp'], shownFile: S
       switching = shown.catch(() => undefined);
       return shown;
    };
-   // Before the first mount, which the editor does not wait for.
+   // Before the first mount, since the page can switch while it loads.
    shownFile.onDidChange(uri => {
       follow(uri).catch((error: unknown) => appendLog(describeError(error)));
    });
-   await follow(shownFile.current());
+   // A first file that fails to load is logged as a later switch's is, so the
+   // page still arms what follows and the switch can reach a file that loads.
+   await follow(shownFile.current()).catch((error: unknown) => appendLog(describeError(error)));
+   // Only a mount that loaded: one that failed has nothing to save.
+   return () => (mountedUri === undefined ? undefined : mounted);
 }
 
 ==============================================================================
 host-browser/src/log.ts
 ==============================================================================
-// The page's status line and log area. A worker has no console anyone reads,
-// so what the server logs and the worker reports is shown here.
+// The page's status line and log area: what the page is told and the errors
+// it reports.
 
 /** Replace the one-line status in the title bar. */
 export function setStatus(text: string): void {
@@ -3188,7 +3250,7 @@ test('loads every head and keeps a saved edit across a reload', async ({ page })
    await expect(editor).toContainText('node First');
    // The data head reads the document out of the same store.
    await expect(page.locator('#data-status')).toHaveText('data head: nodes.bookstore holds a BookstoreModel');
-   // The diagram follows the editor: two nodes in one file, and in the other its
+   // The diagram follows the switch: two nodes in one file, and in the other its
    // node and the target it references there, drawn as external.
    const first = await page.locator('#file').inputValue();
    await page.locator('#file').selectOption('nodes.bookstore');

@@ -1,5 +1,5 @@
-// The page's status line and log area. A worker has no console anyone reads,
-// so what the server logs and the worker reports is shown here.
+// The page's status line and log area: what the page is told and the errors
+// it reports.
 
 /** Replace the one-line status in the title bar. */
 export function setStatus(text: string): void {

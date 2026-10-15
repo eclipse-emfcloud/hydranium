@@ -9,7 +9,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { INIT_HOSTS, type InitHost, isInitHost, requiredHeads } from './init-hosts.js';
+import { editingHeads, INIT_HOSTS, type InitHost, isInitHost } from './init-hosts.js';
 import { buildInitTemplates, readFrameworkVersion, workspaceRootPins } from './init-templates.js';
 import { kebab } from './kebab.js';
 import {
@@ -395,16 +395,16 @@ function resolveHeads(heads: readonly InitHead[] | undefined): readonly InitHead
    return INIT_HEADS.filter(head => resolved.includes(head));
 }
 
-/** Validate the host set against the heads: known names only, and every head a host needs. */
+/** Validate the host set against the heads: known names only, and one of the heads each host edits through. */
 function resolveHosts(hosts: readonly InitHost[], heads: readonly InitHead[]): readonly InitHost[] {
    const unknown = hosts.filter(host => !isInitHost(host));
    if (unknown.length > 0) {
       throw new Error(`Unknown host(s) '${unknown.join(', ')}': expected one of ${INIT_HOSTS.join(', ')}.`);
    }
    for (const host of hosts) {
-      const missing = requiredHeads(host).filter(head => !heads.includes(head));
-      if (missing.length > 0) {
-         throw new Error(`--hosts ${host} needs the '${missing.join(', ')}' head, but the head set is '${heads.join(',')}'.`);
+      const editing = editingHeads(host);
+      if (!editing.some(head => heads.includes(head))) {
+         throw new Error(`--hosts ${host} needs one of the '${editing.join(', ')}' heads, but the head set is '${heads.join(',')}'.`);
       }
    }
    return INIT_HOSTS.filter(host => hosts.includes(host));

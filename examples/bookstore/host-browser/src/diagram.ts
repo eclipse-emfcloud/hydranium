@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-// The GLSP part of the page: the Bookstore diagram of the file the editor
+// The GLSP part of the page: the Bookstore diagram of the file the page
 // shows, drawn by the client module every host of this project mounts.
 
 import type { WorkerHeads } from '@hydranium/client-browser';
@@ -15,14 +15,22 @@ import { glspConnection, type GlspDiagramMount, HydraniumGlspClient, mountGlspDi
 import { describeError, type Logger } from '@hydranium/protocol';
 import { initializeBookstoreDiagramContainer } from '@hydranium/bookstore-client';
 import { BOOKSTORE_DIAGRAM_TYPE, BOOKSTORE_LANGUAGE } from '@hydranium/bookstore-protocol';
-import type { ShownFile } from './editor.js';
 import { appendLog } from './log.js';
+import type { ShownFile } from './shown-file.js';
 
 /**
- * Show the diagram of the file the editor shows, and of each file it switches
- * to. A file of another language hides the pane.
+ * Show the diagram of the file the page shows, and of each file it switches
+ * to, and hand back what reads the mount shown now, if it loaded. A file of
+ * another language hides the pane. `beforeLeave` runs on the shown mount before a switch
+ * disposes it; when it throws, that mount stays shown and the page switches
+ * back to its file.
  */
-export async function mountDiagram(connection: WorkerHeads['glsp'], shownFile: ShownFile, logger: Logger): Promise<void> {
+export async function mountDiagram(
+   connection: WorkerHeads['glsp'],
+   shownFile: ShownFile,
+   logger: Logger,
+   beforeLeave?: (mount: GlspDiagramMount) => Promise<void>
+): Promise<() => GlspDiagramMount | undefined> {
    const glspClient = new HydraniumGlspClient({ id: 'diagram', connectionProvider: glspConnection(connection) });
    let mounted: GlspDiagramMount | undefined;
    let mountedUri: string | undefined;
@@ -31,6 +39,21 @@ export async function mountDiagram(connection: WorkerHeads['glsp'], shownFile: S
       // Switched back before the switch away ran: its diagram is still the one shown.
       if (uri !== shownFile.current() || uri === mountedUri) {
          return;
+      }
+      // Only a mount that loaded: one that failed has no edits to lose, and its
+      // dispatcher may refuse every save, which would keep it shown for good.
+      if (mounted !== undefined && mountedUri !== undefined && beforeLeave !== undefined) {
+         try {
+            await beforeLeave(mounted);
+         } catch (error: unknown) {
+            // The diagram stays on its file, so the switch goes back to it.
+            shownFile.show(mountedUri);
+            throw error;
+         }
+         // Switched again while it ran: the show queued for that file takes over.
+         if (uri !== shownFile.current()) {
+            return;
+         }
       }
       mounted?.dispose();
       mounted = undefined;
@@ -67,9 +90,13 @@ export async function mountDiagram(connection: WorkerHeads['glsp'], shownFile: S
       switching = shown.catch(() => undefined);
       return shown;
    };
-   // Before the first mount, which the editor does not wait for.
+   // Before the first mount, since the page can switch while it loads.
    shownFile.onDidChange(uri => {
       follow(uri).catch((error: unknown) => appendLog(describeError(error)));
    });
-   await follow(shownFile.current());
+   // A first file that fails to load is logged as a later switch's is, so the
+   // page still arms what follows and the switch can reach a file that loads.
+   await follow(shownFile.current()).catch((error: unknown) => appendLog(describeError(error)));
+   // Only a mount that loaded: one that failed has nothing to save.
+   return () => (mountedUri === undefined ? undefined : mounted);
 }

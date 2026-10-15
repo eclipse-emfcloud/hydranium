@@ -1035,10 +1035,7 @@ describe('Bookstore serialization', () => {
    it('emits the same text from a transfer model, whose references are plain strings', async () => {
       const { Bookstore } = createServices();
       const model = transferNode(TransferBookstoreModel, {
-         nodes: [
-            transferNode(BookstoreNode, { name: 'first', target: 'second' }),
-            transferNode(BookstoreNode, { name: 'second' })
-         ]
+         nodes: [transferNode(BookstoreNode, { name: 'first', target: 'second' }), transferNode(BookstoreNode, { name: 'second' })]
       });
 
       expect(await Bookstore.serializer.Serializer.serializeTransfer(model)).toBe(source);

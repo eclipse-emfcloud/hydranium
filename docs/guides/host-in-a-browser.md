@@ -88,6 +88,12 @@ hostHeadsInWorker(fileSystem, (ports, restored) => {
    later reaches the page as a report, which `onWorkerError` delivers. Report
    a failure of your own with `reportWorkerError`.
 
+   Without an LSP head, compose the services with no connection and pass
+   `hostHeadsInWorker` the workspace root as `{ rootUri }`: it brings the
+   workspace up from that root, which the LSP handshake would otherwise do,
+   and fails the bootstrap without one. `init --hosts browser` emits this
+   worker for a head set without `lsp`.
+
 3. **Give the workspace a filesystem.** Without one, reads fail and writes go
    nowhere. For content held in memory, spread `inMemoryFileSystem` where a
    Node host spreads `NodeFileSystem`:
@@ -142,21 +148,29 @@ const fileSystem = persistentFileSystem({
    `WorkspaceManager.workspaceInitialized` resolves, and reports a build that
    fails.
 
-6. **Save through the LSP head.** An editor's `didSave` writes nothing: LSP
-   leaves the write to the client, and a page has no disk. Call `save(uri)` or
-   `saveAll()` on the `MonacoLspClient` you build in step 9. Each asks the
-   worker to persist the text every `didChange` already gave it, in a request
-   the LSP starter answers and advertises, so a page with only text editors
-   needs no other head. The worker refuses a document whose buffer does not
-   hold its text, such as while a server edit is still on its way to the
-   editor; the document stays unsaved for the next save. A diagram edit
-   reaches the editor first, so one save covers both.
+6. **Save through the LSP head, or the diagram.** An editor's `didSave`
+   writes nothing: LSP leaves the write to the client, and a page has no disk.
+   Call `save(uri)` or `saveAll()` on the `MonacoLspClient` you build in
+   step 9. Each asks the worker to persist the text every `didChange` already
+   gave it, in a request the LSP starter answers and advertises, so a page
+   with only text editors needs no other head. The worker refuses a document
+   whose buffer does not hold its text, such as while a server edit is still on
+   its way to the editor; the document stays unsaved for the next save. A
+   diagram edit reaches the editor first, so one save covers both.
+
+   A page with no text editor saves its diagram instead: request
+   `RequestSaveModelAction` from `@hydranium/protocol` through the diagram
+   container's action dispatcher. The GLSP head answers with
+   `ModelSavedAction` once the documents the diagram edits are written, and
+   rejects the request when the write fails. A data session saves the text the
+   server holds with `persistDocument`.
 
 7. **Show the server's log.** The server logs every head over LSP
    `window/logMessage`, and a page with no handler loses all of it. Pass the
    handler as `onLogMessage` to `initializeLanguageClient`, which registers it
    before the connection listens, so you also see the first build, and keep
-   only the newest lines. See `src/page/log-panel.ts`.
+   only the newest lines. See `src/page/log-panel.ts`. Without an LSP head
+   the server logs to the worker's console instead.
 
 8. **Mount the diagram.** Build `HydraniumGlspClient` from
    `@hydranium/glsp-client` over the GLSP head's connection from

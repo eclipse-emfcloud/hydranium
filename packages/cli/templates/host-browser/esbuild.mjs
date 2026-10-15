@@ -1,6 +1,6 @@
-// Bundles the page, the worker hosting the heads and Monaco's own worker into
-// `out/`: once with `npm run build`, and on every change, served, with
-// `npm start`.
+// Bundles the page, the worker hosting the heads and, with an editor, Monaco's
+// own worker into `out/`: once with `npm run build`, and on every change,
+// served, with `npm start`.
 //
 // At `platform: 'browser'` esbuild refuses a `node:*` import rather than
 // shimming it, so a Node import anywhere the worker reaches fails here rather
@@ -8,7 +8,7 @@
 
 import { context } from 'esbuild';
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -52,6 +52,11 @@ const common = {
    logLevel: 'info'
 };
 
+// Monaco's own worker, on a page with an editor: `init` emits its source only
+// with the LSP head.
+const monacoEntry = 'src/monaco-editor-worker.ts';
+const monacoWorker = existsSync(join(root, monacoEntry)) ? { 'monaco-editor-worker': monacoEntry } : {};
+
 const builds = await Promise.all([
    context({
       ...common,
@@ -62,13 +67,14 @@ const builds = await Promise.all([
       // the worker fails its bundle.
       loader: { '.ttf': 'dataurl' }
    }),
-   context({ ...common, entryPoints: { worker: 'src/worker.ts', 'monaco-editor-worker': 'src/monaco-editor-worker.ts' } })
+   context({ ...common, entryPoints: { worker: 'src/worker.ts', ...monacoWorker } })
 ]);
 
 if (process.argv.includes('--serve')) {
    await Promise.all(builds.map(build => build.watch()));
    // On this machine only: the directory served holds the sources and `node_modules`.
-   const { port } = await builds[0].serve({ host: 'localhost', servedir: root, port: Number(process.env.PORT ?? 4937) });
+   const requested = Number(process.env.PORT ?? 4937);
+   const { port } = await builds[0].serve({ host: 'localhost', servedir: root, port: requested });
    console.log(`Serving http://localhost:${port}`);
 } else {
    await Promise.all(builds.map(build => build.rebuild()));

@@ -237,14 +237,15 @@ function quotedList(values: readonly string[]): string {
 /**
  * The column budget the emitted sources wrap at when nothing better is known.
  *
- * **Not "prettier's default"** — that is 80. 120 is a choice, and stating it as
- * a default was wrong in a way that mattered: no single width is stable for an
+ * **Not "prettier's default"** — that is 80. No single width is stable for an
  * unknown repo, so emitted code only passes a formatter check relative to a
  * config. A workspace scaffold detects the surrounding repo's `printWidth` and
  * uses it (see {@link columnsFor}); a standalone one has no config to read and
- * falls back here.
+ * falls back here. It is the framework's own width, so a fixed template, which
+ * wraps at no budget, reads the same in a standalone scaffold as in the
+ * examples this repo formats.
  */
-const DEFAULT_COLUMNS = 120;
+const DEFAULT_COLUMNS = 140;
 
 /** The width THIS composition wraps at: the detected workspace one, else {@link DEFAULT_COLUMNS}. */
 function columnsFor(composition: InitComposition): number {
@@ -351,8 +352,7 @@ const CLIENT_THIRD_PARTY_DEPENDENCIES: Readonly<Record<string, string>> = {
 
 /**
  * What each head adds to the browser host, which bundles the server into its
- * worker and the head's client into its page. `base` is the LSP head's, which
- * the host requires.
+ * worker and the head's client into its page. `base` is what every page needs.
  *
  * `monaco-editor-core` is exact for the reason `langium` is: Monaco's models
  * live in one copy, and `@hydranium/client-browser` must reach the page's.
@@ -364,8 +364,8 @@ const HOST_BROWSER_FRAMEWORK_DEPENDENCIES: Record<InitHead | 'base', readonly st
    glsp: ['@hydranium/glsp-client', '@hydranium/glsp-server']
 };
 const HOST_BROWSER_THIRD_PARTY_DEPENDENCIES: Record<InitHead | 'base', Readonly<Record<string, string>>> = {
-   base: { 'monaco-editor-core': '0.56.0', 'vscode-jsonrpc': '9.0.0', 'vscode-languageserver-protocol': '3.18.1' },
-   lsp: {},
+   base: { 'vscode-jsonrpc': '9.0.0', 'vscode-languageserver-protocol': '3.18.1' },
+   lsp: { 'monaco-editor-core': '0.56.0' },
    data: {},
    glsp: { '@eclipse-glsp/server': '2.7.0', 'reflect-metadata': '~0.2.2' }
 };
@@ -2362,7 +2362,9 @@ function hostBrowserPackageJson(composition: InitComposition): string {
    const dependencies: Record<string, string> = {
       [memberPackageName(composition, 'protocol')]: MEMBER_PIN,
       [memberPackageName(composition, 'server')]: MEMBER_PIN,
-      ...(composition.heads.includes('glsp') ? { [memberPackageName(composition, 'client')]: MEMBER_PIN } : {})
+      ...(composition.heads.includes('glsp') ? { [memberPackageName(composition, 'client')]: MEMBER_PIN } : {}),
+      // A page with no editor saves through the diagram's own action dispatcher.
+      ...(composition.heads.includes('lsp') ? {} : { '@eclipse-glsp/client': CLIENT_THIRD_PARTY_DEPENDENCIES['@eclipse-glsp/client'] })
    };
    for (const head of ['base', ...composition.heads] as const) {
       Object.assign(dependencies, HOST_BROWSER_THIRD_PARTY_DEPENDENCIES[head]);
@@ -2410,6 +2412,7 @@ function starterUri(grammar: InitGrammarNames): string {
  */
 function hostWorkerFile(composition: InitComposition): string {
    const columns = columnsFor(composition);
+   const lsp = composition.heads.includes('lsp');
    const data = composition.heads.includes('data');
    const glsp = composition.heads.includes('glsp');
    const diagrams = composition.grammars.filter(grammar => grammar.diagram);
@@ -2428,7 +2431,11 @@ function hostWorkerFile(composition: InitComposition): string {
            ]
          : []),
       "import { persistentFileSystem } from '@hydranium/core';",
-      importList(['hostHeadsInWorker', 'IndexedDbFileSystemStore', 'startLanguageServerInWorker'], '@hydranium/core/browser', columns),
+      importList(
+         ['hostHeadsInWorker', 'IndexedDbFileSystemStore', ...(lsp ? ['startLanguageServerInWorker'] : [])],
+         '@hydranium/core/browser',
+         columns
+      ),
       ...(data
          ? [
               "import { DataServer } from '@hydranium/data-server';",
@@ -2446,11 +2453,13 @@ function hostWorkerFile(composition: InitComposition): string {
       "import { WORKSPACE_ROOT_URI } from './workspace.js';"
    ];
 
+   const services = `const shared = create${composition.name}Services({ ...fileSystem }).shared;`;
    const lspCall = `startLanguageServerInWorker(ports.lsp, connection => create${composition.name}Services({ connection, ...fileSystem }).shared);`;
-   const startLsp =
-      `      const shared = ${lspCall}`.length <= columns
-         ? `const shared = ${lspCall}`
-         : `const shared = startLanguageServerInWorker(
+   const startServices = !lsp
+      ? services
+      : `      const shared = ${lspCall}`.length <= columns
+        ? `const shared = ${lspCall}`
+        : `const shared = startLanguageServerInWorker(
          ports.lsp,
          connection => create${composition.name}Services({ connection, ...fileSystem }).shared
       );`;
@@ -2458,7 +2467,7 @@ function hostWorkerFile(composition: InitComposition): string {
    const dataCall = `startDataServerInWorker(ports.data, shared, ${dataServer});`;
    const dataHead = data
       ? `
-      // The data head serves from the LSP head's store, on its own port.
+      // The data head serves from the ${lsp ? "LSP head's" : "services'"} store, on its own port.
       ${
          `      ${dataCall}`.length <= columns
             ? dataCall
@@ -2500,10 +2509,13 @@ const store = new IndexedDbFileSystemStore(\`__PROJECT_ID__-workspace-\${__DIREC
 hostHeadsInWorker(
    persistentFileSystem({ store, seed: __WORKSPACE_SEED__, rootUri: WORKSPACE_ROOT_URI }),
    (ports, fileSystem) => {
-      // The LSP head composes the services, as the Node entry does around stdio.
-      ${startLsp}${dataHead}${glspHead}
+      ${lsp ? '// The LSP head composes the services, as the Node entry does around stdio.\n      ' : ''}${startServices}${dataHead}${glspHead}
    },
-   // The ready message then carries the workspace files the page opens.
+   ${
+      lsp
+         ? '// The ready message then carries the workspace files the page opens.'
+         : '// With no LSP head the workspace comes up from this root, and the ready\n   // message then carries its files.'
+   }
    { rootUri: WORKSPACE_ROOT_URI }
 );
 `;
@@ -2515,29 +2527,46 @@ hostHeadsInWorker(
  * part is a module of its own, and this calls the ones the heads serve.
  */
 function hostPageFile(composition: InitComposition): string {
+   const lsp = composition.heads.includes('lsp');
    const data = composition.heads.includes('data');
    const diagram = composition.grammars.find(grammar => grammar.diagram);
+   // A host takes lsp or glsp, and glsp marks a diagram grammar, so without lsp there is one.
+   const diagramLanguage = lsp || diagram === undefined ? undefined : `${screamingSnake(diagram.grammarId)}_LANGUAGE`;
+   const shownLanguage = diagramLanguage ?? 'ALL_LANGUAGES';
    const parts = [
+      // Every part follows the file the page shows, so the switch comes first. With
+      // no editor it lists only the diagram's files, the only ones the page shows.
       {
-         module: './editor.js',
-         name: 'startEditor',
-         call: diagram === undefined ? 'await startEditor(heads);' : 'const shownFile = await startEditor(heads);'
+         module: './shown-file.js',
+         imports: 'startShownFile',
+         call: `const shownFile = await startShownFile(heads, ${diagramLanguage === undefined ? shownLanguage : `[${diagramLanguage}]`});`
       },
+      ...(lsp ? [{ module: './editor.js', imports: 'startEditor', call: 'await startEditor(heads, shownFile);' }] : []),
       ...(data
          ? [
               {
                  module: './data-status.js',
-                 name: 'showDataStatus',
+                 imports: 'showDataStatus',
                  call: `await showDataStatus(heads.data, ${starterUri(composition.grammars[0])});`
               }
            ]
          : []),
       ...(diagram === undefined
          ? []
-         : [{ module: './diagram.js', name: 'mountDiagram', call: 'await mountDiagram(heads.glsp, shownFile, logger);' }])
+         : [
+              {
+                 module: './diagram.js',
+                 imports: 'mountDiagram',
+                 call: lsp
+                    ? 'await mountDiagram(heads.glsp, shownFile, logger);'
+                    : 'const shownDiagram = await mountDiagram(heads.glsp, shownFile, logger, saveBeforeLeaving);'
+              }
+           ]),
+      // Without the editor, the diagram is what the page saves through.
+      ...(lsp ? [] : [{ module: './diagram-save.js', imports: 'armDiagramSave, saveBeforeLeaving', call: 'armDiagramSave(shownDiagram);' }])
    ];
    const imports = [
-      ...parts.map(part => `import { ${part.name} } from '${part.module}';`),
+      ...parts.map(part => `import { ${part.imports} } from '${part.module}';`),
       "import { appendLog, setStatus } from './log.js';",
       ...(data ? ["import { WORKSPACE_ROOT_URI } from './workspace.js';"] : [])
    ].sort((left, right) => left.slice(left.indexOf("'")).localeCompare(right.slice(right.indexOf("'"))));
@@ -2547,6 +2576,7 @@ function hostPageFile(composition: InitComposition): string {
 
 import { connectWorkerHeads } from '@hydranium/client-browser';
 import { ConsoleLogger, describeError } from '@hydranium/protocol';
+import { ${shownLanguage} } from '${memberPackageName(composition, 'protocol')}';
 ${imports.join('\n')}
 
 /** Where the worker bundle is served, substituted by \`esbuild.mjs\`. */
@@ -2566,12 +2596,17 @@ main().catch((error: unknown) => setStatus(\`failed: \${describeError(error)}\`)
 `;
 }
 
-/** The smoke test: what each head shows on the page, and an edit that survives a reload. */
+/**
+ * The smoke test: what each head shows on the page, and an edit that survives
+ * a reload, typed in the editor or, with no LSP head, made in the diagram.
+ */
 function hostSmokeSpec(composition: InitComposition): string {
+   const lsp = composition.heads.includes('lsp');
    const data = composition.heads.includes('data');
    const diagram = composition.grammars.find(grammar => grammar.diagram);
    const primary = composition.grammars[0];
    const checks = [
+      ...(lsp ? ["   await expect(editor).toContainText('node First');"] : []),
       ...(data
          ? [
               '   // The data head reads the document out of the same store.',
@@ -2581,7 +2616,7 @@ function hostSmokeSpec(composition: InitComposition): string {
       ...(diagram === undefined
          ? []
          : [
-              '   // The diagram follows the editor: two nodes in one file, and in the other its',
+              '   // The diagram follows the switch: two nodes in one file, and in the other its',
               '   // node and the target it references there, drawn as external.',
               "   const first = await page.locator('#file').inputValue();",
               `   await page.locator('#file').selectOption('nodes.${diagram.extensions[0]}');`,
@@ -2591,26 +2626,8 @@ function hostSmokeSpec(composition: InitComposition): string {
               "   await page.locator('#file').selectOption(first);"
            ])
    ];
-   return `// The page loads with every head answering, and an edit saved through the
-// LSP head is still there after a reload. Any console error fails it.
-
-import { expect, test } from '@playwright/test';
-
-test('loads every head and keeps a saved edit across a reload', async ({ page }) => {
-   const errors: string[] = [];
-   page.on('pageerror', error => errors.push(error.message));
-   page.on('console', message => {
-      if (message.type() === 'error') {
-         errors.push(message.text());
-      }
-   });
-   const editor = page.locator('#editor .view-lines');
-
-   await page.goto('/');
-   await expect(page.locator('#status')).toHaveText('ready');
-   await expect(editor).toContainText('node First');
-${checks.join('\n')}${checks.length > 0 ? '\n' : ''}
-   await editor.click();
+   const edit = lsp
+      ? `   await editor.click();
    await page.keyboard.press('ControlOrMeta+End');
    await page.keyboard.type('\\nnode Added');
    await page.locator('#save').click();
@@ -2618,7 +2635,52 @@ ${checks.join('\n')}${checks.length > 0 ? '\n' : ''}
 
    await page.reload();
    await expect(page.locator('#status')).toHaveText('ready');
-   await expect(editor).toContainText('node Added');
+   await expect(editor).toContainText('node Added');`
+      : `   // A node from the palette, dropped low and left of centre: the starter nodes
+   // sit in the upper band and the palette in the upper right.
+   const canvas = page.locator('#diagram');
+   const create = async (): Promise<void> => {
+      await page.locator('#diagram .tool-button', { hasText: '${diagram?.nodeRule}' }).click();
+      const size = await canvas.evaluate(element => ({ width: element.clientWidth, height: element.clientHeight }));
+      await canvas.click({ position: { x: size.width * 0.4, y: size.height * 0.85 } });
+   };
+   await create();
+   await expect(nodes).toHaveCount(3);
+   await page.locator('#save').click();
+   await expect(page.locator('#status')).toHaveText('saved the diagram');
+   // A second, left unsaved: the switch saves the diagram it leaves.
+   await create();
+   await expect(nodes).toHaveCount(4);
+   await page.locator('#file').selectOption('references.${diagram?.extensions[0]}');
+   await expect(page.locator('#diagram .external')).toBeVisible();
+
+   await page.reload();
+   await expect(page.locator('#status')).toHaveText('ready');
+   await expect(nodes).toHaveCount(4);`;
+   const locators = [
+      ...(lsp ? ["   const editor = page.locator('#editor .view-lines');"] : []),
+      ...(lsp ? [] : ["   const nodes = page.locator('#diagram .sprotty-node');"])
+   ];
+   return `// The page loads with every head answering, and an edit saved through the
+// ${lsp ? 'LSP head' : 'GLSP head'} is still there after a reload. Any console error fails it.
+
+import { expect, test } from '@playwright/test';
+
+test('loads every head and keeps a saved ${lsp ? 'edit' : 'diagram edit'} across a reload', async ({ page }) => {
+   const errors: string[] = [];
+   page.on('pageerror', error => errors.push(error.message));
+   page.on('console', message => {
+      if (message.type() === 'error') {
+         errors.push(message.text());
+      }
+   });
+${locators.join('\n')}
+
+   await page.goto('/');
+   await expect(page.locator('#status')).toHaveText('ready');
+${checks.join('\n')}
+
+${edit}
    expect(errors).toEqual([]);
 });
 `;
@@ -2626,13 +2688,14 @@ ${checks.join('\n')}${checks.length > 0 ? '\n' : ''}
 
 /** The browser host's README. */
 function hostBrowserReadme(composition: InitComposition): string {
+   const lsp = composition.heads.includes('lsp');
    const data = composition.heads.includes('data');
    const diagram = composition.grammars.find(grammar => grammar.diagram);
    const lines = [
       `# ${memberPackageName(composition, 'host-browser')}`,
       '',
       '__NAME__ in a browser page: every head runs in a web worker, with no backend',
-      'and no Node runtime. The page saves through the LSP head, and the worker',
+      `and no Node runtime. The page saves through the ${lsp ? 'LSP head' : 'GLSP head'}, and the worker`,
       'keeps each saved file in IndexedDB, laid over `../workspace` on the next',
       'load.',
       '',
@@ -2652,19 +2715,21 @@ function hostBrowserReadme(composition: InitComposition): string {
       '',
       '- `index.html` — the page, with a pane for each head that stays hidden until its part fills it',
       '- `hydranium-mark.svg` — the tab icon',
-      '- `esbuild.mjs` — bundles the page, the worker and Monaco’s worker, reading `../workspace` in as the seed',
+      `- \`esbuild.mjs\` — bundles the page${lsp ? ', the worker and Monaco’s worker' : ' and the worker'}, reading \`../workspace\` in as the seed`,
       '- `src/worker.ts` — the worker: the heads over one store, seeded and persisted',
       '- `src/page.ts` — starts the worker and runs the part of the page each head serves',
-      '- `src/editor.ts` — the LSP part: a Monaco editor, the file switch and Save',
+      '- `src/shown-file.ts` — the file switch above the panes, which every part follows',
+      ...(lsp ? ['- `src/editor.ts` — the LSP part: a Monaco editor and Save'] : []),
       ...(data ? ['- `src/data-status.ts` — the data part: one document read through the data head'] : []),
       ...(diagram === undefined
          ? []
          : [
-              `- \`src/diagram.ts\` — the GLSP part: the \`${diagram.grammar}\` diagram of the file the editor shows, defined in the client package`
+              `- \`src/diagram.ts\` — the GLSP part: the \`${diagram.grammar}\` diagram of the file the page shows, defined in the client package`
            ]),
+      ...(lsp ? [] : ['- `src/diagram-save.ts` — Save with no editor: the diagram saved through the GLSP head']),
       '- `src/log.ts` — the status line and the log area',
       '- `src/workspace.ts` — the workspace root URI both ends name',
-      '- `src/monaco-editor-worker.ts` — Monaco’s own worker, which hosts no head',
+      ...(lsp ? ['- `src/monaco-editor-worker.ts` — Monaco’s own worker, which hosts no head'] : []),
       '- `src/posix-path-shim.ts` — the `path` function the framework imports, for the bundle',
       '- `test/smoke.spec.mts` — the page loads, each head answers, and a saved edit survives a reload',
       ''
@@ -2672,15 +2737,24 @@ function hostBrowserReadme(composition: InitComposition): string {
    return project(lines.join('\n'), composition);
 }
 
+/** The page with the line under its log view saying what shows there, which the LSP head decides. */
+function withLogHint(page: InitFile, lsp: boolean): InitFile {
+   const hint = lsp
+      ? 'What the server logs over the LSP head, and the errors the page reports.'
+      : "The errors the page reports. The server logs to the worker's console, in the browser's developer tools.";
+   return { ...page, content: page.content.replace('__LOG_HINT__', hint) };
+}
+
 /** The browser host: a page and a worker, bundled by esbuild and served as static files. */
 function hostBrowserFiles(composition: InitComposition): InitFile[] {
    const fixed = (file: string): InitFile => projectTemplate(`host-browser/${file}`, composition);
+   const lsp = composition.heads.includes('lsp');
    const diagram = composition.grammars.find(grammar => grammar.diagram);
    return [
       { path: 'host-browser/package.json', content: hostBrowserPackageJson(composition) },
       ignoreFile('host-browser'),
       { path: 'host-browser/README.md', content: hostBrowserReadme(composition) },
-      fixed('index.html'),
+      withLogHint(fixed('index.html'), lsp),
       fixed('hydranium-mark.svg'),
       fixed('esbuild.mjs'),
       fixed('playwright.config.mts'),
@@ -2689,13 +2763,14 @@ function hostBrowserFiles(composition: InitComposition): InitFile[] {
       fixed('tsconfig.e2e.json'),
       { path: 'host-browser/src/worker.ts', content: hostWorkerFile(composition) },
       { path: 'host-browser/src/page.ts', content: hostPageFile(composition) },
-      fixed('src/editor.ts'),
+      fixed('src/shown-file.ts'),
+      ...(lsp ? [fixed('src/editor.ts')] : []),
       ...(composition.heads.includes('data') ? [fixed('src/data-status.ts')] : []),
       ...(diagram === undefined ? [] : [grammarTemplate('host-browser/src/diagram.ts', composition, diagram)]),
+      ...(lsp ? [] : [fixed('src/diagram-save.ts')]),
       fixed('src/log.ts'),
       fixed('src/workspace.ts'),
-      fixed('src/monaco-editor-worker.ts'),
-      fixed('src/monaco-editor-core-worker.d.ts'),
+      ...(lsp ? [fixed('src/monaco-editor-worker.ts'), fixed('src/monaco-editor-core-worker.d.ts')] : []),
       fixed('src/posix-path-shim.ts'),
       { path: 'host-browser/test/smoke.spec.mts', content: hostSmokeSpec(composition) }
    ];
