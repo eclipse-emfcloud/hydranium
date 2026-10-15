@@ -839,7 +839,10 @@ export const __CONFIG_ROOT_CONST___CONFIGURATION_ROOT = '__PROJECT_ID__';
       : `const __NAME__SharedModule: Module<__NAME__SharedServices, PartialLangiumSharedServices> = {};`;
 
    const serializerImports = composition.grammars
-      .map(grammar => `import { ${grammar.grammar}Serializer } from './${grammar.grammarId}-serializer.js';`)
+      .flatMap(grammar => [
+         `import { ${grammar.grammar}Serializer } from './${grammar.grammarId}-serializer.js';`,
+         `import { ${grammar.grammar}ValidationContribution } from './${grammar.grammarId}-validation.js';`
+      ])
       .join('\n');
 
    // Each language gets its own adopter module because `Serializer` is a
@@ -851,6 +854,11 @@ export const __CONFIG_ROOT_CONST___CONFIGURATION_ROOT = '__PROJECT_ID__';
          grammar => `const ${grammar.grammar}LanguageModule: Module<__NAME__Services, PartialLangiumServices & DeepPartial<ServerAddedServices>> = {
    serializer: {
       Serializer: services => new ${grammar.grammar}Serializer(services)
+   },
+   validation: {
+      checks: {
+         names: () => new ${grammar.grammar}ValidationContribution()
+      }
    }
 };`
       )
@@ -872,11 +880,11 @@ export const __CONFIG_ROOT_CONST___CONFIGURATION_ROOT = '__PROJECT_ID__';
 
    const text = `// DI bootstrap for __NAME__. Composes the framework defaults with adopter
 // overrides via Langium's \`inject()\` (through the framework's
-// \`createIntegrationServices\`). Each adopter module binds ONE slot — its
-// language's \`Serializer\`, which the framework cannot default because a
-// concrete syntax is grammar knowledge. Everything else (scope, naming, project
-// management, build pipeline) boots on the framework defaults; scope
-// computation, validation checks and AST extensions go in these same modules.
+// \`createIntegrationServices\`). Each adopter module binds its language's
+// \`Serializer\`, which the framework cannot default because a concrete syntax
+// is grammar knowledge, and its validation checks. Everything else (scope,
+// naming, project management, build pipeline) boots on the framework defaults;
+// scope computation and AST extensions go in these same modules.
 //
 // Note which generated symbol comes from which name: the SHARED module is
 // \`__NAME__GeneratedSharedModule\` (from \`projectName\`) and there is one of it,
@@ -1567,14 +1575,9 @@ const LINKING_SUITE = `describe('__GRAMMAR__ linking', () => {
 });`;
 
 /**
- * The validation tier, asserting the FRAMEWORK's diagnostics rather than an
- * adopter rule.
- *
- * The scaffold binds no `validation.checks`, so a test over an adopter check
- * would have to invent one and would then assert the test's own fixture rather
- * than the language. What a scaffolded project really guarantees on day one is
- * that a dangling reference is reported, which is a linker diagnostic — and
- * that is the tier a new adopter breaks third.
+ * The validation tier: the linker's diagnostic for a dangling reference, the
+ * tier a new adopter breaks third, and the scaffold's one check, a warning on
+ * a repeated name.
  */
 const VALIDATING_SUITE = `describe('__GRAMMAR__ validation', () => {
    it('reports nothing for a well-formed document', async () => {
@@ -1600,6 +1603,21 @@ const VALIDATING_SUITE = `describe('__GRAMMAR__ validation', () => {
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].severity).toBe(DiagnosticSeverity.Error);
       expect(diagnostics[0].message).toContain('absent');
+   });
+
+   it('warns on each node named like one before it', async () => {
+      const { shared, __GRAMMAR__ } = createServices();
+
+      const document = await parseHelper<__ENTRY_RULE__>(__GRAMMAR__)('node first\\nnode second\\nnode first', {
+         documentUri: 'file:///duplicate.__EXTENSION__'
+      });
+      await shared.workspace.DocumentBuilder.build([document], { validation: true });
+
+      const diagnostics = document.diagnostics ?? [];
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].severity).toBe(DiagnosticSeverity.Warning);
+      expect(diagnostics[0].message).toBe("A node named 'first' is already declared.");
+      expect(diagnostics[0].range.start.line).toBe(2);
    });
 });`;
 
@@ -1633,10 +1651,9 @@ const LINKING_HEADER = `// Tier two: does my cross-reference resolve.
 
 const VALIDATING_HEADER = `// Tier three: does a broken model get reported.
 //
-// These are the FRAMEWORK's own linker diagnostics, not adopter checks — the
-// scaffold binds no \`validation.checks\`, and a test over an invented one would
-// assert its own fixture rather than the language. Bind a check in your
-// language module and assert it here alongside these.`;
+// A dangling reference is the FRAMEWORK's own linker diagnostic; a repeated
+// name is reported by the scaffold's own validation check. Bind a further
+// check in your language module and assert it here alongside these.`;
 
 /** The README, assembled from lines to avoid escaping the Markdown code fences. */
 function readme(composition: InitComposition): string {
@@ -1697,10 +1714,10 @@ function readme(composition: InitComposition): string {
       ...grammarBullets,
       ...(multi ? ['- `src/grammar/common.langium` — shared terminals, imported by each grammar (not a language)'] : []),
       '- `src/language-server/__PROJECT_ID__-module.ts` — `create__NAME__Services` DI wiring',
-      ...composition.grammars.map(
-         grammar =>
-            `- \`src/language-server/${grammar.grammarId}-serializer.ts\` — emits \`${grammar.grammar}\` back to text (the framework defaults this to a throw)`
-      ),
+      ...composition.grammars.flatMap(grammar => [
+         `- \`src/language-server/${grammar.grammarId}-serializer.ts\` — emits \`${grammar.grammar}\` back to text (the framework defaults this to a throw)`,
+         `- \`src/language-server/${grammar.grammarId}-validation.ts\` — the \`${grammar.grammar}\` checks: a warning on a repeated name`
+      ]),
       "- `src/node/services.ts` — zero-arg `createServices()` for the headless CLI, the package's `./node` entry",
       `- \`src/index.ts\` — the package root, loadable in a browser worker: DI factory + generated AST${diagramCount === 0 ? '' : diagramCount === 1 ? ' + diagram module' : ' + diagram modules'}`,
       `- \`src/main.ts\` — starts ${composition.heads.join(' + ')}, the \`__PROJECT_ID__\` bin entry`,
@@ -1814,11 +1831,11 @@ function readme(composition: InitComposition): string {
  * unmodified; storage and the submission handler are thin typed subclasses,
  * which is where an adopter's own load/save and log formatting land.
  *
- * The set is EDITABLE rather than read-only: one create-node handler, registered
- * on the module. GLSP's own `DiagramModule` binds no handler that mutates a
- * source model, so without it the head renders and answers while telling the
- * client it may change nothing — which reads as a broken diagram rather than as a
- * deliberate viewer.
+ * The set is EDITABLE rather than read-only: a create-node and a delete handler,
+ * registered on the module. GLSP's own `DiagramModule` binds no handler that
+ * mutates a source model, so without them the head renders and answers while
+ * telling the client it may change nothing — which reads as a broken diagram
+ * rather than as a deliberate viewer.
  */
 function glspFiles(composition: InitComposition, grammar: InitGrammarNames): InitFile[] {
    const columns = columnsFor(composition);
@@ -1830,13 +1847,15 @@ function glspFiles(composition: InitComposition, grammar: InitGrammarNames): Ini
 
    const configuration = `// Diagram configuration for the __GRAMMAR__ diagram.
 //
-// **Every hint is \`false\`, and that is not the same as read-only.** The starter
-// __GRAMMAR__CreateNodeOperationHandler makes this diagram editable through the
-// tool palette, which GLSP assembles from the create handlers' trigger actions —
-// there is no \`creatable\` hint. What the hints govern is delete / reparent /
-// reposition / resize, and nothing backs those, so declaring one would offer a
-// gesture whose operation the server rejects: a worse failure than the tool being
-// absent. Turn a hint on in the same change that adds its handler.
+// **A hint is \`true\` only where a handler backs it.** The starter
+// __GRAMMAR__CreateNodeOperationHandler offers creation through the tool palette,
+// which GLSP assembles from the create handlers' trigger actions — there is no
+// \`creatable\` hint. __GRAMMAR__DeleteOperationHandler backs \`deletable\` on a
+// node and an edge; a node of another document stays undeletable, since this
+// diagram does not own it. Nothing backs reparent / reposition / resize, so
+// declaring one would offer a gesture whose operation the server rejects: a worse
+// failure than the tool being absent. Turn a hint on in the same change that adds
+// its handler.
 //
 // \`needsClientLayout\` is \`true\` and \`layoutKind\` is \`NONE\`: the starter grammar
 // persists no bounds, so the client measures and places everything. That is also
@@ -1851,7 +1870,7 @@ ${importList(
    columns
 )}
 import { injectable } from 'inversify';
-import { __GRAMMAR_ID_CONST___EDGE_TYPE, __GRAMMAR_ID_CONST___NODE_TYPE } from '__PROTOCOL_PACKAGE__';
+import { __GRAMMAR_ID_CONST___EDGE_TYPE, __GRAMMAR_ID_CONST___EXTERNAL_NODE_TYPE, __GRAMMAR_ID_CONST___NODE_TYPE } from '__PROTOCOL_PACKAGE__';
 
 @injectable()
 export class __GRAMMAR__DiagramConfiguration implements DiagramConfiguration {
@@ -1864,6 +1883,13 @@ export class __GRAMMAR__DiagramConfiguration implements DiagramConfiguration {
    readonly shapeTypeHints: ShapeTypeHint[] = [
       {
          elementTypeId: __GRAMMAR_ID_CONST___NODE_TYPE,
+         deletable: true,
+         reparentable: false,
+         repositionable: false,
+         resizable: false
+      },
+      {
+         elementTypeId: __GRAMMAR_ID_CONST___EXTERNAL_NODE_TYPE,
          deletable: false,
          reparentable: false,
          repositionable: false,
@@ -1874,11 +1900,11 @@ export class __GRAMMAR__DiagramConfiguration implements DiagramConfiguration {
    readonly edgeTypeHints: EdgeTypeHint[] = [
       {
          elementTypeId: __GRAMMAR_ID_CONST___EDGE_TYPE,
-         deletable: false,
+         deletable: true,
          repositionable: false,
          routable: false,
          sourceElementTypeIds: [__GRAMMAR_ID_CONST___NODE_TYPE],
-         targetElementTypeIds: [__GRAMMAR_ID_CONST___NODE_TYPE]
+         targetElementTypeIds: [__GRAMMAR_ID_CONST___NODE_TYPE, __GRAMMAR_ID_CONST___EXTERNAL_NODE_TYPE]
       }
    ];
 }
@@ -1892,18 +1918,22 @@ export class __GRAMMAR__DiagramConfiguration implements DiagramConfiguration {
 //
 // \`configureOperationHandlers\` ADDS: GLSP's default pair
 // (\`CompoundOperationHandler\` and \`LayoutOperationHandler\`) mutates no source
-// model, so the starter create handler is what makes this diagram editable at all.
+// model, so the starter create and delete handlers are what make this diagram
+// editable at all.
 
 ${importList(
    [
       'ActionHandlerConstructor',
       'BindingTarget',
+      'ComputedBoundsAction',
       'DiagramConfiguration',
       'GModelFactory',
       'GModelIndex',
+      'GModelRoot',
       'InstanceMultiBinding',
       'ModelState',
       'ModelSubmissionHandler',
+      'ModelValidator',
       'OperationHandlerConstructor',
       'SourceModelStorage'
    ],
@@ -1913,17 +1943,32 @@ ${importList(
 )}
 import { ComputedBoundsActionHandler } from '@eclipse-glsp/server';
 ${importList(
-   ['HydraniumGlspComputedBoundsActionHandler', 'AbstractHydraniumGlspDiagramModule', 'HydraniumGlspIndex'],
+   ['HydraniumGlspComputedBoundsActionHandler', 'AbstractHydraniumGlspDiagramModule', 'HydraniumGlspIndex', 'HydraniumGlspModelValidator'],
    '@hydranium/glsp-server',
    columns
 )}
 import { __GRAMMAR__CreateNodeOperationHandler } from './create-node-operation-handler.js';
+import { __GRAMMAR__DeleteOperationHandler } from './delete-operation-handler.js';
 import { __GRAMMAR__DiagramConfiguration } from './diagram-configuration.js';
 import { __GRAMMAR__GModelFactory } from './gmodel-factory.js';
 import { __GRAMMAR__GlspState } from './state.js';
 import { __GRAMMAR__GlspStorage } from './storage.js';
 import { __GRAMMAR__SubmissionHandler } from './submission-handler.js';
 import { __GRAMMAR_ID_CONST___DIAGRAM_TYPE } from '__PROTOCOL_PACKAGE__';
+import { injectable } from 'inversify';
+
+/**
+ * The framework handler, keeping none of the edge routes the client reports:
+ * it routes an edge before it sizes the nodes, so a self-reference's loop would
+ * stay drawn inside its node. The starter's edges have no routing points, and
+ * the client routes them afresh from the sized nodes.
+ */
+@injectable()
+export class __GRAMMAR__ComputedBoundsActionHandler extends HydraniumGlspComputedBoundsActionHandler {
+   protected override applyBounds(root: GModelRoot, action: ComputedBoundsAction): void {
+      super.applyBounds(root, { ...action, routes: undefined });
+   }
+}
 
 export class __GRAMMAR__DiagramModule extends AbstractHydraniumGlspDiagramModule {
    readonly diagramType = __GRAMMAR_ID_CONST___DIAGRAM_TYPE;
@@ -1953,14 +1998,23 @@ export class __GRAMMAR__DiagramModule extends AbstractHydraniumGlspDiagramModule
       return { service: HydraniumGlspIndex };
    }
 
+   /**
+    * The language's diagnostics as diagram markers, following each edit. GLSP
+    * binds no validator by default, and without one no marker ever shows.
+    */
+   protected override bindModelValidator(): BindingTarget<ModelValidator> {
+      return HydraniumGlspModelValidator;
+   }
+
    protected override configureActionHandlers(binding: InstanceMultiBinding<ActionHandlerConstructor>): void {
       super.configureActionHandlers(binding);
-      binding.rebind(ComputedBoundsActionHandler, HydraniumGlspComputedBoundsActionHandler);
+      binding.rebind(ComputedBoundsActionHandler, __GRAMMAR__ComputedBoundsActionHandler);
    }
 
    protected override configureOperationHandlers(binding: InstanceMultiBinding<OperationHandlerConstructor>): void {
       super.configureOperationHandlers(binding);
       binding.add(__GRAMMAR__CreateNodeOperationHandler);
+      binding.add(__GRAMMAR__DeleteOperationHandler);
    }
 }
 `;
@@ -1972,6 +2026,7 @@ export class __GRAMMAR__DiagramModule extends AbstractHydraniumGlspDiagramModule
       fixed('gmodel-factory.ts'),
       computed('diagram-configuration.ts', configuration),
       fixed('create-node-operation-handler.ts'),
+      fixed('delete-operation-handler.ts'),
       computed('diagram-module.ts', module),
       grammarTemplate('server/test/__GRAMMAR_ID__-diagram.test.ts', composition, grammar)
    ];
@@ -2027,9 +2082,10 @@ function serverFiles(composition: InitComposition): InitFile[] {
       // and a serializer is grammar-shaped by definition. That is also why the
       // framework refuses to default it: its `UnboundSerializer` throws, naming the
       // binding to add, rather than guessing a syntax.
-      ...composition.grammars.map(grammar =>
-         grammarTemplate('server/src/language-server/__GRAMMAR_ID__-serializer.ts', composition, grammar)
-      ),
+      ...composition.grammars.flatMap(grammar => [
+         grammarTemplate('server/src/language-server/__GRAMMAR_ID__-serializer.ts', composition, grammar),
+         grammarTemplate('server/src/language-server/__GRAMMAR_ID__-validation.ts', composition, grammar)
+      ]),
       { path: 'server/src/index.ts', content: indexFile(composition) },
       projectTemplate('server/src/node/services.ts', composition),
       { path: 'server/src/main.ts', content: mainFile(composition) },
@@ -2189,6 +2245,8 @@ const CLIENT_COMPILER_OPTIONS: ReadonlyArray<readonly [string, JsonValue]> = [
    ['strict', true],
    ['skipLibCheck', true],
    ['declaration', true],
+   // For inversify's `@injectable`, which a GLSP view needs to be bound.
+   ['experimentalDecorators', true],
    ['types', []],
    // A base that sets it fails every `import` in this CommonJS member.
    ['verbatimModuleSyntax', false]
@@ -2460,7 +2518,11 @@ function hostPageFile(composition: InitComposition): string {
    const data = composition.heads.includes('data');
    const diagram = composition.grammars.find(grammar => grammar.diagram);
    const parts = [
-      { module: './editor.js', name: 'startEditor', call: 'await startEditor(heads);' },
+      {
+         module: './editor.js',
+         name: 'startEditor',
+         call: diagram === undefined ? 'await startEditor(heads);' : 'const shownFile = await startEditor(heads);'
+      },
       ...(data
          ? [
               {
@@ -2472,12 +2534,12 @@ function hostPageFile(composition: InitComposition): string {
          : []),
       ...(diagram === undefined
          ? []
-         : [{ module: './diagram.js', name: 'mountDiagram', call: `await mountDiagram(heads.glsp, ${starterUri(diagram)}, logger);` }])
+         : [{ module: './diagram.js', name: 'mountDiagram', call: 'await mountDiagram(heads.glsp, shownFile, logger);' }])
    ];
    const imports = [
       ...parts.map(part => `import { ${part.name} } from '${part.module}';`),
       "import { appendLog, setStatus } from './log.js';",
-      ...(parts.length > 1 ? ["import { WORKSPACE_ROOT_URI } from './workspace.js';"] : [])
+      ...(data ? ["import { WORKSPACE_ROOT_URI } from './workspace.js';"] : [])
    ].sort((left, right) => left.slice(left.indexOf("'")).localeCompare(right.slice(right.indexOf("'"))));
 
    return `// The page: it starts the worker, hands each head a channel of its own, and
@@ -2507,7 +2569,7 @@ main().catch((error: unknown) => setStatus(\`failed: \${describeError(error)}\`)
 /** The smoke test: what each head shows on the page, and an edit that survives a reload. */
 function hostSmokeSpec(composition: InitComposition): string {
    const data = composition.heads.includes('data');
-   const diagram = composition.grammars.some(grammar => grammar.diagram);
+   const diagram = composition.grammars.find(grammar => grammar.diagram);
    const primary = composition.grammars[0];
    const checks = [
       ...(data
@@ -2516,7 +2578,18 @@ function hostSmokeSpec(composition: InitComposition): string {
               `   await expect(page.locator('#data-status')).toHaveText('data head: nodes.${primary.extensions[0]} holds a ${primary.entryRule}');`
            ]
          : []),
-      ...(diagram ? ['   // The two starter nodes, drawn.', "   await expect(page.locator('#diagram .sprotty-node')).toHaveCount(2);"] : [])
+      ...(diagram === undefined
+         ? []
+         : [
+              '   // The diagram follows the editor: two nodes in one file, and in the other its',
+              '   // node and the target it references there, drawn as external.',
+              "   const first = await page.locator('#file').inputValue();",
+              `   await page.locator('#file').selectOption('nodes.${diagram.extensions[0]}');`,
+              "   await expect(page.locator('#diagram .sprotty-node')).toHaveCount(2);",
+              `   await page.locator('#file').selectOption('references.${diagram.extensions[0]}');`,
+              `   await expect(page.locator('#diagram .external')).toHaveText('Second (nodes.${diagram.extensions[0]})');`,
+              "   await page.locator('#file').selectOption(first);"
+           ])
    ];
    return `// The page loads with every head answering, and an edit saved through the
 // LSP head is still there after a reload. Any console error fails it.
@@ -2578,6 +2651,7 @@ function hostBrowserReadme(composition: InitComposition): string {
       '## Layout',
       '',
       '- `index.html` — the page, with a pane for each head that stays hidden until its part fills it',
+      '- `hydranium-mark.svg` — the tab icon',
       '- `esbuild.mjs` — bundles the page, the worker and Monaco’s worker, reading `../workspace` in as the seed',
       '- `src/worker.ts` — the worker: the heads over one store, seeded and persisted',
       '- `src/page.ts` — starts the worker and runs the part of the page each head serves',
@@ -2585,7 +2659,9 @@ function hostBrowserReadme(composition: InitComposition): string {
       ...(data ? ['- `src/data-status.ts` — the data part: one document read through the data head'] : []),
       ...(diagram === undefined
          ? []
-         : [`- \`src/diagram.ts\` — the GLSP part: the \`${diagram.grammar}\` diagram, defined in the client package`]),
+         : [
+              `- \`src/diagram.ts\` — the GLSP part: the \`${diagram.grammar}\` diagram of the file the editor shows, defined in the client package`
+           ]),
       '- `src/log.ts` — the status line and the log area',
       '- `src/workspace.ts` — the workspace root URI both ends name',
       '- `src/monaco-editor-worker.ts` — Monaco’s own worker, which hosts no head',
@@ -2605,6 +2681,7 @@ function hostBrowserFiles(composition: InitComposition): InitFile[] {
       ignoreFile('host-browser'),
       { path: 'host-browser/README.md', content: hostBrowserReadme(composition) },
       fixed('index.html'),
+      fixed('hydranium-mark.svg'),
       fixed('esbuild.mjs'),
       fixed('playwright.config.mts'),
       fixed('tsconfig.worker.json'),
@@ -2651,7 +2728,7 @@ ${initMembers(composition.heads, composition.hosts)
   "scripts": {
     "build": "npm run build --workspaces",
     "clean": "npm run clean --workspaces --if-present",
-    "test": "npm test --workspaces --if-present"
+${composition.hosts.includes('browser') ? '    "start:browser": "npm --prefix host-browser start",\n' : ''}    "test": "npm test --workspaces --if-present"
   },
   "devDependencies": {
 ${pins.join(',\n')}

@@ -39,6 +39,7 @@ npx hydranium-cli query --server "node ./lib/data-server-main.js ../workspace" -
 - `src/grammar/bookstore.langium` — the `Bookstore` grammar (.bookstore)
 - `src/language-server/bookstore-module.ts` — `createBookstoreServices` DI wiring
 - `src/language-server/bookstore-serializer.ts` — emits `Bookstore` back to text (the framework defaults this to a throw)
+- `src/language-server/bookstore-validation.ts` — the `Bookstore` checks: a warning on a repeated name
 - `src/node/services.ts` — zero-arg `createServices()` for the headless CLI, the package's `./node` entry
 - `src/index.ts` — the package root, loadable in a browser worker: DI factory + generated AST + diagram module
 - `src/main.ts` — starts lsp + data + glsp, the `bookstore` bin entry

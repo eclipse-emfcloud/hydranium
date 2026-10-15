@@ -9,6 +9,7 @@
 
 import {
    type Action,
+   ClientSessionManager,
    type DirtyStateChangeReason,
    type GModelRootSchema,
    type LayoutOperation,
@@ -59,6 +60,7 @@ import { DiagramStatus } from '../state/diagram-status.js';
 @injectable()
 export class HydraniumGlspSubmissionHandler<TRoot extends AstNode, TSourceModel = string> extends ModelSubmissionHandler {
    @inject(ModelState) declare protected modelState: AbstractHydraniumGlspState<TRoot, TSourceModel>;
+   @inject(ClientSessionManager) protected readonly sessionManager!: ClientSessionManager;
 
    /**
     * Document-state gate awaited before {@link submitModel} delegates to
@@ -176,21 +178,40 @@ export class HydraniumGlspSubmissionHandler<TRoot extends AstNode, TSourceModel 
     * Never rejects: GLSP runs it from a debounce that drops the result, so a
     * failure here would go unhandled. A validator that throws is logged as an
     * error, markers that cannot be sent as a warning.
+    *
+    * GLSP does not cancel that debounce when the session ends, so it also runs
+    * for a diagram just closed: that run is skipped, and markers it could not
+    * send because the session ended meanwhile are logged for diagnosis only.
     */
    protected override async performLiveValidation(validator: ModelValidator): Promise<void> {
+      if (this.sessionEnded()) {
+         return;
+      }
       this.modelState.setStatus(DiagramStatus.VALIDATION, { message: 'Validate Model...', severity: 'INFO' });
       try {
          const markers = await validator.validate([this.modelState.root], MarkersReason.LIVE);
-         await this.actionDispatcher
-            .dispatch(SetMarkersAction.create(markers, { reason: MarkersReason.LIVE }))
-            .catch((error: unknown) =>
-               this.modelState.logger.warn(`Could not send the live-validation markers: ${describeErrorWithStack(error)}`)
-            );
+         await this.actionDispatcher.dispatch(SetMarkersAction.create(markers, { reason: MarkersReason.LIVE })).catch((error: unknown) => {
+            const message = `Could not send the live-validation markers: ${describeErrorWithStack(error)}`;
+            if (this.sessionEnded()) {
+               this.modelState.logger.debug(message);
+            } else {
+               this.modelState.logger.warn(message);
+            }
+         });
       } catch (error: unknown) {
          this.modelState.logger.error(`Live validation failed: ${describeErrorWithStack(error)}`);
       } finally {
          this.modelState.setStatus(DiagramStatus.VALIDATION, undefined);
       }
+   }
+
+   /**
+    * Whether the client session this handler serves has ended. By its
+    * dispatcher rather than its id: a client that reopens a diagram under the
+    * same id gets a new session, which this handler does not serve.
+    */
+   protected sessionEnded(): boolean {
+      return this.sessionManager.getSession(this.modelState.clientId)?.actionDispatcher !== this.actionDispatcher;
    }
 
    /**

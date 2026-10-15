@@ -293,6 +293,18 @@ const ORDER_FLOW_MANIFEST: Manifest = {
       verdict: 'adapted',
       reason: "emits the real grammar's syntax, not the starter one"
    },
+   'server/src/language-server/domain-validation.ts': {
+      verdict: 'dropped',
+      reason: 'the name-uniqueness integrity rule repairs a repeated name rather than warning on it'
+   },
+   'server/src/language-server/process-validation.ts': {
+      verdict: 'adapted',
+      reason: 'checks the transitions the diagram also refuses'
+   },
+   'server/src/language-server/layout-validation.ts': {
+      verdict: 'adapted',
+      reason: 'checks the layout entries, not the starter names'
+   },
    'server/src/index.ts': { verdict: 'adapted', reason: "widened to the example's own surface" },
    // At the package root rather than behind `./node`: the example's tooling,
    // tests and docs name `lib/services.js`.
@@ -424,6 +436,7 @@ const BOOKSTORE_MANIFEST: Manifest = {
       verdict: 'identical',
       reason: 'the emitted concrete-syntax emitter for the starter grammar'
    },
+   'server/src/language-server/bookstore-validation.ts': { verdict: 'identical', reason: 'the emitted repeated-name warning' },
    'server/src/index.ts': { verdict: 'identical', reason: 'the scaffolded public surface' },
    'server/src/node/services.ts': { verdict: 'identical', reason: 'the contract is language-count-agnostic' },
    'server/src/main.ts': { verdict: 'identical', reason: 'all three heads in one process, as emitted' },
@@ -439,6 +452,7 @@ const BOOKSTORE_MANIFEST: Manifest = {
    'server/src/glsp/bookstore/gmodel-factory.ts': { verdict: 'identical', reason: 'the emitted AST→GModel walk' },
    'server/src/glsp/bookstore/diagram-configuration.ts': { verdict: 'identical', reason: 'the emitted type hints' },
    'server/src/glsp/bookstore/create-node-operation-handler.ts': { verdict: 'identical', reason: 'the emitted starter operation handler' },
+   'server/src/glsp/bookstore/delete-operation-handler.ts': { verdict: 'identical', reason: 'the emitted starter delete handler' },
    'server/src/glsp/bookstore/diagram-module.ts': { verdict: 'identical', reason: 'the emitted diagram DI wiring' },
    'server/test/bookstore-diagram.test.ts': {
       verdict: 'identical',
@@ -475,6 +489,7 @@ const BOOKSTORE_MANIFEST: Manifest = {
    'host-browser/.gitignore': { verdict: 'identical', reason: "the scaffold's ignore file, which a member writes too" },
    'host-browser/README.md': { verdict: 'identical', reason: 'the scaffold README for the browser host' },
    'host-browser/index.html': { verdict: 'identical', reason: 'the emitted page' },
+   'host-browser/hydranium-mark.svg': { verdict: 'identical', reason: 'the emitted tab icon' },
    'host-browser/esbuild.mjs': { verdict: 'identical', reason: 'the emitted bundling and serving' },
    'host-browser/playwright.config.mts': { verdict: 'identical', reason: 'the emitted smoke-tier configuration' },
    'host-browser/tsconfig.worker.json': { verdict: 'identical', reason: 'the emitted worker project, self-contained' },

@@ -340,13 +340,62 @@ describe('HydraniumGlspSubmissionHandler', () => {
          }
       }
 
+      /**
+       * A handler whose session the manager holds until `endSession`, as GLSP's
+       * does: a disposed session is gone from it, and a reopened id maps to a
+       * new session with a dispatcher of its own.
+       */
       function makeLiveValidatingHandler(dispatch: () => Promise<void>) {
          const { logger, lines } = makeCapturingGlspLogger();
          const handler = new LiveValidatingHandler();
-         (handler as unknown as { modelState: unknown }).modelState = { root: new GModelRoot(), logger, setStatus: () => undefined };
-         (handler as unknown as { actionDispatcher: unknown }).actionDispatcher = { dispatch };
-         return { handler, logged: () => lines.map(line => [line.level, line.message]) };
+         const actionDispatcher = { dispatch };
+         const sessions = new Map<string, { actionDispatcher: unknown }>([['client', { actionDispatcher }]]);
+         (handler as unknown as { modelState: unknown }).modelState = {
+            root: new GModelRoot(),
+            clientId: 'client',
+            logger,
+            setStatus: () => undefined
+         };
+         (handler as unknown as { actionDispatcher: unknown }).actionDispatcher = actionDispatcher;
+         (handler as unknown as { sessionManager: unknown }).sessionManager = { getSession: (id: string) => sessions.get(id) };
+         return {
+            handler,
+            logged: () => lines.map(line => [line.level, line.message]),
+            endSession: () => sessions.delete('client'),
+            reopenSession: () => sessions.set('client', { actionDispatcher: { dispatch } })
+         };
       }
+
+      it('skips a run for a session that has ended, or whose id a new session took', async () => {
+         for (const close of ['end', 'reopen'] as const) {
+            const live = makeLiveValidatingHandler(() => Promise.resolve());
+            if (close === 'end') {
+               live.endSession();
+            } else {
+               live.reopenSession();
+            }
+            const validate = vi.fn(() => Promise.resolve([]));
+
+            await live.handler.validateForTest({ validate });
+
+            expect({ close, validated: validate.mock.calls.length, logged: live.logged() }).toEqual({ close, validated: 0, logged: [] });
+         }
+      });
+
+      it('logs markers it cannot send because the session ended meanwhile for diagnosis only', async () => {
+         const live = makeLiveValidatingHandler(() => Promise.reject(new Error('ActionQueue is stopped')));
+
+         await live.handler.validateForTest({
+            validate: () => {
+               live.endSession();
+               return Promise.resolve([]);
+            }
+         });
+
+         expect(live.logged().map(([level, message]) => [level, message.split('\n')[0]])).toEqual([
+            ['debug', 'Could not send the live-validation markers: Error: ActionQueue is stopped']
+         ]);
+      });
 
       it('logs a validator that throws as an error, and markers it cannot send as a warning, never rejecting', async () => {
          const throwing = makeLiveValidatingHandler(() => Promise.resolve());

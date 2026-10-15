@@ -9,11 +9,11 @@
 
 // DI bootstrap for Bookstore. Composes the framework defaults with adopter
 // overrides via Langium's `inject()` (through the framework's
-// `createIntegrationServices`). Each adopter module binds ONE slot — its
-// language's `Serializer`, which the framework cannot default because a
-// concrete syntax is grammar knowledge. Everything else (scope, naming, project
-// management, build pipeline) boots on the framework defaults; scope
-// computation, validation checks and AST extensions go in these same modules.
+// `createIntegrationServices`). Each adopter module binds its language's
+// `Serializer`, which the framework cannot default because a concrete syntax
+// is grammar knowledge, and its validation checks. Everything else (scope,
+// naming, project management, build pipeline) boots on the framework defaults;
+// scope computation and AST extensions go in these same modules.
 //
 // Note which generated symbol comes from which name: the SHARED module is
 // `BookstoreGeneratedSharedModule` (from `projectName`) and there is one of it,
@@ -34,6 +34,7 @@ import { type DeepPartial, EmptyFileSystem, type Module } from '@hydranium/langi
 import { type LangiumServices, type PartialLangiumServices, type PartialLangiumSharedServices } from '@hydranium/langium/lsp';
 import { BookstoreGeneratedModule, BookstoreGeneratedSharedModule } from './generated/module.js';
 import { BookstoreSerializer } from './bookstore-serializer.js';
+import { BookstoreValidationContribution } from './bookstore-validation.js';
 
 export type BookstoreSharedServices = ServerSharedServices & LspServerAddedSharedServices;
 export type BookstoreServices = LangiumServices &
@@ -66,6 +67,11 @@ const BookstoreSharedModule: Module<BookstoreSharedServices, PartialLangiumShare
 const BookstoreLanguageModule: Module<BookstoreServices, PartialLangiumServices & DeepPartial<ServerAddedServices>> = {
    serializer: {
       Serializer: services => new BookstoreSerializer(services)
+   },
+   validation: {
+      checks: {
+         names: () => new BookstoreValidationContribution()
+      }
    }
 };
 

@@ -9,13 +9,15 @@
 
 // Diagram configuration for the Bookstore diagram.
 //
-// **Every hint is `false`, and that is not the same as read-only.** The starter
-// BookstoreCreateNodeOperationHandler makes this diagram editable through the
-// tool palette, which GLSP assembles from the create handlers' trigger actions —
-// there is no `creatable` hint. What the hints govern is delete / reparent /
-// reposition / resize, and nothing backs those, so declaring one would offer a
-// gesture whose operation the server rejects: a worse failure than the tool being
-// absent. Turn a hint on in the same change that adds its handler.
+// **A hint is `true` only where a handler backs it.** The starter
+// BookstoreCreateNodeOperationHandler offers creation through the tool palette,
+// which GLSP assembles from the create handlers' trigger actions — there is no
+// `creatable` hint. BookstoreDeleteOperationHandler backs `deletable` on a
+// node and an edge; a node of another document stays undeletable, since this
+// diagram does not own it. Nothing backs reparent / reposition / resize, so
+// declaring one would offer a gesture whose operation the server rejects: a worse
+// failure than the tool being absent. Turn a hint on in the same change that adds
+// its handler.
 //
 // `needsClientLayout` is `true` and `layoutKind` is `NONE`: the starter grammar
 // persists no bounds, so the client measures and places everything. That is also
@@ -32,7 +34,7 @@ import {
    getDefaultMapping
 } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
-import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_NODE_TYPE } from '@hydranium/bookstore-protocol';
+import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_EXTERNAL_NODE_TYPE, BOOKSTORE_NODE_TYPE } from '@hydranium/bookstore-protocol';
 
 @injectable()
 export class BookstoreDiagramConfiguration implements DiagramConfiguration {
@@ -45,6 +47,13 @@ export class BookstoreDiagramConfiguration implements DiagramConfiguration {
    readonly shapeTypeHints: ShapeTypeHint[] = [
       {
          elementTypeId: BOOKSTORE_NODE_TYPE,
+         deletable: true,
+         reparentable: false,
+         repositionable: false,
+         resizable: false
+      },
+      {
+         elementTypeId: BOOKSTORE_EXTERNAL_NODE_TYPE,
          deletable: false,
          reparentable: false,
          repositionable: false,
@@ -55,11 +64,11 @@ export class BookstoreDiagramConfiguration implements DiagramConfiguration {
    readonly edgeTypeHints: EdgeTypeHint[] = [
       {
          elementTypeId: BOOKSTORE_EDGE_TYPE,
-         deletable: false,
+         deletable: true,
          repositionable: false,
          routable: false,
          sourceElementTypeIds: [BOOKSTORE_NODE_TYPE],
-         targetElementTypeIds: [BOOKSTORE_NODE_TYPE]
+         targetElementTypeIds: [BOOKSTORE_NODE_TYPE, BOOKSTORE_EXTERNAL_NODE_TYPE]
       }
    ];
 }

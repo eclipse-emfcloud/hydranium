@@ -351,6 +351,7 @@ npx hydranium-cli query --server "node ./lib/data-server-main.js ../workspace" -
 - `src/grammar/bookstore.langium` — the `Bookstore` grammar (.bookstore)
 - `src/language-server/bookstore-module.ts` — `createBookstoreServices` DI wiring
 - `src/language-server/bookstore-serializer.ts` — emits `Bookstore` back to text (the framework defaults this to a throw)
+- `src/language-server/bookstore-validation.ts` — the `Bookstore` checks: a warning on a repeated name
 - `src/node/services.ts` — zero-arg `createServices()` for the headless CLI, the package's `./node` entry
 - `src/index.ts` — the package root, loadable in a browser worker: DI factory + generated AST
 - `src/main.ts` — starts lsp + data, the `bookstore` bin entry
@@ -453,11 +454,11 @@ server/src/language-server/bookstore-module.ts
 ==============================================================================
 // DI bootstrap for Bookstore. Composes the framework defaults with adopter
 // overrides via Langium's `inject()` (through the framework's
-// `createIntegrationServices`). Each adopter module binds ONE slot — its
-// language's `Serializer`, which the framework cannot default because a
-// concrete syntax is grammar knowledge. Everything else (scope, naming, project
-// management, build pipeline) boots on the framework defaults; scope
-// computation, validation checks and AST extensions go in these same modules.
+// `createIntegrationServices`). Each adopter module binds its language's
+// `Serializer`, which the framework cannot default because a concrete syntax
+// is grammar knowledge, and its validation checks. Everything else (scope,
+// naming, project management, build pipeline) boots on the framework defaults;
+// scope computation and AST extensions go in these same modules.
 //
 // Note which generated symbol comes from which name: the SHARED module is
 // `BookstoreGeneratedSharedModule` (from `projectName`) and there is one of it,
@@ -478,6 +479,7 @@ import { type DeepPartial, EmptyFileSystem, type Module } from '@hydranium/langi
 import { type LangiumServices, type PartialLangiumServices, type PartialLangiumSharedServices } from '@hydranium/langium/lsp';
 import { BookstoreGeneratedModule, BookstoreGeneratedSharedModule } from './generated/module.js';
 import { BookstoreSerializer } from './bookstore-serializer.js';
+import { BookstoreValidationContribution } from './bookstore-validation.js';
 
 export type BookstoreSharedServices = ServerSharedServices & LspServerAddedSharedServices;
 export type BookstoreServices = LangiumServices &
@@ -510,6 +512,11 @@ const BookstoreSharedModule: Module<BookstoreSharedServices, PartialLangiumShare
 const BookstoreLanguageModule: Module<BookstoreServices, PartialLangiumServices & DeepPartial<ServerAddedServices>> = {
    serializer: {
       Serializer: services => new BookstoreSerializer(services)
+   },
+   validation: {
+      checks: {
+         names: () => new BookstoreValidationContribution()
+      }
    }
 };
 
@@ -620,6 +627,40 @@ export class BookstoreSerializer extends AbstractSerializer<BookstoreModel> {
    private emitNode(node: BookstoreNode): string {
       const target = this.serializeReferenceText(node.target);
       return target === undefined ? `node ${node.name}` : `node ${node.name} -> ${target}`;
+   }
+}
+
+==============================================================================
+server/src/language-server/bookstore-validation.ts
+==============================================================================
+// Validation for Bookstore: a check the parser and linker cannot make.
+//
+// A name is what a reference resolves by and what the diagram keys a node by,
+// so a second node of the same name is unreachable by reference and dropped
+// from the diagram. Each one after the first gets a warning rather than an
+// error, since a half-typed rename passes through this state.
+
+import type { ValidationCheckContribution, ValidationCheckRegistry } from '@hydranium/core';
+import { acceptMessage } from '@hydranium/core/messages';
+import type { ValidationAcceptor } from '@hydranium/langium';
+import { defineMessage } from '@hydranium/protocol';
+import type { BookstoreModel, BookstoreAstType } from './ast.js';
+
+export const DUPLICATE_NAME = defineMessage('bookstore/bookstore/duplicate-name', "A node named '{name}' is already declared.");
+
+export class BookstoreValidationContribution implements ValidationCheckContribution {
+   registerValidationChecks(registry: ValidationCheckRegistry): void {
+      registry.register<BookstoreAstType>({ BookstoreModel: this.checkUniqueNames }, this);
+   }
+
+   protected checkUniqueNames(model: BookstoreModel, accept: ValidationAcceptor): void {
+      const seen = new Set<string>();
+      for (const node of model.nodes) {
+         if (seen.has(node.name)) {
+            acceptMessage(accept, 'warning', DUPLICATE_NAME, { node, property: 'name' }, { name: node.name });
+         }
+         seen.add(node.name);
+      }
    }
 }
 
@@ -907,10 +948,9 @@ server/test/validating.test.ts
 ==============================================================================
 // Tier three: does a broken model get reported.
 //
-// These are the FRAMEWORK's own linker diagnostics, not adopter checks — the
-// scaffold binds no `validation.checks`, and a test over an invented one would
-// assert its own fixture rather than the language. Bind a check in your
-// language module and assert it here alongside these.
+// A dangling reference is the FRAMEWORK's own linker diagnostic; a repeated
+// name is reported by the scaffold's own validation check. Bind a further
+// check in your language module and assert it here alongside these.
 
 import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
@@ -942,6 +982,21 @@ describe('Bookstore validation', () => {
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].severity).toBe(DiagnosticSeverity.Error);
       expect(diagnostics[0].message).toContain('absent');
+   });
+
+   it('warns on each node named like one before it', async () => {
+      const { shared, Bookstore } = createServices();
+
+      const document = await parseHelper<BookstoreModel>(Bookstore)('node first\nnode second\nnode first', {
+         documentUri: 'file:///duplicate.bookstore'
+      });
+      await shared.workspace.DocumentBuilder.build([document], { validation: true });
+
+      const diagnostics = document.diagnostics ?? [];
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].severity).toBe(DiagnosticSeverity.Warning);
+      expect(diagnostics[0].message).toBe("A node named 'first' is already declared.");
+      expect(diagnostics[0].range.start.line).toBe(2);
    });
 });
 
@@ -993,11 +1048,11 @@ describe('Bookstore serialization', () => {
 ==============================================================================
 workspace/nodes.bookstore
 ==============================================================================
-/** The first node. Hover a name to read its comment. */
-node First
+/** The first node, pointing at the second in the same file. Hover a name to read its comment. */
+node First -> Second
 
-/** A second node, pointing at the first in the same file. */
-node Second -> First
+/** A second node. */
+node Second
 
 ==============================================================================
 workspace/references.bookstore

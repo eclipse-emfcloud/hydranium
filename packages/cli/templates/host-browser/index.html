@@ -6,7 +6,19 @@
       <title>__NAME__</title>
       <!-- The stylesheets Monaco and GLSP import, which esbuild writes beside the page bundle. -->
       <link rel="stylesheet" href="./out/page.css" />
+      <!-- The mark with white pages, which stays visible on a light and a dark tab strip alike. -->
+      <link rel="icon" href="./hydranium-mark.svg" />
       <style>
+         :root {
+            --accent: #3b6ea8;
+            --border: #dde1e6;
+            --surface: #f6f7f9;
+            --text: #1f2933;
+            /* GLSP's marker colours, pure yellow and light blue by default, which a light page barely shows. */
+            --glsp-error-foreground: #c62828;
+            --glsp-warning-foreground: #b26a00;
+            --glsp-info-foreground: var(--accent);
+         }
          html,
          body {
             height: 100%;
@@ -15,8 +27,11 @@
          body {
             display: grid;
             grid-template-rows: auto minmax(0, 1fr) auto;
+            /* The window's width, which a long log line otherwise widens past it, cutting off the diagram. */
+            grid-template-columns: minmax(0, 1fr);
             font-family: system-ui, sans-serif;
             font-size: 13px;
+            color: var(--text);
          }
          header,
          .toolbar {
@@ -26,24 +41,83 @@
             padding: 6px 12px;
          }
          header {
-            border-bottom: 1px solid #d6d8d9;
+            padding: 10px 16px;
+            background: var(--accent);
+            color: #ffffff;
          }
          h1 {
             margin: 0;
-            font-size: 15px;
+            font-size: 16px;
+            font-weight: 600;
          }
+         #status {
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: rgb(255 255 255 / 0.18);
+            font-size: 12px;
+         }
+         .toolbar {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+         }
+         select,
+         button {
+            padding: 4px 10px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: #ffffff;
+            color: inherit;
+            font: inherit;
+         }
+         button {
+            border-color: var(--accent);
+            background: var(--accent);
+            color: #ffffff;
+            cursor: pointer;
+         }
+         /* One column per shown pane, its title, hint and body rows shared, so the titles and hints line up. */
          main {
-            display: flex;
+            display: grid;
+            grid-auto-flow: column;
+            grid-auto-columns: minmax(0, 1fr);
+            grid-template-rows: auto auto minmax(0, 1fr);
             min-height: 0;
          }
          main > section {
-            display: flex;
-            flex: 1 1 0;
-            flex-direction: column;
+            display: grid;
+            grid-row: 1 / -1;
+            grid-template-rows: subgrid;
             min-width: 0;
+            min-height: 0;
          }
          main > section[hidden] {
             display: none;
+         }
+         #diagram-pane {
+            border-left: 1px solid var(--border);
+         }
+         .pane-title {
+            margin: 0;
+            padding: 10px 12px 2px;
+            color: var(--accent);
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+         }
+         .hint {
+            margin: 0;
+            padding: 2px 12px 8px;
+            border-bottom: 1px solid var(--border);
+            color: #5f6b7a;
+            font-size: 12px;
+         }
+         /* Shrinkable, or Monaco's width from before the diagram pane showed holds it at the whole window. */
+         .pane-body {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
          }
          #editor {
             flex: 1 1 auto;
@@ -52,10 +126,58 @@
          /* The diagram needs a height, `position: relative` for its tool palette, and its `<svg>` sized to it. */
          #diagram {
             position: relative;
-            flex: 1 1 auto;
             min-height: 0;
-            border-left: 1px solid #d6d8d9;
+            background: var(--surface) radial-gradient(#d5dae1 1px, transparent 1px) 0 0 / 16px 16px;
             touch-action: none;
+         }
+         /* GLSP's tool palette, in the page's colours. */
+         .tool-palette {
+            top: 12px;
+            right: 44px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
+            color: var(--text);
+            font-size: 13px;
+         }
+         .palette-header {
+            border: 0;
+            background: var(--accent);
+            color: #ffffff;
+         }
+         .header-tools i:hover {
+            background: rgb(255 255 255 / 0.2);
+         }
+         .header-tools .clicked {
+            border-color: transparent;
+            background: rgb(255 255 255 / 0.3);
+         }
+         .palette-body,
+         .tool-group,
+         .tool-button {
+            border: 0;
+            background: #ffffff;
+         }
+         .group-header,
+         .group-header:hover {
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+            font-weight: 600;
+         }
+         .tool-button {
+            padding: 6px 12px;
+         }
+         .tool-button:hover {
+            background: var(--surface);
+         }
+         .tool-button.clicked {
+            background: #dbe6f3;
+         }
+         .minimize-palette-button {
+            top: 12px;
+            right: 14px;
+            color: var(--accent);
          }
          #diagram svg {
             width: 100%;
@@ -66,27 +188,58 @@
             pointer-events: none;
             overflow: hidden;
          }
-         /* GLSP's stylesheet leaves shapes at the SVG defaults: a black fill, and no stroke on an edge. */
+         /* GLSP's stylesheet leaves shapes at the SVG defaults: a black fill, no node outline, and no stroke on an edge. */
          .sprotty-node {
-            fill: #eef3f9;
-            stroke: #4a6fa5;
+            fill: #ffffff;
+            stroke: var(--accent);
+            rx: 6px;
+            filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.12));
+         }
+         /* GLSP's own rule, which draws an unselected node with no outline. */
+         .sprotty-node:not(.selected) {
+            stroke-width: 1.5px;
+         }
+         .sprotty-node.selected {
+            stroke-width: 2.5px;
+         }
+         .sprotty-label {
+            fill: var(--text);
+            font-size: 13px;
          }
          .sprotty-edge {
             fill: none;
-            stroke: #4a6fa5;
+            stroke: var(--accent);
+            stroke-width: 1.5px;
+         }
+         .sprotty-edge-arrow {
+            fill: var(--accent);
+         }
+         /* A node of another file, which the diagram draws but does not own. */
+         .external .sprotty-node {
+            fill: var(--surface);
+            stroke-dasharray: 4 3;
+            filter: none;
+         }
+         .external .sprotty-label {
+            fill: #5f6b7a;
+            font-style: italic;
          }
          footer {
-            border-top: 1px solid #d6d8d9;
+            border-top: 1px solid var(--border);
          }
          #data-status {
             margin: 0;
-            padding: 6px 12px;
+            padding: 2px 12px;
          }
          #log {
-            height: 120px;
+            height: 200px;
             margin: 0;
             padding: 6px 12px;
-            overflow: auto;
+            overflow-y: auto;
+            /* Wrapped to the window rather than scrolled sideways. */
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            color: #5f6b7a;
             font-family: ui-monospace, monospace;
             font-size: 12px;
          }
@@ -100,17 +253,31 @@
       <!-- Each pane stays hidden until the page part for its head fills it. -->
       <main>
          <section id="editor-pane" hidden>
-            <div class="toolbar">
-               <select id="file" aria-label="File"></select>
-               <button id="save" type="button">Save</button>
+            <h2 class="pane-title">Monaco Editor</h2>
+            <p class="hint">
+               Pick a file to edit it with completion, hover and diagnostics. Save (Ctrl+S) keeps it in this browser, over the files in
+               <code>../workspace</code>.
+            </p>
+            <div class="pane-body">
+               <div class="toolbar">
+                  <select id="file" aria-label="File"></select>
+                  <button id="save" type="button">Save</button>
+               </div>
+               <div id="editor"></div>
             </div>
-            <div id="editor"></div>
          </section>
          <section id="diagram-pane" hidden>
+            <h2 class="pane-title">Diagram Editor</h2>
+            <p class="hint">
+               The diagram of the file in the editor. An arrow runs from a node to the node it references; a dashed node is declared in
+               another file. Create a node from the palette; the file stores no positions, so each node is placed above the node it
+               references rather than where you drop it.
+            </p>
             <div id="diagram"></div>
          </section>
       </main>
       <footer>
+         <h2 class="pane-title">Log View</h2>
          <p id="data-status" hidden></p>
          <pre id="log" aria-label="Log"></pre>
       </footer>

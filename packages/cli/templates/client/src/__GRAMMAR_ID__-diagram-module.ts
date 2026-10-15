@@ -3,16 +3,42 @@
 // module and adds its own beside it.
 
 import {
+   angleOfPoint,
    configureModelElement,
    type ContainerConfiguration,
+   type GEdge,
    GEdgeView,
    GNode,
    initializeDiagramContainer,
-   RoundedCornerNodeView
+   Point,
+   type RenderingContext,
+   RoundedCornerNodeView,
+   svg,
+   toDegrees
 } from '@eclipse-glsp/client';
 import { configureHydraniumModelElements, HydraniumGEdge } from '@hydranium/glsp-client';
-import { type Container, ContainerModule } from 'inversify';
-import { __GRAMMAR_ID_CONST___EDGE_TYPE, __GRAMMAR_ID_CONST___NODE_TYPE, type __GRAMMAR__ElementType } from '__PROTOCOL_PACKAGE__';
+import { type Container, ContainerModule, injectable } from 'inversify';
+import {
+   __GRAMMAR_ID_CONST___EDGE_TYPE,
+   __GRAMMAR_ID_CONST___EXTERNAL_NODE_TYPE,
+   __GRAMMAR_ID_CONST___NODE_TYPE,
+   type __GRAMMAR__ElementType
+} from '__PROTOCOL_PACKAGE__';
+
+/** GLSP's edge view plus an arrowhead at the target, so an edge reads in the direction of its reference. */
+@injectable()
+export class __GRAMMAR__EdgeView extends GEdgeView {
+   protected override renderAdditionals(edge: GEdge, segments: Point[], context: RenderingContext) {
+      const end = segments[segments.length - 1];
+      const degrees = toDegrees(angleOfPoint(Point.subtract(segments[segments.length - 2], end)));
+      const arrow = svg('path', {
+         'class-sprotty-edge-arrow': true,
+         d: 'M 0,0 L 10,-4 L 10,4 Z',
+         transform: `rotate(${degrees} ${end.x} ${end.y}) translate(${end.x} ${end.y})`
+      });
+      return [...super.renderAdditionals(edge, segments, context), arrow];
+   }
+}
 
 /** The model class and view one element type renders through, as `configureModelElement` takes them. */
 export interface __GRAMMAR__ElementRegistration {
@@ -29,10 +55,12 @@ export interface __GRAMMAR__ElementRegistration {
  */
 export const __GRAMMAR_ID_CONST___ELEMENT_REGISTRATIONS: Readonly<Record<__GRAMMAR__ElementType, __GRAMMAR__ElementRegistration>> = {
    [__GRAMMAR_ID_CONST___NODE_TYPE]: { model: GNode, view: RoundedCornerNodeView },
+   // Drawn like a node of the document; the server marks it with the `external` CSS class.
+   [__GRAMMAR_ID_CONST___EXTERNAL_NODE_TYPE]: { model: GNode, view: RoundedCornerNodeView },
    // The framework's edge rather than `GEdge`: GLSP's gives the labels of an
    // edge without bendpoints no finite bounds, and fitting the diagram to its
    // pane then blanks the canvas.
-   [__GRAMMAR_ID_CONST___EDGE_TYPE]: { model: HydraniumGEdge, view: GEdgeView }
+   [__GRAMMAR_ID_CONST___EDGE_TYPE]: { model: HydraniumGEdge, view: __GRAMMAR__EdgeView }
 };
 
 /** GLSP's default model elements, plus the registrations above. */

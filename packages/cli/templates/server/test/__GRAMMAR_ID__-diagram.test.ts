@@ -2,20 +2,44 @@
 // opens a document. A create-node operation adds a node, and an undo and a redo
 // take it out and put it back; every step must keep the nodes the document
 // already had, and its comments, since the diagram writes the document from its
-// AST, which carries none. A reference into another document draws no edge,
-// since the graph holds no node for its target, but resolves, even when the
-// diagram opened its document before the workspace was up.
+// AST, which carries none. A delete removes a node with the references to it, or
+// an edge's reference. A reference into another document resolves, even
+// when the diagram opened its document before the workspace was up, and draws
+// an edge to an external node standing for its target. Each node is placed a
+// row above its target, and a cycle does not stop the placing. A diagnostic
+// reaches the diagram as a marker on its node.
 
 import 'reflect-metadata';
-import { type Action, CreateNodeOperation, RedoAction, ServerModule, SetDirtyStateAction, UndoAction } from '@eclipse-glsp/server';
+import {
+   type Action,
+   ComputedBoundsAction,
+   CreateNodeOperation,
+   DeleteElementOperation,
+   GEdge,
+   GNode,
+   ModelValidator,
+   RedoAction,
+   ServerModule,
+   SetDirtyStateAction,
+   SetModelAction,
+   UndoAction,
+   UpdateModelAction
+} from '@eclipse-glsp/server';
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
 import { makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
+import { URI } from '@hydranium/langium';
 import { waitFor } from '@hydranium/protocol/testing';
-import { __GRAMMAR_ID_CONST___DIAGRAM_TYPE, __GRAMMAR_ID_CONST___NODE_TYPE } from '__PROTOCOL_PACKAGE__';
+import {
+   __GRAMMAR_ID_CONST___DIAGRAM_TYPE,
+   __GRAMMAR_ID_CONST___EDGE_TYPE,
+   __GRAMMAR_ID_CONST___EXTERNAL_NODE_TYPE,
+   __GRAMMAR_ID_CONST___NODE_TYPE
+} from '__PROTOCOL_PACKAGE__';
 import { afterEach, describe, expect, it } from 'vitest';
 import { __GRAMMAR__DiagramModule } from '../src/glsp/__GRAMMAR_ID__/diagram-module.js';
+import { __GRAMMAR__GModelFactory } from '../src/glsp/__GRAMMAR_ID__/gmodel-factory.js';
 import type { __GRAMMAR__GlspState } from '../src/glsp/__GRAMMAR_ID__/state.js';
 import { createServices } from '../src/node/services.js';
 
@@ -68,10 +92,80 @@ describe('__GRAMMAR__ diagram', () => {
       });
    });
 
-   it('draws no edge for a reference that resolves into another document', async () => {
+   it('deletes a node with the references to it, and an edge with its reference, undoably', async () => {
       workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
-      workspace.write('declaring.__EXTENSION__', 'node second');
-      const file = workspace.write('referencing.__EXTENSION__', 'node first -> second');
+      const original = 'node first -> second\nnode second\nnode third -> first';
+      const file = workspace.write('model.__EXTENSION__', original);
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      const harness = makeGlspHarness<__GRAMMAR__GlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
+         diagramType: __GRAMMAR_ID_CONST___DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      diagram = harness;
+      await harness.start();
+      await harness.openDocument(file);
+      const uri = workspace.uri('model.__EXTENSION__');
+      const text = (): string | undefined => shared.workspace.TextDocuments.get(uri)?.getText();
+      const idOf = (type: string, index: number): string => harness.state.root.children.filter(child => child.type === type)[index].id;
+
+      await send(harness, DeleteElementOperation.create([idOf(__GRAMMAR_ID_CONST___NODE_TYPE, 1)]), 'operation');
+      const nodeDeleted = text();
+      await send(harness, UndoAction.create(), 'undo');
+      const undone = text();
+      // The edge third -> first.
+      await send(harness, DeleteElementOperation.create([idOf(__GRAMMAR_ID_CONST___EDGE_TYPE, 1)]), 'operation');
+
+      expect({ nodeDeleted, undone, edgeDeleted: text() }).toEqual({
+         nodeDeleted: 'node first\nnode third -> first',
+         undone: original,
+         edgeDeleted: 'node first -> second\nnode second\nnode third'
+      });
+   });
+
+   it('deletes the drawn node of a repeated name, keeping the references the remaining node resolves', async () => {
+      workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
+      const file = workspace.write('model.__EXTENSION__', 'node first -> second\nnode first\nnode second -> first');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      const harness = makeGlspHarness<__GRAMMAR__GlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
+         diagramType: __GRAMMAR_ID_CONST___DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      diagram = harness;
+      await harness.start();
+      await harness.openDocument(file);
+
+      await send(harness, DeleteElementOperation.create([harness.state.root.children[0].id]), 'operation');
+
+      expect(shared.workspace.TextDocuments.get(workspace.uri('model.__EXTENSION__'))?.getText()).toBe('node first\nnode second -> first');
+   });
+
+   it('deletes a node, keeping the references another document declares the name for', async () => {
+      workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
+      workspace.write('other.__EXTENSION__', 'node second');
+      const file = workspace.write('model.__EXTENSION__', 'node first -> second\nnode second');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      const harness = makeGlspHarness<__GRAMMAR__GlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
+         diagramType: __GRAMMAR_ID_CONST___DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      diagram = harness;
+      await harness.start();
+      await harness.openDocument(file);
+
+      await send(harness, DeleteElementOperation.create([harness.state.root.children[1].id]), 'operation');
+
+      expect(shared.workspace.TextDocuments.get(workspace.uri('model.__EXTENSION__'))?.getText()).toBe('node first -> second');
+   });
+
+   it("draws a repeated name once, as its first node with that node's edge", async () => {
+      workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
+      const file = workspace.write('model.__EXTENSION__', 'node a\nnode a -> b\nnode b');
       const { shared } = createServices();
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       diagram = makeGlspHarness<__GRAMMAR__GlspState>({
@@ -82,10 +176,157 @@ describe('__GRAMMAR__ diagram', () => {
       await diagram.start();
       await diagram.openDocument(file);
 
-      // The reference resolves, so the missing edge is the document rule and
-      // not a dangling reference.
-      expect(diagram.state.sourceRoot?.nodes[0].target?.ref?.name).toBe('second');
-      expect(diagram.state.root.children.map(child => child.type)).toEqual([__GRAMMAR_ID_CONST___NODE_TYPE]);
+      // The first `a` references nothing, so no edge, and both nodes share a row.
+      const children = diagram.state.root.children;
+      expect(children.map(child => ({ type: child.type, position: child instanceof GNode ? child.position : undefined }))).toEqual([
+         { type: __GRAMMAR_ID_CONST___NODE_TYPE, position: { x: 0, y: 0 } },
+         { type: __GRAMMAR_ID_CONST___NODE_TYPE, position: { x: 200, y: 0 } }
+      ]);
+   });
+
+   it("draws a node named like another node's label or edge", async () => {
+      workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
+      const file = workspace.write('model.__EXTENSION__', 'node a -> b\nnode b\nnode a_name\nnode a_target');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      diagram = makeGlspHarness<__GRAMMAR__GlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
+         diagramType: __GRAMMAR_ID_CONST___DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      await diagram.start();
+      await diagram.openDocument(file);
+
+      expect(diagram.state.root.children.map(child => child.type)).toEqual([
+         __GRAMMAR_ID_CONST___NODE_TYPE,
+         __GRAMMAR_ID_CONST___NODE_TYPE,
+         __GRAMMAR_ID_CONST___NODE_TYPE,
+         __GRAMMAR_ID_CONST___NODE_TYPE,
+         __GRAMMAR_ID_CONST___EDGE_TYPE
+      ]);
+   });
+
+   it('draws a reference into another document as an edge to one external node', async () => {
+      workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
+      workspace.write('declaring.__EXTENSION__', 'node second');
+      const file = workspace.write('referencing.__EXTENSION__', 'node first -> second\nnode third -> second');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      diagram = makeGlspHarness<__GRAMMAR__GlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
+         diagramType: __GRAMMAR_ID_CONST___DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      await diagram.start();
+      await diagram.openDocument(file);
+
+      const children = diagram.state.root.children;
+      const external = children.find(child => child.type === __GRAMMAR_ID_CONST___EXTERNAL_NODE_TYPE);
+      expect(children.map(child => child.type)).toEqual([
+         __GRAMMAR_ID_CONST___NODE_TYPE,
+         __GRAMMAR_ID_CONST___NODE_TYPE,
+         __GRAMMAR_ID_CONST___EXTERNAL_NODE_TYPE,
+         __GRAMMAR_ID_CONST___EDGE_TYPE,
+         __GRAMMAR_ID_CONST___EDGE_TYPE
+      ]);
+      expect(external?.children[0]).toMatchObject({ text: 'second (declaring.__EXTENSION__)' });
+      // The two referencing nodes side by side in one row, their target in the next.
+      expect(children.filter(child => child instanceof GNode).map(node => node.position)).toEqual([
+         { x: 0, y: 0 },
+         { x: 200, y: 0 },
+         { x: 0, y: 90 }
+      ]);
+      const targets = children.filter(child => child instanceof GEdge).map(edge => edge.targetId);
+      expect(targets).toEqual([external?.id, external?.id]);
+   });
+
+   it('places each node a row above its target, cutting a cycle', async () => {
+      workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
+      const file = workspace.write('cycle.__EXTENSION__', 'node a -> b\nnode b -> a\nnode c -> a');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      diagram = makeGlspHarness<__GRAMMAR__GlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
+         diagramType: __GRAMMAR_ID_CONST___DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      await diagram.start();
+      await diagram.openDocument(file);
+
+      // The walk from `a` meets `a` again at `b`, so `b` ranks first; `c` references `a`.
+      const rows = diagram.state.root.children.filter(child => child instanceof GNode).map(node => node.position.y / 90);
+      expect(rows).toEqual([1, 2, 0]);
+   });
+
+   it('ranks a chain longer than the call stack is deep', () => {
+      // The ranking alone, since a document this long takes seconds to parse and link.
+      class Ranking extends __GRAMMAR__GModelFactory {
+         rankChain(targetOf: ReadonlyMap<string, string>, ids: readonly string[]): Map<string, number> {
+            return this.rank(targetOf, ids);
+         }
+      }
+      const ids = Array.from({ length: 100_000 }, (_, i) => `n${i}`);
+      const targetOf = new Map(ids.slice(0, -1).map((id, i) => [id, ids[i + 1]]));
+
+      const ranks = new Ranking().rankChain(targetOf, ids);
+
+      expect({ first: ranks.get(ids[0]), beforeLast: ranks.get(ids[ids.length - 2]) }).toEqual({ first: ids.length - 1, beforeLast: 1 });
+   });
+
+   it('keeps no route the client reports, which it computes before it sizes the nodes', async () => {
+      workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
+      const file = workspace.write('loop.__EXTENSION__', 'node a -> a');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      const harness = makeGlspHarness<__GRAMMAR__GlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
+         diagramType: __GRAMMAR_ID_CONST___DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      diagram = harness;
+      await harness.start();
+      await harness.openDocument(file);
+      const edge = (): GEdge | undefined => harness.state.root.children.find(child => child instanceof GEdge);
+      const edgeId = edge()?.id ?? '';
+
+      // A self-reference's loop as the client routes it around a node not yet sized.
+      const before = harness.actions.length;
+      const corners = [
+         { x: 19, y: -0.75 },
+         { x: 19, y: 19 },
+         { x: -0.75, y: 19 }
+      ];
+      const routes = [{ elementId: edgeId, newRoutingPoints: [{ x: 0, y: 0 }, ...corners, { x: 0, y: 0 }] }];
+      harness.dispatch(ComputedBoundsAction.create([], { revision: harness.state.root.revision, routes }));
+      await waitFor(() => harness.actions.slice(before).some(sent => SetModelAction.is(sent) || UpdateModelAction.is(sent)), {
+         message: 'no model sent after the computed bounds'
+      });
+
+      expect(edge()?.routingPoints).toEqual([]);
+   });
+
+   it('marks a diagnostic on the node it is about', async () => {
+      workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
+      const file = workspace.write('duplicate.__EXTENSION__', 'node first\nnode first');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      diagram = makeGlspHarness<__GRAMMAR__GlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
+         diagramType: __GRAMMAR_ID_CONST___DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      await diagram.start();
+      await diagram.openDocument(file);
+
+      // A workspace brought up programmatically does not validate; an editor's open does.
+      const document = await shared.workspace.LangiumDocuments.getOrCreateDocument(URI.file(file));
+      await shared.workspace.DocumentBuilder.build([document], { validation: true });
+
+      // The repeated name's warning, on the one node the diagram keeps for both.
+      const markers = await diagram.sessionContainer.get<ModelValidator>(ModelValidator).validate([diagram.state.root]);
+      expect(markers.map(marker => ({ elementId: marker.elementId, kind: marker.kind }))).toEqual([
+         { elementId: diagram.state.root.children[0].id, kind: 'warning' }
+      ]);
    });
 
    it('resolves a cross-document reference in a document opened before the workspace is up', async () => {

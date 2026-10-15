@@ -87,9 +87,11 @@ import { ProcessSerializer } from './process-serializer.js';
  *   only its own grammar's documents. Note the service's default `'silent'`
  *   sync mode writes repairs back to disk. NOT bound on `.layout`: a
  *   `DiagramNode` has no name, so there is nothing to keep unique.
- * - **`validation.checks`** (`.process` only) — the text half of the transition
- *   rules the diagram also enforces, so a hand-edited file reports what the
- *   canvas refuses. `.domain` and `.layout` rely on linking diagnostics alone.
+ * - **`validation.checks`** (`.process` and `.layout`) — on `.process` the text
+ *   half of the transition rules the diagram also enforces, so a hand-edited
+ *   file reports what the canvas refuses; on `.layout` a warning on an entry a
+ *   later one for the same node overrides. `.domain` relies on linking
+ *   diagnostics alone.
  * - **`ast.extensions`** (`.domain` and `.process`) — a CROSS-GRAMMAR computed
  *   property: `Task._writtenFields` holds `.domain` `Field` nodes reached
  *   through the `.process` effect chain, which two grammars are required to

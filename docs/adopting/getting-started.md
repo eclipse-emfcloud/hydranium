@@ -60,13 +60,13 @@ Each package's own README describes the files `init` wrote there.
 ## Open it in a browser
 
 ```bash
-npm --prefix host-browser start
+npm run start:browser
 ```
 
-Open the URL `npm start` prints. The page shows the starter files in an editor
-with diagnostics, the diagram of `nodes.my-lang`, and a line read through the
-data head. Edit a file and press Save: the worker keeps the file in the
-browser's storage, so it survives a reload.
+Open the URL it prints. The page shows the starter files in an editor
+with diagnostics, the diagram of the file the editor shows, and a line read
+through the data head. Edit a file and press Save: the worker keeps the file in
+the browser's storage, so it survives a reload.
 
 ```bash
 npm --prefix host-browser run test:e2e:install   # once: the Chromium the smoke test drives
@@ -74,7 +74,7 @@ npm --prefix host-browser run test:e2e
 ```
 
 The smoke test checks the same things and fails on any console error. It
-serves the page itself, so stop `npm start` first.
+serves the page itself, so stop `start:browser` first.
 
 ## Validate a model
 

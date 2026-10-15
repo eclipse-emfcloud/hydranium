@@ -15,6 +15,7 @@
  * langium generate → tsc → reflect/lint/validate).
  */
 
+import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
@@ -319,6 +320,7 @@ describe('planInitFiles with heads', () => {
          'server/src/glsp/bookstore/gmodel-factory.ts',
          'server/src/glsp/bookstore/diagram-configuration.ts',
          'server/src/glsp/bookstore/create-node-operation-handler.ts',
+         'server/src/glsp/bookstore/delete-operation-handler.ts',
          'server/src/glsp/bookstore/diagram-module.ts'
       ]);
       // The ids live in protocol, where a client reaches them without the server.
@@ -355,7 +357,7 @@ describe('planInitFiles with heads', () => {
       );
       const glspPaths = files.map(file => file.path).filter(path => path.startsWith('server/src/glsp/'));
       expect(glspPaths.every(path => path.startsWith('server/src/glsp/process/'))).toBe(true);
-      expect(glspPaths).toHaveLength(7);
+      expect(glspPaths).toHaveLength(8);
       expect(contentOf(files, 'server/src/main.ts')).toContain('.configureDiagramModule(new ProcessDiagramModule())');
    });
 
@@ -432,6 +434,7 @@ describe('planInitFiles', () => {
             'server/src/language-server/ast.ts',
             'server/src/language-server/bookstore-module.ts',
             'server/src/language-server/bookstore-serializer.ts',
+            'server/src/language-server/bookstore-validation.ts',
             'server/src/main.ts',
             'server/src/node/services.ts',
             'server/test/linking.test.ts',
@@ -657,7 +660,7 @@ describe('planInitFiles project members', () => {
 
    it('writes two starter files per language, the second referencing the first', () => {
       const files = filesFor();
-      expect(contentOf(files, 'workspace/nodes.bookstore')).toContain('node Second -> First');
+      expect(contentOf(files, 'workspace/nodes.bookstore')).toContain('node First -> Second');
       expect(contentOf(files, 'workspace/references.bookstore')).toContain('node Third -> Second');
       expect(contentOf(files, 'workspace/references.bookstore')).toContain('nodes.bookstore');
    });
@@ -768,13 +771,13 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      expect(captured?.files).toHaveLength(31);
+      expect(captured?.files).toHaveLength(32);
       // `path.join`, not a literal: the target is produced by `path.resolve`,
       // which emits the platform separator, so a hardcoded `/` asserts nothing
       // on Windows beyond the separator itself.
       expect(captured?.targetDir.endsWith(path.join('out', 'bookstore'))).toBe(true);
       const output = lines.join('');
-      expect(output).toContain('Scaffolded Bookstore (31 files, heads: lsp,data, 1 grammar(s): Bookstore)');
+      expect(output).toContain('Scaffolded Bookstore (32 files, heads: lsp,data, 1 grammar(s): Bookstore)');
       expect(output).toContain('npm run build');
       expect(output).toContain('npm test');
       // `npx`, not a bare invocation: the scaffold installs `@hydranium/cli` as a
@@ -795,10 +798,10 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      // 31 single-grammar files + two further grammars, their two serializers,
+      // 32 single-grammar files + two further grammars, their serializers and checks,
       // the shared fragment and two starter files each.
-      expect(captured?.files).toHaveLength(40);
-      expect(lines.join('')).toContain('Scaffolded OrderFlow (40 files, heads: lsp,data, 3 grammar(s): Domain, Process, Layout)');
+      expect(captured?.files).toHaveLength(43);
+      expect(lines.join('')).toContain('Scaffolded OrderFlow (43 files, heads: lsp,data, 3 grammar(s): Domain, Process, Layout)');
    });
 
    it('names the diagram grammar and the head set for a three-head scaffold', () => {
@@ -814,11 +817,11 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      // 40 multi-grammar files + the nine for the one diagram: seven in the
+      // 43 multi-grammar files + the ten for the one diagram: eight in the
       // server, its test, and its ids in protocol; + the client package's six.
-      expect(captured?.files).toHaveLength(55);
+      expect(captured?.files).toHaveLength(59);
       expect(lines.join('')).toContain(
-         'Scaffolded OrderFlow (55 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
+         'Scaffolded OrderFlow (59 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
       );
    });
 });
@@ -896,7 +899,11 @@ describe('planInitFiles with hosts', () => {
       const files = filesFor(['lsp', 'data', 'glsp']);
       expect(pathsUnder(files, 'host-browser')).toEqual(expect.arrayContaining(['src/data-status.ts', 'src/diagram.ts']));
       const page = contentOf(files, 'host-browser/src/page.ts') ?? '';
-      const calls = ['await startEditor(heads);', 'await showDataStatus(heads.data,', 'await mountDiagram(heads.glsp,'];
+      const calls = [
+         'const shownFile = await startEditor(heads);',
+         'await showDataStatus(heads.data,',
+         'await mountDiagram(heads.glsp, shownFile, logger);'
+      ];
       expect(calls.map(call => page.indexOf(call))).toEqual([...calls.map(call => page.indexOf(call))].sort((left, right) => left - right));
       expect(calls.every(call => page.includes(call))).toBe(true);
       const worker = contentOf(files, 'host-browser/src/worker.ts') ?? '';
@@ -906,6 +913,11 @@ describe('planInitFiles with hosts', () => {
       expect(worker).toContain(
          'startDataServerInWorker(ports.data, shared, connection => new DataServer<BookstoreModel>(connection, shared));'
       );
+   });
+
+   it('ships the repository logo as the page icon, so the two cannot drift', () => {
+      const logo = readFileSync(fileURLToPath(new URL('../../../docs/assets/hydranium-logo.svg', import.meta.url)), 'utf-8');
+      expect(contentOf(filesFor(['lsp']), 'host-browser/hydranium-mark.svg')).toBe(logo);
    });
 
    it('asserts in the smoke test what each head shows', () => {
@@ -938,7 +950,10 @@ describe('planInitFiles with hosts', () => {
       for (const file of several) {
          expect(file.content, `${file.path} still has a token`).not.toMatch(token);
       }
-      expect(several.find(file => file.path === 'host-browser/src/page.ts')?.content).toContain('/nodes.process`, logger);');
+      // The smoke test opens the diagram grammar's files, not the first grammar's.
+      expect(several.find(file => file.path === 'host-browser/test/smoke.spec.mts')?.content).toContain(
+         "selectOption('references.process')"
+      );
    });
 
    it('prints how to serve and test the browser host', () => {
@@ -953,8 +968,17 @@ describe('planInitFiles with hosts', () => {
       });
       const output = lines.join('');
       expect(output).toContain('heads: lsp,data,glsp, hosts: browser,');
-      expect(output).toContain('npm --prefix host-browser start');
+      expect(output).toContain('npm run start:browser');
       expect(output).toContain('npm --prefix host-browser run test:e2e');
+   });
+
+   it('gives the root a `start:browser` script only with a browser host', () => {
+      const scripts = (hosts: InitHost[]): unknown =>
+         JSON.parse(
+            contentOf(planInitFiles(resolveInitComposition('Bookstore', undefined, ['lsp'], undefined, hosts)), 'package.json') ?? '{}'
+         ).scripts['start:browser'];
+      expect(scripts(['browser'])).toBe('npm --prefix host-browser start');
+      expect(scripts([])).toBeUndefined();
    });
 });
 
@@ -1288,7 +1312,7 @@ describe('runInit --monorepo', () => {
    it('writes the .gitignore a standalone project gets, whatever the root ignores', () => {
       const { files } = scaffold();
       // A standalone scaffold's files, less the root it has no use for here.
-      expect(files).toHaveLength(29);
+      expect(files).toHaveLength(30);
       expect(contentOf(files, 'package.json')).toBeUndefined();
       const standalone = planInitFiles(resolveInitComposition('Bookstore', undefined, ['lsp']));
       expect(contentOf(files, 'server/.gitignore')).toBe(contentOf(standalone, 'server/.gitignore'));
