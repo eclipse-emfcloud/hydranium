@@ -65,17 +65,17 @@ published over the LSP connection.
 
 ## What a new adopter gets on day one
 
-This example overrides nothing the scaffold did not write for it. The one bound
-slot below is `init`'s, not an adopter's.
+This example overrides nothing the scaffold did not write for it. The two bound
+slots below are `init`'s, not an adopter's.
 
 | Seam | bookstore | what answers instead |
 | --- | --- | --- |
 | Hover | no `HoverProvider` | Langium's default, over the workspace's `/** … */` comments |
 | Semantic tokens | no provider | the client's own TextMate grammar |
-| Validation | no checks | parser + linker diagnostics |
+| Validation | the emitted `BookstoreValidationContribution` | a warning on a repeated name, beside parser + linker diagnostics |
 | Integrity | no rules | the framework's build pipeline |
 | Scoping | no `project` header | the `universal` export tier |
-| Serialization | the emitted `BookstoreSerializer` | the one slot `init` binds, the framework's default being a throw |
+| Serialization | the emitted `BookstoreSerializer` | bound by `init`, the framework's default being a throw |
 
 The workspace shows the hover and scoping rows at work:
 
@@ -92,20 +92,27 @@ The workspace shows the hover and scoping rows at work:
 ## The editable diagram
 
 `--diagram` emits a starter create handler,
-[create-node-operation-handler.ts](server/src/glsp/bookstore/create-node-operation-handler.ts).
+[create-node-operation-handler.ts](server/src/glsp/bookstore/create-node-operation-handler.ts),
+and a delete handler,
+[delete-operation-handler.ts](server/src/glsp/bookstore/delete-operation-handler.ts).
 Creating a node on the canvas appends a `node <name>` line to the `.bookstore`
 document, written once through the emitted
 [bookstore-serializer.ts](server/src/language-server/bookstore-serializer.ts),
-and undo and redo apply that one change. Delete the handler and its
-registration in `diagram-module.ts` for a read-only viewer.
+and undo and redo apply that one change. Deleting a node also clears the
+references to it in the same document. For a read-only viewer, delete both
+handlers and their registrations in `diagram-module.ts`, and set `deletable`
+back to `false` in `diagram-configuration.ts`.
 
-The diagram draws the nodes of one document, so a reference into another
-document draws no edge: `nodes.bookstore` shows its edge, `references.bookstore`
-shows its node alone.
+The diagram draws the nodes of the document the editor shows, each a row above
+the node it references, and a reference into another document as an edge to a
+dashed external node standing for its target: `references.bookstore` shows
+`Third` pointing at `Second (nodes.bookstore)`. Diagnostics show on the nodes
+as markers.
 [bookstore-diagram.test.ts](server/test/bookstore-diagram.test.ts) runs the
-handler through an in-process GLSP server, checking that the create, the undo
-and the redo keep the existing nodes, and checks that no edge is drawn into
-another document.
+handlers through an in-process GLSP server: the create, the undo and the redo
+keep the existing nodes, a delete takes the references to a node with it, a
+reference into another document draws its edge to one external node, the
+placing survives a cycle, and a diagnostic becomes a marker.
 
 ## Changing this example
 

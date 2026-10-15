@@ -33,6 +33,12 @@ export const BOOKSTORE_DIAGRAM_TYPE = BOOKSTORE_LANGUAGE.languageId;
 /** A `BookstoreNode` — the starter grammar's one named, referenceable node. */
 export const BOOKSTORE_NODE_TYPE = `${DefaultTypes.NODE}:bookstore-node`;
 
+/**
+ * A `BookstoreNode` declared in another document, drawn because a node of this
+ * one references it. It belongs to that document, so nothing edits it here.
+ */
+export const BOOKSTORE_EXTERNAL_NODE_TYPE = `${DefaultTypes.NODE}:bookstore-external-node`;
+
 /** A resolved `target` reference, drawn as a connection between two nodes. */
 export const BOOKSTORE_EDGE_TYPE = `${DefaultTypes.EDGE}:bookstore-target`;
 
@@ -44,7 +50,7 @@ export const BOOKSTORE_EDGE_TYPE = `${DefaultTypes.EDGE}:bookstore-target`;
  * lacks its registration. Nothing holds the tuple to the constants above, so
  * an id declared without joining it escapes that check.
  */
-export const BOOKSTORE_ELEMENT_TYPES = [BOOKSTORE_NODE_TYPE, BOOKSTORE_EDGE_TYPE] as const;
+export const BOOKSTORE_ELEMENT_TYPES = [BOOKSTORE_NODE_TYPE, BOOKSTORE_EXTERNAL_NODE_TYPE, BOOKSTORE_EDGE_TYPE] as const;
 
 /** One of the element type ids in {@link BOOKSTORE_ELEMENT_TYPES}. */
 export type BookstoreElementType = (typeof BOOKSTORE_ELEMENT_TYPES)[number];

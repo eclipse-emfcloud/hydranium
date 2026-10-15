@@ -14,6 +14,7 @@ package.json
   "scripts": {
     "build": "npm run build --workspaces",
     "clean": "npm run clean --workspaces --if-present",
+    "start:browser": "npm --prefix host-browser start",
     "test": "npm test --workspaces --if-present"
   },
   "devDependencies": {
@@ -183,6 +184,12 @@ export const BOOKSTORE_DIAGRAM_TYPE = BOOKSTORE_LANGUAGE.languageId;
 /** A `BookstoreNode` — the starter grammar's one named, referenceable node. */
 export const BOOKSTORE_NODE_TYPE = `${DefaultTypes.NODE}:bookstore-node`;
 
+/**
+ * A `BookstoreNode` declared in another document, drawn because a node of this
+ * one references it. It belongs to that document, so nothing edits it here.
+ */
+export const BOOKSTORE_EXTERNAL_NODE_TYPE = `${DefaultTypes.NODE}:bookstore-external-node`;
+
 /** A resolved `target` reference, drawn as a connection between two nodes. */
 export const BOOKSTORE_EDGE_TYPE = `${DefaultTypes.EDGE}:bookstore-target`;
 
@@ -194,7 +201,7 @@ export const BOOKSTORE_EDGE_TYPE = `${DefaultTypes.EDGE}:bookstore-target`;
  * lacks its registration. Nothing holds the tuple to the constants above, so
  * an id declared without joining it escapes that check.
  */
-export const BOOKSTORE_ELEMENT_TYPES = [BOOKSTORE_NODE_TYPE, BOOKSTORE_EDGE_TYPE] as const;
+export const BOOKSTORE_ELEMENT_TYPES = [BOOKSTORE_NODE_TYPE, BOOKSTORE_EXTERNAL_NODE_TYPE, BOOKSTORE_EDGE_TYPE] as const;
 
 /** One of the element type ids in {@link BOOKSTORE_ELEMENT_TYPES}. */
 export type BookstoreElementType = (typeof BOOKSTORE_ELEMENT_TYPES)[number];
@@ -417,6 +424,7 @@ npx hydranium-cli query --server "node ./lib/data-server-main.js ../workspace" -
 - `src/grammar/bookstore.langium` — the `Bookstore` grammar (.bookstore)
 - `src/language-server/bookstore-module.ts` — `createBookstoreServices` DI wiring
 - `src/language-server/bookstore-serializer.ts` — emits `Bookstore` back to text (the framework defaults this to a throw)
+- `src/language-server/bookstore-validation.ts` — the `Bookstore` checks: a warning on a repeated name
 - `src/node/services.ts` — zero-arg `createServices()` for the headless CLI, the package's `./node` entry
 - `src/index.ts` — the package root, loadable in a browser worker: DI factory + generated AST + diagram module
 - `src/main.ts` — starts lsp + data + glsp, the `bookstore` bin entry
@@ -520,11 +528,11 @@ server/src/language-server/bookstore-module.ts
 ==============================================================================
 // DI bootstrap for Bookstore. Composes the framework defaults with adopter
 // overrides via Langium's `inject()` (through the framework's
-// `createIntegrationServices`). Each adopter module binds ONE slot — its
-// language's `Serializer`, which the framework cannot default because a
-// concrete syntax is grammar knowledge. Everything else (scope, naming, project
-// management, build pipeline) boots on the framework defaults; scope
-// computation, validation checks and AST extensions go in these same modules.
+// `createIntegrationServices`). Each adopter module binds its language's
+// `Serializer`, which the framework cannot default because a concrete syntax
+// is grammar knowledge, and its validation checks. Everything else (scope,
+// naming, project management, build pipeline) boots on the framework defaults;
+// scope computation and AST extensions go in these same modules.
 //
 // Note which generated symbol comes from which name: the SHARED module is
 // `BookstoreGeneratedSharedModule` (from `projectName`) and there is one of it,
@@ -545,6 +553,7 @@ import { type DeepPartial, EmptyFileSystem, type Module } from '@hydranium/langi
 import { type LangiumServices, type PartialLangiumServices, type PartialLangiumSharedServices } from '@hydranium/langium/lsp';
 import { BookstoreGeneratedModule, BookstoreGeneratedSharedModule } from './generated/module.js';
 import { BookstoreSerializer } from './bookstore-serializer.js';
+import { BookstoreValidationContribution } from './bookstore-validation.js';
 
 export type BookstoreSharedServices = ServerSharedServices & LspServerAddedSharedServices;
 export type BookstoreServices = LangiumServices &
@@ -577,6 +586,11 @@ const BookstoreSharedModule: Module<BookstoreSharedServices, PartialLangiumShare
 const BookstoreLanguageModule: Module<BookstoreServices, PartialLangiumServices & DeepPartial<ServerAddedServices>> = {
    serializer: {
       Serializer: services => new BookstoreSerializer(services)
+   },
+   validation: {
+      checks: {
+         names: () => new BookstoreValidationContribution()
+      }
    }
 };
 
@@ -687,6 +701,40 @@ export class BookstoreSerializer extends AbstractSerializer<BookstoreModel> {
    private emitNode(node: BookstoreNode): string {
       const target = this.serializeReferenceText(node.target);
       return target === undefined ? `node ${node.name}` : `node ${node.name} -> ${target}`;
+   }
+}
+
+==============================================================================
+server/src/language-server/bookstore-validation.ts
+==============================================================================
+// Validation for Bookstore: a check the parser and linker cannot make.
+//
+// A name is what a reference resolves by and what the diagram keys a node by,
+// so a second node of the same name is unreachable by reference and dropped
+// from the diagram. Each one after the first gets a warning rather than an
+// error, since a half-typed rename passes through this state.
+
+import type { ValidationCheckContribution, ValidationCheckRegistry } from '@hydranium/core';
+import { acceptMessage } from '@hydranium/core/messages';
+import type { ValidationAcceptor } from '@hydranium/langium';
+import { defineMessage } from '@hydranium/protocol';
+import type { BookstoreModel, BookstoreAstType } from './ast.js';
+
+export const DUPLICATE_NAME = defineMessage('bookstore/bookstore/duplicate-name', "A node named '{name}' is already declared.");
+
+export class BookstoreValidationContribution implements ValidationCheckContribution {
+   registerValidationChecks(registry: ValidationCheckRegistry): void {
+      registry.register<BookstoreAstType>({ BookstoreModel: this.checkUniqueNames }, this);
+   }
+
+   protected checkUniqueNames(model: BookstoreModel, accept: ValidationAcceptor): void {
+      const seen = new Set<string>();
+      for (const node of model.nodes) {
+         if (seen.has(node.name)) {
+            acceptMessage(accept, 'warning', DUPLICATE_NAME, { node, property: 'name' }, { name: node.name });
+         }
+         seen.add(node.name);
+      }
    }
 }
 
@@ -958,26 +1006,32 @@ server/src/glsp/bookstore/gmodel-factory.ts
 // edge per resolved `target` reference.
 //
 // Ids come from the index rather than being composed here, so the id strategy
-// stays in one place. Nodes are emitted before edges, because a GLSP edge
-// pointing at an id that does not exist fails client-side with a far less
-// obvious error than a missing edge. An unresolved reference is SKIPPED rather
-// than treated as an error: a dangling reference is ordinary editing state, and
-// the language already reports it as a diagnostic. A reference into another
-// document is skipped for the same reason: the graph holds only this
-// document's nodes, so its target has no id here.
+// stays in one place. An id derived from a node's, for its label, its edge or an
+// external node, appends a suffix starting with `-`, which the grammar's `ID`
+// does not allow, so it never clashes with a node's own. Nodes are emitted
+// before edges, because a GLSP edge pointing at an id that does not exist fails
+// client-side with a far less obvious error than a missing edge. An unresolved
+// reference is SKIPPED rather than treated as an error: a dangling reference is
+// ordinary editing state, and the language already reports it as a diagnostic.
 //
-// The starter grammar persists no positions, so the nodes are placed in a row
-// in document order; at the origin each would be drawn over the one before.
+// A reference into another document is drawn to an external node standing for
+// its target, once however many nodes reference it, so the diagram shows what
+// the editor resolves. The target's own diagnostics stay with its document.
+//
+// The starter grammar persists no positions, so the nodes are placed in a grid:
+// each one row above its target, and side by side in document order within a
+// row. Without a cycle every edge spans one row; a cycle is cut where the walk
+// meets a node it is still ranking, and its closing edge spans the cycle.
 
 import { DefaultTypes, GEdge, GGraph, GLabel, type GModelFactory, GNode, ModelState } from '@eclipse-glsp/server';
-import { AstUtils } from '@hydranium/langium';
-import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_NODE_TYPE } from 'bookstore-protocol';
+import { AstUtils, UriUtils } from '@hydranium/langium';
+import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_EXTERNAL_NODE_TYPE, BOOKSTORE_NODE_TYPE } from 'bookstore-protocol';
 import { inject, injectable } from 'inversify';
-import type { BookstoreModel } from '../../language-server/ast.js';
+import type { BookstoreModel, BookstoreNode } from '../../language-server/ast.js';
 import type { BookstoreGlspState } from './state.js';
 
-/** The distance between two nodes' left edges in the row. */
-const NODE_SPACING = 160;
+/** The size of one cell of the grid the nodes are placed in, a column wide and a row high. */
+const CELL = { width: 200, height: 90 };
 
 @injectable()
 export class BookstoreGModelFactory implements GModelFactory {
@@ -993,35 +1047,93 @@ export class BookstoreGModelFactory implements GModelFactory {
    }
 
    protected buildGraph(root: BookstoreModel, graph: GGraph): void {
-      for (const [index, node] of root.nodes.entries()) {
-         const id = this.modelState.index.createId(node);
-         graph.children.push(
-            GNode.builder()
-               .id(id)
-               .type(BOOKSTORE_NODE_TYPE)
-               .position(index * NODE_SPACING, 0)
-               // Sized by the client around its label, which it lays out.
-               .layout('vbox')
-               .addLayoutOptions({ paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8 })
-               .add(GLabel.builder().id(`${id}_name`).text(node.name).type(DefaultTypes.LABEL).build())
-               .build()
-         );
-      }
+      const index = this.modelState.index;
+      // A repeated name repeats the id: only its first node is drawn, with that node's edge.
+      const drawn = new Map<string, BookstoreNode>();
       for (const node of root.nodes) {
+         const id = index.createId(node);
+         if (!drawn.has(id)) {
+            drawn.set(id, node);
+         }
+      }
+      const nodes = [...drawn].map(([id, node]) => ({ id, builder: this.createNode(id, BOOKSTORE_NODE_TYPE, node.name) }));
+      const edges: GEdge[] = [];
+      const targetOf = new Map<string, string>();
+      const externalIds = new Set<string>();
+      for (const [sourceId, node] of drawn) {
          const target = node.target?.ref;
-         if (!target || AstUtils.findRootNode(target) !== root) {
+         if (!target) {
             continue;
          }
-         const sourceId = this.modelState.index.createId(node);
-         graph.children.push(
-            GEdge.builder()
-               .id(`${sourceId}_target`)
-               .type(BOOKSTORE_EDGE_TYPE)
-               .sourceId(sourceId)
-               .targetId(this.modelState.index.createId(target))
-               .build()
-         );
+         let targetId = index.createId(target);
+         if (AstUtils.findRootNode(target) !== root) {
+            targetId = `${targetId}-external`;
+            if (!externalIds.has(targetId)) {
+               externalIds.add(targetId);
+               const file = UriUtils.basename(AstUtils.getDocument(target).uri);
+               const external = this.createNode(targetId, BOOKSTORE_EXTERNAL_NODE_TYPE, `${target.name} (${file})`);
+               nodes.push({ id: targetId, builder: external.addCssClass('external') });
+            }
+         }
+         targetOf.set(sourceId, targetId);
+         edges.push(GEdge.builder().id(`${sourceId}-target`).type(BOOKSTORE_EDGE_TYPE).sourceId(sourceId).targetId(targetId).build());
       }
+      const ids = nodes.map(node => node.id);
+      const ranks = this.rank(targetOf, ids);
+      // Loops rather than spread arguments, which overflow the stack on a large diagram.
+      let lastRow = 0;
+      for (const rank of ranks.values()) {
+         lastRow = Math.max(lastRow, rank);
+      }
+      const columns = new Map<number, number>();
+      const placed = nodes.map(({ id, builder }) => {
+         const row = lastRow - (ranks.get(id) ?? 0);
+         const column = columns.get(row) ?? 0;
+         columns.set(row, column + 1);
+         return builder.position(column * CELL.width, row * CELL.height).build();
+      });
+      for (const child of [...placed, ...edges]) {
+         graph.children.push(child);
+      }
+   }
+
+   /**
+    * Each node's row counted up from the bottom: one more than its target's,
+    * and 0, left out of the map, for a node that references nothing here. A
+    * cycle is cut where the walk meets itself.
+    */
+   protected rank(targetOf: ReadonlyMap<string, string>, ids: readonly string[]): Map<string, number> {
+      const ranks = new Map<string, number>();
+      for (const start of ids) {
+         // Walked in a loop, not recursively, so a long chain does not overflow the stack.
+         const walk = new Set<string>();
+         let id = start;
+         let target = targetOf.get(id);
+         while (target !== undefined && !walk.has(id) && !ranks.has(id)) {
+            walk.add(id);
+            id = target;
+            target = targetOf.get(id);
+         }
+         let rank = ranks.get(id) ?? 0;
+         for (const walked of [...walk].reverse()) {
+            rank += 1;
+            ranks.set(walked, rank);
+         }
+      }
+      return ranks;
+   }
+
+   /** A node labelled `text`, placed and built by the caller. */
+   protected createNode(id: string, type: string, text: string) {
+      return (
+         GNode.builder()
+            .id(id)
+            .type(type)
+            // Sized by the client around its label, which it lays out.
+            .layout('vbox')
+            .addLayoutOptions({ paddingLeft: 12, paddingRight: 12, paddingTop: 8, paddingBottom: 8 })
+            .add(GLabel.builder().id(`${id}-name`).text(text).type(DefaultTypes.LABEL).build())
+      );
    }
 }
 
@@ -1030,13 +1142,15 @@ server/src/glsp/bookstore/diagram-configuration.ts
 ==============================================================================
 // Diagram configuration for the Bookstore diagram.
 //
-// **Every hint is `false`, and that is not the same as read-only.** The starter
-// BookstoreCreateNodeOperationHandler makes this diagram editable through the
-// tool palette, which GLSP assembles from the create handlers' trigger actions —
-// there is no `creatable` hint. What the hints govern is delete / reparent /
-// reposition / resize, and nothing backs those, so declaring one would offer a
-// gesture whose operation the server rejects: a worse failure than the tool being
-// absent. Turn a hint on in the same change that adds its handler.
+// **A hint is `true` only where a handler backs it.** The starter
+// BookstoreCreateNodeOperationHandler offers creation through the tool palette,
+// which GLSP assembles from the create handlers' trigger actions — there is no
+// `creatable` hint. BookstoreDeleteOperationHandler backs `deletable` on a
+// node and an edge; a node of another document stays undeletable, since this
+// diagram does not own it. Nothing backs reparent / reposition / resize, so
+// declaring one would offer a gesture whose operation the server rejects: a worse
+// failure than the tool being absent. Turn a hint on in the same change that adds
+// its handler.
 //
 // `needsClientLayout` is `true` and `layoutKind` is `NONE`: the starter grammar
 // persists no bounds, so the client measures and places everything. That is also
@@ -1053,7 +1167,7 @@ import {
    getDefaultMapping
 } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
-import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_NODE_TYPE } from 'bookstore-protocol';
+import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_EXTERNAL_NODE_TYPE, BOOKSTORE_NODE_TYPE } from 'bookstore-protocol';
 
 @injectable()
 export class BookstoreDiagramConfiguration implements DiagramConfiguration {
@@ -1066,6 +1180,13 @@ export class BookstoreDiagramConfiguration implements DiagramConfiguration {
    readonly shapeTypeHints: ShapeTypeHint[] = [
       {
          elementTypeId: BOOKSTORE_NODE_TYPE,
+         deletable: true,
+         reparentable: false,
+         repositionable: false,
+         resizable: false
+      },
+      {
+         elementTypeId: BOOKSTORE_EXTERNAL_NODE_TYPE,
          deletable: false,
          reparentable: false,
          repositionable: false,
@@ -1076,11 +1197,11 @@ export class BookstoreDiagramConfiguration implements DiagramConfiguration {
    readonly edgeTypeHints: EdgeTypeHint[] = [
       {
          elementTypeId: BOOKSTORE_EDGE_TYPE,
-         deletable: false,
+         deletable: true,
          repositionable: false,
          routable: false,
          sourceElementTypeIds: [BOOKSTORE_NODE_TYPE],
-         targetElementTypeIds: [BOOKSTORE_NODE_TYPE]
+         targetElementTypeIds: [BOOKSTORE_NODE_TYPE, BOOKSTORE_EXTERNAL_NODE_TYPE]
       }
    ];
 }
@@ -1091,13 +1212,13 @@ server/src/glsp/bookstore/create-node-operation-handler.ts
 // The starter operation handler for the Bookstore diagram: the tool-palette
 // entry that creates a `BookstoreNode`.
 //
-// **Deleting this file and its `configureOperationHandlers` registration in
-// `diagram-module.ts` gives a read-only viewer**, and nothing else has to change
-// — creation is offered through the palette rather than through a type hint, so
-// every hint in `diagram-configuration.ts` is already `false`. The scaffold emits
-// the editable direction because that asymmetry runs one way: editable →
-// read-only is a deletion the compiler checks, while read-only → editable is
-// authoring against a seam you have not used yet.
+// **Deleting this file, `delete-operation-handler.ts` and their
+// `configureOperationHandlers` registrations in `diagram-module.ts`, and setting
+// `deletable` back to `false` in `diagram-configuration.ts`, gives a read-only
+// viewer** — creation is offered through the palette rather than through a type
+// hint. The scaffold emits the editable direction because that asymmetry runs one
+// way: editable → read-only is a deletion the compiler checks, while read-only →
+// editable is authoring against a seam you have not used yet.
 //
 // **It edits the operation's working copy.** A handler runs inside an operation,
 // where `sourceRoot` is a copy of the built root: the recording command's
@@ -1111,10 +1232,10 @@ server/src/glsp/bookstore/create-node-operation-handler.ts
 // starter grammar persists no bounds, so there is nowhere to put a coordinate: the
 // node is appended at the end of the document and the client places it.
 //
-// Like protocol's `bookstore-diagram-types.ts`, `gmodel-factory.ts` and
-// `diagram-configuration.ts`, this file knows the starter grammar's shape — the
-// `nodes` list and the `BookstoreNode` it holds. Replacing the grammar means
-// replacing these four together.
+// Like protocol's `bookstore-diagram-types.ts`, `gmodel-factory.ts`,
+// `delete-operation-handler.ts` and `diagram-configuration.ts`, this file knows
+// the starter grammar's shape — the `nodes` list and the `BookstoreNode` it
+// holds. Replacing the grammar means replacing them together.
 
 import { type Command, type CreateNodeOperation, JsonCreateNodeOperationHandler, type MaybePromise } from '@eclipse-glsp/server';
 import { appendChild } from '@hydranium/core';
@@ -1152,6 +1273,73 @@ export class BookstoreCreateNodeOperationHandler extends JsonCreateNodeOperation
 }
 
 ==============================================================================
+server/src/glsp/bookstore/delete-operation-handler.ts
+==============================================================================
+// The starter delete handler for the Bookstore diagram: removes a
+// `BookstoreNode`, or the reference an edge draws.
+//
+// Deleting a node also clears every reference to it in this document, so
+// `node A -> B` becomes `node A` rather than keeping a reference that no longer
+// resolves. A reference stays when the name still resolves: to another node of
+// it here, or to one another document declares. A reference from another
+// document is not this operation's to edit: it is left, and reported there as a
+// link error. A node drawn for another document's target is not deletable, and
+// its id finds no node here.
+//
+// Like the create handler, it edits the operation's working copy, which the
+// operation writes once, with undo and redo applying that one change.
+
+import { type Command, DeleteElementOperation, GEdge, JsonOperationHandler, type MaybePromise } from '@eclipse-glsp/server';
+import { removeChildren } from '@hydranium/core';
+import { HydraniumGlspRecordingCommand } from '@hydranium/glsp-server';
+import { UriUtils } from '@hydranium/langium';
+import type { Mutable } from '@hydranium/protocol';
+import { injectable } from 'inversify';
+import type { BookstoreNode } from '../../language-server/ast.js';
+import type { BookstoreGlspState } from './state.js';
+
+@injectable()
+export class BookstoreDeleteOperationHandler extends JsonOperationHandler {
+   readonly operationType = DeleteElementOperation.KIND;
+
+   declare protected modelState: BookstoreGlspState;
+
+   override createCommand(operation: DeleteElementOperation): MaybePromise<Command | undefined> {
+      return new HydraniumGlspRecordingCommand(this.modelState, 'Delete', () => {
+         const index = this.modelState.index;
+         const root = this.modelState.sourceRoot;
+         // The first node with the id, which is the one the diagram draws for a repeated name.
+         const nodeOf = (id: string): BookstoreNode | undefined => root.nodes.find(node => index.findId(node) === id);
+         const deleted = new Set<BookstoreNode>();
+         // The nodes whose reference a deleted edge drew.
+         const unlinked = new Set<BookstoreNode>();
+         for (const elementId of operation.elementIds) {
+            const element = index.find(elementId);
+            const node = nodeOf(element instanceof GEdge ? element.sourceId : elementId);
+            if (node !== undefined) {
+               (element instanceof GEdge ? unlinked : deleted).add(node);
+            }
+         }
+         const remaining = new Set(root.nodes.filter(node => !deleted.has(node)).map(node => node.name));
+         const indexManager = index.languageServicesFor(root)?.shared.workspace.IndexManager;
+         const stillResolves = (target: BookstoreNode): boolean =>
+            remaining.has(target.name) ||
+            (indexManager
+               ?.allElements(target.$type)
+               .some(element => element.name === target.name && !UriUtils.equals(element.documentUri, this.modelState.sourceUri)) ??
+               false);
+         for (const node of root.nodes) {
+            const target = node.target?.ref;
+            if (unlinked.has(node) || (target !== undefined && deleted.has(target) && !stillResolves(target))) {
+               (node as Mutable<BookstoreNode>).target = undefined;
+            }
+         }
+         removeChildren(root.nodes, deleted);
+      });
+   }
+}
+
+==============================================================================
 server/src/glsp/bookstore/diagram-module.ts
 ==============================================================================
 // GLSP diagram module for Bookstore — the DI wiring of one diagram type.
@@ -1162,17 +1350,21 @@ server/src/glsp/bookstore/diagram-module.ts
 //
 // `configureOperationHandlers` ADDS: GLSP's default pair
 // (`CompoundOperationHandler` and `LayoutOperationHandler`) mutates no source
-// model, so the starter create handler is what makes this diagram editable at all.
+// model, so the starter create and delete handlers are what make this diagram
+// editable at all.
 
 import type {
    ActionHandlerConstructor,
    BindingTarget,
+   ComputedBoundsAction,
    DiagramConfiguration,
    GModelFactory,
    GModelIndex,
+   GModelRoot,
    InstanceMultiBinding,
    ModelState,
    ModelSubmissionHandler,
+   ModelValidator,
    OperationHandlerConstructor,
    SourceModelStorage
 } from '@eclipse-glsp/server';
@@ -1180,15 +1372,31 @@ import { ComputedBoundsActionHandler } from '@eclipse-glsp/server';
 import {
    HydraniumGlspComputedBoundsActionHandler,
    AbstractHydraniumGlspDiagramModule,
-   HydraniumGlspIndex
+   HydraniumGlspIndex,
+   HydraniumGlspModelValidator
 } from '@hydranium/glsp-server';
 import { BookstoreCreateNodeOperationHandler } from './create-node-operation-handler.js';
+import { BookstoreDeleteOperationHandler } from './delete-operation-handler.js';
 import { BookstoreDiagramConfiguration } from './diagram-configuration.js';
 import { BookstoreGModelFactory } from './gmodel-factory.js';
 import { BookstoreGlspState } from './state.js';
 import { BookstoreGlspStorage } from './storage.js';
 import { BookstoreSubmissionHandler } from './submission-handler.js';
 import { BOOKSTORE_DIAGRAM_TYPE } from 'bookstore-protocol';
+import { injectable } from 'inversify';
+
+/**
+ * The framework handler, keeping none of the edge routes the client reports:
+ * it routes an edge before it sizes the nodes, so a self-reference's loop would
+ * stay drawn inside its node. The starter's edges have no routing points, and
+ * the client routes them afresh from the sized nodes.
+ */
+@injectable()
+export class BookstoreComputedBoundsActionHandler extends HydraniumGlspComputedBoundsActionHandler {
+   protected override applyBounds(root: GModelRoot, action: ComputedBoundsAction): void {
+      super.applyBounds(root, { ...action, routes: undefined });
+   }
+}
 
 export class BookstoreDiagramModule extends AbstractHydraniumGlspDiagramModule {
    readonly diagramType = BOOKSTORE_DIAGRAM_TYPE;
@@ -1218,14 +1426,23 @@ export class BookstoreDiagramModule extends AbstractHydraniumGlspDiagramModule {
       return { service: HydraniumGlspIndex };
    }
 
+   /**
+    * The language's diagnostics as diagram markers, following each edit. GLSP
+    * binds no validator by default, and without one no marker ever shows.
+    */
+   protected override bindModelValidator(): BindingTarget<ModelValidator> {
+      return HydraniumGlspModelValidator;
+   }
+
    protected override configureActionHandlers(binding: InstanceMultiBinding<ActionHandlerConstructor>): void {
       super.configureActionHandlers(binding);
-      binding.rebind(ComputedBoundsActionHandler, HydraniumGlspComputedBoundsActionHandler);
+      binding.rebind(ComputedBoundsActionHandler, BookstoreComputedBoundsActionHandler);
    }
 
    protected override configureOperationHandlers(binding: InstanceMultiBinding<OperationHandlerConstructor>): void {
       super.configureOperationHandlers(binding);
       binding.add(BookstoreCreateNodeOperationHandler);
+      binding.add(BookstoreDeleteOperationHandler);
    }
 }
 
@@ -1236,20 +1453,44 @@ server/test/bookstore-diagram.test.ts
 // opens a document. A create-node operation adds a node, and an undo and a redo
 // take it out and put it back; every step must keep the nodes the document
 // already had, and its comments, since the diagram writes the document from its
-// AST, which carries none. A reference into another document draws no edge,
-// since the graph holds no node for its target, but resolves, even when the
-// diagram opened its document before the workspace was up.
+// AST, which carries none. A delete removes a node with the references to it, or
+// an edge's reference. A reference into another document resolves, even
+// when the diagram opened its document before the workspace was up, and draws
+// an edge to an external node standing for its target. Each node is placed a
+// row above its target, and a cycle does not stop the placing. A diagnostic
+// reaches the diagram as a marker on its node.
 
 import 'reflect-metadata';
-import { type Action, CreateNodeOperation, RedoAction, ServerModule, SetDirtyStateAction, UndoAction } from '@eclipse-glsp/server';
+import {
+   type Action,
+   ComputedBoundsAction,
+   CreateNodeOperation,
+   DeleteElementOperation,
+   GEdge,
+   GNode,
+   ModelValidator,
+   RedoAction,
+   ServerModule,
+   SetDirtyStateAction,
+   SetModelAction,
+   UndoAction,
+   UpdateModelAction
+} from '@eclipse-glsp/server';
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
 import { makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
+import { URI } from '@hydranium/langium';
 import { waitFor } from '@hydranium/protocol/testing';
-import { BOOKSTORE_DIAGRAM_TYPE, BOOKSTORE_NODE_TYPE } from 'bookstore-protocol';
+import {
+   BOOKSTORE_DIAGRAM_TYPE,
+   BOOKSTORE_EDGE_TYPE,
+   BOOKSTORE_EXTERNAL_NODE_TYPE,
+   BOOKSTORE_NODE_TYPE
+} from 'bookstore-protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BookstoreDiagramModule } from '../src/glsp/bookstore/diagram-module.js';
+import { BookstoreGModelFactory } from '../src/glsp/bookstore/gmodel-factory.js';
 import type { BookstoreGlspState } from '../src/glsp/bookstore/state.js';
 import { createServices } from '../src/node/services.js';
 
@@ -1302,10 +1543,80 @@ describe('Bookstore diagram', () => {
       });
    });
 
-   it('draws no edge for a reference that resolves into another document', async () => {
+   it('deletes a node with the references to it, and an edge with its reference, undoably', async () => {
       workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
-      workspace.write('declaring.bookstore', 'node second');
-      const file = workspace.write('referencing.bookstore', 'node first -> second');
+      const original = 'node first -> second\nnode second\nnode third -> first';
+      const file = workspace.write('model.bookstore', original);
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      const harness = makeGlspHarness<BookstoreGlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
+         diagramType: BOOKSTORE_DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      diagram = harness;
+      await harness.start();
+      await harness.openDocument(file);
+      const uri = workspace.uri('model.bookstore');
+      const text = (): string | undefined => shared.workspace.TextDocuments.get(uri)?.getText();
+      const idOf = (type: string, index: number): string => harness.state.root.children.filter(child => child.type === type)[index].id;
+
+      await send(harness, DeleteElementOperation.create([idOf(BOOKSTORE_NODE_TYPE, 1)]), 'operation');
+      const nodeDeleted = text();
+      await send(harness, UndoAction.create(), 'undo');
+      const undone = text();
+      // The edge third -> first.
+      await send(harness, DeleteElementOperation.create([idOf(BOOKSTORE_EDGE_TYPE, 1)]), 'operation');
+
+      expect({ nodeDeleted, undone, edgeDeleted: text() }).toEqual({
+         nodeDeleted: 'node first\nnode third -> first',
+         undone: original,
+         edgeDeleted: 'node first -> second\nnode second\nnode third'
+      });
+   });
+
+   it('deletes the drawn node of a repeated name, keeping the references the remaining node resolves', async () => {
+      workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
+      const file = workspace.write('model.bookstore', 'node first -> second\nnode first\nnode second -> first');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      const harness = makeGlspHarness<BookstoreGlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
+         diagramType: BOOKSTORE_DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      diagram = harness;
+      await harness.start();
+      await harness.openDocument(file);
+
+      await send(harness, DeleteElementOperation.create([harness.state.root.children[0].id]), 'operation');
+
+      expect(shared.workspace.TextDocuments.get(workspace.uri('model.bookstore'))?.getText()).toBe('node first\nnode second -> first');
+   });
+
+   it('deletes a node, keeping the references another document declares the name for', async () => {
+      workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
+      workspace.write('other.bookstore', 'node second');
+      const file = workspace.write('model.bookstore', 'node first -> second\nnode second');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      const harness = makeGlspHarness<BookstoreGlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
+         diagramType: BOOKSTORE_DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      diagram = harness;
+      await harness.start();
+      await harness.openDocument(file);
+
+      await send(harness, DeleteElementOperation.create([harness.state.root.children[1].id]), 'operation');
+
+      expect(shared.workspace.TextDocuments.get(workspace.uri('model.bookstore'))?.getText()).toBe('node first -> second');
+   });
+
+   it("draws a repeated name once, as its first node with that node's edge", async () => {
+      workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
+      const file = workspace.write('model.bookstore', 'node a\nnode a -> b\nnode b');
       const { shared } = createServices();
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       diagram = makeGlspHarness<BookstoreGlspState>({
@@ -1316,10 +1627,157 @@ describe('Bookstore diagram', () => {
       await diagram.start();
       await diagram.openDocument(file);
 
-      // The reference resolves, so the missing edge is the document rule and
-      // not a dangling reference.
-      expect(diagram.state.sourceRoot?.nodes[0].target?.ref?.name).toBe('second');
-      expect(diagram.state.root.children.map(child => child.type)).toEqual([BOOKSTORE_NODE_TYPE]);
+      // The first `a` references nothing, so no edge, and both nodes share a row.
+      const children = diagram.state.root.children;
+      expect(children.map(child => ({ type: child.type, position: child instanceof GNode ? child.position : undefined }))).toEqual([
+         { type: BOOKSTORE_NODE_TYPE, position: { x: 0, y: 0 } },
+         { type: BOOKSTORE_NODE_TYPE, position: { x: 200, y: 0 } }
+      ]);
+   });
+
+   it("draws a node named like another node's label or edge", async () => {
+      workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
+      const file = workspace.write('model.bookstore', 'node a -> b\nnode b\nnode a_name\nnode a_target');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      diagram = makeGlspHarness<BookstoreGlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
+         diagramType: BOOKSTORE_DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      await diagram.start();
+      await diagram.openDocument(file);
+
+      expect(diagram.state.root.children.map(child => child.type)).toEqual([
+         BOOKSTORE_NODE_TYPE,
+         BOOKSTORE_NODE_TYPE,
+         BOOKSTORE_NODE_TYPE,
+         BOOKSTORE_NODE_TYPE,
+         BOOKSTORE_EDGE_TYPE
+      ]);
+   });
+
+   it('draws a reference into another document as an edge to one external node', async () => {
+      workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
+      workspace.write('declaring.bookstore', 'node second');
+      const file = workspace.write('referencing.bookstore', 'node first -> second\nnode third -> second');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      diagram = makeGlspHarness<BookstoreGlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
+         diagramType: BOOKSTORE_DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      await diagram.start();
+      await diagram.openDocument(file);
+
+      const children = diagram.state.root.children;
+      const external = children.find(child => child.type === BOOKSTORE_EXTERNAL_NODE_TYPE);
+      expect(children.map(child => child.type)).toEqual([
+         BOOKSTORE_NODE_TYPE,
+         BOOKSTORE_NODE_TYPE,
+         BOOKSTORE_EXTERNAL_NODE_TYPE,
+         BOOKSTORE_EDGE_TYPE,
+         BOOKSTORE_EDGE_TYPE
+      ]);
+      expect(external?.children[0]).toMatchObject({ text: 'second (declaring.bookstore)' });
+      // The two referencing nodes side by side in one row, their target in the next.
+      expect(children.filter(child => child instanceof GNode).map(node => node.position)).toEqual([
+         { x: 0, y: 0 },
+         { x: 200, y: 0 },
+         { x: 0, y: 90 }
+      ]);
+      const targets = children.filter(child => child instanceof GEdge).map(edge => edge.targetId);
+      expect(targets).toEqual([external?.id, external?.id]);
+   });
+
+   it('places each node a row above its target, cutting a cycle', async () => {
+      workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
+      const file = workspace.write('cycle.bookstore', 'node a -> b\nnode b -> a\nnode c -> a');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      diagram = makeGlspHarness<BookstoreGlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
+         diagramType: BOOKSTORE_DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      await diagram.start();
+      await diagram.openDocument(file);
+
+      // The walk from `a` meets `a` again at `b`, so `b` ranks first; `c` references `a`.
+      const rows = diagram.state.root.children.filter(child => child instanceof GNode).map(node => node.position.y / 90);
+      expect(rows).toEqual([1, 2, 0]);
+   });
+
+   it('ranks a chain longer than the call stack is deep', () => {
+      // The ranking alone, since a document this long takes seconds to parse and link.
+      class Ranking extends BookstoreGModelFactory {
+         rankChain(targetOf: ReadonlyMap<string, string>, ids: readonly string[]): Map<string, number> {
+            return this.rank(targetOf, ids);
+         }
+      }
+      const ids = Array.from({ length: 100_000 }, (_, i) => `n${i}`);
+      const targetOf = new Map(ids.slice(0, -1).map((id, i) => [id, ids[i + 1]]));
+
+      const ranks = new Ranking().rankChain(targetOf, ids);
+
+      expect({ first: ranks.get(ids[0]), beforeLast: ranks.get(ids[ids.length - 2]) }).toEqual({ first: ids.length - 1, beforeLast: 1 });
+   });
+
+   it('keeps no route the client reports, which it computes before it sizes the nodes', async () => {
+      workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
+      const file = workspace.write('loop.bookstore', 'node a -> a');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      const harness = makeGlspHarness<BookstoreGlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
+         diagramType: BOOKSTORE_DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      diagram = harness;
+      await harness.start();
+      await harness.openDocument(file);
+      const edge = (): GEdge | undefined => harness.state.root.children.find(child => child instanceof GEdge);
+      const edgeId = edge()?.id ?? '';
+
+      // A self-reference's loop as the client routes it around a node not yet sized.
+      const before = harness.actions.length;
+      const corners = [
+         { x: 19, y: -0.75 },
+         { x: 19, y: 19 },
+         { x: -0.75, y: 19 }
+      ];
+      const routes = [{ elementId: edgeId, newRoutingPoints: [{ x: 0, y: 0 }, ...corners, { x: 0, y: 0 }] }];
+      harness.dispatch(ComputedBoundsAction.create([], { revision: harness.state.root.revision, routes }));
+      await waitFor(() => harness.actions.slice(before).some(sent => SetModelAction.is(sent) || UpdateModelAction.is(sent)), {
+         message: 'no model sent after the computed bounds'
+      });
+
+      expect(edge()?.routingPoints).toEqual([]);
+   });
+
+   it('marks a diagnostic on the node it is about', async () => {
+      workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
+      const file = workspace.write('duplicate.bookstore', 'node first\nnode first');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      diagram = makeGlspHarness<BookstoreGlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
+         diagramType: BOOKSTORE_DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      await diagram.start();
+      await diagram.openDocument(file);
+
+      // A workspace brought up programmatically does not validate; an editor's open does.
+      const document = await shared.workspace.LangiumDocuments.getOrCreateDocument(URI.file(file));
+      await shared.workspace.DocumentBuilder.build([document], { validation: true });
+
+      // The repeated name's warning, on the one node the diagram keeps for both.
+      const markers = await diagram.sessionContainer.get<ModelValidator>(ModelValidator).validate([diagram.state.root]);
+      expect(markers.map(marker => ({ elementId: marker.elementId, kind: marker.kind }))).toEqual([
+         { elementId: diagram.state.root.children[0].id, kind: 'warning' }
+      ]);
    });
 
    it('resolves a cross-document reference in a document opened before the workspace is up', async () => {
@@ -1465,10 +1923,9 @@ server/test/validating.test.ts
 ==============================================================================
 // Tier three: does a broken model get reported.
 //
-// These are the FRAMEWORK's own linker diagnostics, not adopter checks — the
-// scaffold binds no `validation.checks`, and a test over an invented one would
-// assert its own fixture rather than the language. Bind a check in your
-// language module and assert it here alongside these.
+// A dangling reference is the FRAMEWORK's own linker diagnostic; a repeated
+// name is reported by the scaffold's own validation check. Bind a further
+// check in your language module and assert it here alongside these.
 
 import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
@@ -1500,6 +1957,21 @@ describe('Bookstore validation', () => {
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].severity).toBe(DiagnosticSeverity.Error);
       expect(diagnostics[0].message).toContain('absent');
+   });
+
+   it('warns on each node named like one before it', async () => {
+      const { shared, Bookstore } = createServices();
+
+      const document = await parseHelper<BookstoreModel>(Bookstore)('node first\nnode second\nnode first', {
+         documentUri: 'file:///duplicate.bookstore'
+      });
+      await shared.workspace.DocumentBuilder.build([document], { validation: true });
+
+      const diagnostics = document.diagnostics ?? [];
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].severity).toBe(DiagnosticSeverity.Warning);
+      expect(diagnostics[0].message).toBe("A node named 'first' is already declared.");
+      expect(diagnostics[0].range.start.line).toBe(2);
    });
 });
 
@@ -1599,6 +2071,7 @@ client/tsconfig.json
     "strict": true,
     "skipLibCheck": true,
     "declaration": true,
+    "experimentalDecorators": true,
     "types": [],
     "verbatimModuleSyntax": false
   },
@@ -1644,16 +2117,42 @@ client/src/bookstore-diagram-module.ts
 // module and adds its own beside it.
 
 import {
+   angleOfPoint,
    configureModelElement,
    type ContainerConfiguration,
+   type GEdge,
    GEdgeView,
    GNode,
    initializeDiagramContainer,
-   RoundedCornerNodeView
+   Point,
+   type RenderingContext,
+   RoundedCornerNodeView,
+   svg,
+   toDegrees
 } from '@eclipse-glsp/client';
 import { configureHydraniumModelElements, HydraniumGEdge } from '@hydranium/glsp-client';
-import { type Container, ContainerModule } from 'inversify';
-import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_NODE_TYPE, type BookstoreElementType } from 'bookstore-protocol';
+import { type Container, ContainerModule, injectable } from 'inversify';
+import {
+   BOOKSTORE_EDGE_TYPE,
+   BOOKSTORE_EXTERNAL_NODE_TYPE,
+   BOOKSTORE_NODE_TYPE,
+   type BookstoreElementType
+} from 'bookstore-protocol';
+
+/** GLSP's edge view plus an arrowhead at the target, so an edge reads in the direction of its reference. */
+@injectable()
+export class BookstoreEdgeView extends GEdgeView {
+   protected override renderAdditionals(edge: GEdge, segments: Point[], context: RenderingContext) {
+      const end = segments[segments.length - 1];
+      const degrees = toDegrees(angleOfPoint(Point.subtract(segments[segments.length - 2], end)));
+      const arrow = svg('path', {
+         'class-sprotty-edge-arrow': true,
+         d: 'M 0,0 L 10,-4 L 10,4 Z',
+         transform: `rotate(${degrees} ${end.x} ${end.y}) translate(${end.x} ${end.y})`
+      });
+      return [...super.renderAdditionals(edge, segments, context), arrow];
+   }
+}
 
 /** The model class and view one element type renders through, as `configureModelElement` takes them. */
 export interface BookstoreElementRegistration {
@@ -1670,10 +2169,12 @@ export interface BookstoreElementRegistration {
  */
 export const BOOKSTORE_ELEMENT_REGISTRATIONS: Readonly<Record<BookstoreElementType, BookstoreElementRegistration>> = {
    [BOOKSTORE_NODE_TYPE]: { model: GNode, view: RoundedCornerNodeView },
+   // Drawn like a node of the document; the server marks it with the `external` CSS class.
+   [BOOKSTORE_EXTERNAL_NODE_TYPE]: { model: GNode, view: RoundedCornerNodeView },
    // The framework's edge rather than `GEdge`: GLSP's gives the labels of an
    // edge without bendpoints no finite bounds, and fitting the diagram to its
    // pane then blanks the canvas.
-   [BOOKSTORE_EDGE_TYPE]: { model: HydraniumGEdge, view: GEdgeView }
+   [BOOKSTORE_EDGE_TYPE]: { model: HydraniumGEdge, view: BookstoreEdgeView }
 };
 
 /** GLSP's default model elements, plus the registrations above. */
@@ -1774,12 +2275,13 @@ there.
 ## Layout
 
 - `index.html` — the page, with a pane for each head that stays hidden until its part fills it
+- `hydranium-mark.svg` — the tab icon
 - `esbuild.mjs` — bundles the page, the worker and Monaco’s worker, reading `../workspace` in as the seed
 - `src/worker.ts` — the worker: the heads over one store, seeded and persisted
 - `src/page.ts` — starts the worker and runs the part of the page each head serves
 - `src/editor.ts` — the LSP part: a Monaco editor, the file switch and Save
 - `src/data-status.ts` — the data part: one document read through the data head
-- `src/diagram.ts` — the GLSP part: the `Bookstore` diagram, defined in the client package
+- `src/diagram.ts` — the GLSP part: the `Bookstore` diagram of the file the editor shows, defined in the client package
 - `src/log.ts` — the status line and the log area
 - `src/workspace.ts` — the workspace root URI both ends name
 - `src/monaco-editor-worker.ts` — Monaco’s own worker, which hosts no head
@@ -1797,7 +2299,19 @@ host-browser/index.html
       <title>Bookstore</title>
       <!-- The stylesheets Monaco and GLSP import, which esbuild writes beside the page bundle. -->
       <link rel="stylesheet" href="./out/page.css" />
+      <!-- The mark with white pages, which stays visible on a light and a dark tab strip alike. -->
+      <link rel="icon" href="./hydranium-mark.svg" />
       <style>
+         :root {
+            --accent: #3b6ea8;
+            --border: #dde1e6;
+            --surface: #f6f7f9;
+            --text: #1f2933;
+            /* GLSP's marker colours, pure yellow and light blue by default, which a light page barely shows. */
+            --glsp-error-foreground: #c62828;
+            --glsp-warning-foreground: #b26a00;
+            --glsp-info-foreground: var(--accent);
+         }
          html,
          body {
             height: 100%;
@@ -1806,8 +2320,11 @@ host-browser/index.html
          body {
             display: grid;
             grid-template-rows: auto minmax(0, 1fr) auto;
+            /* The window's width, which a long log line otherwise widens past it, cutting off the diagram. */
+            grid-template-columns: minmax(0, 1fr);
             font-family: system-ui, sans-serif;
             font-size: 13px;
+            color: var(--text);
          }
          header,
          .toolbar {
@@ -1817,24 +2334,83 @@ host-browser/index.html
             padding: 6px 12px;
          }
          header {
-            border-bottom: 1px solid #d6d8d9;
+            padding: 10px 16px;
+            background: var(--accent);
+            color: #ffffff;
          }
          h1 {
             margin: 0;
-            font-size: 15px;
+            font-size: 16px;
+            font-weight: 600;
          }
+         #status {
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: rgb(255 255 255 / 0.18);
+            font-size: 12px;
+         }
+         .toolbar {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+         }
+         select,
+         button {
+            padding: 4px 10px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: #ffffff;
+            color: inherit;
+            font: inherit;
+         }
+         button {
+            border-color: var(--accent);
+            background: var(--accent);
+            color: #ffffff;
+            cursor: pointer;
+         }
+         /* One column per shown pane, its title, hint and body rows shared, so the titles and hints line up. */
          main {
-            display: flex;
+            display: grid;
+            grid-auto-flow: column;
+            grid-auto-columns: minmax(0, 1fr);
+            grid-template-rows: auto auto minmax(0, 1fr);
             min-height: 0;
          }
          main > section {
-            display: flex;
-            flex: 1 1 0;
-            flex-direction: column;
+            display: grid;
+            grid-row: 1 / -1;
+            grid-template-rows: subgrid;
             min-width: 0;
+            min-height: 0;
          }
          main > section[hidden] {
             display: none;
+         }
+         #diagram-pane {
+            border-left: 1px solid var(--border);
+         }
+         .pane-title {
+            margin: 0;
+            padding: 10px 12px 2px;
+            color: var(--accent);
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+         }
+         .hint {
+            margin: 0;
+            padding: 2px 12px 8px;
+            border-bottom: 1px solid var(--border);
+            color: #5f6b7a;
+            font-size: 12px;
+         }
+         /* Shrinkable, or Monaco's width from before the diagram pane showed holds it at the whole window. */
+         .pane-body {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
          }
          #editor {
             flex: 1 1 auto;
@@ -1843,10 +2419,58 @@ host-browser/index.html
          /* The diagram needs a height, `position: relative` for its tool palette, and its `<svg>` sized to it. */
          #diagram {
             position: relative;
-            flex: 1 1 auto;
             min-height: 0;
-            border-left: 1px solid #d6d8d9;
+            background: var(--surface) radial-gradient(#d5dae1 1px, transparent 1px) 0 0 / 16px 16px;
             touch-action: none;
+         }
+         /* GLSP's tool palette, in the page's colours. */
+         .tool-palette {
+            top: 12px;
+            right: 44px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
+            color: var(--text);
+            font-size: 13px;
+         }
+         .palette-header {
+            border: 0;
+            background: var(--accent);
+            color: #ffffff;
+         }
+         .header-tools i:hover {
+            background: rgb(255 255 255 / 0.2);
+         }
+         .header-tools .clicked {
+            border-color: transparent;
+            background: rgb(255 255 255 / 0.3);
+         }
+         .palette-body,
+         .tool-group,
+         .tool-button {
+            border: 0;
+            background: #ffffff;
+         }
+         .group-header,
+         .group-header:hover {
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+            font-weight: 600;
+         }
+         .tool-button {
+            padding: 6px 12px;
+         }
+         .tool-button:hover {
+            background: var(--surface);
+         }
+         .tool-button.clicked {
+            background: #dbe6f3;
+         }
+         .minimize-palette-button {
+            top: 12px;
+            right: 14px;
+            color: var(--accent);
          }
          #diagram svg {
             width: 100%;
@@ -1857,27 +2481,58 @@ host-browser/index.html
             pointer-events: none;
             overflow: hidden;
          }
-         /* GLSP's stylesheet leaves shapes at the SVG defaults: a black fill, and no stroke on an edge. */
+         /* GLSP's stylesheet leaves shapes at the SVG defaults: a black fill, no node outline, and no stroke on an edge. */
          .sprotty-node {
-            fill: #eef3f9;
-            stroke: #4a6fa5;
+            fill: #ffffff;
+            stroke: var(--accent);
+            rx: 6px;
+            filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.12));
+         }
+         /* GLSP's own rule, which draws an unselected node with no outline. */
+         .sprotty-node:not(.selected) {
+            stroke-width: 1.5px;
+         }
+         .sprotty-node.selected {
+            stroke-width: 2.5px;
+         }
+         .sprotty-label {
+            fill: var(--text);
+            font-size: 13px;
          }
          .sprotty-edge {
             fill: none;
-            stroke: #4a6fa5;
+            stroke: var(--accent);
+            stroke-width: 1.5px;
+         }
+         .sprotty-edge-arrow {
+            fill: var(--accent);
+         }
+         /* A node of another file, which the diagram draws but does not own. */
+         .external .sprotty-node {
+            fill: var(--surface);
+            stroke-dasharray: 4 3;
+            filter: none;
+         }
+         .external .sprotty-label {
+            fill: #5f6b7a;
+            font-style: italic;
          }
          footer {
-            border-top: 1px solid #d6d8d9;
+            border-top: 1px solid var(--border);
          }
          #data-status {
             margin: 0;
-            padding: 6px 12px;
+            padding: 2px 12px;
          }
          #log {
-            height: 120px;
+            height: 200px;
             margin: 0;
             padding: 6px 12px;
-            overflow: auto;
+            overflow-y: auto;
+            /* Wrapped to the window rather than scrolled sideways. */
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            color: #5f6b7a;
             font-family: ui-monospace, monospace;
             font-size: 12px;
          }
@@ -1891,23 +2546,81 @@ host-browser/index.html
       <!-- Each pane stays hidden until the page part for its head fills it. -->
       <main>
          <section id="editor-pane" hidden>
-            <div class="toolbar">
-               <select id="file" aria-label="File"></select>
-               <button id="save" type="button">Save</button>
+            <h2 class="pane-title">Monaco Editor</h2>
+            <p class="hint">
+               Pick a file to edit it with completion, hover and diagnostics. Save (Ctrl+S) keeps it in this browser, over the files in
+               <code>../workspace</code>.
+            </p>
+            <div class="pane-body">
+               <div class="toolbar">
+                  <select id="file" aria-label="File"></select>
+                  <button id="save" type="button">Save</button>
+               </div>
+               <div id="editor"></div>
             </div>
-            <div id="editor"></div>
          </section>
          <section id="diagram-pane" hidden>
+            <h2 class="pane-title">Diagram Editor</h2>
+            <p class="hint">
+               The diagram of the file in the editor. An arrow runs from a node to the node it references; a dashed node is declared in
+               another file. Create a node from the palette; the file stores no positions, so each node is placed above the node it
+               references rather than where you drop it.
+            </p>
             <div id="diagram"></div>
          </section>
       </main>
       <footer>
+         <h2 class="pane-title">Log View</h2>
          <p id="data-status" hidden></p>
          <pre id="log" aria-label="Log"></pre>
       </footer>
       <script src="./out/page.js"></script>
    </body>
 </html>
+
+==============================================================================
+host-browser/hydranium-mark.svg
+==============================================================================
+<svg width="140" height="140" viewBox="50 72 140 140" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Hydranium">
+  <defs>
+    <linearGradient id="hb" x1="40" y1="60" x2="200" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2DD4BF"/>
+      <stop offset="1" stop-color="#6366F1"/>
+    </linearGradient>
+  </defs>
+
+  <!-- open book with curved pages -->
+  <g stroke="url(#hb)" stroke-width="7" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M120 162 C 102 152 82 151 66 158 L 63 193 C 83 190 102 196 120 202 Z" fill="#fff"/>
+    <path d="M120 162 C 138 152 158 151 174 158 L 177 193 C 157 190 138 196 120 202 Z" fill="#fff"/>
+    <line x1="120" y1="162" x2="120" y2="202"/>
+  </g>
+  <!-- gray text lines on the pages -->
+  <g stroke="#94A3B8" stroke-width="4" stroke-linecap="round" fill="none">
+    <path d="M74 170 C 84 166 99 169 108 174"/>
+    <path d="M74 180 C 84 176 99 179 108 184"/>
+    <path d="M166 170 C 156 166 141 169 132 174"/>
+    <path d="M166 180 C 156 176 141 179 132 184"/>
+  </g>
+
+  <!-- necks emerging from the body -->
+  <g stroke="url(#hb)" stroke-width="11" stroke-linecap="round" fill="none">
+    <path d="M114 144 C 108 134 90 132 84 120 C 81 114 78 110 76 107"/>
+    <path d="M120 143 C 123 133 116 122 120 107"/>
+    <path d="M126 144 C 132 134 150 132 156 120 C 159 114 162 110 164 107"/>
+  </g>
+
+  <!-- the hydra's body: a tapered torso sitting in the book's opening -->
+  <path d="M120 130 C 131 132 140 146 140 158 C 140 171 132 178 120 178 C 108 178 100 171 100 158 C 100 146 109 132 120 130 Z" fill="url(#hb)"/>
+
+  <!-- three noticeably different heads -->
+  <circle cx="76" cy="104" r="14" fill="url(#hb)"/>
+  <circle cx="71" cy="100" r="2.8" fill="#fff"/>
+  <polygon points="136,92 128,105.9 112,105.9 104,92 112,78.1 128,78.1" fill="url(#hb)"/>
+  <circle cx="120" cy="88" r="2.8" fill="#fff"/>
+  <rect x="151" y="91" width="26" height="26" rx="6" fill="url(#hb)"/>
+  <circle cx="169" cy="100" r="2.8" fill="#fff"/>
+</svg>
 
 ==============================================================================
 host-browser/esbuild.mjs
@@ -2153,9 +2866,9 @@ async function main(): Promise<void> {
    const heads = connectWorkerHeads(new Worker(__WORKER_BUNDLE_URL__), { logger });
    heads.onWorkerError(report => appendLog(`worker error during ${report.phase}: ${report.message}`));
    setStatus('starting…');
-   await startEditor(heads);
+   const shownFile = await startEditor(heads);
    await showDataStatus(heads.data, `${WORKSPACE_ROOT_URI}/nodes.bookstore`);
-   await mountDiagram(heads.glsp, `${WORKSPACE_ROOT_URI}/nodes.bookstore`, logger);
+   await mountDiagram(heads.glsp, shownFile, logger);
    setStatus('ready');
 }
 
@@ -2165,8 +2878,9 @@ main().catch((error: unknown) => setStatus(`failed: ${describeError(error)}`));
 host-browser/src/editor.ts
 ==============================================================================
 // The LSP part of the page: one Monaco editor over the LSP head, a switch
-// between the workspace files, and Save. The worker holds the files, so the
-// page saves through the LSP head and the worker writes them to IndexedDB.
+// between the workspace files, which the rest of the page can follow, and
+// Save. The worker holds the files, so the page saves through the LSP head and
+// the worker writes them to IndexedDB.
 
 import { initializeLanguageClient, type WorkerHeads } from '@hydranium/client-browser';
 import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient } from '@hydranium/client-browser/monaco';
@@ -2189,8 +2903,16 @@ const LANGUAGES = ALL_LANGUAGES.map(language => ({
    extensions: [...language.fileExtensions]
 }));
 
+/** The file the editor shows, for a part of the page that follows it. */
+export interface ShownFile {
+   /** The URI of the file shown now. */
+   current(): string;
+   /** Call `listener` with the URI of each file the editor switches to. */
+   onDidChange(listener: (uri: string) => void): void;
+}
+
 /** Run the LSP handshake, then show the first workspace file in the editor. */
-export async function startEditor(heads: WorkerHeads): Promise<void> {
+export async function startEditor(heads: WorkerHeads): Promise<ShownFile> {
    let client!: MonacoLspClient;
    await initializeLanguageClient(heads.lsp, {
       rootUri: WORKSPACE_ROOT_URI,
@@ -2225,11 +2947,18 @@ export async function startEditor(heads: WorkerHeads): Promise<void> {
    const editor = client.createEditor(document.getElementById('editor') as HTMLElement, modelOf(paths[0]), {
       automaticLayout: true,
       minimap: { enabled: false },
-      scrollBeyondLastLine: false
+      scrollBeyondLastLine: false,
+      wordWrap: 'on'
    });
+   let shown = paths[0];
+   const listeners: Array<(uri: string) => void> = [];
    const show = (path: string): void => {
       select.value = path;
-      editor.setModel(modelOf(path));
+      if (path !== shown) {
+         shown = path;
+         editor.setModel(modelOf(path));
+         listeners.forEach(listener => listener(uriOf(path)));
+      }
    };
    select.addEventListener('change', () => show(select.value));
 
@@ -2266,6 +2995,7 @@ export async function startEditor(heads: WorkerHeads): Promise<void> {
       }
    });
    (document.getElementById('editor-pane') as HTMLElement).hidden = false;
+   return { current: () => uriOf(shown), onDidChange: listener => listeners.push(listener) };
 }
 
 ==============================================================================
@@ -2289,31 +3019,71 @@ export async function showDataStatus(port: DataPort, uri: string): Promise<void>
 ==============================================================================
 host-browser/src/diagram.ts
 ==============================================================================
-// The GLSP part of the page: the Bookstore diagram of one document, drawn by
-// the client module every host of this project mounts.
+// The GLSP part of the page: the Bookstore diagram of the file the editor
+// shows, drawn by the client module every host of this project mounts.
 
 import type { WorkerHeads } from '@hydranium/client-browser';
-import { glspConnection, HydraniumGlspClient, mountGlspDiagram } from '@hydranium/glsp-client';
+import { glspConnection, type GlspDiagramMount, HydraniumGlspClient, mountGlspDiagram } from '@hydranium/glsp-client';
 import { describeError, type Logger } from '@hydranium/protocol';
 import { initializeBookstoreDiagramContainer } from 'bookstore-client';
-import { BOOKSTORE_DIAGRAM_TYPE } from 'bookstore-protocol';
+import { BOOKSTORE_DIAGRAM_TYPE, BOOKSTORE_LANGUAGE } from 'bookstore-protocol';
+import type { ShownFile } from './editor.js';
+import { appendLog } from './log.js';
 
-/** Show the diagram of `sourceUri` in the page's diagram pane. */
-export async function mountDiagram(connection: WorkerHeads['glsp'], sourceUri: string, logger: Logger): Promise<void> {
-   // Shown before the mount, which measures the element it draws into.
-   (document.getElementById('diagram-pane') as HTMLElement).hidden = false;
+/**
+ * Show the diagram of the file the editor shows, and of each file it switches
+ * to. A file of another language hides the pane.
+ */
+export async function mountDiagram(connection: WorkerHeads['glsp'], shownFile: ShownFile, logger: Logger): Promise<void> {
    const glspClient = new HydraniumGlspClient({ id: 'diagram', connectionProvider: glspConnection(connection) });
-   const { loadOutcome } = await mountGlspDiagram({
-      mount: document.getElementById('diagram') as HTMLElement,
-      diagramType: BOOKSTORE_DIAGRAM_TYPE,
-      sourceUri,
-      glspClient,
-      initializeDiagramContainer: initializeBookstoreDiagramContainer,
-      logger
+   let mounted: GlspDiagramMount | undefined;
+   let mountedUri: string | undefined;
+   const show = async (uri: string): Promise<void> => {
+      // Switched away while queued: the show queued for the newer file replaces this one.
+      // Switched back before the switch away ran: its diagram is still the one shown.
+      if (uri !== shownFile.current() || uri === mountedUri) {
+         return;
+      }
+      mounted?.dispose();
+      mounted = undefined;
+      mountedUri = undefined;
+      // A fresh element, since a disposed mount leaves what it drew.
+      const element = document.createElement('div');
+      element.id = 'diagram';
+      (document.getElementById('diagram') as HTMLElement).replaceWith(element);
+      const pane = document.getElementById('diagram-pane') as HTMLElement;
+      // Shown before the mount, which measures the element it draws into.
+      pane.hidden = !BOOKSTORE_LANGUAGE.fileExtensions.some(extension => uri.endsWith(extension));
+      if (pane.hidden) {
+         return;
+      }
+      mounted = await mountGlspDiagram({
+         mount: element,
+         diagramType: BOOKSTORE_DIAGRAM_TYPE,
+         sourceUri: uri,
+         glspClient,
+         initializeDiagramContainer: initializeBookstoreDiagramContainer,
+         logger
+      });
+      if (mounted.loadOutcome.status === 'failed') {
+         throw new Error(`the diagram of ${uri} did not load: ${describeError(mounted.loadOutcome.error)}`);
+      }
+      mountedUri = uri;
+   };
+
+   // One mount at a time, so one still loading is not disposed half built, and a
+   // failed one does not stop the next.
+   let switching: Promise<void> = Promise.resolve();
+   const follow = (uri: string): Promise<void> => {
+      const shown = switching.then(() => show(uri));
+      switching = shown.catch(() => undefined);
+      return shown;
+   };
+   // Before the first mount, which the editor does not wait for.
+   shownFile.onDidChange(uri => {
+      follow(uri).catch((error: unknown) => appendLog(describeError(error)));
    });
-   if (loadOutcome.status === 'failed') {
-      throw new Error(`the diagram did not load: ${describeError(loadOutcome.error)}`);
-   }
+   await follow(shownFile.current());
 }
 
 ==============================================================================
@@ -2418,8 +3188,14 @@ test('loads every head and keeps a saved edit across a reload', async ({ page })
    await expect(editor).toContainText('node First');
    // The data head reads the document out of the same store.
    await expect(page.locator('#data-status')).toHaveText('data head: nodes.bookstore holds a BookstoreModel');
-   // The two starter nodes, drawn.
+   // The diagram follows the editor: two nodes in one file, and in the other its
+   // node and the target it references there, drawn as external.
+   const first = await page.locator('#file').inputValue();
+   await page.locator('#file').selectOption('nodes.bookstore');
    await expect(page.locator('#diagram .sprotty-node')).toHaveCount(2);
+   await page.locator('#file').selectOption('references.bookstore');
+   await expect(page.locator('#diagram .external')).toHaveText('Second (nodes.bookstore)');
+   await page.locator('#file').selectOption(first);
 
    await editor.click();
    await page.keyboard.press('ControlOrMeta+End');
@@ -2436,11 +3212,11 @@ test('loads every head and keeps a saved edit across a reload', async ({ page })
 ==============================================================================
 workspace/nodes.bookstore
 ==============================================================================
-/** The first node. Hover a name to read its comment. */
-node First
+/** The first node, pointing at the second in the same file. Hover a name to read its comment. */
+node First -> Second
 
-/** A second node, pointing at the first in the same file. */
-node Second -> First
+/** A second node. */
+node Second
 
 ==============================================================================
 workspace/references.bookstore

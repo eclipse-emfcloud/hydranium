@@ -10,13 +10,13 @@
 // The starter operation handler for the Bookstore diagram: the tool-palette
 // entry that creates a `BookstoreNode`.
 //
-// **Deleting this file and its `configureOperationHandlers` registration in
-// `diagram-module.ts` gives a read-only viewer**, and nothing else has to change
-// — creation is offered through the palette rather than through a type hint, so
-// every hint in `diagram-configuration.ts` is already `false`. The scaffold emits
-// the editable direction because that asymmetry runs one way: editable →
-// read-only is a deletion the compiler checks, while read-only → editable is
-// authoring against a seam you have not used yet.
+// **Deleting this file, `delete-operation-handler.ts` and their
+// `configureOperationHandlers` registrations in `diagram-module.ts`, and setting
+// `deletable` back to `false` in `diagram-configuration.ts`, gives a read-only
+// viewer** — creation is offered through the palette rather than through a type
+// hint. The scaffold emits the editable direction because that asymmetry runs one
+// way: editable → read-only is a deletion the compiler checks, while read-only →
+// editable is authoring against a seam you have not used yet.
 //
 // **It edits the operation's working copy.** A handler runs inside an operation,
 // where `sourceRoot` is a copy of the built root: the recording command's
@@ -30,10 +30,10 @@
 // starter grammar persists no bounds, so there is nowhere to put a coordinate: the
 // node is appended at the end of the document and the client places it.
 //
-// Like protocol's `bookstore-diagram-types.ts`, `gmodel-factory.ts` and
-// `diagram-configuration.ts`, this file knows the starter grammar's shape — the
-// `nodes` list and the `BookstoreNode` it holds. Replacing the grammar means
-// replacing these four together.
+// Like protocol's `bookstore-diagram-types.ts`, `gmodel-factory.ts`,
+// `delete-operation-handler.ts` and `diagram-configuration.ts`, this file knows
+// the starter grammar's shape — the `nodes` list and the `BookstoreNode` it
+// holds. Replacing the grammar means replacing them together.
 
 import { type Command, type CreateNodeOperation, JsonCreateNodeOperationHandler, type MaybePromise } from '@eclipse-glsp/server';
 import { appendChild } from '@hydranium/core';

@@ -9,10 +9,9 @@
 
 // Tier three: does a broken model get reported.
 //
-// These are the FRAMEWORK's own linker diagnostics, not adopter checks — the
-// scaffold binds no `validation.checks`, and a test over an invented one would
-// assert its own fixture rather than the language. Bind a check in your
-// language module and assert it here alongside these.
+// A dangling reference is the FRAMEWORK's own linker diagnostic; a repeated
+// name is reported by the scaffold's own validation check. Bind a further
+// check in your language module and assert it here alongside these.
 
 import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
@@ -44,5 +43,20 @@ describe('Bookstore validation', () => {
       expect(diagnostics).toHaveLength(1);
       expect(diagnostics[0].severity).toBe(DiagnosticSeverity.Error);
       expect(diagnostics[0].message).toContain('absent');
+   });
+
+   it('warns on each node named like one before it', async () => {
+      const { shared, Bookstore } = createServices();
+
+      const document = await parseHelper<BookstoreModel>(Bookstore)('node first\nnode second\nnode first', {
+         documentUri: 'file:///duplicate.bookstore'
+      });
+      await shared.workspace.DocumentBuilder.build([document], { validation: true });
+
+      const diagnostics = document.diagnostics ?? [];
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0].severity).toBe(DiagnosticSeverity.Warning);
+      expect(diagnostics[0].message).toBe("A node named 'first' is already declared.");
+      expect(diagnostics[0].range.start.line).toBe(2);
    });
 });

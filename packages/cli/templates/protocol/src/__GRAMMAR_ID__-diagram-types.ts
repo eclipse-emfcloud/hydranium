@@ -24,6 +24,12 @@ export const __GRAMMAR_ID_CONST___DIAGRAM_TYPE = __GRAMMAR_ID_CONST___LANGUAGE.l
 /** A `__NODE_RULE__` — the starter grammar's one named, referenceable node. */
 export const __GRAMMAR_ID_CONST___NODE_TYPE = `${DefaultTypes.NODE}:__GRAMMAR_ID__-node`;
 
+/**
+ * A `__NODE_RULE__` declared in another document, drawn because a node of this
+ * one references it. It belongs to that document, so nothing edits it here.
+ */
+export const __GRAMMAR_ID_CONST___EXTERNAL_NODE_TYPE = `${DefaultTypes.NODE}:__GRAMMAR_ID__-external-node`;
+
 /** A resolved `target` reference, drawn as a connection between two nodes. */
 export const __GRAMMAR_ID_CONST___EDGE_TYPE = `${DefaultTypes.EDGE}:__GRAMMAR_ID__-target`;
 
@@ -35,7 +41,7 @@ export const __GRAMMAR_ID_CONST___EDGE_TYPE = `${DefaultTypes.EDGE}:__GRAMMAR_ID
  * lacks its registration. Nothing holds the tuple to the constants above, so
  * an id declared without joining it escapes that check.
  */
-export const __GRAMMAR_ID_CONST___ELEMENT_TYPES = [__GRAMMAR_ID_CONST___NODE_TYPE, __GRAMMAR_ID_CONST___EDGE_TYPE] as const;
+export const __GRAMMAR_ID_CONST___ELEMENT_TYPES = [__GRAMMAR_ID_CONST___NODE_TYPE, __GRAMMAR_ID_CONST___EXTERNAL_NODE_TYPE, __GRAMMAR_ID_CONST___EDGE_TYPE] as const;
 
 /** One of the element type ids in {@link __GRAMMAR_ID_CONST___ELEMENT_TYPES}. */
 export type __GRAMMAR__ElementType = (typeof __GRAMMAR_ID_CONST___ELEMENT_TYPES)[number];

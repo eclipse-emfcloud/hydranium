@@ -12,16 +12,42 @@
 // module and adds its own beside it.
 
 import {
+   angleOfPoint,
    configureModelElement,
    type ContainerConfiguration,
+   type GEdge,
    GEdgeView,
    GNode,
    initializeDiagramContainer,
-   RoundedCornerNodeView
+   Point,
+   type RenderingContext,
+   RoundedCornerNodeView,
+   svg,
+   toDegrees
 } from '@eclipse-glsp/client';
 import { configureHydraniumModelElements, HydraniumGEdge } from '@hydranium/glsp-client';
-import { type Container, ContainerModule } from 'inversify';
-import { BOOKSTORE_EDGE_TYPE, BOOKSTORE_NODE_TYPE, type BookstoreElementType } from '@hydranium/bookstore-protocol';
+import { type Container, ContainerModule, injectable } from 'inversify';
+import {
+   BOOKSTORE_EDGE_TYPE,
+   BOOKSTORE_EXTERNAL_NODE_TYPE,
+   BOOKSTORE_NODE_TYPE,
+   type BookstoreElementType
+} from '@hydranium/bookstore-protocol';
+
+/** GLSP's edge view plus an arrowhead at the target, so an edge reads in the direction of its reference. */
+@injectable()
+export class BookstoreEdgeView extends GEdgeView {
+   protected override renderAdditionals(edge: GEdge, segments: Point[], context: RenderingContext) {
+      const end = segments[segments.length - 1];
+      const degrees = toDegrees(angleOfPoint(Point.subtract(segments[segments.length - 2], end)));
+      const arrow = svg('path', {
+         'class-sprotty-edge-arrow': true,
+         d: 'M 0,0 L 10,-4 L 10,4 Z',
+         transform: `rotate(${degrees} ${end.x} ${end.y}) translate(${end.x} ${end.y})`
+      });
+      return [...super.renderAdditionals(edge, segments, context), arrow];
+   }
+}
 
 /** The model class and view one element type renders through, as `configureModelElement` takes them. */
 export interface BookstoreElementRegistration {
@@ -38,10 +64,12 @@ export interface BookstoreElementRegistration {
  */
 export const BOOKSTORE_ELEMENT_REGISTRATIONS: Readonly<Record<BookstoreElementType, BookstoreElementRegistration>> = {
    [BOOKSTORE_NODE_TYPE]: { model: GNode, view: RoundedCornerNodeView },
+   // Drawn like a node of the document; the server marks it with the `external` CSS class.
+   [BOOKSTORE_EXTERNAL_NODE_TYPE]: { model: GNode, view: RoundedCornerNodeView },
    // The framework's edge rather than `GEdge`: GLSP's gives the labels of an
    // edge without bendpoints no finite bounds, and fitting the diagram to its
    // pane then blanks the canvas.
-   [BOOKSTORE_EDGE_TYPE]: { model: HydraniumGEdge, view: GEdgeView }
+   [BOOKSTORE_EDGE_TYPE]: { model: HydraniumGEdge, view: BookstoreEdgeView }
 };
 
 /** GLSP's default model elements, plus the registrations above. */

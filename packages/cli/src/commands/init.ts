@@ -667,7 +667,9 @@ export function runInit(options: InitCommandOptions): void {
    write(`  npx hydranium-cli reflect --services ./${server}/lib/node/services.js\n`);
    if (composition.hosts.includes('browser')) {
       const browser = detection === undefined ? 'host-browser' : `${detection.targetPath}/host-browser`;
-      write(`  npm --prefix ${browser} start   # serve the page at http://localhost:4937, Ctrl+C to stop\n`);
+      // A standalone root runs it as `start:browser`; a surrounding workspace's root is not ours to add to.
+      const start = detection === undefined ? 'npm run start:browser' : `npm --prefix ${browser} start`;
+      write(`  ${start}   # serve the page at http://localhost:4937, Ctrl+C to stop\n`);
       // The smoke test serves the page itself, on the same port.
       write(`  npm --prefix ${browser} run test:e2e:install && npm --prefix ${browser} run test:e2e   # with start stopped\n`);
    }

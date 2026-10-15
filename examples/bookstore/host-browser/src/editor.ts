@@ -8,8 +8,9 @@
  ********************************************************************************/
 
 // The LSP part of the page: one Monaco editor over the LSP head, a switch
-// between the workspace files, and Save. The worker holds the files, so the
-// page saves through the LSP head and the worker writes them to IndexedDB.
+// between the workspace files, which the rest of the page can follow, and
+// Save. The worker holds the files, so the page saves through the LSP head and
+// the worker writes them to IndexedDB.
 
 import { initializeLanguageClient, type WorkerHeads } from '@hydranium/client-browser';
 import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient } from '@hydranium/client-browser/monaco';
@@ -32,8 +33,16 @@ const LANGUAGES = ALL_LANGUAGES.map(language => ({
    extensions: [...language.fileExtensions]
 }));
 
+/** The file the editor shows, for a part of the page that follows it. */
+export interface ShownFile {
+   /** The URI of the file shown now. */
+   current(): string;
+   /** Call `listener` with the URI of each file the editor switches to. */
+   onDidChange(listener: (uri: string) => void): void;
+}
+
 /** Run the LSP handshake, then show the first workspace file in the editor. */
-export async function startEditor(heads: WorkerHeads): Promise<void> {
+export async function startEditor(heads: WorkerHeads): Promise<ShownFile> {
    let client!: MonacoLspClient;
    await initializeLanguageClient(heads.lsp, {
       rootUri: WORKSPACE_ROOT_URI,
@@ -68,11 +77,18 @@ export async function startEditor(heads: WorkerHeads): Promise<void> {
    const editor = client.createEditor(document.getElementById('editor') as HTMLElement, modelOf(paths[0]), {
       automaticLayout: true,
       minimap: { enabled: false },
-      scrollBeyondLastLine: false
+      scrollBeyondLastLine: false,
+      wordWrap: 'on'
    });
+   let shown = paths[0];
+   const listeners: Array<(uri: string) => void> = [];
    const show = (path: string): void => {
       select.value = path;
-      editor.setModel(modelOf(path));
+      if (path !== shown) {
+         shown = path;
+         editor.setModel(modelOf(path));
+         listeners.forEach(listener => listener(uriOf(path)));
+      }
    };
    select.addEventListener('change', () => show(select.value));
 
@@ -109,4 +125,5 @@ export async function startEditor(heads: WorkerHeads): Promise<void> {
       }
    });
    (document.getElementById('editor-pane') as HTMLElement).hidden = false;
+   return { current: () => uriOf(shown), onDidChange: listener => listeners.push(listener) };
 }
