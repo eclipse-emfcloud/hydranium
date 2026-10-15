@@ -61,6 +61,7 @@ export interface OperationInternals {
    recordWrittenRoot(root: AstNode): void;
    recordDropped(current: AstNode | undefined): void;
    recordExecuted(step: OperationSideEffect): void;
+   isUndoingOrRedoing(): boolean;
    assertNotDuringUndoRedo(label: string): void;
    amendBefore(update: (before: AnyObject) => AnyObject): void;
 }
@@ -82,6 +83,39 @@ const openOperations = new WeakMap<object, OperationInternals>();
 /** The operation open on `state`, executing, undoing or redoing its side effects; `undefined` between operations. */
 export function openOperationOf(state: object): OperationInternals | undefined {
    return openOperations.get(state);
+}
+
+/**
+ * How many operations an undo or redo skipped and applied, as one command-stack
+ * entry, a compound executed outside an operation, can undo several.
+ */
+export interface UndoRedoTally {
+   skipped: number;
+   applied: number;
+}
+
+/** The tally of each state's undo or redo, until {@link takeUndoRedoTally} reads it. */
+const undoRedoTallies = new WeakMap<object, UndoRedoTally>();
+
+function tallyOf(state: object): UndoRedoTally {
+   let tally = undoRedoTallies.get(state);
+   if (!tally) {
+      tally = { skipped: 0, applied: 0 };
+      undoRedoTallies.set(state, tally);
+   }
+   return tally;
+}
+
+/**
+ * The operations undone or redone on `state` since the last call, skipped and
+ * applied, for the handler that ran the undo or redo to tell the client: GLSP's
+ * command stack takes no answer from an undo, and moves past a skipped one as
+ * past any other.
+ */
+export function takeUndoRedoTally(state: object): UndoRedoTally {
+   const tally = undoRedoTallies.get(state) ?? { skipped: 0, applied: 0 };
+   undoRedoTallies.delete(state);
+   return tally;
 }
 
 /** Run `operation` as {@link HydraniumGlspOperationCommand} describes. */
@@ -172,6 +206,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
                this.before = update(this.before) as TSourceModel;
             }
          },
+         isUndoingOrRedoing: () => this.undoingOrRedoing,
          assertNotDuringUndoRedo: label => {
             if (this.undoingOrRedoing) {
                throw new Error(
@@ -411,8 +446,9 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
    /**
     * Resolve the transition onto the current model, run the commands' side
     * effects, then write once, gated on the versions the model was read at. A
-    * collision does nothing but warn; a transition with nothing left to apply,
-    * or one the model already holds, still runs the side effects.
+    * collision does nothing but warn; a transition with nothing left to
+    * apply, or one the model already holds, still runs the side effects. Either
+    * way the outcome is counted for {@link takeUndoRedoTally}.
     *
     * The caller holds `runExclusive`, which nothing here takes again.
     */
@@ -438,10 +474,12 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
             this.modelState.logger.warn(
                `${direction === 'undo' ? 'Undo' : 'Redo'} of an operation skipped (${outcome.status}); a foreign edit changed a shared field`
             );
+            tallyOf(this.modelState).skipped++;
             return;
          }
       }
       await this.undoOrRedoSideEffects(direction, merged);
+      tallyOf(this.modelState).applied++;
    }
 
    /**
@@ -597,6 +635,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
    }
 }
 
-function isCommandArray(value: unknown): value is Command[] {
+/** Whether `value` is a list of commands, as a `CompoundCommand` holds its children. */
+export function isCommandArray(value: unknown): value is Command[] {
    return Array.isArray(value) && value.every(element => typeof element === 'object' && element !== null && 'execute' in element);
 }

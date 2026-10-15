@@ -409,7 +409,9 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    /**
     * Resync after a write whose reconcile dropped the edit: during an
     * operation the operation undoes its side effects, pushes nothing, and
-    * captures the document's current root when it ends.
+    * captures the document's current root when it ends. Announced on
+    * {@link onEditDropped}, except during an undo or redo, which fails and
+    * reports that itself.
     */
    protected writeDropped(): void {
       const operation = openOperationOf(this);
@@ -418,6 +420,22 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
       } else {
          this.refreshSourceRoot();
       }
+      if (!operation?.isUndoingOrRedoing()) {
+         this.editDroppedEmitter.fire();
+      }
+   }
+
+   /** Backing emitter for {@link onEditDropped}. */
+   protected readonly editDroppedEmitter = new Emitter<void>();
+
+   /**
+    * Fires when a write's reconcile dropped a diagram edit, whether an
+    * operation or code outside one wrote it, so that one listener tells the
+    * client: the diagram returning to the document's state otherwise reads as
+    * the edit never having been made.
+    */
+   get onEditDropped(): Event<void> {
+      return this.editDroppedEmitter.event;
    }
 
    /**

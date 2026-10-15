@@ -9,7 +9,26 @@
 
 /** Undo and redo of an operation, and the order of its side effects. */
 
-import { type Command, CompoundCommand, CompoundOperation, MessageAction, RedoAction, UndoAction } from '@eclipse-glsp/server';
+import {
+   type Command,
+   CompoundCommand,
+   CompoundOperation,
+   MessageAction,
+   ModelSubmissionHandler,
+   RedoAction,
+   UndoAction
+} from '@eclipse-glsp/server';
+import {
+   DIAGRAM_REDO_ERROR,
+   DIAGRAM_REDO_FAILED,
+   DIAGRAM_REDO_PARTLY_SKIPPED,
+   DIAGRAM_REDO_SKIPPED,
+   DIAGRAM_UNDO_ERROR,
+   DIAGRAM_UNDO_FAILED,
+   DIAGRAM_UNDO_PARTLY_SKIPPED,
+   DIAGRAM_UNDO_SKIPPED
+} from '@hydranium/glsp-server/messages';
+import { ConflictError, asModelVersion } from '@hydranium/protocol';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { OrderFlowCommand } from '../../src/glsp/order-flow-command.js';
@@ -249,6 +268,88 @@ describe('undo and redo of an operation', () => {
       });
    });
 
+   it('warns the client of an undo and a redo that a foreign edit of the same field skips', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await apply(diagram, move(diagram, 'Pay', 50, 110));
+      await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 50, 110', 'node Pay at 55, 115'));
+      const messagesOf = async (action: UndoAction | RedoAction): Promise<Array<Pick<MessageAction, 'severity' | 'message'>>> => {
+         const before = diagram.actions.length;
+         await undoOrRedo(diagram, action);
+         return diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ severity, message }) => ({ severity, message }));
+      };
+
+      expect({ undo: await messagesOf(UndoAction.create()), redo: await messagesOf(RedoAction.create()) }).toEqual({
+         undo: [{ severity: 'WARNING', message: DIAGRAM_UNDO_SKIPPED.text }],
+         redo: [{ severity: 'WARNING', message: DIAGRAM_REDO_SKIPPED.text }]
+      });
+      expect(textOf(opened, layoutUri)).toContain('node Pay at 55, 115');
+   });
+
+   it('warns that only part of an undo and a redo applied when a foreign edit skips one operation of the step', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await commandStackOf(diagram).execute(
+         new CompoundCommand([
+            new OrderFlowCommand(diagram.state, 'Pay', () => place(diagram, 'Pay', 50, 110)),
+            new OrderFlowCommand(diagram.state, 'Ship', () => place(diagram, 'Ship', 700, 220))
+         ])
+      );
+      await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 50, 110', 'node Pay at 55, 115'));
+      const messagesOf = async (action: UndoAction | RedoAction): Promise<string[]> => {
+         const before = diagram.actions.length;
+         await undoOrRedo(diagram, action);
+         return diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ message }) => message);
+      };
+
+      const undo = await messagesOf(UndoAction.create());
+      const shipUndone = textOf(opened, layoutUri).includes('node Ship at 660, 200');
+      const redo = await messagesOf(RedoAction.create());
+
+      expect({
+         undo,
+         shipUndone,
+         redo,
+         shipRedone: textOf(opened, layoutUri).includes('node Ship at 700, 220'),
+         payForeign: textOf(opened, layoutUri).includes('node Pay at 55, 115')
+      }).toEqual({
+         undo: [DIAGRAM_UNDO_PARTLY_SKIPPED.text],
+         shipUndone: true,
+         redo: [DIAGRAM_REDO_PARTLY_SKIPPED.text],
+         shipRedone: true,
+         payForeign: true
+      });
+   });
+
+   it('does not warn of a skip on an undo after a skipped one whose submit failed', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await apply(diagram, move(diagram, 'Ship', 700, 220));
+      await apply(diagram, move(diagram, 'Pay', 50, 110));
+      await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 50, 110', 'node Pay at 55, 115'));
+      vi.spyOn(diagram.sessionContainer.get<ModelSubmissionHandler>(ModelSubmissionHandler), 'submitModel').mockRejectedValueOnce(
+         new Error('render failed')
+      );
+      await applyFailing(diagram, UndoAction.create());
+      const before = diagram.actions.length;
+
+      await undoOrRedo(diagram, UndoAction.create());
+
+      expect({
+         shipUndone: textOf(opened, layoutUri).includes('node Ship at 660, 200'),
+         messages: diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ message }) => message)
+      }).toEqual({ shipUndone: true, messages: [] });
+   });
+
    describe('when the serializer rounds what it writes', () => {
       const pay = (opened: Setup): string | undefined => /node Pay at \S+, \S+/.exec(textOf(opened, opened.layoutUri))?.[0];
 
@@ -403,12 +504,42 @@ describe('undo and redo of an operation', () => {
          changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 50, 110', 'node Pay at 55, 115'))
       );
 
+      const before = diagram.actions.length;
+
       await applyFailing(diagram, UndoAction.create());
 
-      expect({ count: counter.count, foreign: textOf(opened, layoutUri).includes('node Pay at 55, 115') }).toEqual({
-         count: 1,
-         foreign: true
-      });
+      expect({
+         count: counter.count,
+         foreign: textOf(opened, layoutUri).includes('node Pay at 55, 115'),
+         messages: diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ message }) => message),
+         canRedo: commandStackOf(diagram).canRedo()
+      }).toEqual({ count: 1, foreign: true, messages: [DIAGRAM_UNDO_FAILED.text], canRedo: false });
+   });
+
+   it('fails a redo whose write collides with a foreign edit that lands meanwhile, and says the history is gone', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await applyUndoable(
+         opened,
+         async () => undefined,
+         () => changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 40, 100', 'node Pay at 45, 105'))
+      );
+      await undoOrRedo(diagram, UndoAction.create());
+
+      const before = diagram.actions.length;
+
+      await applyFailing(diagram, RedoAction.create());
+
+      expect({
+         messages: diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ message }) => message),
+         canUndo: commandStackOf(diagram).canUndo()
+      }).toEqual({ messages: [DIAGRAM_REDO_FAILED.text], canUndo: false });
    });
 
    describe("when the text already holds the undo's or redo's result", () => {
@@ -609,16 +740,66 @@ describe('undo and redo of an operation', () => {
       });
    });
 
-   it('redoes the side effects of an undo whose write throws, and leaves the text as it was', async () => {
+   it('redoes the side effects of an undo whose write throws, leaves the text as it was, and says the history is gone', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
       const counter = await applyUndoable(opened, async () => undefined);
       const layoutBefore = textOf(opened, layoutUri);
       vi.spyOn(diagram.state, 'updateSourceModel').mockRejectedValueOnce(new Error('undo write failed'));
+      const before = diagram.actions.length;
 
       await applyFailing(diagram, UndoAction.create());
 
-      expect({ count: counter.count, layout: textOf(opened, layoutUri) === layoutBefore }).toEqual({ count: 1, layout: true });
+      expect({
+         count: counter.count,
+         layout: textOf(opened, layoutUri) === layoutBefore,
+         messages: diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ message, details }) => ({ message, details })),
+         canRedo: commandStackOf(diagram).canRedo()
+      }).toEqual({
+         count: 1,
+         layout: true,
+         messages: [{ message: DIAGRAM_UNDO_ERROR.text, details: 'undo write failed' }],
+         canRedo: false
+      });
+   });
+
+   it("tells a conflict thrown by an undo's write as a foreign edit", async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await applyUndoable(opened, async () => undefined);
+      vi.spyOn(diagram.state, 'updateSourceModel').mockRejectedValueOnce(new ConflictError(layoutUri, asModelVersion(1), 2));
+      const before = diagram.actions.length;
+
+      await applyFailing(diagram, UndoAction.create());
+
+      expect(
+         diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ message }) => message)
+      ).toEqual([DIAGRAM_UNDO_FAILED.text]);
+   });
+
+   it('says the history is gone when a redo fails for a reason of its own', async () => {
+      const opened = await openDiagram();
+      const { diagram } = opened;
+      await applyUndoable(opened, async () => undefined);
+      await undoOrRedo(diagram, UndoAction.create());
+      vi.spyOn(diagram.state, 'updateSourceModel').mockRejectedValueOnce(new Error('redo write failed'));
+      const before = diagram.actions.length;
+
+      await applyFailing(diagram, RedoAction.create());
+
+      expect({
+         messages: diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ message }) => message),
+         canUndo: commandStackOf(diagram).canUndo()
+      }).toEqual({ messages: [DIAGRAM_REDO_ERROR.text], canUndo: false });
    });
 
    it('fails an undo whose bridge executes a recording command, redoing the steps already run, writing nothing and flushing the stack', async () => {

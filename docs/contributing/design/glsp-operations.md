@@ -62,6 +62,23 @@ nothing, and the undo or redo succeeds on the document's built root. An array
 counts as held only whole, since a patch addresses its elements by index, and
 an inserted element never does, since two equal insertions may both be meant.
 
+## A dropped edit is told to the client
+
+Every diagram action that does not take effect sends the client a message;
+otherwise the diagram returning to the document's state, or an undo doing
+nothing, reads as a fault. A write the reconcile drops is told as a dropped
+edit, whether an operation or a recording command executed outside one wrote
+it. An undo or redo that a foreign edit of the same field skips, wholly or in
+part, is told as skipped.
+
+An undo or redo that fails clears the undo and redo history, as GLSP does, and
+its message says so. A write dropped or conflicting while it runs is told as a
+foreign edit; any other failure as an error.
+
+A recording command executed outside an operation whose write is dropped pushes
+no undo step. In a compound whose other commands wrote, the step is pushed
+without it, and the server logs a warning.
+
 ## One gesture, one operation
 
 An operation a handler dispatches runs after the handler's own, as its own

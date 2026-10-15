@@ -23,6 +23,18 @@
  */
 
 export {
+   DIAGRAM_REDO_ERROR,
+   DIAGRAM_REDO_FAILED,
+   DIAGRAM_REDO_PARTLY_SKIPPED,
+   DIAGRAM_REDO_SKIPPED,
+   DIAGRAM_UNDO_ERROR,
+   DIAGRAM_UNDO_FAILED,
+   DIAGRAM_UNDO_PARTLY_SKIPPED,
+   DIAGRAM_UNDO_SKIPPED
+} from '../command/hydranium-glsp-undo-redo-action-handler.js';
+export { DIAGRAM_LAYOUT_STALE } from '../computed-bounds/hydranium-glsp-computed-bounds-action-handler.js';
+export { DIAGRAM_EDIT_DROPPED } from '../status/diagram-status-reporter.js';
+export {
    DIAGRAM_READONLY_PARSE_ERROR,
    DIAGRAM_SESSION_REFUSED,
    SAVE_TARGET_UNKNOWN,
