@@ -20,8 +20,9 @@
 import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 import type { BookstoreModel } from '../src/language-server/ast.js';
-import type { BookstoreModel as TransferBookstoreModel } from '@hydranium/bookstore-protocol';
+import { BookstoreModel as TransferBookstoreModel, BookstoreNode } from '@hydranium/bookstore-protocol';
 import { createServices } from '../src/node/services.js';
+import { transferNode } from './generated-hydranium/transfer-builder.js';
 
 describe('Bookstore serialization', () => {
    const source = 'node first -> second\nnode second';
@@ -37,13 +38,9 @@ describe('Bookstore serialization', () => {
 
    it('emits the same text from a transfer model, whose references are plain strings', async () => {
       const { Bookstore } = createServices();
-      const model: TransferBookstoreModel = {
-         $type: 'BookstoreModel',
-         nodes: [
-            { $type: 'BookstoreNode', name: 'first', target: 'second' },
-            { $type: 'BookstoreNode', name: 'second' }
-         ]
-      };
+      const model = transferNode(TransferBookstoreModel, {
+         nodes: [transferNode(BookstoreNode, { name: 'first', target: 'second' }), transferNode(BookstoreNode, { name: 'second' })]
+      });
 
       expect(await Bookstore.serializer.Serializer.serializeTransfer(model)).toBe(source);
    });

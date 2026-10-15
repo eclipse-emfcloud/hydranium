@@ -10,7 +10,7 @@
 import { type JsonModelState } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
-import { type BaseVersion, type TransferElement, type VersionedModel } from '@hydranium/protocol';
+import { type BaseVersion, type TransferElement, type TransferTypeFor, type VersionedModel } from '@hydranium/protocol';
 import { type OperationTransition } from '../command/hydranium-glsp-operation-command.js';
 import { AbstractHydraniumGlspState } from './abstract-hydranium-glsp-state.js';
 import { reconcileSourceModelWrite } from './reconcile-source-model-write.js';
@@ -47,15 +47,18 @@ import { reconcileSourceModelWrite } from './reconcile-source-model-write.js';
  * *orchestration* that consults it.
  */
 @injectable()
-export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourceModel extends TransferElement>
-   extends AbstractHydraniumGlspState<TRoot, TSourceModel>
-   implements JsonModelState<TSourceModel>
+export class ReconcilingTransferHydraniumGlspState<
+   TRoot extends AstNode,
+   TTransferMap extends { [K in keyof TTransferMap]: TransferElement } = Record<string, TransferElement>
+>
+   extends AbstractHydraniumGlspState<TRoot, TransferTypeFor<TRoot, TTransferMap>>
+   implements JsonModelState<TransferTypeFor<TRoot, TTransferMap>>
 {
    /**
     * The projection a forward-write conflict reconciles the user's intent
     * from, taken from the built root on every capture.
     */
-   protected base!: TSourceModel;
+   protected base!: TransferTypeFor<TRoot, TTransferMap>;
 
    /**
     * Persisted-shape projection of the current source root, consumed by GLSP's
@@ -65,7 +68,7 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
     * properties excluded), so the diff reflects only authored state.
     * Synchronous — the encoder walks the in-memory AST without serialising.
     */
-   get sourceModel(): TSourceModel {
+   get sourceModel(): TransferTypeFor<TRoot, TTransferMap> {
       return this.projectRoot(this.sourceRoot);
    }
 
@@ -73,12 +76,14 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
     * The source model of `root`. The single projection seam: the source
     * model, the refetch and {@link normalizeTransition} all project through it.
     */
-   protected projectRoot(root: AstNode): TSourceModel {
-      return this.sharedServices.model.TransferEncoder.toTransfer(root, 'grammar') as unknown as TSourceModel;
+   protected projectRoot(root: AstNode): TransferTypeFor<TRoot, TTransferMap> {
+      return this.sharedServices.model.TransferEncoder.toTransfer(root, 'grammar') as TransferTypeFor<TRoot, TTransferMap>;
    }
 
    /** Both ends serialized for the source document and parsed back, unless they are equal. */
-   override async normalizeTransition(transition: OperationTransition<TSourceModel>): Promise<OperationTransition<TSourceModel>> {
+   override async normalizeTransition(
+      transition: OperationTransition<TransferTypeFor<TRoot, TTransferMap>>
+   ): Promise<OperationTransition<TransferTypeFor<TRoot, TTransferMap>>> {
       if (JSON.stringify(transition.from) === JSON.stringify(transition.to)) {
          return transition;
       }
@@ -101,11 +106,11 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
     * (force = last-writer-wins, reconciling = field-level merge) shared with
     * undo / redo.
     */
-   async updateSourceModel(model: TSourceModel, baseVersion: BaseVersion = this.baseVersion): Promise<void> {
+   async updateSourceModel(model: TransferTypeFor<TRoot, TTransferMap>, baseVersion: BaseVersion = this.baseVersion): Promise<void> {
       // Orchestration lives in `reconcileSourceModelWrite` so the multi-document
       // state gets the identical conflict handling; this method supplies only
       // the single-document meaning of persist / project.
-      return reconcileSourceModelWrite<TSourceModel>(model, baseVersion, {
+      return reconcileSourceModelWrite<TransferTypeFor<TRoot, TTransferMap>>(model, baseVersion, {
          persist: async (candidate, candidateBaseVersion) => {
             const { root } = await this.persist(candidate, candidateBaseVersion);
             this.captureWrittenRoot(root);
@@ -129,7 +134,7 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
     * alongside so undo compares what this writes; the orchestration in
     * {@link updateSourceModel} is unchanged.
     */
-   protected async persist(model: TSourceModel, baseVersion: BaseVersion): Promise<{ root: TRoot }> {
+   protected async persist(model: TransferTypeFor<TRoot, TTransferMap>, baseVersion: BaseVersion): Promise<{ root: TRoot }> {
       const document = await this.requireModelSession().update({ uri: this._sourceUri, model, baseVersion });
       return document as unknown as { root: TRoot };
    }
@@ -142,7 +147,7 @@ export class ReconcilingTransferHydraniumGlspState<TRoot extends AstNode, TSourc
     * + the framework encoder's `'grammar'` mode; adopters override alongside
     * {@link persist}.
     */
-   protected async refetch(): Promise<VersionedModel<TSourceModel> | undefined> {
+   protected async refetch(): Promise<VersionedModel<TransferTypeFor<TRoot, TTransferMap>> | undefined> {
       const theirs = await this.readCurrentRoot(this._sourceUri);
       return (
          theirs && {

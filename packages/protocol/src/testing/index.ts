@@ -11,8 +11,8 @@
 // primitives: `makeFakeClock` (deterministic `Clock` double on one virtual time
 // axis), `waitFor` / `tick`, the client-side data-head doubles
 // (`makeFakeDataPort` / `makeCapturingDataClient`), the translation-catalogue
-// audit (`flattenCatalogue` / `findUndeclaredCodes` / `findSharedCodes`), and
-// the `Harness` marker
+// audit (`flattenCatalogue` / `findUndeclaredCodes` / `findSharedCodes`), the
+// transfer-node builder (`makeTransferNodeBuilder`), and the `Harness` marker
 // interface every framework harness extends. Kept out of the main barrel so production bundles don't pull
 // the test scaffolding in by default; adopters opt in by importing from
 // `@hydranium/protocol/testing`.
@@ -26,4 +26,5 @@ export * from './catalogue-audit';
 export * from './data-doubles';
 export * from './fake-clock';
 export * from './harness';
+export * from './transfer-node-builder';
 export * from './wait-for';

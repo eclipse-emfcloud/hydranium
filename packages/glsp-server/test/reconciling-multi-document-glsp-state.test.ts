@@ -120,7 +120,7 @@ function builtRoot(harness: Harness, uri: string): TestRoot {
 }
 
 @injectable()
-class TestMultiState extends ReconcilingMultiDocumentGlspState<TestRoot, TestPrimary> {
+class TestMultiState extends ReconcilingMultiDocumentGlspState<TestRoot, { TestRoot: TestPrimary }> {
    get exposedBase(): TestComposite | undefined {
       return this.base;
    }

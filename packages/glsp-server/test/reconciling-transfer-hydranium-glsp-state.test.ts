@@ -84,7 +84,7 @@ interface Harness {
 }
 
 @injectable()
-class TestReconcilingState extends ReconcilingTransferHydraniumGlspState<TestRoot, TestSourceModel> {
+class TestReconcilingState extends ReconcilingTransferHydraniumGlspState<TestRoot, { TestRoot: TestSourceModel }> {
    /** Expose the protected base for assertions. */
    get exposedBase(): TestSourceModel | undefined {
       return this.base;

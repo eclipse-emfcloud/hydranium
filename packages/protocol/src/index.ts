@@ -41,6 +41,7 @@ export * from './profiling';
 export * from './tracer';
 export * from './transfer-diagnostic';
 export * from './transfer-element';
+export * from './types';
 export * from './model-service';
 export * from './transfer-document';
 export * from './model-server';

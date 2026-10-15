@@ -37,9 +37,9 @@
   },
   "scripts": {
     "build": "npm run generate && tsc -b",
-    "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium tsconfig.tsbuildinfo",
+    "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium test/generated-hydranium tsconfig.tsbuildinfo",
     "generate": "npm run langium:generate && npm run generate:transfer-model",
-    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file ../protocol/src/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --languages-file ../protocol/src/generated-hydranium/languages.ts --element-type-name BookstoreElement --terminals-name BookstoreTerminals --regen-command \"Run: npm --prefix examples/bookstore/server run generate:transfer-model\"",
+    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file ../protocol/src/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --transfer-builder-file test/generated-hydranium/transfer-builder.ts --languages-file ../protocol/src/generated-hydranium/languages.ts --element-type-name BookstoreElement --terminals-name BookstoreTerminals --regen-command \"Run: npm --prefix examples/bookstore/server run generate:transfer-model\"",
     "langium:generate": "langium generate",
     "langium:watch": "langium generate --watch",
     "lint": "oxlint --report-unused-disable-directives --format stylish --config ../../../oxlint.config.cjs src test --max-warnings 0",

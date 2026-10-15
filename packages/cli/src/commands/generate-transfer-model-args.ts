@@ -30,6 +30,7 @@ export const GENERATE_TRANSFER_MODEL_FLAGS: readonly string[] = [
    '--augmentation-file',
    '--out-file',
    '--ast-builder-file',
+   '--transfer-builder-file',
    '--languages-file',
    '--element-type-name',
    '--terminals-name',
@@ -51,11 +52,12 @@ export const GENERATE_TRANSFER_MODEL_HELP: readonly string[] = [
    'Usage: hydranium-cli generate-transfer-model [options]',
    '',
    'Generate a serializable transfer-model TypeScript file from a Langium AST, and',
-   'optionally an AST-node builder module bound to the same reflection. The',
-   'required inputs (--ast-file / --augmentation-file / --out-file) may instead come',
-   'from a --config JSON file, and --ast-file can be auto-discovered from a Langium',
-   "config's `out` directory. Precedence, highest first: explicit flags, then the",
-   '--config file, then the langium-config-derived --ast-file.',
+   'optionally an AST-node builder bound to the same reflection and a transfer-node',
+   'builder for tests. The required inputs (--ast-file / --augmentation-file /',
+   '--out-file) may instead come from a --config JSON file, and --ast-file can be',
+   "auto-discovered from a Langium config's `out` directory. Precedence, highest",
+   'first: explicit flags, then the --config file, then the langium-config-derived',
+   '--ast-file.',
    '',
    'Options:',
    '  --config <path>               JSON config supplying any of the options below.',
@@ -75,6 +77,9 @@ export const GENERATE_TRANSFER_MODEL_HELP: readonly string[] = [
    '                                spanning all of them. Omit if nothing constructs',
    '                                AST nodes. Same restriction as --out-file: keep it',
    "                                out of langium-cli's own `out` directory.",
+   '  --transfer-builder-file <p>   Also emit a test module here binding',
+   '                                makeTransferNodeBuilder to the transfer model as',
+   '                                transferNode. Import it from tests only.',
    "  --languages-file <path>       Also emit each grammar's language id and file",
    '                                extensions here, read from the module.ts beside',
    '                                --ast-file, for a package without Langium.',
@@ -133,6 +138,9 @@ export function parseGenerateOptions(args: string[], onError: UsageError = exitW
             break;
          case '--ast-builder-file':
             flags.astBuilderFile = next();
+            break;
+         case '--transfer-builder-file':
+            flags.transferBuilderFile = next();
             break;
          case '--languages-file':
             flags.languagesFile = next();

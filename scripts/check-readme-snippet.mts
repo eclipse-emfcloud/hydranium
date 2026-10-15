@@ -87,6 +87,11 @@ const SNIPPET_TARGETS = [
       rewrites: [{ from: "'./generated/", to: "'../src/language-server/generated/" }]
    },
    {
+      readme: 'packages/cli/README.md',
+      host: 'examples/order-flow/protocol',
+      rewrites: [{ from: "'./generated-hydranium/", to: "'../src/generated-hydranium/" }]
+   },
+   {
       readme: 'examples/order-flow/client/README.md',
       host: 'examples/order-flow/client'
    },

@@ -10,6 +10,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { SourceFile } from 'ts-morph';
+import { relativeImportPath } from './generated-module-path.js';
 
 /** Inputs for {@link emitAstBuilder}, resolved by the transfer-model command. */
 export interface EmitAstBuilderOptions {
@@ -173,17 +174,6 @@ function findReflectionConstName(astSource: SourceFile, languageId: string): str
       }
    }
    return 'reflection';
-}
-
-/**
- * Module specifier for the AST file as seen from the generated module's own
- * directory. Emitted with a `.js` extension and posix separators because the
- * output is ESM TypeScript, where the specifier names the compiled sibling.
- */
-function relativeImportPath(outFile: string, astFile: string): string {
-   const relative = path.relative(path.dirname(path.resolve(outFile)), path.resolve(astFile));
-   const posix = relative.split(path.sep).join('/').replace(/\.ts$/, '.js');
-   return posix.startsWith('.') ? posix : `./${posix}`;
 }
 
 function renderAstBuilder(

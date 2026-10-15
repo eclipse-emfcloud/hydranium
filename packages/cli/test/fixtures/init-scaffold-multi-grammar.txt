@@ -112,7 +112,10 @@ protocol/src/index.ts
 // constant or a wire type.
 //
 // The server's `generate` writes `generated-hydranium/` from the grammar;
-// commit those modules with the grammar change that produced them.
+// commit those modules with the grammar change that produced them. An interface
+// narrowed here hides the generated constant of the same name; re-export that
+// constant beside it, and declare the type map under its own name with the
+// narrowed entry, or the builder and the GLSP state keep the generated one.
 
 export * from './generated-hydranium/languages.js';
 export * from './generated-hydranium/transfer-model.js';
@@ -177,9 +180,9 @@ server/package.json
   },
   "scripts": {
     "build": "npm run generate && tsc -b",
-    "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium tsconfig.tsbuildinfo",
+    "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium test/generated-hydranium tsconfig.tsbuildinfo",
     "generate": "npm run langium:generate && npm run generate:transfer-model",
-    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file ../protocol/src/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --languages-file ../protocol/src/generated-hydranium/languages.ts --element-type-name OrderFlowElement --terminals-name OrderFlowTerminals --regen-command \"Run: npm --prefix server run generate:transfer-model\"",
+    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file ../protocol/src/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --transfer-builder-file test/generated-hydranium/transfer-builder.ts --languages-file ../protocol/src/generated-hydranium/languages.ts --element-type-name OrderFlowElement --terminals-name OrderFlowTerminals --regen-command \"Run: npm --prefix server run generate:transfer-model\"",
     "langium:generate": "langium generate",
     "langium:watch": "langium generate --watch",
     "start": "node lib/main.js --stdio",
@@ -1369,12 +1372,16 @@ server/test/serialization.test.ts
 import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 import type { DomainModel, ProcessModel, LayoutModel } from '../src/language-server/ast.js';
-import type {
+import {
    DomainModel as TransferDomainModel,
+   DomainNode,
    ProcessModel as TransferProcessModel,
-   LayoutModel as TransferLayoutModel
+   ProcessNode,
+   LayoutModel as TransferLayoutModel,
+   LayoutNode
 } from 'order-flow-protocol';
 import { createServices } from '../src/node/services.js';
+import { transferNode } from './generated-hydranium/transfer-builder.js';
 
 describe('Domain serialization', () => {
    const source = 'node first -> second\nnode second';
@@ -1390,13 +1397,12 @@ describe('Domain serialization', () => {
 
    it('emits the same text from a transfer model, whose references are plain strings', async () => {
       const { Domain } = createServices();
-      const model: TransferDomainModel = {
-         $type: 'DomainModel',
+      const model = transferNode(TransferDomainModel, {
          nodes: [
-            { $type: 'DomainNode', name: 'first', target: 'second' },
-            { $type: 'DomainNode', name: 'second' }
+            transferNode(DomainNode, { name: 'first', target: 'second' }),
+            transferNode(DomainNode, { name: 'second' })
          ]
-      };
+      });
 
       expect(await Domain.serializer.Serializer.serializeTransfer(model)).toBe(source);
    });
@@ -1416,13 +1422,12 @@ describe('Process serialization', () => {
 
    it('emits the same text from a transfer model, whose references are plain strings', async () => {
       const { Process } = createServices();
-      const model: TransferProcessModel = {
-         $type: 'ProcessModel',
+      const model = transferNode(TransferProcessModel, {
          nodes: [
-            { $type: 'ProcessNode', name: 'first', target: 'second' },
-            { $type: 'ProcessNode', name: 'second' }
+            transferNode(ProcessNode, { name: 'first', target: 'second' }),
+            transferNode(ProcessNode, { name: 'second' })
          ]
-      };
+      });
 
       expect(await Process.serializer.Serializer.serializeTransfer(model)).toBe(source);
    });
@@ -1442,13 +1447,12 @@ describe('Layout serialization', () => {
 
    it('emits the same text from a transfer model, whose references are plain strings', async () => {
       const { Layout } = createServices();
-      const model: TransferLayoutModel = {
-         $type: 'LayoutModel',
+      const model = transferNode(TransferLayoutModel, {
          nodes: [
-            { $type: 'LayoutNode', name: 'first', target: 'second' },
-            { $type: 'LayoutNode', name: 'second' }
+            transferNode(LayoutNode, { name: 'first', target: 'second' }),
+            transferNode(LayoutNode, { name: 'second' })
          ]
-      };
+      });
 
       expect(await Layout.serializer.Serializer.serializeTransfer(model)).toBe(source);
    });

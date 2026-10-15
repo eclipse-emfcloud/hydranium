@@ -13,8 +13,8 @@ export interface BookstoreElement {
 }
 
 // --- Type Constants ---
-export const BookstoreModelType = 'BookstoreModel';
-export const BookstoreNodeType = 'BookstoreNode';
+export const BookstoreModel = { $type: 'BookstoreModel', nodes: 'nodes' } as const;
+export const BookstoreNode = { $type: 'BookstoreNode', name: 'name', target: 'target' } as const;
 
 // --- Type Aliases ---
 export type BookstoreKeywordNames = | "->"
@@ -31,12 +31,12 @@ export const BookstoreTerminals = {
 
 // --- Interfaces ---
 export interface BookstoreModel extends BookstoreElement {
-   readonly $type: typeof BookstoreModelType;
+   readonly $type: 'BookstoreModel';
    nodes: Array<BookstoreNode>;
 }
 
 export interface BookstoreNode extends BookstoreElement {
-   readonly $type: typeof BookstoreNodeType;
+   readonly $type: 'BookstoreNode';
    name: string;
    target?: Reference<BookstoreNode>;
 }
@@ -47,14 +47,58 @@ export function isBookstoreElement(item: unknown): item is BookstoreElement {
 }
 
 export function isBookstoreModel(item: unknown): item is BookstoreModel {
-   return isBookstoreElement(item) && item.$type === BookstoreModelType;
+   return isBookstoreElement(item) && item.$type === 'BookstoreModel';
 }
 
 export function isBookstoreNode(item: unknown): item is BookstoreNode {
-   return isBookstoreElement(item) && item.$type === BookstoreNodeType;
+   return isBookstoreElement(item) && item.$type === 'BookstoreNode';
 }
 
 export function isBookstoreKeywordNames(item: unknown): item is BookstoreKeywordNames {
    return item === '->' || item === 'node';
 }
+
+// --- Type Map ---
+export type BookstoreTransferTypes = {
+   BookstoreModel: BookstoreModel;
+   BookstoreNode: BookstoreNode;
+};
+
+// --- Reflection ---
+export interface BookstoreTransferTypeMetaData {
+   readonly name: string;
+   readonly properties: {
+      readonly [name: string]: { readonly name: string; readonly defaultValue?: unknown; readonly optional?: boolean; readonly referenceType?: string };
+   };
+   readonly superTypes: readonly string[];
+}
+
+export const BookstoreTransferReflection = {
+   types: {
+      BookstoreModel: { name: 'BookstoreModel', properties: { nodes: { name: 'nodes', defaultValue: [], optional: true } }, superTypes: [] },
+      BookstoreNode: { name: 'BookstoreNode', properties: { name: { name: 'name' }, target: { name: 'target', optional: true, referenceType: 'BookstoreNode' } }, superTypes: [] },
+   } as const satisfies { readonly [type: string]: BookstoreTransferTypeMetaData },
+
+   getAllTypes(): string[] {
+      return Object.keys(this.types);
+   },
+
+   getTypeMetaData(type: string): BookstoreTransferTypeMetaData {
+      return Object.prototype.hasOwnProperty.call(this.types, type)
+         ? (this.types as { readonly [type: string]: BookstoreTransferTypeMetaData })[type]
+         : { name: type, properties: {}, superTypes: [] };
+   },
+
+   isSubtype(subtype: string, supertype: string): boolean {
+      return subtype === supertype || this.getTypeMetaData(subtype).superTypes.some(type => this.isSubtype(type, supertype));
+   },
+
+   getAllSubTypes(type: string): string[] {
+      return this.getAllTypes().filter(candidate => this.isSubtype(candidate, type));
+   },
+
+   isInstance(item: unknown, type: string): boolean {
+      return isBookstoreElement(item) && this.isSubtype(item.$type, type);
+   }
+};
 

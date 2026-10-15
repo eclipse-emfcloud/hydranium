@@ -15,7 +15,7 @@ import { injectable } from 'inversify';
 import { LayoutModel, type ProcessModel, isLayoutModel } from '../language-server/ast.js';
 import { layoutNode } from '../language-server/order-flow-ast-builder.js';
 import { layoutUriFor } from '../language-server/layout-file.js';
-import type { ProcessModel as TransferProcessModel } from '@hydranium/example-order-flow-protocol';
+import type { OrderFlowTransferTypes, ProcessModel as TransferProcessModel } from '@hydranium/example-order-flow-protocol';
 import type { OrderFlowGlspIndex } from './order-flow-glsp-index.js';
 
 /**
@@ -50,7 +50,7 @@ export type OrderFlowSourceModel = MultiDocumentSourceModel<TransferProcessModel
  * a session's writes open nothing.
  */
 @injectable()
-export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<ProcessModel, TransferProcessModel> {
+export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<ProcessModel, OrderFlowTransferTypes> {
    declare readonly index: OrderFlowGlspIndex;
 
    /** URI of this process's layout file, whether or not it exists yet. */

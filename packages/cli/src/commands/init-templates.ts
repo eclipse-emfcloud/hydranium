@@ -515,9 +515,9 @@ __BIN__  },
   },
   "scripts": {
     "build": "npm run generate && tsc -b",
-    "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium tsconfig.tsbuildinfo",
+    "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium test/generated-hydranium tsconfig.tsbuildinfo",
     "generate": "npm run langium:generate && npm run generate:transfer-model",
-    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file ../protocol/src/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --languages-file ../protocol/src/generated-hydranium/languages.ts --element-type-name __NAME__Element --terminals-name __NAME__Terminals --regen-command \\"Run: __NPM_RUN__ generate:transfer-model\\"",
+    "generate:transfer-model": "hydranium-cli generate-transfer-model --ast-file src/language-server/generated/ast.ts --augmentation-file src/language-server/ast.ts --out-file ../protocol/src/generated-hydranium/transfer-model.ts --ast-builder-file src/language-server/generated-hydranium/ast-builder.ts --transfer-builder-file test/generated-hydranium/transfer-builder.ts --languages-file ../protocol/src/generated-hydranium/languages.ts --element-type-name __NAME__Element --terminals-name __NAME__Terminals --regen-command \\"Run: __NPM_RUN__ generate:transfer-model\\"",
     "langium:generate": "langium generate",
     "langium:watch": "langium generate --watch",
 __LINT__    "start": "node lib/main.js__START_ARGS__",
@@ -1435,13 +1435,9 @@ const SERIALIZATION_SUITE = `describe('__GRAMMAR__ serialization', () => {
 
    it('emits the same text from a transfer model, whose references are plain strings', async () => {
       const { __GRAMMAR__ } = createServices();
-      const model: Transfer__ENTRY_RULE__ = {
-         $type: '__ENTRY_RULE__',
-         nodes: [
-            { $type: '__NODE_RULE__', name: 'first', target: 'second' },
-            { $type: '__NODE_RULE__', name: 'second' }
-         ]
-      };
+      const model = transferNode(Transfer__ENTRY_RULE__, {
+         nodes: __TRANSFER_NODES__
+      });
 
       expect(await __GRAMMAR__.serializer.Serializer.serializeTransfer(model)).toBe(source);
    });
@@ -1460,7 +1456,20 @@ const SERIALIZATION_SUITE = `describe('__GRAMMAR__ serialization', () => {
 function serializationTest(composition: InitComposition): string {
    const columns = columnsFor(composition);
    const astTypes = composition.grammars.map(grammar => grammar.entryRule);
-   const transferTypes = composition.grammars.map(grammar => `${grammar.entryRule} as Transfer${grammar.entryRule}`);
+   const transferConstants = composition.grammars.flatMap(grammar => [
+      `${grammar.entryRule} as Transfer${grammar.entryRule}`,
+      grammar.nodeRule
+   ]);
+   const suite = (grammar: InitGrammarNames): string => {
+      const nodes = [
+         `transferNode(${grammar.nodeRule}, { name: 'first', target: 'second' })`,
+         `transferNode(${grammar.nodeRule}, { name: 'second' })`
+      ];
+      const single = `[${nodes.join(', ')}]`;
+      const literal =
+         `         nodes: ${single}`.length <= columns ? single : `[\n${nodes.map(node => `            ${node}`).join(',\n')}\n         ]`;
+      return render(SERIALIZATION_SUITE, composition, grammar).replace('__TRANSFER_NODES__', literal);
+   };
    const text = `// Round-trips each grammar through its serializer: parse the source, serialize
 // the model, compare the text. The serializer is the parser's inverse, so this
 // is the assertion that keeps a client session's \`update\` / \`save\` writing
@@ -1474,10 +1483,11 @@ function serializationTest(composition: InitComposition): string {
 import { parseHelper } from '@hydranium/core/testing';
 import { describe, expect, it } from 'vitest';
 ${importList(astTypes, '../src/language-server/ast.js', columns, true)}
-${importList(transferTypes, memberPackageName(composition, 'protocol'), columns, true)}
+${importList(transferConstants, memberPackageName(composition, 'protocol'), columns)}
 import { createServices } from '../src/node/services.js';
+import { transferNode } from './generated-hydranium/transfer-builder.js';
 
-${composition.grammars.map(grammar => render(SERIALIZATION_SUITE, composition, grammar)).join('\n\n')}
+${composition.grammars.map(suite).join('\n\n')}
 `;
    return text;
 }
@@ -2103,7 +2113,10 @@ function protocolIndexFile(composition: InitComposition): string {
 // constant or a wire type.
 //
 // The server's \`generate\` writes \`generated-hydranium/\` from the grammar;
-// commit those modules with the grammar change that produced them.
+// commit those modules with the grammar change that produced them. An interface
+// narrowed here hides the generated constant of the same name; re-export that
+// constant beside it, and declare the type map under its own name with the
+// narrowed entry, or the builder and the GLSP state keep the generated one.
 
 ${modules.map(module => `export * from '${module}';`).join('\n')}
 `;

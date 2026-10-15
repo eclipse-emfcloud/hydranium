@@ -38,6 +38,7 @@
         "syntaxes/**",
         "src/language-server/generated/**",
         "src/language-server/generated-hydranium/**",
+        "test/generated-hydranium/**",
         "tsconfig.tsbuildinfo"
       ]
     },

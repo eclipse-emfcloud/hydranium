@@ -17,6 +17,7 @@ import {
    type ModelVersion,
    type TextVersion,
    type TransferElement,
+   type TransferTypeFor,
    type VersionedModel,
    describeErrorWithStack
 } from '@hydranium/protocol';
@@ -78,18 +79,24 @@ export interface VersionedMultiDocumentSourceModel<TPrimary extends TransferElem
  * again before each write; an adopter whose write set can name a document that
  * does not exist yet overrides {@link openForWrite} to create it through
  * {@link createSecondaryDocument}.
+ *
+ * `TTransferMap` is the transfer model's `$type` → interface map, the generated
+ * `<LanguageId>TransferTypes`; the primary's projection is typed through it.
  */
 @injectable()
-export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary extends TransferElement = TransferElement>
-   extends AbstractHydraniumGlspState<TRoot, MultiDocumentSourceModel<TPrimary>>
-   implements JsonModelState<MultiDocumentSourceModel<TPrimary>>
+export class ReconcilingMultiDocumentGlspState<
+   TRoot extends AstNode,
+   TTransferMap extends { [K in keyof TTransferMap]: TransferElement } = Record<string, TransferElement>
+>
+   extends AbstractHydraniumGlspState<TRoot, MultiDocumentSourceModel<TransferTypeFor<TRoot, TTransferMap>>>
+   implements JsonModelState<MultiDocumentSourceModel<TransferTypeFor<TRoot, TTransferMap>>>
 {
    /**
     * The projection across the whole write set that a forward-write conflict
     * reconciles the user's intent from, taken from the built roots on every
     * capture.
     */
-   protected base!: MultiDocumentSourceModel<TPrimary>;
+   protected base!: MultiDocumentSourceModel<TransferTypeFor<TRoot, TTransferMap>>;
 
    /** The documents {@link createSecondaryDocument} created for the {@link persist} under way, with the version each was created at. */
    protected readonly createdForWrite = new Map<string, TextVersion>();
@@ -105,7 +112,7 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * document, whereas an explicit `undefined` would diff as a removal and
     * persist as a deletion of content the state simply could not see.
     */
-   get sourceModel(): MultiDocumentSourceModel<TPrimary> {
+   get sourceModel(): MultiDocumentSourceModel<TransferTypeFor<TRoot, TTransferMap>> {
       const secondaries: Record<string, TransferElement> = {};
       for (const uri of this.secondaryUris) {
          const projection = this.projectDocument(uri);
@@ -128,13 +135,13 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * stays out of the transition's patch anyway.
     */
    override async normalizeTransition(
-      transition: OperationTransition<MultiDocumentSourceModel<TPrimary>>
-   ): Promise<OperationTransition<MultiDocumentSourceModel<TPrimary>>> {
+      transition: OperationTransition<MultiDocumentSourceModel<TransferTypeFor<TRoot, TTransferMap>>>
+   ): Promise<OperationTransition<MultiDocumentSourceModel<TransferTypeFor<TRoot, TTransferMap>>>> {
       const from = { primary: transition.from.primary, secondaries: { ...transition.from.secondaries } };
       const to = { primary: transition.to.primary, secondaries: { ...transition.to.secondaries } };
       if (JSON.stringify(from.primary) !== JSON.stringify(to.primary)) {
-         from.primary = this.projectRoot<TPrimary>(await this.roundTrip(this._sourceUri, from.primary));
-         to.primary = this.projectRoot<TPrimary>(await this.roundTrip(this._sourceUri, to.primary));
+         from.primary = this.projectRoot((await this.roundTrip(this._sourceUri, from.primary)) as TRoot);
+         to.primary = this.projectRoot((await this.roundTrip(this._sourceUri, to.primary)) as TRoot);
       }
       for (const uri of new Set([...Object.keys(from.secondaries), ...Object.keys(to.secondaries)])) {
          if (JSON.stringify(from.secondaries[uri]) === JSON.stringify(to.secondaries[uri])) {
@@ -217,9 +224,12 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * policy exactly as the single-document state does — the orchestration is
     * shared.
     */
-   async updateSourceModel(model: MultiDocumentSourceModel<TPrimary>, baseVersion: BaseVersion = this.baseVersion): Promise<void> {
+   async updateSourceModel(
+      model: MultiDocumentSourceModel<TransferTypeFor<TRoot, TTransferMap>>,
+      baseVersion: BaseVersion = this.baseVersion
+   ): Promise<void> {
       let secondaryVersions: Readonly<Record<string, ModelVersion>> | undefined;
-      return reconcileSourceModelWrite<MultiDocumentSourceModel<TPrimary>>(model, baseVersion, {
+      return reconcileSourceModelWrite<MultiDocumentSourceModel<TransferTypeFor<TRoot, TTransferMap>>>(model, baseVersion, {
          persist: async (candidate, candidateBaseVersion) => {
             const { root } = await this.persist(candidate, candidateBaseVersion, secondaryVersions);
             this.captureWrittenRoot(root);
@@ -254,7 +264,7 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * created for it that {@link closesCreatedDocument} accepts.
     */
    protected async persist(
-      model: MultiDocumentSourceModel<TPrimary>,
+      model: MultiDocumentSourceModel<TransferTypeFor<TRoot, TTransferMap>>,
       baseVersion: BaseVersion,
       secondaryVersions?: Readonly<Record<string, ModelVersion>>
    ): Promise<{ root: TRoot }> {
@@ -381,7 +391,7 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
     * since a reconcile without it has nothing to merge into; an unreadable
     * secondary is omitted the same way {@link sourceModel} omits one.
     */
-   protected async refetch(): Promise<VersionedMultiDocumentSourceModel<TPrimary> | undefined> {
+   protected async refetch(): Promise<VersionedMultiDocumentSourceModel<TransferTypeFor<TRoot, TTransferMap>> | undefined> {
       const theirs = await this.readCurrentRoot(this._sourceUri);
       if (!theirs) {
          return undefined;
@@ -395,7 +405,7 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
             secondaryVersions[uri] = read.version;
          }
       }
-      return { model: { primary: this.projectRoot<TPrimary>(theirs.root), secondaries }, baseVersion: theirs.version, secondaryVersions };
+      return { model: { primary: this.projectRoot(theirs.root as TRoot), secondaries }, baseVersion: theirs.version, secondaryVersions };
    }
 
    /**
@@ -411,9 +421,13 @@ export class ReconcilingMultiDocumentGlspState<TRoot extends AstNode, TPrimary e
       return root ? this.projectRoot(root) : undefined;
    }
 
-   /** Grammar-mode transfer projection of one AST root. The single projection seam. */
-   protected projectRoot<T extends TransferElement = TransferElement>(root: AstNode): T {
-      return this.sharedServices.model.TransferEncoder.toTransfer(root, 'grammar') as unknown as T;
+   /**
+    * Grammar-mode transfer projection of one AST root. The single projection
+    * seam. The encoder slot answers the structural base, so the map's type is
+    * asserted here, once.
+    */
+   protected projectRoot<T extends AstNode>(root: T): TransferTypeFor<T, TTransferMap> {
+      return this.sharedServices.model.TransferEncoder.toTransfer(root, 'grammar') as TransferTypeFor<T, TTransferMap>;
    }
 }
 
