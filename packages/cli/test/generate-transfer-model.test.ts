@@ -102,6 +102,9 @@ describe('resolveNamespacedStringUnion', () => {
       export namespace LangC {
          export type KeywordNames = | "\\"" | "'" | "\\\\";
       }
+      export namespace LangD {
+         export type KeywordNames = never;
+      }
    `);
 
    it('leaves a plain string-literal union untouched', () => {
@@ -115,6 +118,14 @@ describe('resolveNamespacedStringUnion', () => {
 
    it('quotes a keyword that holds a quote or a backslash again, escapes included', () => {
       expect(resolveNamespacedStringUnion(source, 'LangC.KeywordNames')).toBe(`'"' | '\\'' | '\\\\'`);
+   });
+
+   it('skips a language without keywords, whose keyword names are never', () => {
+      expect(resolveNamespacedStringUnion(source, 'LangD.KeywordNames | LangA.KeywordNames')).toBe("'shared' | 'only-a'");
+   });
+
+   it('resolves to never when no referenced language has keywords', () => {
+      expect(resolveNamespacedStringUnion(source, 'LangD.KeywordNames')).toBe('never');
    });
 
    it('returns the definition unchanged when a referenced member is not a pure literal union', () => {
@@ -289,6 +300,36 @@ export class ProjectAstReflection extends langium.AbstractAstReflection {
 export const reflection = new ProjectAstReflection();
 `;
 
+/**
+ * Keyword names as `langium generate` writes them for a language without
+ * keywords: `never` in that language's namespace, and as the project's keyword
+ * names themselves in a single-language project.
+ */
+function keywordNamesAst(projectKeywordNames: string): string {
+   return `
+import * as langium from 'langium';
+export namespace LangA {
+    export type KeywordNames =
+        | "one";
+}
+export namespace LangB {
+    export type KeywordNames = never;
+}
+export type ProjectKeywordNames = ${projectKeywordNames};
+export type ProjectAstType = { Element: Element };
+export interface Element extends langium.AstNode {
+   readonly $type: 'Element';
+}
+export const Element = { $type: 'Element' } as const;
+export class ProjectAstReflection extends langium.AbstractAstReflection {
+   override readonly types = {
+      Element: { name: Element.$type, properties: {}, superTypes: [] }
+   } as const satisfies langium.AstMetaData;
+}
+export const reflection = new ProjectAstReflection();
+`;
+}
+
 describe('generateTransferModel', () => {
    let scratch: string;
 
@@ -416,6 +457,25 @@ describe('generateTransferModel', () => {
       expect(guards.isProjectKeywordNames('\\')).toBe(true);
       expect(guards.isQuote("'")).toBe(true);
       expect(guards.isQuote('other')).toBe(false);
+   });
+
+   it('resolves the keyword names of a project with a language that has no keywords', async () => {
+      const { model, outFile } = await generate(keywordNamesAst('LangA.KeywordNames | LangB.KeywordNames'));
+      const guards = model as Record<string, (item: unknown) => boolean>;
+
+      expect(typecheck(outFile)).toEqual({ output: '', status: 0 });
+      expect(model.ProjectKeywordNamesValues).toEqual(['one']);
+      expect(guards.isProjectKeywordNames('one')).toBe(true);
+      expect(guards.isProjectKeywordNames('other')).toBe(false);
+   });
+
+   it('guards the keyword names of a project without keywords', async () => {
+      const { model, outFile } = await generate(keywordNamesAst('never'));
+      const guards = model as Record<string, (item: unknown) => boolean>;
+
+      expect(typecheck(outFile)).toEqual({ output: '', status: 0 });
+      expect(model.ProjectKeywordNamesValues).toEqual([]);
+      expect(guards.isProjectKeywordNames('one')).toBe(false);
    });
 
    it('keeps the guards off the reflection, so importing one does not pull the metadata in', async () => {
