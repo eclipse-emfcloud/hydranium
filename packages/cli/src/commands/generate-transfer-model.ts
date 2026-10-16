@@ -447,7 +447,7 @@ export function generateTransferModel(options: GenerateTransferModelOptions): vo
    for (const { name, definition, members } of typeAliases) {
       const literals = extractStringLiterals(definition);
       if (literals) {
-         const checks = literals.map(l => `item === ${quote(l)}`).join(' || ');
+         const checks = literals.map(l => `item === ${quote(l)}`).join(' || ') || 'false';
          out.push(`export function is${name}(item: unknown): item is ${name} {`);
          out.push(`   return ${checks};`);
          out.push('}');
@@ -862,10 +862,11 @@ export function typeAliasMemberGuard(member: string): string {
  * name.
  *
  * Each referenced member is inlined and de-duplicated, preserving first-seen
- * order. The definition is returned UNCHANGED when it holds no
- * namespace-qualified reference (the single-language case) or when any referenced
- * member is not a pure string-literal union — passing it through rather than
- * emitting a half-resolved union.
+ * order; when no member holds a literal, the union is `never`. The definition
+ * is returned UNCHANGED when it holds no namespace-qualified reference (the
+ * single-language case) or when any referenced member is not a pure
+ * string-literal union — passing it through rather than emitting a
+ * half-resolved union.
  */
 export function resolveNamespacedStringUnion(astSource: SourceFile, definition: string): string {
    const references = [...definition.matchAll(/\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\b/g)];
@@ -887,7 +888,7 @@ export function resolveNamespacedStringUnion(astSource: SourceFile, definition: 
          }
       }
    }
-   return literals.map(quote).join(' | ');
+   return literals.length > 0 ? literals.map(quote).join(' | ') : 'never';
 }
 
 /**
@@ -910,19 +911,24 @@ function unionMembers(typeNode: Node): string[] {
 /**
  * The values of a union of string literals, or undefined when the definition holds anything
  * else. The TypeScript scanner decodes each literal, so a keyword with a quote in it reads the
- * same whichever quotes and escapes Langium wrote it with.
+ * same whichever quotes and escapes Langium wrote it with. Langium writes the keyword names of
+ * a language without keywords as `never`, which adds no value.
  */
 function extractStringLiterals(definition: string): string[] | undefined {
    const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, definition);
    const literals: string[] = [];
+   let members = 0;
    for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
       if (token === ts.SyntaxKind.StringLiteral) {
          literals.push(scanner.getTokenValue());
+         members++;
+      } else if (token === ts.SyntaxKind.NeverKeyword) {
+         members++;
       } else if (token !== ts.SyntaxKind.BarToken) {
          return undefined;
       }
    }
-   return literals.length > 0 ? literals : undefined;
+   return members > 0 ? literals : undefined;
 }
 
 /**
