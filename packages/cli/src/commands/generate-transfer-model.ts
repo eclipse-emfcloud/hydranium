@@ -17,6 +17,7 @@ import {
    type ObjectLiteralExpression,
    Project,
    SyntaxKind,
+   ts,
    type ClassDeclaration,
    type InterfaceDeclaration,
    type SourceFile
@@ -344,7 +345,7 @@ export function generateTransferModel(options: GenerateTransferModelOptions): vo
          out.push(`export type ${name} = ${definition};`);
          const literals = extractStringLiterals(definition);
          if (literals) {
-            const items = literals.map(l => `'${l}'`).join(', ');
+            const items = literals.map(quote).join(', ');
             out.push(`export const ${name}Values = [${items}] as const;`);
          }
       }
@@ -446,7 +447,7 @@ export function generateTransferModel(options: GenerateTransferModelOptions): vo
    for (const { name, definition, members } of typeAliases) {
       const literals = extractStringLiterals(definition);
       if (literals) {
-         const checks = literals.map(l => `item === '${l}'`).join(' || ');
+         const checks = literals.map(l => `item === ${quote(l)}`).join(' || ');
          out.push(`export function is${name}(item: unknown): item is ${name} {`);
          out.push(`   return ${checks};`);
          out.push('}');
@@ -886,7 +887,7 @@ export function resolveNamespacedStringUnion(astSource: SourceFile, definition: 
          }
       }
    }
-   return literals.map(literal => `'${literal}'`).join(' | ');
+   return literals.map(quote).join(' | ');
 }
 
 /**
@@ -906,13 +907,30 @@ function unionMembers(typeNode: Node): string[] {
    return [typeNode.getText()];
 }
 
-/** Extract string literals from a union definition, or undefined if not pure literals. */
+/**
+ * The values of a union of string literals, or undefined when the definition holds anything
+ * else. The TypeScript scanner decodes each literal, so a keyword with a quote in it reads the
+ * same whichever quotes and escapes Langium wrote it with.
+ */
 function extractStringLiterals(definition: string): string[] | undefined {
-   const stringLiteral = '(?:\'[^\']*\'|"[^"]*")';
-   if (!new RegExp(`^\\|?\\s*${stringLiteral}(\\s*\\|\\s*${stringLiteral})*$`).test(definition.trim())) {
-      return undefined;
+   const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, definition);
+   const literals: string[] = [];
+   for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+      if (token === ts.SyntaxKind.StringLiteral) {
+         literals.push(scanner.getTokenValue());
+      } else if (token !== ts.SyntaxKind.BarToken) {
+         return undefined;
+      }
    }
-   return [...definition.matchAll(/'([^']*)'|"([^"]*)"/g)].map(m => m[1] ?? m[2]);
+   return literals.length > 0 ? literals : undefined;
+}
+
+/**
+ * `value` as a string literal in the single quotes the generated file uses. A keyword can
+ * contain a quote or a backslash, and either one ends or escapes the literal unless escaped.
+ */
+function quote(value: string): string {
+   return `'${value.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`;
 }
 
 function topologicalSort(names: string[], getDeps: (n: string) => string[]): string[] {

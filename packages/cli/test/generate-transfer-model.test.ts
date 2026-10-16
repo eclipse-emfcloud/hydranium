@@ -99,6 +99,9 @@ describe('resolveNamespacedStringUnion', () => {
          export type KeywordNames = 'only-b' | 'shared';
          export type NotLiterals = string | number;
       }
+      export namespace LangC {
+         export type KeywordNames = | "\\"" | "'" | "\\\\";
+      }
    `);
 
    it('leaves a plain string-literal union untouched', () => {
@@ -108,6 +111,10 @@ describe('resolveNamespacedStringUnion', () => {
    it('flattens namespace-qualified members into one union, de-duplicated in first-seen order', () => {
       // 'shared' is declared by both grammars and must appear once.
       expect(resolveNamespacedStringUnion(source, 'LangB.KeywordNames | LangA.KeywordNames')).toBe("'only-b' | 'shared' | 'only-a'");
+   });
+
+   it('quotes a keyword that holds a quote or a backslash again, escapes included', () => {
+      expect(resolveNamespacedStringUnion(source, 'LangC.KeywordNames')).toBe(`'"' | '\\'' | '\\\\'`);
    });
 
    it('returns the definition unchanged when a referenced member is not a pure literal union', () => {
@@ -254,6 +261,34 @@ export class ProjectAstReflection extends langium.AbstractAstReflection {
 export const reflection = new ProjectAstReflection();
 `;
 
+/**
+ * Keywords that hold a quote or a backslash, as `langium generate` writes them:
+ * in double quotes in the keyword names and in single quotes in a data-type
+ * alias. Langium does not escape a backslash in an alias, so only the keyword
+ * names carry one.
+ */
+const QUOTED_KEYWORDS_AST = `
+import * as langium from 'langium';
+export type ProjectAstType = { Element: Element };
+export type ProjectKeywordNames =
+    | "\\""
+    | "'"
+    | "\\\\"
+    | "plain";
+export type Quote = '"' | '\\'' | 'plain';
+export interface Element extends langium.AstNode {
+   readonly $type: 'Element';
+   quote?: Quote;
+}
+export const Element = { $type: 'Element', quote: 'quote' } as const;
+export class ProjectAstReflection extends langium.AbstractAstReflection {
+   override readonly types = {
+      Element: { name: Element.$type, properties: { quote: { name: Element.quote, optional: true } }, superTypes: [] }
+   } as const satisfies langium.AstMetaData;
+}
+export const reflection = new ProjectAstReflection();
+`;
+
 describe('generateTransferModel', () => {
    let scratch: string;
 
@@ -369,6 +404,18 @@ describe('generateTransferModel', () => {
       // The string member accepts every literal, so only the text shows each one survived.
       expect(text).toContain("return item === '\\'' || item === '|' || typeof item === 'string';");
       expect(guards.isKeywordOrTerminal(1)).toBe(false);
+   });
+
+   it('keeps a keyword that holds a quote or a backslash in the values and the guard', async () => {
+      const { model, outFile } = await generate(QUOTED_KEYWORDS_AST);
+      const guards = model as Record<string, (item: unknown) => boolean>;
+
+      expect(typecheck(outFile)).toEqual({ output: '', status: 0 });
+      expect(model.ProjectKeywordNamesValues).toEqual(['"', "'", '\\', 'plain']);
+      expect(model.QuoteValues).toEqual(['"', "'", 'plain']);
+      expect(guards.isProjectKeywordNames('\\')).toBe(true);
+      expect(guards.isQuote("'")).toBe(true);
+      expect(guards.isQuote('other')).toBe(false);
    });
 
    it('keeps the guards off the reflection, so importing one does not pull the metadata in', async () => {
