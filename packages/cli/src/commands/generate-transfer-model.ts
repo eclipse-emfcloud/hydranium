@@ -246,15 +246,19 @@ export function generateTransferModel(options: GenerateTransferModelOptions): vo
       astInterfaces.set(iface.getName(), iface);
    }
 
-   const typeAliases: Array<{ name: string; definition: string }> = [];
+   const typeAliases: Array<{ name: string; definition: string; members: string[] }> = [];
    for (const alias of astSource.getTypeAliases()) {
       const name = alias.getName();
       if (skipTypeAliases.has(name)) {
          continue;
       }
-      const typeText = alias.getTypeNode()?.getText();
-      if (typeText) {
-         typeAliases.push({ name, definition: mapType(resolveNamespacedStringUnion(astSource, typeText), elementTypeName) });
+      const typeNode = alias.getTypeNode();
+      if (typeNode) {
+         typeAliases.push({
+            name,
+            definition: mapType(resolveNamespacedStringUnion(astSource, typeNode.getText()), elementTypeName),
+            members: unionMembers(typeNode).map(member => mapType(member, elementTypeName))
+         });
       }
    }
 
@@ -439,7 +443,7 @@ export function generateTransferModel(options: GenerateTransferModelOptions): vo
       out.push('');
    }
 
-   for (const { name, definition } of typeAliases) {
+   for (const { name, definition, members } of typeAliases) {
       const literals = extractStringLiterals(definition);
       if (literals) {
          const checks = literals.map(l => `item === '${l}'`).join(' || ');
@@ -448,9 +452,9 @@ export function generateTransferModel(options: GenerateTransferModelOptions): vo
          out.push('}');
          out.push('');
       } else {
-         // Union (or single) of named members and/or Langium data-type primitives. Each member maps
-         // to its own check (typeof / instanceof / named-guard) via typeAliasMemberGuard.
-         const members = definition.split('|').map(s => s.trim());
+         // Union (or single) of named members, Langium data-type primitives and the string
+         // literals a data-type rule's keywords add beside them. Each member maps to its own
+         // check via typeAliasMemberGuard.
          const checks = members.map(typeAliasMemberGuard).join(' || ');
          out.push(`export function is${name}(item: unknown): item is ${name} {`);
          out.push(`   return ${checks};`);
@@ -824,12 +828,16 @@ function mapType(text: string, elementTypeName: string): string {
 
 /**
  * Type-guard expression (against an `item: unknown`) for one member of a non-literal type-alias
- * union. Covers the full set of Langium data-type primitives: the `typeof`-checkable ones
- * (`string`/`number`/`boolean`/`bigint`) use `typeof`; `Date` — the one Langium primitive `typeof`
- * reports as `'object'` — uses `instanceof`; any other member is a named type whose generated
- * `is<Member>` guard is called.
+ * union. A string literal is compared as written, so the escapes Langium wrote stay valid.
+ * Covers the full set of Langium data-type primitives. The `typeof`-checkable ones
+ * (`string`/`number`/`boolean`/`bigint`) use `typeof`, and `Date`, the one Langium primitive
+ * `typeof` reports as `'object'`, uses `instanceof`. Any other member is a named type whose
+ * generated `is<Member>` guard is called.
  */
 export function typeAliasMemberGuard(member: string): string {
+   if (member.startsWith("'") || member.startsWith('"')) {
+      return `item === ${member}`;
+   }
    switch (member) {
       case 'string':
       case 'number':
@@ -879,6 +887,23 @@ export function resolveNamespacedStringUnion(astSource: SourceFile, definition: 
       }
    }
    return literals.map(literal => `'${literal}'`).join(' | ');
+}
+
+/**
+ * The members of a type-alias union as TypeScript parses them. If a data-type rule groups
+ * alternatives in parentheses, the alias Langium generates contains the same group, as in
+ * `'a' | ('b' | Keyword)`, so each group is flattened into its members. Splitting the text on
+ * `|` breaks such a group and any keyword that contains `|`, such as `'||'`, and the
+ * resulting guard does not compile.
+ */
+function unionMembers(typeNode: Node): string[] {
+   if (typeNode.isKind(SyntaxKind.UnionType)) {
+      return typeNode.getTypeNodes().flatMap(member => unionMembers(member));
+   }
+   if (typeNode.isKind(SyntaxKind.ParenthesizedType)) {
+      return unionMembers(typeNode.getTypeNode());
+   }
+   return [typeNode.getText()];
 }
 
 /** Extract string literals from a union definition, or undefined if not pure literals. */

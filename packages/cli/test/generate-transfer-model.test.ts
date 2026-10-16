@@ -137,6 +137,12 @@ describe('typeAliasMemberGuard', () => {
       expect(typeAliasMemberGuard('TypeOne')).toBe('isTypeOne(item)');
    });
 
+   it('compares a string literal as written, escapes included', () => {
+      expect(typeAliasMemberGuard("'one'")).toBe("item === 'one'");
+      expect(typeAliasMemberGuard('"one"')).toBe('item === "one"');
+      expect(typeAliasMemberGuard("'\\''")).toBe("item === '\\''");
+   });
+
    it('composes a mixed primitive + named union into a valid expression', () => {
       const definition = ['string', 'Date', 'TypeOne'];
       expect(definition.map(typeAliasMemberGuard).join(' || ')).toBe("typeof item === 'string' || item instanceof Date || isTypeOne(item)");
@@ -215,6 +221,39 @@ export class ProjectAstReflection extends langium.AbstractAstReflection {
 export const reflection = new ProjectAstReflection();
 `;
 
+/**
+ * Data-type aliases as `langium generate` writes them for a rule that mixes
+ * keywords with another data-type rule or with a terminal, or groups its
+ * alternatives. A keyword holding a `|` or a quote reaches the alias as
+ * written, escapes included, and a group as a parenthesized union. Langium
+ * keeps data-type rules out of the reflection.
+ */
+const MIXED_ALIAS_AST = `
+import * as langium from 'langium';
+export type ProjectAstType = { Element: Element };
+export type Keyword = 'one' | 'two';
+export type KeywordOrRule = 'none' | '||' | Keyword;
+export type KeywordOrTerminal = '\\'' | '|' | string;
+export type Grouped = 'none' | ('x' | 'y') | Keyword;
+export interface Element extends langium.AstNode {
+   readonly $type: 'Element';
+   alias?: KeywordOrRule;
+   group?: Grouped;
+   name: KeywordOrTerminal;
+}
+export const Element = { $type: 'Element', alias: 'alias', group: 'group', name: 'name' } as const;
+export class ProjectAstReflection extends langium.AbstractAstReflection {
+   override readonly types = {
+      Element: {
+         name: Element.$type,
+         properties: { alias: { name: Element.alias, optional: true }, group: { name: Element.group, optional: true }, name: { name: Element.name } },
+         superTypes: []
+      }
+   } as const satisfies langium.AstMetaData;
+}
+export const reflection = new ProjectAstReflection();
+`;
+
 describe('generateTransferModel', () => {
    let scratch: string;
 
@@ -237,6 +276,17 @@ describe('generateTransferModel', () => {
          model: (await import(pathToFileURL(outFile).href)) as Record<string, unknown>,
          outFile
       };
+   }
+
+   function typecheck(file: string): { output: string; status: number | null } {
+      const manifest = findPackageJSON('typescript', import.meta.url);
+      if (manifest === undefined) {
+         throw new Error('typescript does not resolve from this package');
+      }
+      const tsc = path.join(path.dirname(manifest), 'bin', 'tsc');
+      const args = ['--ignoreConfig', '--noEmit', '--strict', '--target', 'ES2022', '--module', 'nodenext', file];
+      const result = spawnSync(process.execPath, [tsc, ...args], { encoding: 'utf-8' });
+      return { output: result.stdout + result.stderr, status: result.status };
    }
 
    it("emits Langium's per-type constant under the type's own name, unions included", async () => {
@@ -298,18 +348,27 @@ describe('generateTransferModel', () => {
 
    it("compiles for a grammar whose types are named like TypeScript's utility types", async () => {
       const { model, outFile } = await generate(UTILITY_NAMED_AST);
-      const manifest = findPackageJSON('typescript', import.meta.url);
-      if (manifest === undefined) {
-         throw new Error('typescript does not resolve from this package');
-      }
-      const tsc = path.join(path.dirname(manifest), 'bin', 'tsc');
-      const args = ['--ignoreConfig', '--noEmit', '--strict', '--target', 'ES2022', '--module', 'nodenext', outFile];
 
       // vitest strips types on import, so only tsc sees a shadowed type name.
-      const result = spawnSync(process.execPath, [tsc, ...args], { encoding: 'utf-8' });
-      expect(result.stdout + result.stderr).toBe('');
-      expect(result.status).toBe(0);
+      expect(typecheck(outFile)).toEqual({ output: '', status: 0 });
       expect((model.ProjectTransferReflection as { getAllTypes(): string[] }).getAllTypes()).toEqual(['Readonly', 'Record']);
+   });
+
+   it('guards a data-type alias that mixes keywords with another rule, a terminal or a group', async () => {
+      const { text, model, outFile } = await generate(MIXED_ALIAS_AST);
+      const guards = model as Record<string, (item: unknown) => boolean>;
+
+      expect(typecheck(outFile)).toEqual({ output: '', status: 0 });
+      expect(guards.isKeywordOrRule('none')).toBe(true);
+      expect(guards.isKeywordOrRule('||')).toBe(true);
+      expect(guards.isKeywordOrRule('one')).toBe(true);
+      expect(guards.isKeywordOrRule('other')).toBe(false);
+      expect(guards.isGrouped('y')).toBe(true);
+      expect(guards.isGrouped('two')).toBe(true);
+      expect(guards.isGrouped('other')).toBe(false);
+      // The string member accepts every literal, so only the text shows each one survived.
+      expect(text).toContain("return item === '\\'' || item === '|' || typeof item === 'string';");
+      expect(guards.isKeywordOrTerminal(1)).toBe(false);
    });
 
    it('keeps the guards off the reflection, so importing one does not pull the metadata in', async () => {
