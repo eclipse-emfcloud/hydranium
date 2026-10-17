@@ -15,6 +15,8 @@ import {
    GLSPModelSource,
    LocalComputedBoundsAction,
    MessageAction,
+   Operation,
+   RedoAction,
    RejectAction,
    RequestAction,
    RequestBoundsAction,
@@ -30,9 +32,20 @@ import {
    SetModelAction,
    SetTypeHintsAction,
    StatusAction,
+   UndoAction,
    UpdateModelAction
 } from '@eclipse-glsp/client';
-import { type Clock, type Logger, type Stopwatch, SystemClock, type Tracer } from '@hydranium/protocol';
+import {
+   type Clock,
+   Deferred,
+   type Logger,
+   PendingWorkTracker,
+   RequestEditsSettledAction,
+   type Stopwatch,
+   SystemClock,
+   TIMED_OUT,
+   type Tracer
+} from '@hydranium/protocol';
 import { inject, injectable, optional, unmanaged } from 'inversify';
 import { HydraniumClientTypes } from './types';
 
@@ -90,6 +103,17 @@ export interface HydraniumGlspActionDispatcherOptions {
  * kind the protocol defines. Adopters with custom kinds either pass
  * `extraLoggedKinds` / `extraKindPairs` to the constructor (via a
  * `toDynamicValue` binding) or subclass and override.
+ *
+ * Where the host asks for it, it also counts the edits it sends that the server
+ * has not answered yet, as {@link editsInFlight}, so a page can ask before a
+ * reload drops one. The dirty state cannot say this: the server sets it only
+ * once it has answered, and an edit that changed nothing is answered with
+ * nothing at all. Each edit is followed by a {@link RequestEditsSettledAction},
+ * which the server answers after it, and counts until that request or a later
+ * one is answered or rejected: the server handles them in order. With no
+ * answer, as when the connection is lost, the count stays, so a guard asks
+ * rather than loses the edit. An action from the server is not counted, nor
+ * is anything on a server that serves no settle request.
  */
 @injectable()
 export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
@@ -97,10 +121,26 @@ export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
    @inject(HydraniumClientTypes.Tracer) protected readonly tracer!: Tracer;
    /** Times each request to its response: the diagram container's {@link Clock}, or a `SystemClock`. */
    @inject(HydraniumClientTypes.Clock) @optional() protected readonly clock: Clock = new SystemClock();
+   /** Whether to count edits in flight; the host asks for it through `createGlspClientModule`. */
+   @inject(HydraniumClientTypes.TrackEditsInFlight) @optional() protected readonly trackEditsInFlight: boolean = false;
 
    protected readonly loggedKinds: ReadonlySet<string>;
    protected readonly kindPairs: ReadonlyMap<string, string>;
    protected readonly kindPairsReverse: ReadonlyMap<string, string>;
+
+   /** Per edit sent, until its {@link RequestEditsSettledAction} or a later one is answered or rejected. */
+   protected readonly pendingEdits = new PendingWorkTracker();
+   /** The edits in flight by the number of their settle request, in send order. */
+   protected readonly editsBySettle = new Map<number, Deferred>();
+   protected settlesSent = 0;
+   /**
+    * How long {@link whenEditsSettled} waits before going on anyway: well past
+    * the server's bounded waits on one settle together. Its handling of the
+    * edits before has no bound, so a server slower than that is taken as lost.
+    */
+   protected readonly settleEditsMs: number = 30_000;
+   /** The postponed actions a lifted block is dispatching a second time, counted when first sent. */
+   protected redispatched: ReadonlySet<Action> | undefined;
 
    protected pairCounter = 0;
    /** Pending requests keyed by requestId (for actions that carry one). */
@@ -146,11 +186,87 @@ export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
       }
    }
 
+   /** How many edits the server has not answered yet; see {@link isEdit}. */
+   get editsInFlight(): number {
+      return this.pendingEdits.size;
+   }
+
+   /**
+    * Resolves to `true` once the edits in flight now have been answered or
+    * rejected, or to `false` once {@link settleEditsMs} has passed first. An
+    * edit sent while it waits is not waited for. Never rejects. For a save or a
+    * switch that must not run ahead of an edit the server has not answered.
+    */
+   async whenEditsSettled(): Promise<boolean> {
+      if (this.pendingEdits.isIdle) {
+         return true;
+      }
+      return (await this.clock.raceTimer(this.pendingEdits.whenSettled(), this.settleEditsMs)) !== TIMED_OUT;
+   }
+
    override dispatch(action: Action): Promise<void> {
       if (this.loggedKinds.has(action.kind)) {
          this.logAction(action);
       }
-      return super.dispatch(action);
+      const dispatched = super.dispatch(action);
+      this.trackEdit(action);
+      return dispatched;
+   }
+
+   protected override handleBlocked(action: Action, predicate: (action: Action) => boolean): Promise<void> {
+      if (!predicate(action)) {
+         return super.handleBlocked(action, predicate);
+      }
+      // A lifted block dispatches what it postponed again, within this call.
+      this.redispatched = new Set(this.postponedActions.map(postponed => postponed.action));
+      try {
+         return super.handleBlocked(action, predicate);
+      } finally {
+         this.redispatched = undefined;
+      }
+   }
+
+   /** Whether `action` changes the model on the server: an operation, an undo or a redo. Widen it for an edit kind of your own. */
+   protected isEdit(action: Action): boolean {
+      return Operation.is(action) || UndoAction.is(action) || RedoAction.is(action);
+   }
+
+   /**
+    * Count `action` if it is an edit the client sends, even one whose dispatch
+    * failed, since it may have reached the server. One dispatched again counts
+    * again, except where a lifted block dispatches what it postponed.
+    */
+   protected trackEdit(action: Action): void {
+      if (
+         !this.trackEditsInFlight ||
+         ServerAction.is(action) ||
+         !this.isEdit(action) ||
+         this.redispatched?.has(action) ||
+         !this.hasHandler({ kind: RequestEditsSettledAction.KIND })
+      ) {
+         return;
+      }
+      const settle = ++this.settlesSent;
+      const edit = new Deferred();
+      this.editsBySettle.set(settle, edit);
+      void this.pendingEdits.track(edit.promise);
+      const answered = (): void => this.endEditsThrough(settle);
+      this.request(RequestEditsSettledAction.create()).then(answered, answered);
+   }
+
+   /**
+    * End every edit up to the `settle`th: the server handles a client's actions
+    * in order, so its answer covers the edits before it, one whose own settle
+    * was lost included.
+    */
+   protected endEditsThrough(settle: number): void {
+      for (const [sent, edit] of this.editsBySettle) {
+         if (sent > settle) {
+            break;
+         }
+         edit.resolve();
+         this.editsBySettle.delete(sent);
+      }
    }
 
    protected logAction(action: Action): void {

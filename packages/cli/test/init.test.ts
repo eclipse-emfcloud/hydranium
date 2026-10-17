@@ -904,9 +904,11 @@ describe('planInitFiles with hosts', () => {
       const page = contentOf(files, 'host-browser/src/page.ts') ?? '';
       const calls = [
          'const shownFile = await startShownFile(heads, ALL_LANGUAGES);',
-         'await startEditor(heads, shownFile);',
+         'const editor = await startEditor(heads, shownFile);',
+         // Armed before the other panes load, waiting for the diagram's edits once there is one.
+         'armEditorSave(editor, () => settleDiagramEdits(shownDiagram?.()));',
          'await showDataStatus(heads.data,',
-         'await mountDiagram(heads.glsp, shownFile, logger);'
+         'shownDiagram = await mountDiagram(heads.glsp, shownFile, logger, settleDiagramEdits);'
       ];
       expect(calls.map(call => page.indexOf(call))).toEqual([...calls.map(call => page.indexOf(call))].sort((left, right) => left - right));
       expect(calls.every(call => page.includes(call))).toBe(true);

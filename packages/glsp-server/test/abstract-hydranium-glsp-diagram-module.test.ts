@@ -18,6 +18,7 @@ import {
 } from '@eclipse-glsp/server';
 import { HydraniumGlspServerActionDispatcher } from '../src/dispatcher/server-action-dispatcher.js';
 import { AbstractHydraniumGlspDiagramModule } from '../src/launcher/abstract-hydranium-glsp-diagram-module.js';
+import { HydraniumGlspRequestEditsSettledActionHandler } from '../src/storage/hydranium-glsp-request-edits-settled-action-handler.js';
 import { HydraniumGlspRequestSaveModelActionHandler } from '../src/storage/hydranium-glsp-request-save-model-action-handler.js';
 
 /** Exposes what the base registers; the bindings it never reaches throw. */
@@ -54,6 +55,10 @@ describe('AbstractHydraniumGlspDiagramModule action handlers', () => {
 
       expect(handlers).toContain(HydraniumGlspRequestSaveModelActionHandler);
       expect(handlers).toContain(SaveModelActionHandler);
+   });
+
+   it('answers the request that tells a client its edits are settled', () => {
+      expect(new ProbeModule().registeredActionHandlers()).toContain(HydraniumGlspRequestEditsSettledActionHandler);
    });
 });
 

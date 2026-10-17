@@ -25,10 +25,12 @@ function serviceIdentifier<T>(description: string): interfaces.ServiceIdentifier
  * `Logger` and `Tracer` are required, so a host that binds neither fails at
  * resolution rather than running silent; `createGlspClientModule` binds
  * defaults for a host that passes none. `Clock` is optional: the classes fall
- * back to a `SystemClock`.
+ * back to a `SystemClock`. `TrackEditsInFlight` is optional too, and off
+ * unbound: `createGlspClientModule` binds it for a host that asks.
  */
 export const HydraniumClientTypes = {
    Logger: serviceIdentifier<Logger>('HydraniumClientLogger'),
    Tracer: serviceIdentifier<Tracer>('HydraniumClientTracer'),
-   Clock: serviceIdentifier<Clock>('HydraniumClientClock')
+   Clock: serviceIdentifier<Clock>('HydraniumClientClock'),
+   TrackEditsInFlight: serviceIdentifier<boolean>('HydraniumClientTrackEditsInFlight')
 } as const;

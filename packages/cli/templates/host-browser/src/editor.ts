@@ -24,8 +24,12 @@ const LANGUAGES = ALL_LANGUAGES.map(language => ({
    extensions: [...language.fileExtensions]
 }));
 
-/** Run the LSP handshake, then show the page's shown file in the editor, following each switch. */
-export async function startEditor(heads: WorkerHeads, shownFile: ShownFile): Promise<void> {
+/**
+ * Run the LSP handshake, then show the page's shown file in the editor,
+ * following each switch, and hand back the client {@link armEditorSave} saves
+ * through.
+ */
+export async function startEditor(heads: WorkerHeads, shownFile: ShownFile): Promise<MonacoLspClient> {
    let client!: MonacoLspClient;
    await initializeLanguageClient(heads.lsp, {
       rootUri: WORKSPACE_ROOT_URI,
@@ -58,11 +62,32 @@ export async function startEditor(heads: WorkerHeads, shownFile: ShownFile): Pro
       return true;
    });
 
+   // Asks before a reload or a closed tab drops an unsaved edit.
+   window.addEventListener('beforeunload', event => {
+      if (client.dirtyDocuments().length > 0) {
+         event.preventDefault();
+      }
+   });
+   (document.getElementById('editor-pane') as HTMLElement).hidden = false;
+   return client;
+}
+
+/**
+ * Arm the page's Save and Ctrl+S, which save every file the editor holds
+ * unsaved once `beforeSave` has settled: an edit made elsewhere, such as in the
+ * diagram, shows in the editor only once the server has answered it. When
+ * `beforeSave` throws, nothing is saved and the status says why.
+ */
+export function armEditorSave(client: MonacoLspClient, beforeSave: () => Promise<void> = () => Promise.resolve()): void {
    const save = (): void => {
-      client.saveAll().then(
-         saved => setStatus(`saved ${saved.length} file(s)`),
-         (error: unknown) => setStatus(`save failed: ${describeError(error)}`)
-      );
+      // The wait can last up to its bound on a server that stopped answering.
+      setStatus('saving…');
+      beforeSave()
+         .then(() => client.saveAll())
+         .then(
+            saved => setStatus(`saved ${saved.length} file(s)`),
+            (error: unknown) => setStatus(`save failed: ${describeError(error)}`)
+         );
    };
    const saveButton = document.getElementById('save') as HTMLButtonElement;
    saveButton.addEventListener('click', save);
@@ -73,12 +98,5 @@ export async function startEditor(heads: WorkerHeads, shownFile: ShownFile): Pro
          save();
       }
    });
-   // Asks before a reload or a closed tab drops an unsaved edit.
-   window.addEventListener('beforeunload', event => {
-      if (client.dirtyDocuments().length > 0) {
-         event.preventDefault();
-      }
-   });
    saveButton.hidden = false;
-   (document.getElementById('editor-pane') as HTMLElement).hidden = false;
 }

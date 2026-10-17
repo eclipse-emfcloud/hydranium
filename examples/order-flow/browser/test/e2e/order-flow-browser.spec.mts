@@ -1513,6 +1513,80 @@ test.describe('order-flow in a web worker', () => {
       );
    });
 
+   test('a drag the server has not answered keeps the unload guard up, and Save clicked at once keeps it', async ({ page }) => {
+      const askGuard = (): Promise<boolean> =>
+         page.evaluate(() => {
+            const event = new Event('beforeunload', { cancelable: true });
+            window.dispatchEvent(event);
+            return event.defaultPrevented;
+         });
+      await page.goto('/');
+      await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);
+
+      // Asked and clicked right after the drop's own handlers, in the same turn
+      // of the page, so the server's answer cannot have reached the editor yet.
+      await page.evaluate(() => {
+         window.addEventListener(
+            'mouseup',
+            () =>
+               queueMicrotask(() => {
+                  const event = new Event('beforeunload', { cancelable: true });
+                  window.dispatchEvent(event);
+                  document.getElementById('save-workspace')?.click();
+                  Reflect.set(window, 'guardedOnDrop', event.defaultPrevented);
+               }),
+            { once: true }
+         );
+      });
+      await dragBy(page, nodeLocator('Cancel'), { x: 300, y: 180 });
+      expect(await page.evaluate(() => Reflect.get(window, 'guardedOnDrop'))).toBe(true);
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /^saved 1 document\(s\)/);
+      expect(await askGuard()).toBe(false);
+
+      await page.reload();
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute(
+         'title',
+         'restored 1 file(s) from storage: orders/fulfillment.layout'
+      );
+      await expectLayoutEntry(page, 'Cancel');
+   });
+
+   test('a properties write the server has not answered keeps the unload guard up, and Save clicked at once keeps it', async ({ page }) => {
+      const askGuard = (): Promise<boolean> =>
+         page.evaluate(() => {
+            const event = new Event('beforeunload', { cancelable: true });
+            window.dispatchEvent(event);
+            return event.defaultPrevented;
+         });
+      await page.goto('/');
+      const name = page.locator('#properties-body #field-name');
+      await expect(name).toHaveValue('Fulfillment');
+
+      // Written, asked and clicked in one turn of the page, before the server's
+      // answer reaches the editor's buffer.
+      const guarded = await page.evaluate(() => {
+         const field = document.querySelector<HTMLInputElement>('#properties-body #field-name');
+         if (field !== null) {
+            field.value = 'Express';
+            field.dispatchEvent(new Event('change'));
+         }
+         const event = new Event('beforeunload', { cancelable: true });
+         window.dispatchEvent(event);
+         document.getElementById('save-workspace')?.click();
+         return event.defaultPrevented;
+      });
+      expect(guarded).toBe(true);
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /^saved 1 document\(s\)/);
+      expect(await askGuard()).toBe(false);
+
+      await page.reload();
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute(
+         'title',
+         'restored 1 file(s) from storage: orders/fulfillment.process'
+      );
+      await expect(name).toHaveValue('Express');
+   });
+
    test('resetting the workspace returns the next load to the committed seed', async ({ page }) => {
       await page.goto('/');
       await expect(page.locator('[data-report="layout-head"]')).toHaveAttribute('title', SEEDED_LAYOUT);

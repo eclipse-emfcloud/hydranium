@@ -8,13 +8,17 @@
  ********************************************************************************/
 
 import {
+   type Clock,
    type ConflictResolver,
    type DataEvents,
    type DataSession,
    type LoadedTransferDocument,
    type TransferDiagnostic,
    type TransferElement,
+   PendingWorkTracker,
    ReconcilingConflictResolver,
+   SystemClock,
+   TIMED_OUT,
    TransferDocument,
    reconcileWrite
 } from '@hydranium/protocol';
@@ -103,6 +107,14 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
    protected readonly conflictResolver: ConflictResolver = new ReconcilingConflictResolver();
    /** Writes of one field edit, the first included, before a still-conflicting one is dropped. */
    protected readonly maxWrites: number = 3;
+   /**
+    * Each field edit until its last write answers, the reread after a conflict
+    * included, which the session's own count of its writes leaves out.
+    */
+   protected readonly edits = new PendingWorkTracker();
+   /** How long {@link whenWritesSettled} waits before going on anyway, as the session's own wait does. */
+   protected readonly settleWritesMs: number = 30_000;
+   protected readonly clock: Clock = new SystemClock();
 
    /** The current server snapshot — the base every write is authored against. */
    protected snapshot?: TransferDocument<TTransfer>;
@@ -259,7 +271,23 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
          return { status: 'unchanged' };
       }
 
-      return this.reconcile(base, withField(base.model.root, name, value));
+      return this.edits.track(this.reconcile(base, withField(base.model.root, name, value)));
+   }
+
+   /** Whether a field edit has not answered yet. Synchronous, for an unload guard. */
+   get hasWritesInFlight(): boolean {
+      return !this.edits.isIdle;
+   }
+
+   /**
+    * Resolves to `true` once the field edits in flight now have answered, or
+    * to `false` once {@link settleWritesMs} has passed first. Never rejects.
+    */
+   async whenWritesSettled(): Promise<boolean> {
+      if (this.edits.isIdle) {
+         return true;
+      }
+      return (await this.clock.raceTimer(this.edits.whenSettled(), this.settleWritesMs)) !== TIMED_OUT;
    }
 
    /** Close the open document. The server unwatches implicitly. Safe when nothing is open. */

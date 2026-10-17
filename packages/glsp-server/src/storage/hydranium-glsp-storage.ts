@@ -914,17 +914,29 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    }
 
    /**
-    * Save the stored text of `primaryUri`, every tracked secondary and every
-    * document that left the write set since the last save, each only where
-    * the diagram's session has it open; then close those that left. Each goes
-    * through the session's `persist`, so an override of the session class's
-    * `persistDocument` applies to diagram saves too. Each saved document is
-    * then settled in the language client, so the save does not answer before
-    * that client has answered the push of what it wrote.
+    * The documents a save of `primaryUri` writes: it, every tracked secondary
+    * and every document that left the write set since the last save, each only
+    * where the diagram's session has it open. Deduplicated, because a state
+    * that tracks its own primary as a secondary would otherwise save it twice
+    * and fire two save notifications for one save.
+    */
+   openWriteSet(primaryUri: string): string[] {
+      const textDocuments = this.sharedServices.workspace.TextDocuments;
+      const clientId = this.state.clientId;
+      return [...new Set([primaryUri, ...this.state.secondaryUris, ...this.departedSecondaries])].filter(uri =>
+         textDocuments.isOpenInClient(uri, clientId)
+      );
+   }
+
+   /**
+    * Save the stored text of each document {@link openWriteSet} names, then
+    * close those that left the write set. Each goes through the session's
+    * `persist`, so an override of the session class's `persistDocument`
+    * applies to diagram saves too. Each saved document is then settled in the
+    * language client, so the save does not answer before that client has
+    * answered the push of what it wrote.
     *
-    * Deduplicated, because a state that tracks its own primary as a secondary
-    * would otherwise save it twice and fire two save notifications for one
-    * save. Every save is called in one synchronous step, so each takes its text
+    * Every save is called in one synchronous step, so each takes its text
     * before anything can close a document of the set: saved one after another,
     * a GLSP session ending during the first write closes the rest unsaved. A
     * `persistDocument` override that awaits before calling the base gives that
@@ -935,14 +947,10 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       // Refused like the load: without a session the client id's opens are
       // another participant's, and this would save them.
       const session = this.requireModelSession();
-      const textDocuments = this.sharedServices.workspace.TextDocuments;
-      const clientId = this.state.clientId;
       // Taken with the targets: a document leaving the set during the writes
       // was not saved by them, and stays open for the next save.
       const departed = [...this.departedSecondaries];
-      const targets = [...new Set([primaryUri, ...this.state.secondaryUris, ...departed])].filter(uri =>
-         textDocuments.isOpenInClient(uri, clientId)
-      );
+      const targets = this.openWriteSet(primaryUri);
       // Async, so a persist that throws instead of rejecting fails its own
       // document rather than leaving the rest of the set uncalled. Settled in
       // full before failing, or the save's dirty-state hold ends while the

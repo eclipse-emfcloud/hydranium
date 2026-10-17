@@ -31,6 +31,11 @@ export interface GlspClientModuleOptions {
     *  binding the host made. Absent, the token keeps the host's own binding, or
     *  gets a `ConsoleLogger` when it has none. */
    readonly logger?: Logger;
+   /** Count the diagram edits the server has not answered yet, as
+    *  `HydraniumGlspActionDispatcher.editsInFlight`, for a host that reads the
+    *  count. Off by default: each edit then costs an extra request and its
+    *  answer. */
+   readonly trackEditsInFlight?: boolean;
 }
 
 /**
@@ -68,6 +73,11 @@ export function createGlspClientModule(context: BindingContext, options: GlspCli
             return new DefaultTracer(logger, clock);
          })
          .inSingletonScope();
+   }
+   if (options.trackEditsInFlight !== undefined) {
+      (isBound(HydraniumClientTypes.TrackEditsInFlight) ? rebind : bind)(HydraniumClientTypes.TrackEditsInFlight).toConstantValue(
+         options.trackEditsInFlight
+      );
    }
    bind(HydraniumGlspActionDispatcher).toSelf().inSingletonScope();
    rebind(GLSPActionDispatcher).toService(HydraniumGlspActionDispatcher);

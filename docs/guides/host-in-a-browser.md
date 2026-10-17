@@ -156,7 +156,11 @@ const fileSystem = persistentFileSystem({
    with only text editors needs no other head. The worker refuses a document
    whose buffer does not hold its text, such as while a server edit is still on
    its way to the editor; the document stays unsaved for the next save. A
-   diagram edit reaches the editor first, so one save covers both.
+   diagram edit reaches the editor once the server has answered it, so await
+   the mount's `whenEditsSettled()` before the save, and one save covers both.
+   A data session's update is the same: await its `whenWritesSettled()` too.
+   Each resolves `false` once its bound passes with an edit still unanswered;
+   refuse the save then, since it would miss that edit.
 
    A page with no text editor saves its diagram instead: request
    `RequestSaveModelAction` from `@hydranium/protocol` through the diagram
@@ -164,6 +168,20 @@ const fileSystem = persistentFileSystem({
    `ModelSavedAction` once the documents the diagram edits are written, and
    rejects the request when the write fails. A data session saves the text the
    server holds with `persistDocument`.
+
+   Guard a reload on the mount's `editsInFlight` as well as on what is unsaved:
+   a diagram edit the server has not answered yet shows in neither the diagram's
+   dirty state nor the editor, so a reload right after it drops it. On the LSP
+   page a switch to another file awaits `whenEditsSettled()` too; the page
+   without LSP saves before a switch, behind the edit. On both the diagram is
+   `inert` meanwhile, since an edit made during the wait would outlast it. See
+   `src/diagram.ts` and `src/editor.ts` in a scaffold made with
+   `--hosts browser`. A page that writes through a data session guards on its
+   `hasWritesInFlight` the same way. A field edit that writes more than once,
+   as one rereading after a conflict does, counts itself from the first write
+   to the last, since the session counts each write alone; the order-flow
+   example's properties model does, in
+   `examples/order-flow/client/src/data/order-flow-properties-model.ts`.
 
 7. **Show the server's log.** The server logs every head over LSP
    `window/logMessage`, and a page with no handler loses all of it. Pass the

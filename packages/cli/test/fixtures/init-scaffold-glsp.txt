@@ -3498,8 +3498,8 @@ import { connectWorkerHeads } from '@hydranium/client-browser';
 import { ConsoleLogger, describeError } from '@hydranium/protocol';
 import { ALL_LANGUAGES } from 'bookstore-protocol';
 import { showDataStatus } from './data-status.js';
-import { mountDiagram } from './diagram.js';
-import { startEditor } from './editor.js';
+import { mountDiagram, settleDiagramEdits } from './diagram.js';
+import { armEditorSave, startEditor } from './editor.js';
 import { appendLog, setStatus } from './log.js';
 import { startShownFile } from './shown-file.js';
 import { WORKSPACE_ROOT_URI } from './workspace.js';
@@ -3514,9 +3514,11 @@ async function main(): Promise<void> {
    heads.onWorkerError(report => appendLog(`worker error during ${report.phase}: ${report.message}`));
    setStatus('starting…');
    const shownFile = await startShownFile(heads, ALL_LANGUAGES);
-   await startEditor(heads, shownFile);
+   const editor = await startEditor(heads, shownFile);
+   let shownDiagram: Awaited<ReturnType<typeof mountDiagram>> | undefined = undefined;
+   armEditorSave(editor, () => settleDiagramEdits(shownDiagram?.()));
    await showDataStatus(heads.data, `${WORKSPACE_ROOT_URI}/nodes.bookstore`);
-   await mountDiagram(heads.glsp, shownFile, logger);
+   shownDiagram = await mountDiagram(heads.glsp, shownFile, logger, settleDiagramEdits);
    setStatus('ready');
 }
 
@@ -3616,8 +3618,12 @@ const LANGUAGES = ALL_LANGUAGES.map(language => ({
    extensions: [...language.fileExtensions]
 }));
 
-/** Run the LSP handshake, then show the page's shown file in the editor, following each switch. */
-export async function startEditor(heads: WorkerHeads, shownFile: ShownFile): Promise<void> {
+/**
+ * Run the LSP handshake, then show the page's shown file in the editor,
+ * following each switch, and hand back the client {@link armEditorSave} saves
+ * through.
+ */
+export async function startEditor(heads: WorkerHeads, shownFile: ShownFile): Promise<MonacoLspClient> {
    let client!: MonacoLspClient;
    await initializeLanguageClient(heads.lsp, {
       rootUri: WORKSPACE_ROOT_URI,
@@ -3650,11 +3656,32 @@ export async function startEditor(heads: WorkerHeads, shownFile: ShownFile): Pro
       return true;
    });
 
+   // Asks before a reload or a closed tab drops an unsaved edit.
+   window.addEventListener('beforeunload', event => {
+      if (client.dirtyDocuments().length > 0) {
+         event.preventDefault();
+      }
+   });
+   (document.getElementById('editor-pane') as HTMLElement).hidden = false;
+   return client;
+}
+
+/**
+ * Arm the page's Save and Ctrl+S, which save every file the editor holds
+ * unsaved once `beforeSave` has settled: an edit made elsewhere, such as in the
+ * diagram, shows in the editor only once the server has answered it. When
+ * `beforeSave` throws, nothing is saved and the status says why.
+ */
+export function armEditorSave(client: MonacoLspClient, beforeSave: () => Promise<void> = () => Promise.resolve()): void {
    const save = (): void => {
-      client.saveAll().then(
-         saved => setStatus(`saved ${saved.length} file(s)`),
-         (error: unknown) => setStatus(`save failed: ${describeError(error)}`)
-      );
+      // The wait can last up to its bound on a server that stopped answering.
+      setStatus('saving…');
+      beforeSave()
+         .then(() => client.saveAll())
+         .then(
+            saved => setStatus(`saved ${saved.length} file(s)`),
+            (error: unknown) => setStatus(`save failed: ${describeError(error)}`)
+         );
    };
    const saveButton = document.getElementById('save') as HTMLButtonElement;
    saveButton.addEventListener('click', save);
@@ -3665,14 +3692,7 @@ export async function startEditor(heads: WorkerHeads, shownFile: ShownFile): Pro
          save();
       }
    });
-   // Asks before a reload or a closed tab drops an unsaved edit.
-   window.addEventListener('beforeunload', event => {
-      if (client.dirtyDocuments().length > 0) {
-         event.preventDefault();
-      }
-   });
    saveButton.hidden = false;
-   (document.getElementById('editor-pane') as HTMLElement).hidden = false;
 }
 
 ==============================================================================
@@ -3711,9 +3731,9 @@ import type { ShownFile } from './shown-file.js';
 /**
  * Show the diagram of the file the page shows, and of each file it switches
  * to, and hand back what reads the mount shown now, if it loaded. A file of
- * another language hides the pane. `beforeLeave` runs on the shown mount before a switch
- * disposes it; when it throws, that mount stays shown and the page switches
- * back to its file.
+ * another language hides the pane. `beforeLeave` runs on the shown mount
+ * before a switch disposes it, while the diagram takes no input; when it
+ * throws, that mount stays shown and the page switches back to its file.
  */
 export async function mountDiagram(
    connection: WorkerHeads['glsp'],
@@ -3733,12 +3753,17 @@ export async function mountDiagram(
       // Only a mount that loaded: one that failed has no edits to lose, and its
       // dispatcher may refuse every save, which would keep it shown for good.
       if (mounted !== undefined && mountedUri !== undefined && beforeLeave !== undefined) {
+         // Inert, since an edit made while it runs would outlast its wait and be dropped with the mount.
+         const shown = document.getElementById('diagram') as HTMLElement;
+         shown.inert = true;
          try {
             await beforeLeave(mounted);
          } catch (error: unknown) {
             // The diagram stays on its file, so the switch goes back to it.
             shownFile.show(mountedUri);
             throw error;
+         } finally {
+            shown.inert = false;
          }
          // Switched again while it ran: the show queued for that file takes over.
          if (uri !== shownFile.current()) {
@@ -3787,8 +3812,28 @@ export async function mountDiagram(
    // A first file that fails to load is logged as a later switch's is, so the
    // page still arms what follows and the switch can reach a file that loads.
    await follow(shownFile.current()).catch((error: unknown) => appendLog(describeError(error)));
+   // Asks before a reload or a closed tab drops an edit the server has not
+   // answered yet, which neither dirty state nor the editor shows until then.
+   window.addEventListener('beforeunload', event => {
+      if ((mounted?.editsInFlight ?? 0) > 0) {
+         event.preventDefault();
+      }
+   });
    // Only a mount that loaded: one that failed has nothing to save.
    return () => (mountedUri === undefined ? undefined : mounted);
+}
+
+/**
+ * Wait for the edits of `diagram` the server has not answered yet, before a
+ * save, which would miss them, or before a switch disposes it, as the server
+ * drops what an ended session still had queued and the reload guard reads only
+ * the diagram shown. Throws when one stays unanswered, so the save does not
+ * report success and the switch keeps the diagram shown.
+ */
+export async function settleDiagramEdits(diagram: GlspDiagramMount | undefined): Promise<void> {
+   if ((await diagram?.whenEditsSettled()) === false) {
+      throw new Error('the server has not answered an edit of this diagram yet');
+   }
 }
 
 ==============================================================================
@@ -3874,7 +3919,9 @@ export function resolve(...segments: string[]): string {
 host-browser/test/smoke.spec.mts
 ==============================================================================
 // The page loads with every head answering, and an edit saved through the
-// LSP head is still there after a reload. Any console error fails it.
+// LSP head is still there after a reload; any console error fails that
+// test. The other asks before a reload drops a diagram edit the server has not
+// answered yet, and keeps it when Save is clicked at once.
 
 import { expect, test } from '@playwright/test';
 
@@ -3912,6 +3959,48 @@ test('loads every head and keeps a saved edit across a reload', async ({ page })
    await expect(page.locator('#status')).toHaveText('ready');
    await expect(editor).toContainText('node Added');
    expect(errors).toEqual([]);
+});
+
+test('asks before a reload drops a diagram edit the server has not answered, and saves it with Save at once', async ({ page }) => {
+   const nodes = page.locator('#diagram .sprotty-node');
+   const askGuard = (): Promise<boolean> =>
+      page.evaluate(() => {
+         const event = new Event('beforeunload', { cancelable: true });
+         window.dispatchEvent(event);
+         return event.defaultPrevented;
+      });
+   await page.goto('/');
+   await expect(page.locator('#status')).toHaveText('ready');
+   await page.locator('#file').selectOption('nodes.bookstore');
+   await expect(nodes).toHaveCount(2);
+
+   const canvas = page.locator('#diagram');
+   await page.locator('#diagram .tool-button', { hasText: 'BookstoreNode' }).click();
+   const size = await canvas.evaluate(element => ({ width: element.clientWidth, height: element.clientHeight }));
+   // Asked and clicked right after the click's own handlers, in the same turn
+   // of the page, so the server's answer cannot have marked anything unsaved.
+   await page.evaluate(() => {
+      window.addEventListener(
+         'mouseup',
+         () =>
+            queueMicrotask(() => {
+               const event = new Event('beforeunload', { cancelable: true });
+               window.dispatchEvent(event);
+               document.getElementById('save')?.click();
+               Reflect.set(window, 'guardedOnCreate', event.defaultPrevented);
+            }),
+         { once: true }
+      );
+   });
+   await canvas.click({ position: { x: size.width * 0.4, y: size.height * 0.85 } });
+   expect(await page.evaluate(() => Reflect.get(window, 'guardedOnCreate'))).toBe(true);
+   await expect(page.locator('#status')).toHaveText('saved 1 file(s)');
+   expect(await askGuard()).toBe(false);
+
+   await page.reload();
+   await expect(page.locator('#status')).toHaveText('ready');
+   await page.locator('#file').selectOption('nodes.bookstore');
+   await expect(nodes).toHaveCount(3);
 });
 
 ==============================================================================

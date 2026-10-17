@@ -7,12 +7,16 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
    type Action,
+   type RequestAction,
+   type ResponseAction,
    CheckEdgeResultAction,
    ComputedBoundsAction,
+   GLSPActionDispatcher,
    MessageAction,
+   RedoAction,
    RejectAction,
    RequestBoundsAction,
    RequestCheckEdgeAction,
@@ -24,8 +28,11 @@ import {
    SetMarkersAction,
    SetModelAction,
    SetTypeHintsAction,
-   StatusAction
+   StatusAction,
+   UndoAction
 } from '@eclipse-glsp/client';
+import { Deferred, EditsSettledAction, RequestEditsSettledAction } from '@hydranium/protocol';
+import { makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
 import { HYDRANIUM_DEFAULT_KIND_PAIRS, HYDRANIUM_DEFAULT_LOGGED_KINDS, HydraniumGlspActionDispatcher } from '../src/action-dispatcher';
 
 // Test subclass exposes protected members for assertion + skips the inherited
@@ -284,6 +291,224 @@ describe('HydraniumGlspActionDispatcher.summarize defaults', () => {
 
    it('unknown action kinds summarise to empty string', () => {
       expect(dispatcher.exposeSummarize({ kind: 'unknown-action' })).toBe('');
+   });
+});
+
+/** A dispatcher whose host asked for edits in flight to be counted. */
+class TrackingDispatcher extends TestableDispatcher {
+   protected override readonly trackEditsInFlight = true;
+   protected override readonly settleEditsMs = 50;
+
+   /** Lift a block with `unblocking`, over `postponed`, through sprotty's own handleBlocked. */
+   liftBlock(unblocking: Action, postponed: Action[]): Promise<void> {
+      this.postponedActions = postponed.map(action => ({ action, resolve: () => undefined, reject: () => undefined }));
+      return this.handleBlocked(unblocking, () => true);
+   }
+
+   // Stubbed: the block's own action needs a full GLSP container to handle.
+   protected override handleAction(): Promise<void> {
+      return Promise.resolve();
+   }
+}
+
+const defaultBoundClock = makeFakeClock();
+
+/** Counts edits with the default bound on the wait, on a clock the test advances. */
+class DefaultBoundDispatcher extends TestableDispatcher {
+   protected override readonly trackEditsInFlight = true;
+   protected override readonly clock = defaultBoundClock;
+}
+
+describe('HydraniumGlspActionDispatcher edits in flight', () => {
+   /** What reached GLSP's dispatcher and its request, in order. */
+   let sent: string[];
+   /** The settle requests not yet answered, oldest first. */
+   let settles: Array<Deferred<Action>>;
+   let dispatcher: TrackingDispatcher;
+   const operation = asAction({ kind: 'changeBounds', isOperation: true, newBounds: [] });
+
+   function serve(...kinds: string[]): void {
+      dispatcher.setActionHandlerRegistry({ get: (kind: string) => (kinds.includes(kind) ? [{}] : []) });
+   }
+
+   beforeEach(() => {
+      sent = [];
+      settles = [];
+      dispatcher = new TrackingDispatcher();
+      dispatcher.setLogger({ trace: vi.fn() });
+      serve(RequestEditsSettledAction.KIND);
+      vi.spyOn(GLSPActionDispatcher.prototype, 'dispatch').mockImplementation(async (action: Action) => {
+         sent.push(action.kind);
+      });
+      vi.spyOn(dispatcher, 'request').mockImplementation(<Res extends ResponseAction>(action: RequestAction<Res>) => {
+         sent.push(action.kind);
+         const settle = new Deferred<Action>();
+         settles.push(settle);
+         return settle.promise as Promise<Res>;
+      });
+   });
+
+   afterEach(() => {
+      vi.restoreAllMocks();
+   });
+
+   it('counts an operation from its send until the server answers the settle request sent after it', async () => {
+      await dispatcher.dispatch(operation);
+      expect(sent).toEqual(['changeBounds', RequestEditsSettledAction.KIND]);
+      expect(dispatcher.editsInFlight).toBe(1);
+
+      settles[0].resolve(EditsSettledAction.create());
+      await waitFor(() => dispatcher.editsInFlight === 0);
+   });
+
+   it('counts undo and redo, which change the model on the server too', async () => {
+      await dispatcher.dispatch(UndoAction.create());
+      await dispatcher.dispatch(RedoAction.create());
+      expect(dispatcher.editsInFlight).toBe(2);
+   });
+
+   it('counts each edit until its own settle is answered', async () => {
+      await dispatcher.dispatch(operation);
+      await dispatcher.dispatch({ ...operation });
+      settles[0].resolve(EditsSettledAction.create());
+      await tick();
+      expect(dispatcher.editsInFlight).toBe(1);
+   });
+
+   it('counts an edit once when a lifted block dispatches it a second time', async () => {
+      await dispatcher.dispatch(operation);
+      await dispatcher.liftBlock(asAction({ kind: 'setModel', newRoot: { type: 'graph', id: 'g' } }), [operation]);
+      expect(dispatcher.editsInFlight).toBe(1);
+      expect(sent).toEqual(['changeBounds', RequestEditsSettledAction.KIND, 'changeBounds']);
+   });
+
+   it('keeps counting an edit whose settle request failed to send, which sprotty leaves unanswered', async () => {
+      vi.mocked(dispatcher.request).mockRestore();
+      let failedSends = 0;
+      vi.spyOn(GLSPActionDispatcher.prototype, 'dispatch').mockImplementation(async (action: Action) => {
+         if (action.kind === RequestEditsSettledAction.KIND) {
+            failedSends++;
+            throw new Error('connection closed');
+         }
+      });
+      await dispatcher.dispatch(operation);
+      await tick();
+      expect(failedSends).toBe(1);
+      expect(dispatcher.editsInFlight).toBe(1);
+   });
+
+   it('ends the count of every earlier edit once a later settle is answered, since the server handles them in order', async () => {
+      await dispatcher.dispatch(operation);
+      await dispatcher.dispatch({ ...operation });
+      expect(dispatcher.editsInFlight).toBe(2);
+
+      // The first settle stays unanswered, as one whose send failed would.
+      settles[1].resolve(EditsSettledAction.create());
+      await waitFor(() => dispatcher.editsInFlight === 0);
+      await expect(dispatcher.whenEditsSettled()).resolves.toBe(true);
+   });
+
+   it('counts an edit object each time a caller dispatches it again, whether its last edit is in flight or answered', async () => {
+      await dispatcher.dispatch(operation);
+      await dispatcher.dispatch(operation);
+      expect(dispatcher.editsInFlight).toBe(2);
+
+      settles[0].resolve(EditsSettledAction.create());
+      settles[1].resolve(EditsSettledAction.create());
+      await waitFor(() => dispatcher.editsInFlight === 0);
+      await dispatcher.dispatch(operation);
+      expect(dispatcher.editsInFlight).toBe(1);
+   });
+
+   it('does not count an action that is no edit, nor an operation that came from the server', async () => {
+      await dispatcher.dispatch(asAction({ kind: 'setModel', newRoot: { type: 'graph', id: 'g' } }));
+      await dispatcher.dispatch(asAction({ ...operation, __receivedFromServer: true }));
+      expect(dispatcher.editsInFlight).toBe(0);
+      expect(sent).not.toContain(RequestEditsSettledAction.KIND);
+   });
+
+   it('ends the count when the server rejects the settle request', async () => {
+      await dispatcher.dispatch(operation);
+      settles[0].reject(new Error('rejected'));
+      await waitFor(() => dispatcher.editsInFlight === 0);
+   });
+
+   it('keeps counting while the settle request has no answer, so a guard asks rather than loses the edit', async () => {
+      await dispatcher.dispatch(operation);
+      await tick();
+      expect(dispatcher.editsInFlight).toBe(1);
+   });
+
+   it('waits for the edits in flight when asked to, and reports them settled though an edit sent after is not', async () => {
+      await dispatcher.dispatch(operation);
+      let settled = false;
+      const waiting = dispatcher.whenEditsSettled().then(result => {
+         settled = true;
+         return result;
+      });
+      await dispatcher.dispatch({ ...operation });
+      await tick();
+      expect(settled).toBe(false);
+
+      settles[0].resolve(EditsSettledAction.create());
+      await expect(waiting).resolves.toBe(true);
+      expect(dispatcher.editsInFlight).toBe(1);
+   });
+
+   it('reports the wait unsettled once its bound passes while an edit stays unanswered, which still counts', async () => {
+      await dispatcher.dispatch(operation);
+      await expect(dispatcher.whenEditsSettled()).resolves.toBe(false);
+      expect(dispatcher.editsInFlight).toBe(1);
+   });
+
+   it("waits by default well past the server's bounded waits on one settle before reporting an edit unsettled", async () => {
+      const slow = new DefaultBoundDispatcher();
+      slow.setLogger({ trace: vi.fn() });
+      slow.setActionHandlerRegistry({ get: (kind: string) => (kind === RequestEditsSettledAction.KIND ? [{}] : []) });
+      vi.spyOn(slow, 'request').mockImplementation(<Res extends ResponseAction>() => new Deferred<Res>().promise);
+      await slow.dispatch(operation);
+      let settled: boolean | undefined;
+      void slow.whenEditsSettled().then(result => (settled = result));
+
+      // Past the server's two bounded waits together, with room for its own handling.
+      defaultBoundClock.advance(29_000);
+      await tick(5);
+      expect(settled).toBeUndefined();
+      defaultBoundClock.advance(1_000);
+      await waitFor(() => settled !== undefined);
+      expect(settled).toBe(false);
+   });
+
+   it('reports no edits in flight as settled at once', async () => {
+      await expect(dispatcher.whenEditsSettled()).resolves.toBe(true);
+   });
+
+   it('counts an edit whose own send failed until the settle request after it is answered', async () => {
+      vi.mocked(GLSPActionDispatcher.prototype.dispatch).mockImplementationOnce(async (action: Action) => {
+         sent.push(action.kind);
+         throw new Error('send failed');
+      });
+      await expect(dispatcher.dispatch(operation)).rejects.toThrow('send failed');
+      expect(dispatcher.editsInFlight).toBe(1);
+      settles[0].resolve(EditsSettledAction.create());
+      await waitFor(() => dispatcher.editsInFlight === 0);
+   });
+
+   it('counts nothing and asks the server nothing when the host did not ask for edits to be counted', async () => {
+      const untracked = new TestableDispatcher();
+      untracked.setLogger({ trace: vi.fn() });
+      untracked.setActionHandlerRegistry({ get: (kind: string) => (kind === RequestEditsSettledAction.KIND ? [{}] : []) });
+      const request = vi.spyOn(untracked, 'request');
+      await untracked.dispatch(operation);
+      expect(untracked.editsInFlight).toBe(0);
+      expect(request).not.toHaveBeenCalled();
+   });
+
+   it('counts nothing against a server that serves no settle request, which nothing would answer', async () => {
+      serve();
+      await dispatcher.dispatch(operation);
+      expect(dispatcher.editsInFlight).toBe(0);
+      expect(sent).toEqual(['changeBounds']);
    });
 });
 

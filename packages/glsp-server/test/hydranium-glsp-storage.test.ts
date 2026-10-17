@@ -654,6 +654,18 @@ describe('HydraniumGlspStorage', () => {
          expect(calls).toEqual(['save file:///a/side.x', 'close file:///a/side.x']);
       });
 
+      it('names a document that left the write set among those a save writes while it is open, and not once closed', () => {
+         const open = new Set(['file:///a/main.x', 'file:///a/side.x', 'file:///a/kept.x']);
+         const { storage, state } = createOpeningStorage(['file:///a/side.x', 'file:///a/kept.x'], open);
+         state.trackSecondaryDocument('file:///a/side.x');
+         state.untrackSecondaryDocuments();
+         state.trackSecondaryDocument('file:///a/kept.x');
+
+         expect(storage.openWriteSet('file:///a/main.x')).toEqual(['file:///a/main.x', 'file:///a/kept.x', 'file:///a/side.x']);
+         open.delete('file:///a/side.x');
+         expect(storage.openWriteSet('file:///a/main.x')).toEqual(['file:///a/main.x', 'file:///a/kept.x']);
+      });
+
       it('keeps a document that left the write set open when the save failed', async () => {
          const open = new Set(['file:///a/side.x']);
          const { storage, state, calls } = createOpeningStorage(['file:///a/side.x'], open, {

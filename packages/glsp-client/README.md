@@ -115,7 +115,14 @@ for touch, and size its `<svg>` to it, or sprotty draws into 300×150. The
 first render replaces the element with sprotty's own under the same id, so
 keep no reference to it and find it by id when you need it. A failed load
 resolves the mount; read `diagram.loadOutcome` to report it, since the status
-overlay cannot show a failure of the action dispatcher itself.
+overlay cannot show a failure of the action dispatcher itself. A page that
+asks before a reload also reads `diagram.editsInFlight`, the edits the server
+has not answered yet, which no dirty state shows, and a save or a file
+switch awaits `diagram.whenEditsSettled()` so it does not run ahead of one,
+and stops when it resolves `false`, its bound passed with one unanswered.
+A host that calls `createGlspClientModule` itself counts them only when it
+passes `trackEditsInFlight: true`, and reads them from
+`HydraniumGlspActionDispatcher`.
 
 For a browser page, see *Host in a browser* in
 [Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).

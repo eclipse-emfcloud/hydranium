@@ -91,6 +91,16 @@ export class PropertiesPanel {
       return this.openUri;
    }
 
+   /** Whether a field edit has not answered yet, for the unload guard. */
+   get hasWritesInFlight(): boolean {
+      return this.model.hasWritesInFlight;
+   }
+
+   /** Resolves to whether the field edits in flight now answered within the model's bound. */
+   whenWritesSettled(): Promise<boolean> {
+      return this.model.whenWritesSettled();
+   }
+
    /**
     * Open `uri`, or clear the panel when there is none.
     *

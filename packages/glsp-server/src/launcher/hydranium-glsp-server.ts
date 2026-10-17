@@ -24,6 +24,7 @@ import { describeErrorWithStack, RequestSaveModelAction } from '@hydranium/proto
 import { injectable } from 'inversify';
 import { logActionFailure } from '../command/diagram-edit-dropped-error.js';
 import { HydraniumGlspStorage } from '../storage/hydranium-glsp-storage.js';
+import { takeSettleFailureLogged } from '../storage/logged-settle-failures.js';
 
 /**
  * The GLSP server the framework binds in place of upstream's
@@ -165,11 +166,12 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
    /**
     * Lifted from `@eclipse-glsp/server` 2.7.0's
     * {@link DefaultGLSPServer.handleClientRequest}, with the detail computation
-    * delegated to {@link requestFailureDetail}, the failure logged once with
-    * its stack, a request that fails once its session has ended logged at
-    * `debug` and answered to no client, as {@link process} treats an action,
-    * and one addition: a failed {@link RequestSaveModelAction} also
-    * raises the error notification a failed `SaveModelAction` raises, through
+    * delegated to {@link requestFailureDetail}. A failure is logged once, with
+    * its stack; a settle request's failure its handler has logged already is
+    * not logged again. A request that fails once its session has ended is
+    * logged at `debug` and answered to no client, as {@link process} treats an
+    * action. One addition: a failed {@link RequestSaveModelAction} also raises
+    * the error notification a failed `SaveModelAction` raises, through
     * {@link handleProcessError}, which then logs it instead. A rejection
     * reaches only the client's log, and a Theia host only logs a rejected save,
     * so without it a save that failed would tell the user nothing. Nothing else
@@ -203,7 +205,8 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
          }
          const detail = this.requestFailureDetail(error);
          const isSave = action.kind === RequestSaveModelAction.KIND;
-         if (!isSave) {
+         // A settle failure the handler logged, with the stack its rejection does not carry.
+         if (!isSave && !takeSettleFailureLogged(clientId, action.requestId)) {
             this.logger.error(`Failed to handle request '${action.kind}' (${action.requestId}): ${describeErrorWithStack(error)}`);
          }
          // Inside the guard: `process` does not await this method, so a throw

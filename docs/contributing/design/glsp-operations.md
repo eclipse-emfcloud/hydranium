@@ -90,3 +90,32 @@ its undo's side effects included. Other code that runs while the diagram holds
 its order — a GModel factory, a submit, an undo's write — must not dispatch an
 operation and await it, and no such code may await a dispatched undo, redo or
 model request: each waits for that code to finish, and the two deadlock.
+
+## Edits the server has not answered yet
+
+A client that counts its edits in flight, as a browser page's mount does, sends
+a `RequestEditsSettledAction` after each operation, undo or redo, and counts the
+edit until that request or a later one is answered or rejected: the server
+handles a client's actions in order, so a later answer covers an edit whose own
+request was lost. The server answers with `EditsSettledAction` only once the
+edits sent before the request have been handled, a queued operation's run in the
+state's exclusive section included; what such an operation answered has been
+delivered, its dirty state among it; and the language client has answered the
+push of each document a save writes. The last two waits are bounded, by the
+handler's `settleDeliveriesMs` and `settleLanguageClient`'s own bound, and past
+a bound the server answers anyway; a delivery given up on is not waited for
+again. The handler returns at once and dispatches its answer once the waits are
+over, so the diagram's later actions do not wait for them, and a delivery the
+browser worker's dispatch scope queues behind the request still runs before the
+answer. An operation that a handler of a delivered action dispatches without
+awaiting is not waited for, nor, in the browser worker, one that a queued
+operation dispatches. In the browser worker a queued operation's delivery can
+run in GLSP's own queue, so one that hangs holds the request behind it, as any
+hung handler holds what follows, and `settleDeliveriesMs` never starts. The
+client's own wait, `settleEditsMs`, sits well above both server bounds together,
+so a page refuses a save only on a server that has stopped answering or whose
+handling of the edits before took longer still. A client asks only a server that
+advertised the request, since one that never answers would keep the count up for
+good. A request that carries a timeout, as GLSP's `requestUntil` sets, is
+rejected once it passes, as any request is, and the answer that follows is
+dropped; the dispatcher sends it with `request` and bounds the wait itself.

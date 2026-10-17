@@ -45,14 +45,16 @@ import {
 } from '@hydranium/core/testing/node';
 import { DataServer } from '@hydranium/data-server';
 import {
+   type Clock,
    DataConnection,
    DataEvents,
+   Deferred,
    type DataSession,
    TransferDocument,
    type DataPort,
    type TransferDocumentUpdatedEvent
 } from '@hydranium/protocol';
-import { waitFor } from '@hydranium/protocol/testing';
+import { makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
 import { type DuplexConnectionPair, makeDuplexConnectionPair } from '@hydranium/protocol/testing/node';
 import { createOrderFlowServices } from '@hydranium/example-order-flow-server/lib/language-server/order-flow-module';
 import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
@@ -530,6 +532,76 @@ describe('order-flow properties model', () => {
       const reread = (await server.getModelDocument({ uri })).model?.root as ProcessModel;
       expect(reread.name).toBe('Fulfilment');
       expect(reread.subject).toBe('Customer');
+   });
+
+   it('counts a field edit in flight while it rereads after a conflict, which the session does not', async () => {
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      const hold = new Deferred<void>();
+      let holding = false;
+      const rereading = new Deferred<void>();
+      const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(
+         refetchIntercepting(session!, async () => {
+            if (holding) {
+               rereading.resolve();
+               await hold.promise;
+            }
+         }),
+         new DataEvents<OrderFlowTransferRoot>()
+      );
+      models.push(model);
+      await model.open(uri);
+      const foreign = (await currentRoot(uri)) as ProcessModel;
+      await thirdPartyWrite(uri, { ...foreign, subject: 'LineItem' });
+      holding = true;
+
+      const written = model.setField('name', 'Fulfilment');
+      await rereading.promise;
+      expect(session!.hasWritesInFlight).toBe(false);
+      expect(model.hasWritesInFlight).toBe(true);
+
+      hold.resolve();
+      expect(await written).toEqual({ status: 'merged' });
+      expect(model.hasWritesInFlight).toBe(false);
+   });
+
+   it('reports a field edit unanswered once its bound passes, and not a moment before', async () => {
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      const clock = makeFakeClock();
+      const hold = new Deferred<void>();
+      let holding = false;
+      const rereading = new Deferred<void>();
+      class ClockedModel extends OrderFlowPropertiesModel<OrderFlowTransferRoot> {
+         protected override readonly clock: Clock = clock;
+      }
+      const model = new ClockedModel(
+         refetchIntercepting(session!, async () => {
+            if (holding) {
+               rereading.resolve();
+               await hold.promise;
+            }
+         }),
+         new DataEvents<OrderFlowTransferRoot>()
+      );
+      models.push(model);
+      await model.open(uri);
+      const foreign = (await currentRoot(uri)) as ProcessModel;
+      await thirdPartyWrite(uri, { ...foreign, subject: 'LineItem' });
+      holding = true;
+
+      const written = model.setField('name', 'Fulfilment');
+      await rereading.promise;
+      let settled: boolean | undefined;
+      void model.whenWritesSettled().then(result => (settled = result));
+      clock.advance(29_999);
+      await tick(5);
+      expect(settled).toBeUndefined();
+      clock.advance(1);
+      await waitFor(() => settled !== undefined, { message: 'the wait never gave up' });
+      expect(settled).toBe(false);
+
+      hold.resolve();
+      await written;
+      await expect(model.whenWritesSettled()).resolves.toBe(true);
    });
 
    it('drops a write that raced a foreign edit to the same field', async () => {

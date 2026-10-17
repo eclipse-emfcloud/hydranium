@@ -32,8 +32,8 @@ import { HydraniumStatusOverlay } from '../src/status-overlay';
 import { HydraniumClientTypes } from '../src/types';
 
 /** What the dispatcher was given, which it keeps protected. */
-function injectedInto(dispatcher: unknown): { hydraniumLogger: unknown; clock: unknown } {
-   return dispatcher as { hydraniumLogger: unknown; clock: unknown };
+function injectedInto(dispatcher: unknown): { hydraniumLogger: unknown; clock: unknown; trackEditsInFlight: unknown } {
+   return dispatcher as { hydraniumLogger: unknown; clock: unknown; trackEditsInFlight: unknown };
 }
 
 /**
@@ -69,6 +69,17 @@ describe('createGlspClientModule in a GLSP container', () => {
       const dispatcher = injectedInto(makeGlspContainer(hydraniumModule).get(GLSPActionDispatcher));
       expect(dispatcher.hydraniumLogger).toBe(logger);
       expect(dispatcher.clock).toBeInstanceOf(SystemClock);
+   });
+
+   it('leaves counting edits in flight off when the host does not ask for it', () => {
+      expect(injectedInto(makeGlspContainer(hydraniumModule).get(GLSPActionDispatcher)).trackEditsInFlight).toBe(false);
+   });
+
+   it('turns counting edits in flight on when the host asks for it', () => {
+      const trackingModule = new ContainerModule((bind, unbind, isBound, rebind) => {
+         createGlspClientModule({ bind, unbind, isBound, rebind }, { logger, trackEditsInFlight: true });
+      });
+      expect(injectedInto(makeGlspContainer(trackingModule).get(GLSPActionDispatcher)).trackEditsInFlight).toBe(true);
    });
 
    it('hands the classes the clock a host binds', () => {

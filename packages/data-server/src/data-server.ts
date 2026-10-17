@@ -223,7 +223,7 @@ export interface DataServerOptions extends LogNameOptions {
     * `Validated` when {@link GetModelDocumentArgs.includeDiagnostics} is set.
     * A write (`updateModelDocument` / `updateModelDocuments` /
     * `saveModelDocument`) answers once its document is validated, as a
-    * session's write does; a save then also waits for
+    * session's write does, and then waits for
     * `ModelService.settleLanguageClient`. This option controls only the async
     * notification phase.
     *
@@ -672,6 +672,8 @@ export class DataServer<
       const astDocuments = await this.requireSession(args.clientId).updateAll({
          updates: args.updates.map(update => this.toSessionWrite(update))
       });
+      // A page that reads unsaved work from its editor sees the writes only once their text reaches it.
+      await Promise.all(args.updates.map(update => this.modelService.settleLanguageClient(update.uri)));
       return astDocuments.map(astDocument => this.encodeDocument(astDocument));
    }
 
@@ -759,6 +761,8 @@ export class DataServer<
 
    async updateModelDocument(args: TransferUpdateDocumentArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
       const astDocument = await this.requireSession(args.clientId).update(this.toSessionWrite(args));
+      // A page that reads unsaved work from its editor sees the write only once the text reaches it.
+      await this.modelService.settleLanguageClient(args.uri);
       return this.encodeDocument(astDocument);
    }
 
