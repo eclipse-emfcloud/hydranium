@@ -49,14 +49,16 @@ The design behind what the adopter pages under
   failures that only happen while building or testing this repo.
 - [**Performance baseline**](contributing/perf-baseline.md) — how to take a
   measurement that is comparable with an earlier one.
-- [**Working with Claude Code**](../CLAUDE.md) — the commands an agent session
-  types, and which page to read before which change.
+- [**Working with coding agents**](../AGENTS.md) — the commands an agent session
+  types, and which page to read before which change. The
+  [Claude Code entry point](../CLAUDE.md) links to the same instructions.
 
 ## Reporting issues
 
-Open a GitHub issue. Two templates are offered — a bug report and a question —
-and each asks for what we need to act on it: steps to reproduce, expected vs.
-actual behaviour, and your Node, npm, `@hydranium/*` and Langium versions.
+Open a GitHub issue using the bug report, feature request or question
+template. For a bug, include steps to reproduce, expected vs. actual
+behaviour, your OS and Hydranium version. Partial reports are welcome;
+include what you know.
 
 Because the API surface is still moving, a question describing what you were
 trying to build is often more useful than a patch against a seam that is about

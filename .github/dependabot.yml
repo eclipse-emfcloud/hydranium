@@ -1,8 +1,8 @@
 version: 2
 updates:
   # No npm entry: langium, vscode-jsonrpc and vscode-languageserver-protocol
-  # are exact-pinned in the root overrides as one chain, and a per-package
-  # bump of any single link breaks it.
+  # have coordinated pins across manifests and CLI scaffolds. Only langium
+  # is a root override; a per-package bump of one link breaks the chain.
   - package-ecosystem: github-actions
     directory: /
     schedule:
