@@ -987,6 +987,24 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    }
 
    /**
+    * Whether the editor holds text older than the store's text at `version`,
+    * or text the store never held. The first is the case while the push of
+    * that text is in flight. An answer computed on the store's text at
+    * `version` then refers to text the editor does not have. `false` once the
+    * editor holds that text or a later one, and when it does not have `uri`
+    * open.
+    */
+   isLanguageClientBehind(uri: DocumentUri, version: TextVersion): boolean {
+      const key = this.documentKey(uri);
+      const clientUri = this.toLanguageClientUri(uri);
+      if (!this.languageClientShadow.isOpen(key, clientUri)) {
+         return false;
+      }
+      const held = this.languageClientShadow.heldVersion(key, clientUri);
+      return held === undefined || held < version;
+   }
+
+   /**
     * The text the store holds for `uri`: an open document's, or for a closed
     * one, the clean text its version sequence left off at, which for a deleted
     * document is its last text. `undefined` for a URI no build and no client

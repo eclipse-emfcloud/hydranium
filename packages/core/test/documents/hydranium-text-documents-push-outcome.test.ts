@@ -582,3 +582,55 @@ describe('HydraniumTextDocuments save gate for the editor', () => {
       expect(refusal(docs, URI, 1)).toBeInstanceOf(DocumentNotOpenError);
    });
 });
+
+describe('HydraniumTextDocuments.isLanguageClientBehind', () => {
+   it('is behind a write while its push is in flight, and not once its echo lands', async () => {
+      const { docs, editorAt } = makeStore();
+      const editor = editorAt(URI);
+      editor.open(DISK);
+      const opened = docs.version(URI);
+      docs.applyContentChange(URI, WRITTEN, 'form-client');
+      const written = docs.version(URI);
+      const pushed = sync(docs, WRITTEN);
+      const inFlight = { opened: docs.isLanguageClientBehind(URI, opened), written: docs.isLanguageClientBehind(URI, written) };
+      await editor.answer('apply');
+      await pushed;
+
+      expect({ inFlight, echoed: docs.isLanguageClientBehind(URI, written) }).toEqual({
+         inFlight: { opened: false, written: true },
+         echoed: false
+      });
+   });
+
+   it('is not behind a version its own keystroke moved past', () => {
+      const { docs, editorAt } = makeStore();
+      const editor = editorAt(URI);
+      editor.open(DISK);
+      const opened = docs.version(URI);
+      editor.type(Range.create(3, 0, 3, 0), 'l4\n');
+
+      expect([docs.isLanguageClientBehind(URI, opened), docs.isLanguageClientBehind(URI, docs.version(URI))]).toEqual([false, false]);
+   });
+
+   it('is behind while it holds text the store does not, until the refresh lands', async () => {
+      const { docs, editorAt } = makeStore();
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 1, text: DISK } }, 'form-client');
+      docs.applyContentChange(URI, WRITTEN, 'form-client');
+      const editor = editorAt(URI);
+      editor.open(DISK);
+      const opened = docs.isLanguageClientBehind(URI, docs.version(URI));
+      const refreshed = sync(docs, WRITTEN);
+      await editor.answer('apply');
+      await refreshed;
+
+      expect({ opened, refreshed: docs.isLanguageClientBehind(URI, docs.version(URI)) }).toEqual({ opened: true, refreshed: false });
+   });
+
+   it('is not behind on a document the editor does not have open', () => {
+      const { docs } = makeStore();
+      docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 1, text: DISK } }, 'form-client');
+      docs.applyContentChange(URI, WRITTEN, 'form-client');
+
+      expect(docs.isLanguageClientBehind(URI, docs.version(URI))).toBe(false);
+   });
+});
