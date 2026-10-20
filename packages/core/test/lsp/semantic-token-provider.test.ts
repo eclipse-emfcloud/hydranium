@@ -9,7 +9,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { type AstNode, type CstNode, type LangiumDocument, type Reference, type ReferenceInfo } from '@hydranium/langium';
-import { CancellationToken, SemanticTokenTypes } from 'vscode-languageserver';
+import { CancellationToken, LSPErrorCodes, Range, ResponseError, SemanticTokenTypes } from 'vscode-languageserver';
+import { DefaultModelLedger } from '../../src/documents/model-ledger.js';
 import {
    AbstractHydraniumSemanticTokenProvider,
    type HydraniumSemanticTokenProviderOptions,
@@ -55,6 +56,27 @@ function makeServices(referenceTypes: Record<string, string> = {}, namePropertie
          lsp: { LanguageServer: { onInitialize: () => undefined } }
       }
    } as unknown as ServerLanguageServices;
+}
+
+const EDITOR_URI = 'file:///a.x';
+
+/**
+ * {@link makeServices} with the real ledger and a store that answers
+ * `isLanguageClientBehind` like `HydraniumTextDocuments` for an editor of
+ * {@link EDITOR_URI} that holds the store's text at `held`. `undefined` stands
+ * for text the store never held.
+ */
+function makeEditorServices(held: number | undefined): { services: ServerLanguageServices; ledger: DefaultModelLedger } {
+   const services = makeServices();
+   const ledger = new DefaultModelLedger();
+   Object.assign(services.shared.workspace, {
+      TextDocuments: {
+         onDidClose: () => undefined,
+         isLanguageClientBehind: (uri: string, version: number) => uri === EDITOR_URI && (held === undefined || held < version)
+      },
+      ModelLedger: ledger
+   });
+   return { services, ledger };
 }
 
 /** Concrete provider under test: one `$type` → kind map, nothing else. */
@@ -420,6 +442,65 @@ describe('AbstractHydraniumSemanticTokenProvider', () => {
          expect(await provider.runDocument(makeDocument())).toContainEqual(
             expect.objectContaining({ property: 'name', type: SemanticTokenTypes.class })
          );
+      });
+   });
+
+   describe('requests of an editor behind the parse', () => {
+      type Request = (provider: TestProvider, document: LangiumDocument) => Promise<unknown>;
+      const textDocument = { uri: EDITOR_URI };
+      const requests: Record<string, Request> = {
+         semanticHighlight: (provider, document) => provider.semanticHighlight(document, { textDocument }),
+         semanticHighlightRange: (provider, document) =>
+            provider.semanticHighlightRange(document, { textDocument, range: Range.create(0, 0, 1, 0) }),
+         semanticHighlightDelta: (provider, document) => provider.semanticHighlightDelta(document, { textDocument, previousResultId: '1' })
+      };
+
+      /**
+       * A document whose parse the ledger records at `parsedFrom`, or not at
+       * all when `undefined`, open in an editor that holds the store's text at
+       * `held`.
+       */
+      function setUp(parsedFrom: number | undefined, held: number | undefined): { provider: TestProvider; document: LangiumDocument } {
+         const { services, ledger } = makeEditorServices(held);
+         const document = makeFakeDocument(EDITOR_URI, makeFakeAstNode<AnyNode>({ $type: 'TypeOne', name: 'Element' }));
+         if (parsedFrom !== undefined) {
+            ledger.record(document.parseResult.value, parsedFrom);
+         }
+         return { provider: new TestProvider(services, { TypeOne: SemanticTokenTypes.class }), document };
+      }
+
+      /** The code of the response error `request` rejects with, or `'answered'` when it resolves. */
+      async function outcome(request: Promise<unknown>): Promise<unknown> {
+         try {
+            await request;
+            return 'answered';
+         } catch (error: unknown) {
+            return error instanceof ResponseError ? error.code : error;
+         }
+      }
+
+      it.each(Object.keys(requests))('`%s` refuses with `ContentModified` while the push of the parsed text is in flight', async name => {
+         const { provider, document } = setUp(3, 2);
+
+         expect(await outcome(requests[name](provider, document))).toBe(LSPErrorCodes.ContentModified);
+      });
+
+      it.each(Object.keys(requests))('`%s` answers once the editor holds the parsed text', async name => {
+         const { provider, document } = setUp(2, 2);
+
+         expect(await outcome(requests[name](provider, document))).toBe('answered');
+      });
+
+      it('answers an editor whose keystroke is ahead of the parse', async () => {
+         const { provider, document } = setUp(1, 2);
+
+         expect(await outcome(requests.semanticHighlight(provider, document))).toBe('answered');
+      });
+
+      it('answers on a parse with no recorded version, which names no text to compare, whatever the editor holds', async () => {
+         const { provider, document } = setUp(undefined, undefined);
+
+         expect(await outcome(requests.semanticHighlight(provider, document))).toBe('answered');
       });
    });
 
