@@ -48,7 +48,7 @@ export interface ValidationCounts {
 export interface WorkspaceValidationResult {
    /** Number of `LangiumDocument`s in the built workspace. */
    documents: number;
-   /** Every problem found, grouped contiguously by document, in the order the documents were given. */
+   /** Every problem found, grouped contiguously by document, in the order the documents were given, and by position within one. */
    findings: ValidationFinding[];
    /** Per-severity totals over {@link findings}. */
    counts: ValidationCounts;
@@ -94,7 +94,13 @@ export function collectValidationResult(
    const counts: ValidationCounts = { error: 0, warning: 0, info: 0, hint: 0 };
    for (const document of documents) {
       const relativeUri = wsRelativePath(document.uri);
-      for (const diagnostic of (document.diagnostics ?? []) as Diagnostic[]) {
+      // Langium appends the lexer, parser, linker and validator diagnostics phase after phase,
+      // so a reader scanning a file top to bottom needs them sorted. The sort is stable, so
+      // diagnostics at one position keep the order their phases produced them in.
+      const diagnostics = [...((document.diagnostics ?? []) as Diagnostic[])].sort(
+         (a, b) => a.range.start.line - b.range.start.line || a.range.start.character - b.range.start.character
+      );
+      for (const diagnostic of diagnostics) {
          const severity = severityLabel(diagnostic.severity);
          counts[severity] += 1;
          findings.push({

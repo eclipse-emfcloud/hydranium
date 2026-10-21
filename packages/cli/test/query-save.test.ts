@@ -37,6 +37,7 @@ function makeStubProxy(
       failDelete?: boolean;
       failEnd?: boolean;
       fileExists?: boolean;
+      absent?: boolean;
       writeBeforeAnswer?: boolean;
       failOpen?: string;
    } = {}
@@ -44,6 +45,9 @@ function makeStubProxy(
    return {
       async getModelDocument(args) {
          calls.getModelDocument.push(args);
+         if (options.absent) {
+            return TransferDocument.absent<FakeRoot>(args.uri);
+         }
          return TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'echo', uri: args.uri }, 'hash');
       },
       async updateModelDocument(args) {
@@ -140,6 +144,18 @@ describe('runQuery', () => {
       expect(written[0].endsWith('\n')).toBe(true);
       const parsed = JSON.parse(written[0]);
       expect(parsed.uri).toBe('file:///workspace/A.fake');
+   });
+
+   it('fails on a URI the server holds no document at, rather than printing the empty envelope', async () => {
+      const written: string[] = [];
+      const query = runQuery({
+         serverCommand: 'unused',
+         uri: 'file:///workspace/Missing.fake',
+         write: line => written.push(line),
+         __proxyForTest: makeStubProxy(emptyCalls(), { absent: true })
+      });
+      await expect(query).rejects.toThrow('No document at file:///workspace/Missing.fake');
+      expect(written).toEqual([]);
    });
 });
 
