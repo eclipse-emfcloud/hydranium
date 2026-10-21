@@ -112,7 +112,7 @@ export class LspLogger extends AbstractLogger implements Logger {
             }
             const envLevel = parseLogLevel(env[DEFAULT_LOG_LEVEL_ENV]);
             if (envLevel) {
-               this.applyLevel(envLevel, DEFAULT_LOG_LEVEL_ENV);
+               this.applyLevel(envLevel, DEFAULT_LOG_LEVEL_ENV, { launch: true });
             }
          }
       }
@@ -155,19 +155,24 @@ export class LspLogger extends AbstractLogger implements Logger {
     *
     * Only on a real transition: the bound setting re-fires for configuration
     * changes that leave the value alone.
+    *
+    * A `launch` baseline, the environment's, is announced only after the
+    * switch. The threshold it leaves is a default no reader ran at, so a
+    * notice under it would be the one line of a run launched at `off`, and an
+    * info line in a run launched at `error`, against the launch's request.
     */
-   protected applyLevel(next: LogThreshold, source: string): void {
+   protected applyLevel(next: LogThreshold, source: string, options: { launch?: boolean } = {}): void {
       const previous = Logger.getLevel();
       if (previous === next) {
          return;
       }
       const message = `Log level ${previous} → ${next} (${source})`;
-      const announceFirst = next === 'error' || next === 'off';
+      const announceFirst = !options.launch && (next === 'error' || next === 'off');
       if (announceFirst && previous !== 'error') {
          this.logAt(previous, message);
       }
       Logger.setLevel(next);
-      if (!announceFirst) {
+      if (!announceFirst && next !== 'error') {
          this.logAt(next, message);
       }
    }
