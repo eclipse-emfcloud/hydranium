@@ -144,6 +144,36 @@ export interface IndentationTokenNames {
 }
 
 /**
+ * A container a run of comment lines can be placed in: the run's own, or one
+ * it is lifted into when a block's DEDENT follows the run. `last` is the index
+ * in its content the run is placed after, `closed` the block the run is lifted
+ * out of, and `liftBelow` the column a comment line has to start left of to be
+ * lifted this far.
+ */
+export interface CommentLiftTarget {
+   readonly container: CompositeCstNode;
+   readonly last: number;
+   readonly closed?: CompositeCstNode;
+   readonly liftBelow?: number;
+}
+
+/**
+ * A run of hidden nodes in `content`, from `start` to `end`, with the syntax
+ * before it and the containers its comments can be placed in, innermost first.
+ */
+export interface CommentRun {
+   readonly content: readonly CstNode[];
+   readonly start: number;
+   readonly end: number;
+   readonly previous?: { readonly end: number };
+   readonly targets: readonly CommentLiftTarget[];
+   /** The nodes {@link CommentPreserver.neighbours} finds before the run, in order. */
+   readonly before: readonly CstNode[];
+   /** Per target, the nodes {@link CommentPreserver.neighbours} finds after its `last`. */
+   readonly after: readonly (readonly CstNode[])[];
+}
+
+/**
  * One splice, with what it takes to check the risky kind afterwards.
  *
  * `inline` is set only for an edit that opens a line inside syntax the
@@ -192,6 +222,18 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
    protected readonly maxIsolatedEdits: number;
    protected commentTokenNames?: readonly string[];
    protected indentationTokenNames?: IndentationTokenNames | null;
+   /**
+    * Set for the duration of one {@link extract}: the run
+    * {@link resolveCommentRun} resolved last, so the run's next comment reuses
+    * it.
+    */
+   protected commentRun?: CommentRun;
+   /**
+    * Set for the duration of one {@link extract}: {@link syntaxSpan} per node,
+    * as a block a run is lifted out of would otherwise be measured once per
+    * comment.
+    */
+   protected spanMemo?: Map<CstNode, { readonly offset: number; readonly end: number } | undefined>;
    /** Set for the duration of one {@link apply}; see {@link cachedAnchorKey}. */
    protected keyMemo?: Map<AstNode, string | undefined>;
    /** Set for the duration of one {@link apply}; see {@link ambiguousRetainedKey}. */
@@ -259,9 +301,14 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
       if (this.getIndentationTokenNames() === undefined) {
          return node;
       }
+      if (this.spanMemo?.has(node)) {
+         return this.spanMemo.get(node);
+      }
       const first = this.edgeToken(node, 1);
       const last = this.edgeToken(node, -1);
-      return first && last && { offset: first.offset, end: last.end };
+      const span = first && last && { offset: first.offset, end: last.end };
+      this.spanMemo?.set(node, span);
+      return span;
    }
 
    /** The first token of `node` for a `step` of 1, the last for -1, that is neither hidden nor indentation. */
@@ -355,7 +402,14 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
       }
       const source = document.textDocument.getText();
       const comments: DocumentComment[] = [];
-      this.captureFrom(root, source, commentTokens, comments);
+      this.commentRun = undefined;
+      this.spanMemo = new Map();
+      try {
+         this.captureFrom(root, source, commentTokens, comments);
+      } finally {
+         this.commentRun = undefined;
+         this.spanMemo = undefined;
+      }
       return { comments, sourceRoot: document.parseResult.value };
    }
 
@@ -409,7 +463,14 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
       const following = content[at + 1];
       const blankLinesAfter = following === undefined ? 0 : this.countBlankLines(source.slice(comment.end, offsetOf(following)));
       const preceding = at > 0 ? content[at - 1] : undefined;
-      const blankLinesBefore = preceding === undefined ? 0 : this.countBlankLines(source.slice(endOf(preceding), comment.offset));
+      // From the last text before the comment: a block it is lifted out of can
+      // end with comment lines of its own, after the block's syntax.
+      const precedingEnd = preceding === undefined ? comment.offset : endOf(preceding);
+      let gapStart = comment.offset;
+      while (gapStart > precedingEnd && /\s/.test(source[gapStart - 1])) {
+         gapStart--;
+      }
+      const blankLinesBefore = preceding === undefined ? 0 : this.countBlankLines(source.slice(gapStart, comment.offset));
 
       // Only a comment that OWNS its line can be reindented — one sharing a line
       // with code keeps whatever spacing that line gives it.
@@ -418,7 +479,7 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
       const sourceIndent = beforeOnLine.trim().length === 0 ? beforeOnLine : undefined;
 
       const text = this.normalizeLineEndings(comment.text);
-      const sharesLineWithPrevious = previous !== undefined && !source.slice(endOf(previous), comment.offset).includes('\n');
+      const sharesLineWithPrevious = previous !== undefined && !this.breaksLine(source, endOf(previous), comment.offset);
 
       if (sharesLineWithPrevious) {
          // On the same line as whatever precedes it, so it annotates that line.
@@ -451,8 +512,10 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
    }
 
    /**
-    * Resolves the container {@link classify} anchors `comment` in and its
-    * siblings there without INDENT and DEDENT tokens.
+    * Resolves the container {@link classify} anchors `comment` in, and the
+    * comment's adjacent siblings there and the nearest syntax on each side,
+    * without INDENT and DEDENT tokens. The content is that window, not all of
+    * the container's siblings.
     *
     * An indentation-aware lexer can emit a block's DEDENT after the comment
     * lines that follow the block, so the parser nests them in it. An own-line
@@ -466,10 +529,35 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
       container: CompositeCstNode,
       source: string
    ): { readonly container: CompositeCstNode; readonly content: readonly CstNode[]; readonly index: number } {
-      if (this.getIndentationTokenNames() === undefined) {
-         return { container, content: container.content, index };
-      }
       const content = container.content;
+      const run = this.resolveCommentRun(index, container, source);
+      let placed = 0;
+      if (run.targets.length > 1 && (run.previous === undefined || this.breaksLine(source, run.previous.end, comment.offset))) {
+         const column = this.columnAt(source, comment.offset);
+         while (placed + 1 < run.targets.length && column < (run.targets[placed + 1].liftBelow ?? 0)) {
+            placed++;
+         }
+      }
+      const { container: parent, closed } = run.targets[placed];
+      const before = closed ? [closed] : run.before;
+      const around = content.slice(Math.max(index - 1, run.start), Math.min(index + 1, run.end) + 1);
+      const view = [...before, ...around, ...run.after[placed]];
+      return { container: parent, content: view, index: before.length + (index > run.start ? 1 : 0) };
+   }
+
+   /**
+    * The run of hidden nodes around `container.content[index]`, and the blocks
+    * it can be lifted out of: each that ends right after the run and whose
+    * INDENT opened a column, up to the first that does not.
+    */
+   protected resolveCommentRun(index: number, container: CompositeCstNode, source: string): CommentRun {
+      const content = container.content;
+      const cached = this.commentRun;
+      // Resolved once per run, not per comment: a run of k comment lines would
+      // otherwise cost k scans of the run.
+      if (cached?.content === content && index >= cached.start && index <= cached.end) {
+         return cached;
+      }
       let start = index;
       while (start > 0 && content[start - 1].hidden) {
          start--;
@@ -478,42 +566,102 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
       while (end + 1 < content.length && content[end + 1].hidden) {
          end++;
       }
-      const run = content.slice(start, end + 1);
       let previous: { readonly end: number } | undefined;
-      for (let scan = start - 1; scan >= 0 && previous === undefined; scan--) {
-         previous = content[scan].hidden ? undefined : this.syntaxSpan(content[scan]);
-      }
-      let parent = container;
-      let closed: CstNode | undefined;
-      if (previous === undefined || source.slice(previous.end, comment.offset).includes('\n')) {
-         const column = this.columnAt(source, comment.offset);
-         while (
-            parent.container &&
-            this.closesAfter(parent.content, closed ?? run[run.length - 1]) &&
-            column < (this.openedColumn(parent.content, closed ?? run[0], source) ?? 0)
-         ) {
-            closed = parent;
-            parent = parent.container;
+      const targets: CommentLiftTarget[] = [{ container, last: end }];
+      if (this.getIndentationTokenNames() !== undefined) {
+         for (let scan = start - 1; scan >= 0 && previous === undefined; scan--) {
+            previous = content[scan].hidden ? undefined : this.syntaxSpan(content[scan]);
+         }
+         let target = targets[0];
+         while (target.container.container && this.closesAfter(target.container.content, target.last)) {
+            const opened = this.openedColumn(target.container.content, target.closed ? target.last : start, source) ?? 0;
+            if (opened === 0) {
+               break;
+            }
+            const parent = target.container.container;
+            target = {
+               container: parent,
+               last: this.indexIn(parent.content, target.container),
+               closed: target.container,
+               liftBelow: opened
+            };
+            targets.push(target);
          }
       }
-      const view = parent.content.flatMap(node => (node === closed ? [node, ...run] : this.isIndentation(node) ? [] : [node]));
-      return { container: parent, content: view, index: view.indexOf(comment) };
+      const before = this.neighbours(content, start - 1, -1).reverse();
+      const after = targets.map(target => this.neighbours(target.container.content, target.last + 1, 1));
+      return (this.commentRun = { content, start, end, previous, targets, before, after });
    }
 
-   /** Whether only hidden and indentation tokens follow `node` in `content`. */
-   protected closesAfter(content: readonly CstNode[], node: CstNode): boolean {
-      return content.slice(content.indexOf(node) + 1).every(sibling => sibling.hidden || this.isIndentation(sibling));
+   /** The nodes of `content` from `from` in `step` direction up to the first that is syntax, without indentation tokens. */
+   protected neighbours(content: readonly CstNode[], from: number, step: 1 | -1): CstNode[] {
+      const found: CstNode[] = [];
+      for (let scan = from; scan >= 0 && scan < content.length; scan += step) {
+         const node = content[scan];
+         if (!this.isIndentation(node)) {
+            found.push(node);
+            if (!node.hidden) {
+               break;
+            }
+         }
+      }
+      return found;
    }
 
-   /** The column the last INDENT before `node` in `content` opens, `undefined` without one. */
-   protected openedColumn(content: readonly CstNode[], node: CstNode, source: string): number | undefined {
+   /** Whether only hidden and indentation tokens follow `index` in `content`. */
+   protected closesAfter(content: readonly CstNode[], index: number): boolean {
+      for (let scan = index + 1; scan < content.length; scan++) {
+         if (!content[scan].hidden && !this.isIndentation(content[scan])) {
+            return false;
+         }
+      }
+      return true;
+   }
+
+   /** The column the last INDENT before `content[index]` opens, `undefined` without one. */
+   protected openedColumn(content: readonly CstNode[], index: number, source: string): number | undefined {
       const indent = this.getIndentationTokenNames()?.indent;
-      for (let scan = content.indexOf(node) - 1; scan >= 0; scan--) {
+      for (let scan = index - 1; scan >= 0; scan--) {
          if (tokenNameOf(content[scan]) === indent) {
             return this.columnAt(source, content[scan].end);
          }
       }
       return undefined;
+   }
+
+   /**
+    * The index of `node` in `content`, found by offset: `indexOf` per lifted
+    * block makes extraction quadratic in a block's siblings.
+    */
+   protected indexIn(content: readonly CstNode[], node: CstNode): number {
+      let low = 0;
+      let high = content.length;
+      while (low < high) {
+         const middle = (low + high) >> 1;
+         if (content[middle].offset < node.offset) {
+            low = middle + 1;
+         } else {
+            high = middle;
+         }
+      }
+      // Zero-width tokens can share the node's offset.
+      for (let index = low; index < content.length && content[index].offset === node.offset; index++) {
+         if (content[index] === node) {
+            return index;
+         }
+      }
+      return content.indexOf(node);
+   }
+
+   /** Whether `text` has a line break from `from` up to `to`, without copying the span. */
+   protected breaksLine(text: string, from: number, to: number): boolean {
+      // Not indexOf, which scans on to the next line break past `to`.
+      for (let offset = from; offset < to; offset++) {
+         if (text.charCodeAt(offset) === 10) {
+            return true;
+         }
+      }
+      return false;
    }
 
    /** The column of `offset` in `text`. */
