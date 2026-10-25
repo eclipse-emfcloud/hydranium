@@ -74,7 +74,8 @@ const synthetic = (value: string): object => ({ $type: 'CharacterRange', left: k
 
 /**
  * `Model: elements+=Element*; Element: 'element' name=ID ':' INDENT
- * members+=Member+ DEDENT; Member: 'member' name=ID;` with `#` line comments.
+ * members+=Member+ DEDENT; Member: 'member' name=ID (':' INDENT
+ * members+=Member+ DEDENT)?;` with `#` line comments.
  */
 function makeGrammar(): Grammar {
    const rules = [
@@ -90,7 +91,18 @@ function makeGrammar(): Grammar {
             call(DEDENT)
          ]
       }),
-      parserRule('Member', { $type: 'Group', elements: [keyword('member'), assign('name', '=', ID)] }),
+      parserRule('Member', {
+         $type: 'Group',
+         elements: [
+            keyword('member'),
+            assign('name', '=', ID),
+            {
+               $type: 'Group',
+               cardinality: '?',
+               elements: [keyword(':'), call(INDENT), assign('members', '+=', MEMBER, '+'), call(DEDENT)]
+            }
+         ]
+      }),
       terminal('INDENT', synthetic('synthetic:indent')),
       terminal('DEDENT', synthetic('synthetic:dedent')),
       terminal('WS', regex(/[\t ]+/), true),
@@ -127,7 +139,12 @@ interface IndentedLanguage {
 
 function makeIndentedLanguage(tokenBuilder: () => IndentationAwareTokenBuilder): IndentedLanguage {
    const shared = inject(createDefaultSharedCoreModule(EmptyFileSystem), {
-      AstReflection: () => makeFakeReflection({ Model: { elements: { defaultValue: [] } }, Element: { members: { defaultValue: [] } } })
+      AstReflection: () =>
+         makeFakeReflection({
+            Model: { elements: { defaultValue: [] } },
+            Element: { members: { defaultValue: [] } },
+            Member: { members: { defaultValue: [] } }
+         })
    });
    const language: LangiumCoreServices = inject(createDefaultCoreModule({ shared }), {
       Grammar: () => makeGrammar(),
@@ -190,6 +207,21 @@ describe.each([
    it('keeps a comment line at the column of the members after the last member', () => {
       const source = 'element a:\n    member x\n    # after x\nelement b:\n    member y\n';
       expect(write(source, 'element a:\n    member x\nelement b:\n    member y\n')).toBe(source);
+   });
+
+   it('keeps a comment line after nested blocks above the next block', () => {
+      const source = 'element a:\n    member x:\n        member y\n# about b\nelement b:\n    member z\n';
+      expect(write(source, 'element a:\n    member x:\n        member y\nelement b:\n    member z\n')).toBe(source);
+   });
+
+   it('keeps a comment line after a nested block above the next member of its parent', () => {
+      const source = 'element a:\n    member x:\n        member y\n    # about w\n    member w\n';
+      expect(write(source, 'element a:\n    member x:\n        member y\n    member w\n')).toBe(source);
+   });
+
+   it('places each line of one comment run after nested blocks by its own column', () => {
+      const source = 'element a:\n    member x:\n        member y\n        # after y\n    # about w\n# about b\nelement b:\n    member z\n';
+      expect(write(source, 'element a:\n    member x:\n        member y\nelement b:\n    member z\n')).toBe(source);
    });
 
    it('drops the comment of a block the write deleted rather than moving it to the next', () => {
