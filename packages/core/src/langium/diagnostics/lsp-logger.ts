@@ -143,7 +143,7 @@ export class LspLogger extends AbstractLogger implements Logger {
    /**
     * Set the process-wide threshold and announce the transition under whichever
     * of the two thresholds can carry the notice, so a reader sees every change
-    * and its absence means the threshold never moved.
+    * after launch that one of them can carry.
     *
     * `error` and `off` admit no notice of their own — `off` nothing at all, and
     * an error-severity line is read as a fault, which a client that marks its
@@ -157,9 +157,10 @@ export class LspLogger extends AbstractLogger implements Logger {
     * changes that leave the value alone.
     *
     * A `launch` baseline, the environment's, is announced only after the
-    * switch. The threshold it leaves is a default no reader ran at, so a
-    * notice under it would be the one line of a run launched at `off`, and an
-    * info line in a run launched at `error`, against the launch's request.
+    * switch, so a run launched at `error` or `off` carries no notice. The
+    * threshold it leaves is a default no reader ran at, so a notice under it
+    * would be the one line of a run launched at `off`, and an info line in a
+    * run launched at `error`, against the launch's request.
     */
    protected applyLevel(next: LogThreshold, source: string, options: { launch?: boolean } = {}): void {
       const previous = Logger.getLevel();
@@ -167,12 +168,19 @@ export class LspLogger extends AbstractLogger implements Logger {
          return;
       }
       const message = `Log level ${previous} → ${next} (${source})`;
-      const announceFirst = !options.launch && (next === 'error' || next === 'off');
+      if (options.launch) {
+         Logger.setLevel(next);
+         if (next !== 'error') {
+            this.logAt(next, message);
+         }
+         return;
+      }
+      const announceFirst = next === 'error' || next === 'off';
       if (announceFirst && previous !== 'error') {
          this.logAt(previous, message);
       }
       Logger.setLevel(next);
-      if (!announceFirst && next !== 'error') {
+      if (!announceFirst) {
          this.logAt(next, message);
       }
    }
