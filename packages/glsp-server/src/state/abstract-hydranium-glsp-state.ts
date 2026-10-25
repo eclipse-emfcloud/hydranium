@@ -165,6 +165,14 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    protected readonly capturedRoots = new Map<string, AstNode>();
    /** Model versions of the secondary write set, keyed by URI. See {@link trackSecondaryDocument}. */
    protected readonly _secondaryVersions = new Map<string, ModelVersion>();
+   /**
+    * Per model {@link updateSourceModel} wrote as given, the roots it wrote,
+    * keyed by URI, each only when built from that write's text alone: a later
+    * build's root holds a later edit too. {@link normalizeTransition} takes
+    * those of its after end as written, once, rather than serializing them
+    * again; keyed by the model, an entry never answers another write.
+    */
+   protected readonly writtenRoots = new WeakMap<object, ReadonlyMap<string, AstNode>>();
 
    /** Backing emitter for {@link onSecondaryUrisChanged}; fired only on a membership change. */
    protected readonly secondaryUrisChangedEmitter = new Emitter<void>();

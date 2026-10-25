@@ -16,7 +16,7 @@
  */
 
 import {
-   type AstDocument,
+   type WrittenAstDocument,
    type ClientSession,
    type ClientSessionFactory,
    type ClientSessionPersistArgs,
@@ -1388,7 +1388,7 @@ describe('ClientSessionFactory', () => {
          protected override updateDocument(
             args: ClientSessionWriteArgs<TransferElement>,
             cancelToken?: CancellationToken
-         ): Promise<AstDocument<AstNode>> {
+         ): Promise<WrittenAstDocument<AstNode>> {
             this.updates++;
             return super.updateDocument(args, cancelToken);
          }

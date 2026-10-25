@@ -60,12 +60,24 @@ export interface AstDocument<TAst extends AstNode, TDiagnostic extends AstDiagno
 }
 
 /**
- * What a session's save or persist resolves to: the document, and in
+ * What a session's write resolves to: the document, and in `written` the
+ * version its text took. A `version` past it means the document was built
+ * from a later text, which holds another client's edit too.
+ */
+export type WrittenAstDocument<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> = AstDocument<TAst, TDiagnostic> & {
+   written: { version: TextVersion };
+};
+
+/**
+ * What a session's save resolves to: the written document, and in
  * `persisted` the version of the text it wrote to the file. That can differ
  * from `version` either way, since writes land between the build and the
  * take.
  */
-export type SavedAstDocument<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> = AstDocument<TAst, TDiagnostic> & {
+export type SavedAstDocument<TAst extends AstNode, TDiagnostic extends AstDiagnostic = AstDiagnostic> = WrittenAstDocument<
+   TAst,
+   TDiagnostic
+> & {
    persisted: { version: TextVersion };
 };
 

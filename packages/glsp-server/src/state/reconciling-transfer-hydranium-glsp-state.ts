@@ -75,21 +75,29 @@ export class ReconcilingTransferHydraniumGlspState<
    /**
     * The source model of `root`. The single projection seam: the source
     * model, the refetch and {@link normalizeTransition} all project through it.
+    * Its result must not depend on whether `root` is linked:
+    * {@link normalizeTransition} projects a built root and a parse.
     */
    protected projectRoot(root: AstNode): TransferTypeFor<TRoot, TTransferMap> {
       return this.sharedServices.model.TransferEncoder.toTransfer(root, 'grammar') as TransferTypeFor<TRoot, TTransferMap>;
    }
 
-   /** Both ends serialized for the source document and parsed back, unless they are equal. */
+   /**
+    * Both ends serialized for the source document and parsed back, unless they
+    * are equal; the end in {@link writtenRoots} is taken as written, so
+    * {@link projectRoot} must not depend on whether a root is linked.
+    */
    override async normalizeTransition(
       transition: OperationTransition<TransferTypeFor<TRoot, TTransferMap>>
    ): Promise<OperationTransition<TransferTypeFor<TRoot, TTransferMap>>> {
+      const written = this.writtenRoots.get(transition.to)?.get(this._sourceUri);
+      this.writtenRoots.delete(transition.to);
       if (JSON.stringify(transition.from) === JSON.stringify(transition.to)) {
          return transition;
       }
       return {
          from: this.projectRoot(await this.roundTrip(this._sourceUri, transition.from)),
-         to: this.projectRoot(await this.roundTrip(this._sourceUri, transition.to))
+         to: this.projectRoot(written ?? (await this.roundTrip(this._sourceUri, transition.to)))
       };
    }
 
@@ -112,7 +120,10 @@ export class ReconcilingTransferHydraniumGlspState<
       // the single-document meaning of persist / project.
       return reconcileSourceModelWrite<TransferTypeFor<TRoot, TTransferMap>>(model, baseVersion, {
          persist: async (candidate, candidateBaseVersion) => {
-            const { root } = await this.persist(candidate, candidateBaseVersion);
+            const { root, writtenRoots } = await this.persist(candidate, candidateBaseVersion);
+            if (candidate === model && writtenRoots) {
+               this.writtenRoots.set(model, writtenRoots);
+            }
             this.captureWrittenRoot(root);
          },
          refetch: () => this.refetch(),
@@ -132,11 +143,16 @@ export class ReconcilingTransferHydraniumGlspState<
     * and throws without a session. Adopters whose document
     * round-trip differs override this, and {@link normalizeTransition}
     * alongside so undo compares what this writes; the orchestration in
-    * {@link updateSourceModel} is unchanged.
+    * {@link updateSourceModel} is unchanged. `writtenRoots` holds the root
+    * when it was built from this write's text alone; see {@link writtenRoots}.
     */
-   protected async persist(model: TransferTypeFor<TRoot, TTransferMap>, baseVersion: BaseVersion): Promise<{ root: TRoot }> {
+   protected async persist(
+      model: TransferTypeFor<TRoot, TTransferMap>,
+      baseVersion: BaseVersion
+   ): Promise<{ root: TRoot; writtenRoots?: ReadonlyMap<string, AstNode> }> {
       const document = await this.requireModelSession().update({ uri: this._sourceUri, model, baseVersion });
-      return document as unknown as { root: TRoot };
+      const root = document.root as unknown as TRoot;
+      return { root, writtenRoots: new Map(document.version === document.written.version ? [[this._sourceUri, root]] : []) };
    }
 
    /**

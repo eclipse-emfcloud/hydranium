@@ -132,26 +132,32 @@ export class ReconcilingMultiDocumentGlspState<
    /**
     * Each document whose ends differ, either end serialized for its URI and
     * parsed back; a document equal on both ends is left as it is, since it
-    * stays out of the transition's patch anyway.
+    * stays out of the transition's patch anyway. An end in
+    * {@link writtenRoots} is taken as written, so {@link projectRoot} must not
+    * depend on whether a root is linked.
     */
    override async normalizeTransition(
       transition: OperationTransition<MultiDocumentSourceModel<TransferTypeFor<TRoot, TTransferMap>>>
    ): Promise<OperationTransition<MultiDocumentSourceModel<TransferTypeFor<TRoot, TTransferMap>>>> {
       const from = { primary: transition.from.primary, secondaries: { ...transition.from.secondaries } };
       const to = { primary: transition.to.primary, secondaries: { ...transition.to.secondaries } };
+      const written = this.writtenRoots.get(transition.to) ?? new Map<string, AstNode>();
+      this.writtenRoots.delete(transition.to);
       if (JSON.stringify(from.primary) !== JSON.stringify(to.primary)) {
          from.primary = this.projectRoot((await this.roundTrip(this._sourceUri, from.primary)) as TRoot);
-         to.primary = this.projectRoot((await this.roundTrip(this._sourceUri, to.primary)) as TRoot);
+         to.primary = this.projectRoot((written.get(this._sourceUri) ?? (await this.roundTrip(this._sourceUri, to.primary))) as TRoot);
       }
       for (const uri of new Set([...Object.keys(from.secondaries), ...Object.keys(to.secondaries)])) {
          if (JSON.stringify(from.secondaries[uri]) === JSON.stringify(to.secondaries[uri])) {
             continue;
          }
-         for (const end of [from, to]) {
-            const secondary = end.secondaries[uri];
-            if (secondary !== undefined) {
-               end.secondaries[uri] = this.projectRoot(await this.roundTrip(uri, secondary));
-            }
+         const before = from.secondaries[uri];
+         if (before !== undefined) {
+            from.secondaries[uri] = this.projectRoot(await this.roundTrip(uri, before));
+         }
+         const after = to.secondaries[uri];
+         if (after !== undefined) {
+            to.secondaries[uri] = this.projectRoot(written.get(uri) ?? (await this.roundTrip(uri, after)));
          }
       }
       return { from, to };
@@ -231,7 +237,10 @@ export class ReconcilingMultiDocumentGlspState<
       let secondaryVersions: Readonly<Record<string, ModelVersion>> | undefined;
       return reconcileSourceModelWrite<MultiDocumentSourceModel<TransferTypeFor<TRoot, TTransferMap>>>(model, baseVersion, {
          persist: async (candidate, candidateBaseVersion) => {
-            const { root } = await this.persist(candidate, candidateBaseVersion, secondaryVersions);
+            const { root, writtenRoots } = await this.persist(candidate, candidateBaseVersion, secondaryVersions);
+            if (candidate === model && writtenRoots) {
+               this.writtenRoots.set(model, writtenRoots);
+            }
             this.captureWrittenRoot(root);
          },
          refetch: async () => {
@@ -255,10 +264,12 @@ export class ReconcilingMultiDocumentGlspState<
     * `secondaryVersions` (a refetch's) or else {@link secondaryBaseVersion}, or
     * every document on `'any'` when `baseVersion` is `'any'`. Resolves to
     * the primary's root, the one already captured when the primary did not
-    * change. A write that bypasses `updateAll` gives up the all-or-none
-    * guarantee the class describes. Throws without a session
-    * ({@link requireModelSession}). An override that serializes otherwise than
-    * `ModelService.modelToText` overrides {@link normalizeTransition} alongside.
+    * change, and in `writtenRoots` each written document's root built from this
+    * write's text alone; see {@link writtenRoots}. A write that bypasses
+    * `updateAll` gives up the all-or-none guarantee the class describes.
+    * Throws without a session ({@link requireModelSession}). An override that
+    * serializes otherwise than `ModelService.modelToText` overrides
+    * {@link normalizeTransition} alongside.
     *
     * A write that fails closes every document {@link createSecondaryDocument}
     * created for it that {@link closesCreatedDocument} accepts.
@@ -267,7 +278,7 @@ export class ReconcilingMultiDocumentGlspState<
       model: MultiDocumentSourceModel<TransferTypeFor<TRoot, TTransferMap>>,
       baseVersion: BaseVersion,
       secondaryVersions?: Readonly<Record<string, ModelVersion>>
-   ): Promise<{ root: TRoot }> {
+   ): Promise<{ root: TRoot; writtenRoots?: ReadonlyMap<string, AstNode> }> {
       const primaryChanged = this.hasChanged(this.base.primary, model.primary);
       const changedSecondaries = Object.entries(model.secondaries).filter(([uri, secondary]) =>
          this.hasChanged(this.base.secondaries[uri], secondary)
@@ -296,7 +307,12 @@ export class ReconcilingMultiDocumentGlspState<
             });
          }
          const documents = await session.updateAll({ updates });
-         return { root: primaryChanged ? (documents[0].root as unknown as TRoot) : this._sourceRoot };
+         const writtenRoots = new Map(
+            documents.flatMap((document, i) =>
+               document.version === document.written.version ? [[updates[i].uri, document.root] as const] : []
+            )
+         );
+         return { root: primaryChanged ? (documents[0].root as unknown as TRoot) : this._sourceRoot, writtenRoots };
       } catch (error: unknown) {
          for (const [uri, created] of this.createdForWrite) {
             try {
@@ -424,7 +440,8 @@ export class ReconcilingMultiDocumentGlspState<
    /**
     * Grammar-mode transfer projection of one AST root. The single projection
     * seam. The encoder slot answers the structural base, so the map's type is
-    * asserted here, once.
+    * asserted here, once. Its result must not depend on whether `root` is
+    * linked: {@link normalizeTransition} projects a built root and a parse.
     */
    protected projectRoot<T extends AstNode>(root: T): TransferTypeFor<T, TTransferMap> {
       return this.sharedServices.model.TransferEncoder.toTransfer(root, 'grammar') as TransferTypeFor<T, TTransferMap>;
