@@ -15,6 +15,7 @@ import {
    type CstNode,
    GrammarAST,
    GrammarUtils,
+   IndentationAwareTokenBuilder,
    isAstNode,
    type LangiumDocument,
    type URI
@@ -137,6 +138,11 @@ export interface AnchorSpan {
    readonly owner: AstNode;
 }
 
+export interface IndentationTokenNames {
+   readonly indent: string;
+   readonly dedent: string;
+}
+
 /**
  * One splice, with what it takes to check the risky kind afterwards.
  *
@@ -185,6 +191,7 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
    protected readonly tracer: Tracer;
    protected readonly maxIsolatedEdits: number;
    protected commentTokenNames?: readonly string[];
+   protected indentationTokenNames?: IndentationTokenNames | null;
    /** Set for the duration of one {@link apply}; see {@link cachedAnchorKey}. */
    protected keyMemo?: Map<AstNode, string | undefined>;
    /** Set for the duration of one {@link apply}; see {@link ambiguousRetainedKey}. */
@@ -215,6 +222,61 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
             .map(rule => rule.name);
       }
       return this.commentTokenNames;
+   }
+
+   /**
+    * The names of the INDENT and DEDENT tokens the language's
+    * `IndentationAwareTokenBuilder` emits, `undefined` for a lexer that emits
+    * none. Override it for a lexer of your own that emits such tokens.
+    *
+    * They are syntax to the parser only. A DEDENT is zero-width at the start of
+    * the line after its block, and an INDENT covers the whitespace in front of
+    * the block's first line, so a comment line beside either reads as sharing a
+    * line with the block, and moves onto the block's last line or its header.
+    */
+   protected getIndentationTokenNames(): IndentationTokenNames | undefined {
+      if (this.indentationTokenNames === undefined) {
+         const builder = this.services.parser.TokenBuilder;
+         this.indentationTokenNames =
+            builder instanceof IndentationAwareTokenBuilder
+               ? { indent: builder.indentTokenType.name, dedent: builder.dedentTokenType.name }
+               : null;
+      }
+      return this.indentationTokenNames ?? undefined;
+   }
+
+   protected isIndentation(node: CstNode): boolean {
+      const names = this.getIndentationTokenNames();
+      const name = tokenNameOf(node);
+      return names !== undefined && (name === names.indent || name === names.dedent);
+   }
+
+   /**
+    * Where the syntax of `node` begins and ends without the indentation tokens
+    * at its edges.
+    */
+   protected syntaxSpan(node: CstNode): { readonly offset: number; readonly end: number } | undefined {
+      if (this.getIndentationTokenNames() === undefined) {
+         return node;
+      }
+      const first = this.edgeToken(node, 1);
+      const last = this.edgeToken(node, -1);
+      return first && last && { offset: first.offset, end: last.end };
+   }
+
+   /** The first token of `node` for a `step` of 1, the last for -1, that is neither hidden nor indentation. */
+   protected edgeToken(node: CstNode, step: 1 | -1): CstNode | undefined {
+      if (!isComposite(node)) {
+         return node.hidden || this.isIndentation(node) ? undefined : node;
+      }
+      const content = node.content;
+      for (let index = step > 0 ? 0 : content.length - 1; index >= 0 && index < content.length; index += step) {
+         const found = this.edgeToken(content[index], step);
+         if (found !== undefined) {
+            return found;
+         }
+      }
+      return undefined;
    }
 
    /**
@@ -321,9 +383,12 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
     * what relocates an end-of-line note onto the following declaration.
     */
    protected classify(comment: CstNode, index: number, container: CompositeCstNode, source: string): DocumentComment {
-      const content = container.content;
+      const placed = this.placeAmongSyntax(comment, index, container, source);
+      const owner = placed.container;
+      const content = placed.content;
+      const at = placed.index;
       const ownsOwnNode = (candidate: CstNode | undefined): boolean =>
-         candidate?.astNode !== undefined && candidate.astNode !== container.astNode;
+         candidate?.astNode !== undefined && candidate.astNode !== owner.astNode;
       const realSibling = (from: number, step: number): CstNode | undefined => {
          for (let scan = from; scan >= 0 && scan < content.length; scan += step) {
             if (!content[scan].hidden) {
@@ -332,17 +397,19 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
          }
          return undefined;
       };
+      const offsetOf = (node: CstNode): number => this.syntaxSpan(node)?.offset ?? node.offset;
+      const endOf = (node: CstNode): number => this.syntaxSpan(node)?.end ?? node.end;
 
-      const previous = realSibling(index - 1, -1);
-      const next = realSibling(index + 1, 1);
+      const previous = realSibling(at - 1, -1);
+      const next = realSibling(at + 1, 1);
 
       // Measured to whatever comes NEXT IN SOURCE, comment or not — never to the
       // next real node, which would skip the rest of a comment block and make
       // every line of it re-emit the whole gap that follows the block.
-      const following = content[index + 1];
-      const blankLinesAfter = following === undefined ? 0 : this.countBlankLines(source.slice(comment.end, following.offset));
-      const preceding = index > 0 ? content[index - 1] : undefined;
-      const blankLinesBefore = preceding === undefined ? 0 : this.countBlankLines(source.slice(preceding.end, comment.offset));
+      const following = content[at + 1];
+      const blankLinesAfter = following === undefined ? 0 : this.countBlankLines(source.slice(comment.end, offsetOf(following)));
+      const preceding = at > 0 ? content[at - 1] : undefined;
+      const blankLinesBefore = preceding === undefined ? 0 : this.countBlankLines(source.slice(endOf(preceding), comment.offset));
 
       // Only a comment that OWNS its line can be reindented — one sharing a line
       // with code keeps whatever spacing that line gives it.
@@ -351,7 +418,7 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
       const sourceIndent = beforeOnLine.trim().length === 0 ? beforeOnLine : undefined;
 
       const text = this.normalizeLineEndings(comment.text);
-      const sharesLineWithPrevious = previous !== undefined && !source.slice(previous.end, comment.offset).includes('\n');
+      const sharesLineWithPrevious = previous !== undefined && !source.slice(endOf(previous), comment.offset).includes('\n');
 
       if (sharesLineWithPrevious) {
          // On the same line as whatever precedes it, so it annotates that line.
@@ -362,7 +429,7 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
          // moves a note about the declaration onto its first child.
          return ownsOwnNode(previous)
             ? { text, anchor: previous.astNode!, placement: 'trailing', blankLinesAfter: 0, blankLinesBefore: 0 }
-            : { text, anchor: container.astNode!, placement: 'trailingOnContainer', blankLinesAfter: 0, blankLinesBefore: 0 };
+            : { text, anchor: owner.astNode!, placement: 'trailingOnContainer', blankLinesAfter: 0, blankLinesBefore: 0 };
       }
       if (ownsOwnNode(next)) {
          return { text, anchor: next!.astNode!, placement: 'leading', blankLinesAfter, blankLinesBefore: 0, sourceIndent };
@@ -371,7 +438,7 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
          return { text, anchor: previous!.astNode!, placement: 'afterNode', blankLinesAfter: 0, blankLinesBefore, sourceIndent };
       }
       if (previous === undefined) {
-         return { text, anchor: container.astNode!, placement: 'atContainerStart', blankLinesAfter, blankLinesBefore: 0, sourceIndent };
+         return { text, anchor: owner.astNode!, placement: 'atContainerStart', blankLinesAfter, blankLinesBefore: 0, sourceIndent };
       }
       // Surrounded by the container's own syntax on both sides. A further
       // sibling after it means the comment sits INSIDE the construct — between
@@ -380,7 +447,78 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
       // which would move it out to the enclosing scope. Only a comment with
       // nothing after it at all actually trails the container.
       const placement: CommentPlacement = next === undefined ? 'atContainerEnd' : 'trailingOnContainer';
-      return { text, anchor: container.astNode!, placement, blankLinesAfter, blankLinesBefore, sourceIndent };
+      return { text, anchor: owner.astNode!, placement, blankLinesAfter, blankLinesBefore, sourceIndent };
+   }
+
+   /**
+    * Resolves the container {@link classify} anchors `comment` in and its
+    * siblings there without INDENT and DEDENT tokens.
+    *
+    * An indentation-aware lexer can emit a block's DEDENT after the comment
+    * lines that follow the block, so the parser nests them in it. An own-line
+    * comment left of the column a block's INDENT opened is lifted out of each
+    * block that ends right after it, with its adjacent hidden nodes, and placed
+    * after that block in the enclosing container.
+    */
+   protected placeAmongSyntax(
+      comment: CstNode,
+      index: number,
+      container: CompositeCstNode,
+      source: string
+   ): { readonly container: CompositeCstNode; readonly content: readonly CstNode[]; readonly index: number } {
+      if (this.getIndentationTokenNames() === undefined) {
+         return { container, content: container.content, index };
+      }
+      const content = container.content;
+      let start = index;
+      while (start > 0 && content[start - 1].hidden) {
+         start--;
+      }
+      let end = index;
+      while (end + 1 < content.length && content[end + 1].hidden) {
+         end++;
+      }
+      const run = content.slice(start, end + 1);
+      let previous: { readonly end: number } | undefined;
+      for (let scan = start - 1; scan >= 0 && previous === undefined; scan--) {
+         previous = content[scan].hidden ? undefined : this.syntaxSpan(content[scan]);
+      }
+      let parent = container;
+      let closed: CstNode | undefined;
+      if (previous === undefined || source.slice(previous.end, comment.offset).includes('\n')) {
+         const column = this.columnAt(source, comment.offset);
+         while (
+            parent.container &&
+            this.closesAfter(parent.content, closed ?? run[run.length - 1]) &&
+            column < (this.openedColumn(parent.content, closed ?? run[0], source) ?? 0)
+         ) {
+            closed = parent;
+            parent = parent.container;
+         }
+      }
+      const view = parent.content.flatMap(node => (node === closed ? [node, ...run] : this.isIndentation(node) ? [] : [node]));
+      return { container: parent, content: view, index: view.indexOf(comment) };
+   }
+
+   /** Whether only hidden and indentation tokens follow `node` in `content`. */
+   protected closesAfter(content: readonly CstNode[], node: CstNode): boolean {
+      return content.slice(content.indexOf(node) + 1).every(sibling => sibling.hidden || this.isIndentation(sibling));
+   }
+
+   /** The column the last INDENT before `node` in `content` opens, `undefined` without one. */
+   protected openedColumn(content: readonly CstNode[], node: CstNode, source: string): number | undefined {
+      const indent = this.getIndentationTokenNames()?.indent;
+      for (let scan = content.indexOf(node) - 1; scan >= 0; scan--) {
+         if (tokenNameOf(content[scan]) === indent) {
+            return this.columnAt(source, content[scan].end);
+         }
+      }
+      return undefined;
+   }
+
+   /** The column of `offset` in `text`. */
+   protected columnAt(text: string, offset: number): number {
+      return offset - (text.lastIndexOf('\n', offset - 1) + 1);
    }
 
    /**
@@ -1060,18 +1198,21 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
       // costing nodes x depth.
       const visit = (node: CstNode): void => {
          const key = node.astNode !== undefined && !node.hidden ? this.cachedAnchorKey(node.astNode) : undefined;
-         if (key !== undefined) {
+         // Without the indentation tokens, whose DEDENT would end a block at
+         // the start of the line after it.
+         const span = key === undefined ? undefined : this.syntaxSpan(node);
+         if (key !== undefined && span !== undefined) {
             const owner = owners.get(key);
             if (owner === undefined) {
                owners.set(key, node.astNode!);
-               found.set(key, { offset: node.offset, end: node.end, owner: node.astNode! });
+               found.set(key, { offset: span.offset, end: span.end, owner: node.astNode! });
             } else if (owner === node.astNode) {
                // Widest span per node: its first CST node gives the start, a
                // later token contributing to the same node extends the end.
                const existing = found.get(key)!;
                found.set(key, {
-                  offset: Math.min(existing.offset, node.offset),
-                  end: Math.max(existing.end, node.end),
+                  offset: Math.min(existing.offset, span.offset),
+                  end: Math.max(existing.end, span.end),
                   owner: existing.owner
                });
             } else {
