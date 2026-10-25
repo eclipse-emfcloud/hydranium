@@ -38,7 +38,7 @@ import {
 import { type AstNode, URI } from '@hydranium/langium';
 import { type ProcessModel as TransferProcessModel, Task } from '@hydranium/example-order-flow-protocol';
 import { readFileSync } from 'node:fs';
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { makeScratchWorkspaceHarness, makeServices, type OrderFlowHarness } from './order-flow-harness.js';
 import { transferNode } from './generated-hydranium/transfer-builder.js';
 import { type OrderFlowServices } from '../src/language-server/order-flow-module.js';
@@ -653,6 +653,41 @@ describe('trivia preservation', () => {
       const written = await writeBackIn(makeServices(), '.domain', source);
       expect(written).toContain('// first note\n   // second note\n   PAID');
       expect(await writeBackIn(makeServices(), '.domain', written)).toBe(written);
+   });
+
+   describe('parses each text once per write', () => {
+      it('reads a renamed anchor from the parse that located the output', async () => {
+         const harness = makeServices();
+         const uri = URI.parse(URI_STRING);
+         const source = 'process P for Order {\n   // about Pay\n   task Pay\n   task Pick\n}\n';
+         const document = harness.shared.workspace.LangiumDocumentFactory.fromString(source, uri);
+         const trivia = harness.process.trivia.TriviaService.extract(document);
+         const transfer = harness.shared.model.TransferEncoder.toTransfer(document.parseResult.value, 'grammar');
+         (transfer as unknown as { nodes: Array<{ name: string }> }).nodes[0].name = 'Charge';
+         const serialized = await harness.process.serializer.Serializer.serializeTransfer(transfer);
+         const parses = vi.spyOn(harness.shared.workspace.LangiumDocumentFactory, 'fromString');
+         onTestFinished(() => parses.mockRestore());
+
+         expect(harness.process.trivia.TriviaService.apply(serialized, trivia, uri)).toContain('   // about Pay\n   task Charge');
+         // The serializer's output, then the spliced text for the final check.
+         expect(parses).toHaveBeenCalledTimes(2);
+      });
+
+      it('checks a shared-line splice with the parse that read it back', async () => {
+         const harness = makeServices();
+         const uri = URI.parse('memory:///comments.domain');
+         const source = ['enum Status {', '   // about PAID', '   PAID,', '   // about SHIPPED', '   SHIPPED', '}', ''].join('\n');
+         const document = harness.shared.workspace.LangiumDocumentFactory.fromString(source, uri);
+         const services = harness.shared.ServiceRegistry.getServices(uri);
+         const trivia = services.trivia.TriviaService.extract(document);
+         const serialized = await services.serializer.Serializer.serializeAst(document.parseResult.value);
+         const parses = vi.spyOn(harness.shared.workspace.LangiumDocumentFactory, 'fromString');
+         onTestFinished(() => parses.mockRestore());
+
+         expect(services.trivia.TriviaService.apply(serialized, trivia, uri)).toContain('// about SHIPPED\n   SHIPPED');
+         // The serializer's output, then the spliced text; the final check reuses the second.
+         expect(parses).toHaveBeenCalledTimes(2);
+      });
    });
 
    describe('never moved onto another declaration', () => {

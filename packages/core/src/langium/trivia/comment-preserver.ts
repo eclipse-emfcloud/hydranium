@@ -238,6 +238,8 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
    protected keyMemo?: Map<AstNode, string | undefined>;
    /** Set for the duration of one {@link apply}; see {@link ambiguousRetainedKey}. */
    protected listVerdicts?: Map<AstNode, Map<string, boolean>>;
+   /** Set for the duration of one {@link apply}; see {@link parse}. */
+   protected lastParse?: { text?: string; uri?: string; document?: LangiumDocument };
 
    constructor(
       protected readonly services: HydraniumLanguageServices,
@@ -695,16 +697,18 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
       if (trivia.comments.length === 0) {
          return serialized;
       }
-      // Both memos are scoped to this call and not to the instance, because an
+      // The memos are scoped to this call and not to the instance, because an
       // in-place write changes what a node's key IS: a repair that renames a
       // node between two writes would otherwise be answered from the first.
       this.keyMemo = new Map();
       this.listVerdicts = new Map();
+      this.lastParse = {};
       try {
          return this.applyComments(serialized, trivia, uri);
       } finally {
          this.keyMemo = undefined;
          this.listVerdicts = undefined;
+         this.lastParse = undefined;
       }
    }
 
@@ -745,18 +749,34 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
    }
 
    /**
-    * Parse `text` as a throwaway document, or `undefined` when it is not
+    * Parse `text` as an unregistered document, or `undefined` when it is not
     * readable — by reported error, or by a throw from a URI that routes to no
     * services. Does NOT register the result, so `LangiumDocuments` is untouched.
+    *
+    * Within one {@link apply}, the text and URI parsed last are answered with
+    * the same document rather than parsed again, so a caller must not change
+    * it. One entry, so no document outlives the next parse.
     */
    protected parse(text: string, uri: URI): LangiumDocument | undefined {
-      let document: LangiumDocument;
+      const memo = this.lastParse;
+      if (memo !== undefined && memo.text === text && memo.uri === uri.toString()) {
+         return memo.document;
+      }
+      let document: LangiumDocument | undefined;
       try {
          document = this.services.shared.workspace.LangiumDocumentFactory.fromString(text, uri);
       } catch {
-         return undefined;
+         document = undefined;
       }
-      return document.parseResult.parserErrors.length > 0 || document.parseResult.lexerErrors.length > 0 ? undefined : document;
+      if (document !== undefined && (document.parseResult.parserErrors.length > 0 || document.parseResult.lexerErrors.length > 0)) {
+         document = undefined;
+      }
+      if (memo !== undefined) {
+         memo.text = text;
+         memo.uri = uri.toString();
+         memo.document = document;
+      }
+      return document;
    }
 
    /** The splice itself, run before {@link apply}'s parse check. */
