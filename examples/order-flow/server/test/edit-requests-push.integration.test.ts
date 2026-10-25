@@ -62,12 +62,18 @@ const WRITTEN = `process Handling for Crate {
 }
 `;
 
+// Each request here is answered in well under a second; a bound names the one
+// that is not, where the test's own timeout would only report the test.
+const ANSWER_TIMEOUT_MS = 3_000;
+
 let transport: LspServerConnection | undefined;
 let workspace: ScratchWorkspace | undefined;
+let describeDocuments: () => string = () => 'no server';
 
 afterEach(() => {
    transport?.dispose();
    transport = undefined;
+   describeDocuments = () => 'no server';
    workspace?.dispose();
    workspace = undefined;
 });
@@ -92,9 +98,44 @@ async function composeServer(
       options
    );
    startLanguageServer(services.shared);
+   describeDocuments = () => {
+      const store = services.shared.workspace.TextDocuments;
+      const documents = services.shared.workspace.LangiumDocuments;
+      return JSON.stringify(
+         store.all().map(document => ({
+            uri: document.uri,
+            version: document.version,
+            languageClientBehind: store.isLanguageClientBehind(document.uri, document.version),
+            buildState: documents.getDocument(URI.parse(document.uri))?.state
+         }))
+      );
+   };
    await composed.initialize(on ? { workspaceFolders: [{ uri: on.workspace.uri(), name: 'order-flow' }] } : undefined);
    await services.shared.workspace.WorkspaceManager.workspaceInitialized;
    return { composed, shared: services.shared, process: services.Process };
+}
+
+/** Rejects a wait that {@link bounded} gave up on; {@link outcome} rethrows it rather than reporting it as an answer. */
+class NotSettled extends Error {}
+
+/** `work`, or a rejection naming `what` and the documents' state when it is not settled in time. */
+async function bounded<T>(what: string, work: Promise<T>): Promise<T> {
+   let timer: NodeJS.Timeout | undefined;
+   const timedOut = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+         () => reject(new NotSettled(`${what} not settled after ${ANSWER_TIMEOUT_MS} ms; documents: ${describeDocuments()}`)),
+         ANSWER_TIMEOUT_MS
+      );
+   });
+   try {
+      return await Promise.race([work, timedOut]);
+   } finally {
+      clearTimeout(timer);
+   }
+}
+
+function request<R>(composed: LspServerConnection, method: string, params: object): Promise<R> {
+   return bounded(method, composed.client.sendRequest<R>(method, params));
 }
 
 /** The code of the response error `request` rejects with, or `'answered'` when it resolves. */
@@ -103,6 +144,9 @@ async function outcome(request: Promise<unknown>): Promise<unknown> {
       await request;
       return 'answered';
    } catch (error: unknown) {
+      if (error instanceof NotSettled) {
+         throw error;
+      }
       return (error as { code?: unknown }).code ?? error;
    }
 }
@@ -110,9 +154,9 @@ async function outcome(request: Promise<unknown>): Promise<unknown> {
 /** Write `text` to `uri` as a form does, and wait until its push reaches the editor, which does not apply it yet. */
 async function writeFromForm(composed: LspServerConnection, shared: OrderFlowSharedServices, uri: string, text: string): Promise<void> {
    const session = shared.model.ModelService.createSession('form', 'form');
-   await session.open(uri);
+   await bounded('the form session open', session.open(uri));
    const pushed = composed.nextAppliedEdit(uri);
-   await session.update({ uri, model: text, baseVersion: 'any' });
+   await bounded('the form update', session.update({ uri, model: text, baseVersion: 'any' }));
    await pushed;
 }
 
@@ -126,25 +170,25 @@ describe('order-flow edit requests over the real transport', () => {
       const textDocument = { uri: PROCESS_URI };
       const requests = (): Promise<Record<string, unknown>> =>
          Promise.all([
-            outcome(composed.client.sendRequest('textDocument/formatting', { textDocument, options })),
+            outcome(request(composed, 'textDocument/formatting', { textDocument, options })),
             outcome(
-               composed.client.sendRequest('textDocument/rangeFormatting', {
+               request(composed, 'textDocument/rangeFormatting', {
                   textDocument,
                   options,
                   range: { start: { line: 0, character: 0 }, end: { line: 4, character: 0 } }
                })
             ),
-            outcome(composed.client.sendRequest('textDocument/rename', { textDocument, position, newName: 'Renamed' })),
-            outcome(composed.client.sendRequest('textDocument/completion', { textDocument, position })),
+            outcome(request(composed, 'textDocument/rename', { textDocument, position, newName: 'Renamed' })),
+            outcome(request(composed, 'textDocument/completion', { textDocument, position })),
             outcome(
-               composed.client.sendRequest('textDocument/codeAction', {
+               request(composed, 'textDocument/codeAction', {
                   textDocument,
                   range: { start: position, end: position },
                   context: { diagnostics: [] }
                })
             ),
-            outcome(composed.client.sendRequest('textDocument/onTypeFormatting', { textDocument, position, ch: '\n', options })),
-            outcome(composed.client.sendRequest('textDocument/hover', { textDocument, position }))
+            outcome(request(composed, 'textDocument/onTypeFormatting', { textDocument, position, ch: '\n', options })),
+            outcome(request(composed, 'textDocument/hover', { textDocument, position }))
          ]).then(([formatting, rangeFormatting, rename, completion, codeAction, onTypeFormatting, hover]) => ({
             formatting,
             rangeFormatting,
@@ -193,7 +237,7 @@ describe('order-flow edit requests over the real transport', () => {
       composed.openDocument(PROCESS_URI, OPENED, 'order-flow-process', 1);
       // On `Crate` in the process, which the domain declares.
       const rename = (): Promise<WorkspaceEdit | null> =>
-         composed.client.sendRequest('textDocument/rename', {
+         request(composed, 'textDocument/rename', {
             textDocument: { uri: PROCESS_URI },
             position: { line: 0, character: 23 },
             newName: 'Box'
@@ -231,7 +275,7 @@ describe('order-flow edit requests over the real transport', () => {
       composed.openDocument(PROCESS_URI, OPENED, 'order-flow-process', 1);
       const codeAction = (): Promise<unknown> =>
          outcome(
-            composed.client.sendRequest('textDocument/codeAction', {
+            request(composed, 'textDocument/codeAction', {
                textDocument: { uri: DOMAIN_URI },
                range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
                context: { diagnostics: [] }
@@ -260,7 +304,7 @@ describe('order-flow edit requests over the real transport', () => {
          return edit;
       };
       // Answered after the open, so the form attaches to the editor's text.
-      await composed.client.sendRequest('textDocument/hover', { textDocument: { uri: PROCESS_URI }, position });
+      await request(composed, 'textDocument/hover', { textDocument: { uri: PROCESS_URI }, position });
       await writeFromForm(composed, shared, PROCESS_URI, WRITTEN);
 
       // On `Inspect` in the editor's text, where the store's has `Ship`.
@@ -269,10 +313,10 @@ describe('order-flow edit requests over the real transport', () => {
       );
       composed.changeDocument(PROCESS_URI, WRITTEN, 2);
       // Answered after the echo, which the server handles in order.
-      await composed.client.sendRequest('textDocument/hover', { textDocument: { uri: PROCESS_URI }, position });
+      await request(composed, 'textDocument/hover', { textDocument: { uri: PROCESS_URI }, position });
       gate.resolve();
 
-      expect(await renamed).toBe(LSPErrorCodes.ContentModified);
+      expect(await bounded('textDocument/rename', renamed)).toBe(LSPErrorCodes.ContentModified);
    });
 
    it.each([
@@ -307,15 +351,15 @@ describe('order-flow edit requests over the real transport', () => {
             context: { diagnostics: [] }
          })
       );
-      await computed.promise;
+      await bounded('the provider call', computed.promise);
 
       if (rebuild) {
          workspace.write('closed.domain', DOMAIN_WRITTEN);
-         await shared.workspace.DocumentBuilder.update([URI.parse(closedUri)], []);
+         await bounded('the rebuild', shared.workspace.DocumentBuilder.update([URI.parse(closedUri)], []));
       }
       gate.resolve();
 
-      expect(await codeAction).toBe(expected);
+      expect(await bounded('textDocument/codeAction', codeAction)).toBe(expected);
    });
 
    it('refuse a code action that edits a document another client saved, and the editor closed and reopened, while it is computed', async () => {
@@ -342,7 +386,7 @@ describe('order-flow edit requests over the real transport', () => {
       composed.openDocument(askedUri, DOMAIN, 'order-flow-domain', 1);
       composed.openDocument(editedUri, OPENED, 'order-flow-process', 1);
       // Answered after the opens, so the form attaches to the editor's text.
-      await composed.client.sendRequest('textDocument/hover', { textDocument: { uri: editedUri }, position });
+      await request(composed, 'textDocument/hover', { textDocument: { uri: editedUri }, position });
       const codeAction = outcome(
          composed.client.sendRequest('textDocument/codeAction', {
             textDocument: { uri: askedUri },
@@ -350,19 +394,19 @@ describe('order-flow edit requests over the real transport', () => {
             context: { diagnostics: [] }
          })
       );
-      await computed.promise;
+      await bounded('the provider call', computed.promise);
 
       const session = shared.model.ModelService.createSession('form', 'form');
-      await session.open(editedUri);
-      await session.save({ uri: editedUri, model: WRITTEN, baseVersion: 'any' });
-      await session.close(editedUri);
+      await bounded('the form session open', session.open(editedUri));
+      await bounded('the form save', session.save({ uri: editedUri, model: WRITTEN, baseVersion: 'any' }));
+      await bounded('the form session close', session.close(editedUri));
       await composed.closeDocument(editedUri);
       composed.openDocument(editedUri, WRITTEN, 'order-flow-process', 1);
       // Answered after the reopen, which the server handles in order.
-      await composed.client.sendRequest('textDocument/hover', { textDocument: { uri: editedUri }, position });
+      await request(composed, 'textDocument/hover', { textDocument: { uri: editedUri }, position });
       gate.resolve();
 
-      expect(await codeAction).toBe(LSPErrorCodes.ContentModified);
+      expect(await bounded('textDocument/codeAction', codeAction)).toBe(LSPErrorCodes.ContentModified);
    });
 
    it.each([
@@ -394,13 +438,13 @@ describe('order-flow edit requests over the real transport', () => {
          return edits;
       };
       const formatting = outcome(composed.client.sendRequest('textDocument/formatting', { textDocument: { uri: PROCESS_URI }, options }));
-      await computed.promise;
+      await bounded('the provider call', computed.promise);
 
       await change(composed, shared);
       // Answered after the change, which the server handles in order.
-      await composed.client.sendRequest('textDocument/hover', { textDocument: { uri: PROCESS_URI }, position });
+      await request(composed, 'textDocument/hover', { textDocument: { uri: PROCESS_URI }, position });
       gate.resolve();
 
-      expect(await formatting).toBe(expected);
+      expect(await bounded('textDocument/formatting', formatting)).toBe(expected);
    });
 });
