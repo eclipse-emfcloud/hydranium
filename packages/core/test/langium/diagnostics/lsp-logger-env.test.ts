@@ -12,9 +12,10 @@ import { DEFAULT_LOG_FILE_ENV, DEFAULT_LOG_FILE_LEVEL_ENV, DEFAULT_LOG_LEVEL_ENV
 import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { format } from 'node:util';
 import { setLogFilePath, setLogFileSink } from '../../../src/langium/diagnostics/logger.js';
 import { installNodeLogFileSink } from '../../../src/node/log-file-sink.js';
-import { installConsoleTee } from '../../../src/langium/diagnostics/console-tee.js';
+import { installConsoleTee, setConsoleFormat } from '../../../src/langium/diagnostics/console-tee.js';
 import { LspLogger } from '../../../src/langium/diagnostics/lsp-logger.js';
 import type { ServerSharedServices } from '../../../src/langium/module.js';
 
@@ -217,7 +218,15 @@ describe('the first LspLogger of a module', () => {
             }
          });
 
-         console.error('stack-throws', throwingStack);
+         // A throwing renderer, since whether `util.format` throws on such an error depends on the Node release.
+         setConsoleFormat(() => {
+            throw new Error('unrenderable');
+         });
+         try {
+            console.error('stack-throws', throwingStack);
+         } finally {
+            setConsoleFormat(format);
+         }
 
          expect(linesMatching(/^\[Error - [\d:.]+\] \[console\] stack-throws readable$/gm)).toBe(1);
       });
