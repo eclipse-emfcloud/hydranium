@@ -38,7 +38,7 @@ import {
 } from '@hydranium/langium';
 import type { CancellationToken } from 'vscode-languageserver-protocol';
 // A VALUE import, for `Diagnostic.getMessageString`: `message` is
-// `string | MarkupContent` in LSP 3.17+, so upstream's own reader is what
+// `string | MarkupContent` since LSP 3.18, so upstream's own reader is what
 // narrows it rather than a hand-rolled union check here.
 import { Diagnostic } from 'vscode-languageserver-types';
 import { type LogNameOptions } from '../diagnostics/logger.js';

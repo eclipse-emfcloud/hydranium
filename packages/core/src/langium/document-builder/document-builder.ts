@@ -1597,7 +1597,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
          const text = this.messageRenderer.renderDiagnostic(diagnostic);
          // Against the message's STRING FORM, not the field. `renderDiagnostic`
          // answers a `string` by contract, while `Diagnostic.message` is
-         // `string | MarkupContent` since LSP 3.17 — so comparing the answer
+         // `string | MarkupContent` since LSP 3.18 — so comparing the answer
          // against the field never matches for a markup message, and a pass
          // that replaced on mismatch flattened every un-identified markup
          // diagnostic to its own plain text. That is silent data loss on the

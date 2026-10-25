@@ -98,7 +98,7 @@
     "vscode-languageserver": "10.0.1",
     "vscode-languageserver-protocol": "3.18.1",
     "vscode-languageserver-textdocument": "^1.0.12",
-    "vscode-languageserver-types": "^3.17.5"
+    "vscode-languageserver-types": "3.18.0"
   },
   "peerDependencies": {
     "@hydranium/langium": "^1.0.0-next",
@@ -108,7 +108,7 @@
     "vscode-languageserver": "~10.0.1",
     "vscode-languageserver-protocol": "~3.18.1",
     "vscode-languageserver-textdocument": "^1.0.12",
-    "vscode-languageserver-types": "^3.17.5"
+    "vscode-languageserver-types": "^3.18.0"
   },
   "peerDependenciesMeta": {
     "@playwright/test": {

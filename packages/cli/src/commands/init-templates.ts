@@ -321,7 +321,9 @@ const HEAD_THIRD_PARTY_DEPENDENCIES: Record<InitHead | 'base', Readonly<Record<s
       // or returns loses its code, and a later patch can pin another protocol.
       'vscode-languageserver': '10.0.1',
       'vscode-jsonrpc': '9.0.0',
-      'vscode-languageserver-protocol': '3.18.1'
+      'vscode-languageserver-protocol': '3.18.1',
+      // The copy that protocol pins; a root without it takes the one Theia pins.
+      'vscode-languageserver-types': '3.18.0'
    },
    lsp: {},
    data: {},
@@ -450,7 +452,8 @@ export function workspaceRootPins(composition: InitComposition): ReadonlyArray<r
          : []),
       ...(members.includes('host-vscode') && heads.includes('glsp') ? Object.entries(HOST_VSCODE_GLSP_THIRD_PARTY_DEPENDENCIES) : []),
       ...(members.includes('host-vscode') && heads.includes('data') ? Object.entries(HOST_VSCODE_DATA_THIRD_PARTY_DEPENDENCIES) : []),
-      ...(members.includes('theia') ? theiaThirdPartyDependencies(heads) : [])
+      ...(members.includes('theia') ? theiaThirdPartyDependencies(heads) : []),
+      ...(members.includes('host-theia-browser') ? hostTheiaBrowserTheiaDependencies() : [])
    ]);
    return [...pins].filter(([, version]) => /^\d+\.\d+\.\d+$/.test(version)).sort(([left], [right]) => left.localeCompare(right));
 }
@@ -3586,11 +3589,12 @@ function hostVscodeFiles(composition: InitComposition): InitFile[] {
 }
 
 /**
- * The Theia release range of both Theia members, the one the framework's own
- * Theia example takes, so a scaffold builds against what the repo tests. 1.75
- * is the first that bundles with esbuild, which the application's files assume.
+ * The Theia release of both Theia members, the one the framework's own
+ * Theia example takes, so a scaffold builds against what the repo tests: the
+ * Theia community release. Exact, as Theia's members pin each other, so a
+ * workspace root declares it too and GLSP's open Theia peer resolves to it.
  */
-const THEIA_RANGE = '^1.75.0';
+const THEIA_VERSION = '1.74.3';
 
 /**
  * What each head adds to the Theia extension; `base` is the connection hardening
@@ -3606,20 +3610,20 @@ const THEIA_FRAMEWORK_DEPENDENCIES: Record<InitHead | 'base', readonly string[]>
 };
 const THEIA_THIRD_PARTY_DEPENDENCIES: Record<InitHead | 'base', Readonly<Record<string, string>>> = {
    base: {
-      '@theia/core': THEIA_RANGE,
-      '@theia/editor': THEIA_RANGE,
-      '@theia/filesystem': THEIA_RANGE,
-      '@theia/output': THEIA_RANGE,
+      '@theia/core': THEIA_VERSION,
+      '@theia/editor': THEIA_VERSION,
+      '@theia/filesystem': THEIA_VERSION,
+      '@theia/output': THEIA_VERSION,
       inversify: '^6.1.3',
       'vscode-jsonrpc': '9.0.0'
    },
    lsp: {},
-   data: { '@theia/workspace': THEIA_RANGE },
+   data: { '@theia/workspace': THEIA_VERSION },
    glsp: {
       '@eclipse-glsp/client': '2.7.0',
       '@eclipse-glsp/theia-integration': '2.7.0',
-      '@theia/process': THEIA_RANGE,
-      '@theia/workspace': THEIA_RANGE
+      '@theia/process': THEIA_VERSION,
+      '@theia/workspace': THEIA_VERSION
    }
 };
 
@@ -3647,6 +3651,14 @@ const HOST_THEIA_BROWSER_DEPENDENCIES: readonly string[] = [
    '@theia/process',
    '@theia/workspace'
 ];
+
+/** The Theia tooling the application builds with. */
+const HOST_THEIA_BROWSER_DEV_DEPENDENCIES: readonly string[] = ['@theia/cli'];
+
+/** Every Theia package the application declares, for a workspace root's pins. */
+function hostTheiaBrowserTheiaDependencies(): Array<[string, string]> {
+   return [...HOST_THEIA_BROWSER_DEPENDENCIES, ...HOST_THEIA_BROWSER_DEV_DEPENDENCIES].map(name => [name, THEIA_VERSION]);
+}
 
 /** The Theia extension's `theiaExtensions` entries: one per head it forwards, and one per diagram. */
 function theiaExtensionEntries(composition: InitComposition): Array<Record<string, string>> {
@@ -3879,13 +3891,13 @@ function theiaFiles(composition: InitComposition): InitFile[] {
 function hostTheiaBrowserPackageJson(composition: InitComposition): string {
    const dependencies: Record<string, string> = {
       [memberPackageName(composition, 'theia')]: MEMBER_PIN,
-      ...Object.fromEntries(HOST_THEIA_BROWSER_DEPENDENCIES.map(name => [name, THEIA_RANGE]))
+      ...Object.fromEntries(HOST_THEIA_BROWSER_DEPENDENCIES.map(name => [name, THEIA_VERSION]))
    };
    const devDependencies: Record<string, string> = {
       // Built before this application, whose start links it into plugins/.
       [memberPackageName(composition, 'vscode-servers')]: MEMBER_PIN,
       '@playwright/test': '^1.55.0',
-      '@theia/cli': THEIA_RANGE,
+      ...Object.fromEntries(HOST_THEIA_BROWSER_DEV_DEPENDENCIES.map(name => [name, THEIA_VERSION])),
       '@types/node': '^22.0.0',
       rimraf: '^5.0.0',
       typescript: '^7.0.2'

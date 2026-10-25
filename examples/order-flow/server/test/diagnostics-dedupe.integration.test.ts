@@ -126,8 +126,9 @@ async function boot(locked: boolean): Promise<Booted> {
 
 /**
  * Stable identity of a diagnostic, for spotting a repeat within one payload.
- * `message` is `string | MarkupContent` in LSP 3.18, so it is normalised rather
- * than assumed — a duplicate must compare equal whichever form it arrives in.
+ * `message` is `string | MarkupContent` since LSP 3.18, so it is normalised
+ * rather than assumed — a duplicate must compare equal whichever form it
+ * arrives in.
  */
 function keyOf(diagnostic: Diagnostic): string {
    const message = typeof diagnostic.message === 'string' ? diagnostic.message : diagnostic.message.value;

@@ -896,6 +896,11 @@ const SCAFFOLD_PIN_SOURCES: Record<string, PinSource> = {
       path: ['packages', 'node_modules/vscode-languageserver-protocol', 'dependencies', 'vscode-jsonrpc'],
       rule: 'exact'
    },
+   'vscode-languageserver-types': {
+      file: 'package-lock.json',
+      path: ['packages', 'node_modules/vscode-languageserver-protocol', 'dependencies', 'vscode-languageserver-types'],
+      rule: 'exact'
+   },
    '@eclipse-glsp/server': { file: 'packages/glsp-server/package.json', path: ['devDependencies', '@eclipse-glsp/server'], rule: 'exact' },
    // `graph` has no declaration of its own anywhere in `packages/` — it reaches
    // the framework as a transitive of `server` — and the GLSP packages ship as

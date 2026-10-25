@@ -39,7 +39,7 @@ npm install @hydranium/glsp-client
 | `@eclipse-glsp/client` | `^2.6.0`      |
 | `@hydranium/protocol`  | `^1.0.0-next` |
 | `inversify`            | `^6.0.0`      |
-| `snabbdom`             | `^3.5.1`      |
+| `snabbdom`             | `~3.5.1`      |
 
 ## Wiring
 

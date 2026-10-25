@@ -869,7 +869,8 @@ describe('planInitFiles with hosts', () => {
          'monaco-editor-core': '0.56.0',
          'vscode-jsonrpc': '9.0.0',
          'vscode-languageserver': '10.0.1',
-         'vscode-languageserver-protocol': '3.18.1'
+         'vscode-languageserver-protocol': '3.18.1',
+         'vscode-languageserver-types': '3.18.0'
       });
    });
 
@@ -1117,6 +1118,26 @@ describe('planInitFiles with hosts', () => {
       expect(app.theia.target).toBe('browser');
       expect(app.theia.backend.config.frontendConnectionTimeout).toBeGreaterThan(0);
       expect(app.theia.backend.config.connectionBufferBytes).toBe(app.theia.frontend.config.connectionBufferBytes);
+   });
+
+   it("pins every Theia package both Theia members declare at the root, so GLSP's open Theia peer does not install the newest", () => {
+      for (const heads of [['lsp'], ['lsp', 'data'], ['lsp', 'glsp'], ['lsp', 'data', 'glsp']] as InitHead[][]) {
+         const files = filesFor(heads, ['theia-browser']);
+         const root = JSON.parse(contentOf(files, 'package.json') ?? '{}') as { devDependencies: Record<string, string> };
+         for (const member of ['theia', 'host-theia-browser']) {
+            const manifest = JSON.parse(contentOf(files, `${member}/package.json`) ?? '{}') as {
+               dependencies?: Record<string, string>;
+               devDependencies?: Record<string, string>;
+            };
+            const theia = Object.entries({ ...manifest.dependencies, ...manifest.devDependencies }).filter(([name]) =>
+               name.startsWith('@theia/')
+            );
+            expect(theia.length, `${heads.join(',')} ${member}`).toBeGreaterThan(0);
+            for (const [name, version] of theia) {
+               expect(root.devDependencies[name], `${heads.join(',')} ${member} ${name}`).toBe(version);
+            }
+         }
+      }
    });
 
    it('wraps the VS Code host README prose at 80 columns in every head set, a lone link aside', () => {
@@ -1389,7 +1410,8 @@ describe('runInit --monorepo into a yo langium root', () => {
             '    "langium": "4.3.1",\n' +
             '    "vscode-jsonrpc": "9.0.0",\n' +
             '    "vscode-languageserver": "10.0.1",\n' +
-            '    "vscode-languageserver-protocol": "3.18.1"\n'
+            '    "vscode-languageserver-protocol": "3.18.1",\n' +
+            '    "vscode-languageserver-types": "3.18.0"\n'
       );
    });
 

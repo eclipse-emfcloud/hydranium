@@ -18,7 +18,8 @@ package.json
     "langium": "4.3.1",
     "vscode-jsonrpc": "9.0.0",
     "vscode-languageserver": "10.0.1",
-    "vscode-languageserver-protocol": "3.18.1"
+    "vscode-languageserver-protocol": "3.18.1",
+    "vscode-languageserver-types": "3.18.0"
   },
   "engines": {
     "node": ">=22.13"
@@ -199,7 +200,8 @@ server/package.json
     "order-flow-protocol": "0.0.0",
     "vscode-jsonrpc": "9.0.0",
     "vscode-languageserver": "10.0.1",
-    "vscode-languageserver-protocol": "3.18.1"
+    "vscode-languageserver-protocol": "3.18.1",
+    "vscode-languageserver-types": "3.18.0"
   },
   "devDependencies": {
     "@hydranium/cli": "^__FRAMEWORK_VERSION__",

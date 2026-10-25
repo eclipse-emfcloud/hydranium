@@ -36,7 +36,7 @@ npm install @hydranium/glsp-client-theia
 | `@theia/process`                  | `^1.70.0`     |
 | `@theia/workspace`                | `^1.70.0`     |
 | `inversify`                       | `^6.0.0`      |
-| `snabbdom`                        | `^3.5.1`      |
+| `snabbdom`                        | `~3.5.1`      |
 | `vscode-jsonrpc`                  | `^9.0.0`      |
 
 ## Wiring

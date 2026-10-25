@@ -38,12 +38,20 @@ Declare these exact versions, as `init` does:
 - `vscode-languageserver` `10.0.1`
 - `vscode-languageserver-protocol` `3.18.1`
 - `vscode-jsonrpc` `9.0.0`
+- `vscode-languageserver-types` `3.18.0`
 
 The LSP stack is pinned with Langium because each
-`vscode-languageserver-protocol` release pins its own `vscode-jsonrpc` exactly.
-Any protocol release other than `3.18.1` brings a second `vscode-jsonrpc`
-beside the one `vscode-languageserver@10.0.1` uses. Bump `langium` and this
-stack together.
+`vscode-languageserver-protocol` release pins its own `vscode-jsonrpc` and
+`vscode-languageserver-types` exactly. Any protocol release other than `3.18.1`
+brings a second copy of each beside the ones `vscode-languageserver@10.0.1`
+uses. Bump `langium` and this stack together.
+
+With a Theia host, also pin every `@theia/*` package at one exact version.
+GLSP's Theia integration accepts any Theia from 1.66, so without a pin of your
+own npm installs the newest Theia beside yours. Theia 1.74 pins
+`vscode-languageserver-protocol` `3.17.5`, which pins
+`vscode-languageserver-types` `3.17.5`; that copy takes the top of the tree
+unless you pin `3.18.0`.
 
 The framework's peer ranges follow the same chain. `@hydranium/core` declares
 `vscode-languageserver` at `~10.0.1` and `vscode-languageserver-protocol` at

@@ -28,7 +28,7 @@ function makeTab(items = new Map<string, string>()): { items: Map<string, string
    return {
       items,
       leave: () => fire('pagehide', { persisted: true }),
-      // Back from the back-forward cache without a reload, as Theia before 1.75 leaves it.
+      // Back from the back-forward cache without a reload, as Theia before 1.74.1 leaves it.
       restore: () => fire('pageshow', { persisted: true })
    };
 }
