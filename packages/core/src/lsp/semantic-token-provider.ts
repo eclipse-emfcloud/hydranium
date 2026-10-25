@@ -19,8 +19,22 @@ import {
    type LeafCstNode,
    type ReferenceInfo
 } from '@hydranium/langium';
+import { STALE_VERSION, UNRECORDED_VERSION } from '@hydranium/protocol';
 import { AbstractSemanticTokenProvider, type SemanticTokenAcceptor } from '@hydranium/langium/lsp';
-import { type CancellationToken, SemanticTokenModifiers, SemanticTokenTypes } from 'vscode-languageserver';
+import {
+   type CancellationToken,
+   LSPErrorCodes,
+   ResponseError,
+   SemanticTokenModifiers,
+   type SemanticTokens,
+   type SemanticTokensDelta,
+   type SemanticTokensDeltaParams,
+   type SemanticTokensParams,
+   type SemanticTokensRangeParams,
+   SemanticTokenTypes
+} from 'vscode-languageserver';
+import { type HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
+import { type ModelLedger } from '../documents/model-ledger.js';
 import { type NameProvider } from '../langium/naming/name-provider.js';
 import { type ServerLanguageServices } from '../langium/language-module.js';
 
@@ -115,6 +129,8 @@ export abstract class AbstractHydraniumSemanticTokenProvider extends AbstractSem
    protected readonly nameProvider: NameProvider;
    protected readonly reflection: AstReflection;
    protected readonly options: HydraniumSemanticTokenProviderOptions;
+   protected readonly textDocuments: HydraniumTextDocuments;
+   protected readonly modelLedger: ModelLedger;
 
    /**
     * Modifier added to every declaration token. `declaration` is what themes
@@ -128,6 +144,61 @@ export abstract class AbstractHydraniumSemanticTokenProvider extends AbstractSem
       this.nameProvider = services.references.NameProvider;
       this.reflection = services.shared.AstReflection;
       this.options = options;
+      this.textDocuments = services.shared.workspace.TextDocuments;
+      this.modelLedger = services.shared.workspace.ModelLedger;
+   }
+
+   override async semanticHighlight(
+      document: LangiumDocument,
+      params: SemanticTokensParams,
+      cancelToken?: CancellationToken
+   ): Promise<SemanticTokens> {
+      this.assertEditorHoldsParse(document, params.textDocument.uri);
+      return super.semanticHighlight(document, params, cancelToken);
+   }
+
+   override async semanticHighlightRange(
+      document: LangiumDocument,
+      params: SemanticTokensRangeParams,
+      cancelToken?: CancellationToken
+   ): Promise<SemanticTokens> {
+      this.assertEditorHoldsParse(document, params.textDocument.uri);
+      return super.semanticHighlightRange(document, params, cancelToken);
+   }
+
+   override async semanticHighlightDelta(
+      document: LangiumDocument,
+      params: SemanticTokensDeltaParams,
+      cancelToken?: CancellationToken
+   ): Promise<SemanticTokens | SemanticTokensDelta> {
+      this.assertEditorHoldsParse(document, params.textDocument.uri);
+      return super.semanticHighlightDelta(document, params, cancelToken);
+   }
+
+   /**
+    * Refuse with `ContentModified` while the editor of `uri` holds text older
+    * than the parse the tokens are computed from, e.g. while the push of
+    * another client's write is still in flight. Tokens carry no text version,
+    * so the editor applies them to the text it holds, and Monaco rejects them
+    * as invalid or colours the wrong ranges. Once the push changes the
+    * editor's text, the editor requests the tokens again. Encoding the text
+    * version in `resultId` instead would require every client to compare it.
+    *
+    * An editor ahead of the parse, as after a keystroke that waits for a
+    * debounced build, still gets its tokens. It maps them over its own changes
+    * since the request, and LSP leaves a result on an older state to the
+    * client. The check runs before the token walk, so a refused delta request
+    * keeps the result named by `previousResultId` as the base of the next one.
+    */
+   protected assertEditorHoldsParse(document: LangiumDocument, uri: string): void {
+      const parsedFrom = this.modelLedger.versionOf(document.parseResult.value);
+      // Neither is a version of the store's text, so there is nothing to compare.
+      if (parsedFrom === UNRECORDED_VERSION || parsedFrom === STALE_VERSION) {
+         return;
+      }
+      if (this.textDocuments.isLanguageClientBehind(uri, parsedFrom)) {
+         throw new ResponseError(LSPErrorCodes.ContentModified, 'The editor does not have the parsed text yet');
+      }
    }
 
    /**

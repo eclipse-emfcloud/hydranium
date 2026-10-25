@@ -28,7 +28,9 @@ document lifecycle to several clients:
 - **The text editor is updated through LSP `workspace/applyEdit`**, since it
   cannot subscribe to the store's listeners. A language-client shadow is the
   store's model of what the editor holds, which also tells the editor's echoes
-  of those pushes apart from its own edits.
+  of those pushes apart from its own edits. While the editor holds older text
+  than the parse, semantic token requests answer `ContentModified`, as tokens
+  carry no text version and the editor would apply them to the text it holds.
 - **A successful update changes shared memory only**; the caller's `save`
   persists it. The one other disk writer is an integrity repair, routed as
   [How an integrity repair is
