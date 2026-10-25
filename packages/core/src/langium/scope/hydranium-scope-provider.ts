@@ -24,7 +24,9 @@ import {
    type AstNodeLocator,
    AstUtils,
    DefaultScopeProvider,
+   type LocalSymbols,
    MapScope,
+   MultiMapScope,
    type ReferenceInfo,
    type Scope,
    type ScopeOptions,
@@ -104,16 +106,16 @@ export interface ScopeContext {
  * ## Scope chain (high → low, inner shadows outer)
  *
  * ```
- *   document-local (Langium precomputed)        [DefaultScopeProvider.getScope]
+ *   document-local (Langium precomputed)        [getScope, CACHED per build in localScope]
  *     extension:local                           [layerLocalExtension, per-context]
  *       own-project → dependency → universal-index   [createGlobalScope default, CACHED per ${project}::${refType}]
  *         extension:universal                   [layerUniversalExtension, per-context, outermost]
  * ```
  *
- * Implementation: Langium's `getScope` layers document-local on top of
- * whatever `getGlobalScope` returns. The framework owns `getGlobalScope`
- * and uses it to assemble everything *below* document-local, with the
- * adopter-overridable {@link createGlobalScope} in the middle.
+ * Implementation: {@link getScope} layers document-local on top of
+ * whatever `getGlobalScope` returns, as Langium's does. The framework owns
+ * `getGlobalScope` and uses it to assemble everything *below* document-local,
+ * with the adopter-overridable {@link createGlobalScope} in the middle.
  *
  * ## Adopter override surface
  *
@@ -162,6 +164,12 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
     * the workspace-global `DocumentBuilder.onUpdate`.
     */
    protected readonly scopeCache: WorkspaceCache<string, Scope>;
+   /**
+    * Each container's local scope per reference type, keyed by the local
+    * symbols it was built from. A build replaces a document's local symbols
+    * when it recomputes them, so a rebuilt document never reads a stale entry.
+    */
+   protected readonly localScopes = new WeakMap<LocalSymbols, Map<AstNode, Map<string, Scope>>>();
    protected readonly tracer: Tracer;
    /**
     * Narrows the inherited Langium {@link NameProvider} field to the framework's
@@ -205,13 +213,71 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
    }
 
    /**
+    * Langium's, with each container's local scope built once per build through
+    * {@link localScope} rather than once per reference. Linking a document then
+    * costs its references plus its declarations, not their product.
+    */
+   override getScope(context: ReferenceInfo): Scope {
+      const referenceType = this.reflection.getReferenceType(context);
+      const localSymbols = AstUtils.getDocument(context.container).localSymbols;
+      let result = this.getGlobalScope(referenceType, context);
+      if (localSymbols === undefined) {
+         return result;
+      }
+      const containers: AstNode[] = [];
+      for (let container: AstNode | undefined = context.container; container; container = container.$container) {
+         if (localSymbols.has(container)) {
+            containers.push(container);
+         }
+      }
+      // Outermost first, so the innermost container's symbols shadow the rest.
+      for (let i = containers.length - 1; i >= 0; i--) {
+         result = new FallbackScope(this.localScope(localSymbols, containers[i], referenceType), result);
+      }
+      return result;
+   }
+
+   /**
+    * The symbols `container` declares that a `referenceType` reference can
+    * reach, through {@link createScope}, built once per `localSymbols`.
+    */
+   protected localScope(localSymbols: LocalSymbols, container: AstNode, referenceType: string): Scope {
+      let byContainer = this.localScopes.get(localSymbols);
+      if (byContainer === undefined) {
+         byContainer = new Map();
+         this.localScopes.set(localSymbols, byContainer);
+      }
+      let byType = byContainer.get(container);
+      if (byType === undefined) {
+         byType = new Map();
+         byContainer.set(container, byType);
+      }
+      let scope = byType.get(referenceType);
+      if (scope === undefined) {
+         scope = this.createScope(
+            localSymbols.getStream(container).filter(description => this.reflection.isSubtype(description.type, referenceType))
+         );
+         byType.set(referenceType, scope);
+      }
+      return scope;
+   }
+
+   /**
+    * Keyed by name, where Langium's walks every element on each lookup. Every
+    * description of a name is kept and the first answers, as in Langium's;
+    * `getAllElements` lists them grouped by name.
+    */
+   protected override createScope(elements: Iterable<AstNodeDescription>, outerScope?: Scope, options?: ScopeOptions): Scope {
+      return new MultiMapScope(elements, outerScope, options);
+   }
+
+   /**
     * Framework-owned assembly seam. **Adopters do NOT override this** —
     * override {@link createGlobalScope} instead. This method layers the
     * scope-extension tiers around the adopter-overridable global scope.
     *
-    * Langium's `DefaultScopeProvider.getScope` then layers document-local
-    * on top of this result, yielding the full chain documented on the
-    * class.
+    * {@link getScope} then layers document-local on top of this result,
+    * yielding the full chain documented on the class.
     */
    protected override getGlobalScope(referenceType: string, context: ReferenceInfo): Scope {
       const projectChain = this.createGlobalScope(referenceType, context);
@@ -318,7 +384,7 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
     * closure).
     *
     * Contrast {@link getGlobalScope}, which applies the framework's
-    * tier filter to this set, and `getScope` (Langium default), which
+    * tier filter to this set, and {@link getScope}, which
     * additionally merges in the local scope.
     */
    protected getAllElementsGlobalScope(referenceType: string, context: ReferenceInfo): Scope {
@@ -376,11 +442,11 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
     * Includes own-project `'public'`-tier descriptions when
     * {@link HydraniumScopeProviderOptions.includeOwnProjectPublic} is set
     * (routed to the own-project bucket by {@link bucketFor}). Returns a
-    * {@link StreamScope} (not {@link MapScope}) so same-name siblings are
+    * {@link MultiMapScope} (not {@link MapScope}) so same-name siblings are
     * preserved rather than collapsed.
     */
    protected createOwnProjectScope(context: ScopeContext): Scope {
-      return new StreamScope(stream(context.ownProjectEntries));
+      return new MultiMapScope(context.ownProjectEntries);
    }
 
    /**
@@ -389,7 +455,7 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
     * (own-project canonical filter applied by {@link bucketFor}).
     */
    protected createDependencyScope(context: ScopeContext): Scope {
-      return new StreamScope(stream(context.dependencyEntries));
+      return new MultiMapScope(context.dependencyEntries);
    }
 
    /**
@@ -401,13 +467,13 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
    }
 
    /**
-    * Chain three tier sub-scopes inner-first. The `outerScope` argument
-    * of {@link StreamScope} is consulted only when the inner stream has
-    * no match, so a more specific tier shadows a less specific one of
-    * the same name.
+    * Chain three tier sub-scopes inner-first through {@link FallbackScope},
+    * which consults an outer tier only when the inner one has no match, so a
+    * more specific tier shadows a less specific one of the same name, and each
+    * tier keeps its own lookup.
     */
    protected chainScopes(ownScope: Scope, dependencyScope: Scope, universalScope: Scope): Scope {
-      return new StreamScope(ownScope.getAllElements(), new StreamScope(dependencyScope.getAllElements(), universalScope));
+      return new FallbackScope(ownScope, new FallbackScope(dependencyScope, universalScope));
    }
 
    /**

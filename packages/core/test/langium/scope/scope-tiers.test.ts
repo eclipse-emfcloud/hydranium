@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Project } from '@hydranium/protocol';
-import { type AstNode, type AstNodeDescription, MapScope, type Scope, URI } from '@hydranium/langium';
+import { type AstNode, type AstNodeDescription, MapScope, MultiMapScope, type Scope, URI } from '@hydranium/langium';
 import { type HydraniumLanguageServices } from '../../../src/langium/language-module.js';
 import { HydraniumScopeProvider, type HydraniumScopeProviderOptions } from '../../../src/langium/scope/hydranium-scope-provider.js';
 import { type DescriptionTier, type TieredAstNodeDescription } from '../../../src/langium/scope/scoped-ast-node-description.js';
@@ -386,6 +386,39 @@ describe('HydraniumScopeProvider tier walk typed scope reading', () => {
          const description = tieredDescription('universal', { name: 'Any' });
          const result = provider.getProjectScope(URI.parse(URI_A), makeGlobalScope([description]), REF_TYPE);
          expect(names(result)).toEqual(['Any']);
+      });
+   });
+
+   describe('shadowing', () => {
+      // A global scope that keeps every description of a name, as Langium's
+      // index scope does; a `MapScope` would collapse them before the walk.
+      function sameNameScope(tiers: readonly ('project' | 'public' | 'universal')[]): Scope {
+         return new MultiMapScope(
+            tiers.map(tier =>
+               tier === 'project'
+                  ? tieredDescription('project', { name: 'Element', uri: URI_A, projectId: 'A' })
+                  : tier === 'public'
+                    ? tieredDescription('public', { name: 'Element', uri: URI_B, projectId: 'B' })
+                    : tieredDescription('universal', { name: 'Element' })
+            )
+         );
+      }
+
+      it('answers a name from the own project before a dependency, and from a dependency before the universal tier', () => {
+         // A provider per walk: the project scope is cached per project and reference type.
+         const tierOf = (tiers: readonly ('project' | 'public' | 'universal')[]): unknown => {
+            const { provider } = makeProvider(
+               [
+                  { id: 'A', referenceName: 'A', dependencies: ['B'] },
+                  { id: 'B', referenceName: 'B' }
+               ],
+               { [URI_A]: 'A', [URI_B]: 'B' }
+            );
+            const answer = provider.getProjectScope(URI.parse(URI_A), sameNameScope(tiers), REF_TYPE).getElement('Element');
+            return (answer as TieredAstNodeDescription | undefined)?.tier;
+         };
+         expect(tierOf(['universal', 'public', 'project'])).toBe('project');
+         expect(tierOf(['universal', 'public'])).toBe('public');
       });
    });
 

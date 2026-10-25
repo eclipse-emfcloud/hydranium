@@ -22,10 +22,12 @@ import {
    type AstNodeDescription,
    type AstReflection,
    EMPTY_SCOPE,
+   type LocalSymbols,
    MapScope,
    type ReferenceInfo,
    type Scope,
    type ScopeOptions,
+   stream,
    URI
 } from '@hydranium/langium';
 import { type HydraniumLanguageServices } from '../../../src/langium/language-module.js';
@@ -584,5 +586,93 @@ describe('HydraniumScopeProvider extension tiers', () => {
       const { provider } = makeProvider([], []);
       provider.projectScope = new MapScope([makeFakeDescription('only', { type: 'Project' })]);
       expect(provider.globalScope()).toBe(provider.projectScope);
+   });
+});
+
+describe('HydraniumScopeProvider document-local scope', () => {
+   /** Answers an empty project scope, so only the document-local tier is under test. */
+   class LocalScopeProvider extends HydraniumScopeProvider {
+      protected override createGlobalScope(): Scope {
+         return EMPTY_SCOPE;
+      }
+   }
+
+   /** `declared` per container, counting how often a container's symbols are streamed. */
+   function makeLocalSymbols(declared: Map<AstNode, AstNodeDescription[]>): LocalSymbols & { streamed: number } {
+      return {
+         streamed: 0,
+         has: node => declared.has(node),
+         getStream(node) {
+            this.streamed++;
+            return stream(declared.get(node) ?? []);
+         }
+      };
+   }
+
+   function makeTree(): { root: AstNode & { $document: { localSymbols?: LocalSymbols } }; child: AstNode } {
+      const root = makeFakeAstNode<AstNode & { $document: { localSymbols?: LocalSymbols } }>({ $type: 'Root', $document: {} });
+      const child = makeFakeAstNode({ $type: 'Child', $container: root });
+      return { root, child };
+   }
+
+   function referenceIn(container: AstNode, property = 'ref'): ReferenceInfo {
+      return { reference: { $refText: 'x' }, container, property } as unknown as ReferenceInfo;
+   }
+
+   const provider = new LocalScopeProvider(makeStubServices({ getDescriptions: () => ({ local: [], universal: [] }) }));
+
+   /** A reference through `one` targets `TypeOne`, any other `TypeTwo`; each type is a subtype of itself only. */
+   function makeTypedProvider(): LocalScopeProvider {
+      const services = makeStubServices({ getDescriptions: () => ({ local: [], universal: [] }) });
+      const reflection = {
+         ...services.shared.AstReflection,
+         getReferenceType: (context: ReferenceInfo) => (context.property === 'one' ? 'TypeOne' : 'TypeTwo'),
+         isSubtype: (subtype: string, supertype: string) => subtype === supertype
+      } as unknown as AstReflection;
+      return new LocalScopeProvider({
+         ...services,
+         shared: { ...services.shared, AstReflection: reflection }
+      } as HydraniumLanguageServices);
+   }
+
+   it("builds a container's local scope once for every reference into it, and again once the build recomputes the symbols", () => {
+      const { root, child } = makeTree();
+      const symbols = makeLocalSymbols(new Map([[root, [makeFakeDescription('a', { type: 'Fake' })]]]));
+      root.$document.localSymbols = symbols;
+
+      expect(provider.getScope(referenceIn(child)).getElement('a')?.name).toBe('a');
+      expect(provider.getScope(referenceIn(child)).getElement('a')?.name).toBe('a');
+      expect(symbols.streamed).toBe(1);
+
+      const rebuilt = makeLocalSymbols(new Map([[root, [makeFakeDescription('b', { type: 'Fake' })]]]));
+      root.$document.localSymbols = rebuilt;
+      const scope = provider.getScope(referenceIn(child));
+      expect([scope.getElement('a'), scope.getElement('b')?.name]).toEqual([undefined, 'b']);
+      expect(rebuilt.streamed).toBe(1);
+   });
+
+   it('keeps a separate local scope for each reference type reaching a container', () => {
+      const typed = makeTypedProvider();
+      const { root, child } = makeTree();
+      root.$document.localSymbols = makeLocalSymbols(
+         new Map([[root, [makeFakeDescription('x', { type: 'TypeOne' }), makeFakeDescription('x', { type: 'TypeTwo' })]]])
+      );
+
+      expect(typed.getScope(referenceIn(child, 'one')).getElement('x')?.type).toBe('TypeOne');
+      expect(typed.getScope(referenceIn(child, 'two')).getElement('x')?.type).toBe('TypeTwo');
+   });
+
+   it("lets an inner container's symbols shadow an outer container's of the same name", () => {
+      const { root, child } = makeTree();
+      root.$document.localSymbols = makeLocalSymbols(
+         new Map([
+            [root, [makeFakeDescription('x', { type: 'Outer' }), makeFakeDescription('onlyOuter', { type: 'Outer' })]],
+            [child, [makeFakeDescription('x', { type: 'Inner' })]]
+         ])
+      );
+
+      const inChild = provider.getScope(referenceIn(child));
+      expect([inChild.getElement('x')?.type, inChild.getElement('onlyOuter')?.type]).toEqual(['Inner', 'Outer']);
+      expect(provider.getScope(referenceIn(root)).getElement('x')?.type).toBe('Outer');
    });
 });
