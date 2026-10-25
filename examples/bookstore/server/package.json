@@ -62,7 +62,8 @@
     "reflect-metadata": "~0.2.2",
     "vscode-jsonrpc": "9.0.0",
     "vscode-languageserver": "10.0.1",
-    "vscode-languageserver-protocol": "3.18.1"
+    "vscode-languageserver-protocol": "3.18.1",
+    "vscode-languageserver-types": "3.18.0"
   },
   "devDependencies": {
     "@hydranium/cli": "^1.0.0-next",

@@ -71,9 +71,9 @@
     "@hydranium/glsp-client": "1.0.0-next",
     "@hydranium/glsp-server": "1.0.0-next",
     "@hydranium/protocol": "1.0.0-next",
-    "@theia/core": "^1.75.0",
-    "@theia/process": "^1.75.0",
-    "@theia/workspace": "^1.75.0",
+    "@theia/core": "1.74.3",
+    "@theia/process": "1.74.3",
+    "@theia/workspace": "1.74.3",
     "@types/node": "^22.0.0",
     "inversify": "6.2.2",
     "reflect-metadata": "0.2.2",
@@ -92,7 +92,7 @@
     "@theia/process": "^1.70.0",
     "@theia/workspace": "^1.70.0",
     "inversify": "^6.0.0",
-    "snabbdom": "^3.5.1",
+    "snabbdom": "~3.5.1",
     "vscode-jsonrpc": "^9.0.0"
   },
   "engines": {

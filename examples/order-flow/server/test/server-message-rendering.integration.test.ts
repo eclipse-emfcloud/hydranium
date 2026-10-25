@@ -190,7 +190,7 @@ async function boot(choice: RendererChoice, locale: string | undefined = TEST_LO
 
 /**
  * The sentence of a diagnostic. `Diagnostic.message` is `string | MarkupContent`
- * in LSP 3.17+, and every message asserted here is the string form.
+ * since LSP 3.18, and every message asserted here is the string form.
  */
 function sentence(diagnostic: Diagnostic): string {
    return typeof diagnostic.message === 'string' ? diagnostic.message : diagnostic.message.value;

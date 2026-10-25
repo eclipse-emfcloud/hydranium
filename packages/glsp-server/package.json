@@ -78,7 +78,7 @@
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",
     "vscode-jsonrpc": "9.0.0",
-    "vscode-languageserver-types": "^3.17.5"
+    "vscode-languageserver-types": "3.18.0"
   },
   "peerDependencies": {
     "@eclipse-glsp/server": "^2.6.0",
@@ -88,7 +88,7 @@
     "inversify": "^6.0.0",
     "reflect-metadata": "^0.2.2",
     "vscode-jsonrpc": "^9.0.0",
-    "vscode-languageserver-types": "^3.17.5"
+    "vscode-languageserver-types": "^3.18.0"
   },
   "engines": {
     "node": ">=22.13"

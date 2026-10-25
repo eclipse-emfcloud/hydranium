@@ -26,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       theia_version:
-        description: Version or dist-tag to run instead of the floor+latest pair, e.g. 1.71.0 or next
+        description: Version or dist-tag to run instead of the floor, community and latest set, e.g. 1.71.0 or next
         required: false
         default: ''
   # The registry half of the risk cannot move on a pull request. OUR half
@@ -95,12 +95,18 @@ jobs:
           // all three published packages declare the same range, and
           // `check:deps` fails if they ever disagree.
           const manifest = JSON.parse(readFileSync('packages/client-theia/package.json', 'utf8'));
-          const declared = manifest.peerDependencies['@theia/core'];
-          const floor = declared.replace(/^[^0-9]*/, '');
-          if (!/^\d+\.\d+\.\d+$/.test(floor)) {
-            console.error('Cannot read a floor out of ' + declared);
-            process.exit(1);
-          }
+          const versionOf = (what, declared) => {
+            const version = String(declared).replace(/^[^0-9]*/, '');
+            if (!/^\d+\.\d+\.\d+$/.test(version)) {
+              console.error('Cannot read a ' + what + ' out of ' + declared);
+              process.exit(1);
+            }
+            return version;
+          };
+          const floor = versionOf('floor', manifest.peerDependencies['@theia/core']);
+          // The Theia community release, which the examples and the scaffold
+          // build on; the three packages' devDependencies pin it.
+          const community = versionOf('community release', manifest.devDependencies['@theia/core']);
 
           // Every released minor from the floor up, highest patch of each.
           // Derived from the registry so a new Theia minor joins the weekly
@@ -133,7 +139,7 @@ jobs:
           } else if (process.env.SCHEDULE === '0 8 * * 1') {
             versions = [...enumerateFrom(), 'next'];
           } else {
-            versions = [floor, 'latest'];
+            versions = [...new Set([floor, community, 'latest'])];
           }
           console.log('versions=' + JSON.stringify(versions));
           NODE

@@ -56,7 +56,7 @@ export interface WindowSessionService {
  * Claimed as the frontend starts, not with the first diagram: until then the
  * released mark stays, and a tab duplicated meanwhile would take it too. A page
  * restored from the back-forward cache takes the mark back, since Theia
- * before 1.75 leaves it live without a reload.
+ * before 1.74.1 leaves it live without a reload.
  */
 @injectable()
 export class DefaultWindowSessionService implements WindowSessionService, FrontendApplicationContribution {

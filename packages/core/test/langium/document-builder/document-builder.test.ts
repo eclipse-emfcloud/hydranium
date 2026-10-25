@@ -1276,7 +1276,7 @@ describe('HydraniumDocumentBuilder', () => {
          }) as unknown as Diagnostic;
 
       it('leaves a MarkupContent message with no identity as MARKUP', () => {
-         // LSP 3.17 widened `Diagnostic.message` to `string | MarkupContent`, so
+         // LSP 3.18 widened `Diagnostic.message` to `string | MarkupContent`, so
          // this is a legal diagnostic an adopter can raise. Flattening it here
          // is silent data loss on the pass-through path — the client renders
          // plain text where the server sent markdown, and nothing reports it.

@@ -63,7 +63,7 @@ export function acceptMessage<S extends string, N extends AstNode, P extends Pro
  * Recover the identity from a published diagnostic, for a surface that
  * identifies or renders diagnostics itself.
  *
- * `Diagnostic.message` is `string | MarkupContent` in LSP 3.17+, so the text
+ * `Diagnostic.message` is `string | MarkupContent` since LSP 3.18, so the text
  * comes from upstream's own `Diagnostic.getMessageString` rather than a
  * hand-rolled narrowing — consuming the library in its style, and one fewer
  * place restating the union.
