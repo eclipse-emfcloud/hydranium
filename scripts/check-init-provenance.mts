@@ -839,6 +839,7 @@ function checkTarget(init: InitModule, target: ScaffoldTarget): { problems: Prob
 
 /** The example app the scaffolded Theia app is built like. */
 const THEIA_APP = 'examples/order-flow/theia-app/package.json';
+const THEIA_ELECTRON_APP = 'examples/order-flow/theia-electron-app/package.json';
 
 /**
  * Where each version literal the scaffold emits is allowed to come from.
@@ -961,6 +962,8 @@ const SCAFFOLD_PIN_SOURCES: Record<string, PinSource> = {
    '@theia/process': { file: THEIA_APP, path: ['dependencies', '@theia/process'], rule: 'exact' },
    '@theia/workspace': { file: THEIA_APP, path: ['dependencies', '@theia/workspace'], rule: 'exact' },
    '@theia/cli': { file: THEIA_APP, path: ['devDependencies', '@theia/cli'], rule: 'exact' },
+   '@theia/electron': { file: THEIA_ELECTRON_APP, path: ['dependencies', '@theia/electron'], rule: 'exact' },
+   electron: { file: THEIA_ELECTRON_APP, path: ['devDependencies', 'electron'], rule: 'exact' },
    '@eclipse-glsp/theia-integration': {
       file: 'packages/glsp-client-theia/package.json',
       path: ['devDependencies', '@eclipse-glsp/theia-integration'],
@@ -1151,7 +1154,8 @@ function emittedPins(init: InitModule): Record<string, string> {
    const composition = init.resolveInitComposition('PinProbe', undefined, ['lsp', 'data', 'glsp'], packaging, [
       'browser',
       'vscode',
-      'theia-browser'
+      'theia-browser',
+      'theia-electron'
    ]);
    const manifests = init
       .planInitFiles(composition)

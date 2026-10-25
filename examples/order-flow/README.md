@@ -45,7 +45,7 @@ cross-grammar reference chain they exist for.
 | Diagram, server side | [server/src/glsp/](server/src/glsp/), operation handlers in [server/src/glsp/handler/](server/src/glsp/handler/) | [Make a diagram editable](../../docs/guides/editable-diagram.md) |
 | Diagram, client side | [client/src/diagram/](client/src/diagram/) | |
 | Properties view | [client/src/data/](client/src/data/), [client/src/properties/](client/src/properties/), [theia/src/browser/order-flow-properties-widget.ts](theia/src/browser/order-flow-properties-widget.ts) | [Connect a data client](../../docs/guides/connect-a-data-client.md) |
-| Theia host | [theia/](theia/README.md), [theia-app/](theia-app/README.md) | [Host in Theia](../../docs/guides/host-in-theia.md) |
+| Theia host | [theia/](theia/README.md), [theia-app/](theia-app/README.md), [theia-electron-app/](theia-electron-app/README.md) | [Host in Theia](../../docs/guides/host-in-theia.md) |
 | VS Code host | [vscode/](vscode/README.md), [vscode-servers/](vscode-servers/README.md) | |
 | Browser host, no backend | [browser/](browser/README.md) | [Host in a browser](../../docs/guides/host-in-a-browser.md) |
 | Translations | [theia/src/nls/order-flow.de.json](theia/src/nls/order-flow.de.json), [server/src/nls/order-flow.de.json](server/src/nls/order-flow.de.json) | [Translate your language](../../docs/guides/translate-your-language.md) |

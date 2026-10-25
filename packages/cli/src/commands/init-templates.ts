@@ -97,6 +97,7 @@
 import { readFileSync } from 'node:fs';
 import { readCliVersion } from '../cli-version.js';
 import { type InitComposition, type InitFile, type InitGrammarNames, type InitHead, type InitMember, initMembers } from './init.js';
+import { isTheiaHost } from './init-hosts.js';
 import type { JsonValue } from './init-workspace.js';
 
 /** One template file: its path (tokens allowed) and its content (tokens allowed). */
@@ -453,7 +454,8 @@ export function workspaceRootPins(composition: InitComposition): ReadonlyArray<r
       ...(members.includes('host-vscode') && heads.includes('glsp') ? Object.entries(HOST_VSCODE_GLSP_THIRD_PARTY_DEPENDENCIES) : []),
       ...(members.includes('host-vscode') && heads.includes('data') ? Object.entries(HOST_VSCODE_DATA_THIRD_PARTY_DEPENDENCIES) : []),
       ...(members.includes('theia') ? theiaThirdPartyDependencies(heads) : []),
-      ...(members.includes('host-theia-browser') ? hostTheiaBrowserTheiaDependencies() : [])
+      ...(members.includes('host-theia-browser') ? hostTheiaBrowserTheiaDependencies() : []),
+      ...(members.includes('host-theia-electron') ? hostTheiaElectronPins() : [])
    ]);
    return [...pins].filter(([, version]) => /^\d+\.\d+\.\d+$/.test(version)).sort(([left], [right]) => left.localeCompare(right));
 }
@@ -3094,14 +3096,22 @@ export async function start${composition.name}LanguageClient(context: ExtensionC
 `;
 }
 
+/** The folders of the Theia applications the composition emits, as code spans. */
+function theiaApplicationPaths(composition: InitComposition): string[] {
+   return composition.hosts.filter(isTheiaHost).map(host => `\`../host-${host}\``);
+}
+
 /** The servers-only extension's README. */
 function vscodeServersReadme(composition: InitComposition): string {
    const vscode = composition.hosts.includes('vscode');
+   const theiaApps = theiaApplicationPaths(composition);
    const intro = [
       'A VS Code extension that starts the __NAME__ server and contributes no editor, view or command: the languages, their grammars and the server.',
       `With a socket head, it also answers each head’s port under a host command, which a host without a language client of its own runs${
-         composition.hosts.includes('theia-browser')
-            ? ': the Theia application in `../host-theia-browser`, which sideloads this extension.'
+         theiaApps.length > 0
+            ? theiaApps.length === 1
+               ? `: the Theia application in ${theiaApps[0]}, which sideloads this extension.`
+               : `: the Theia applications in ${listPhrase(theiaApps)}, which sideload this extension.`
             : ', such as a Theia app sideloading this extension.'
       }`,
       ...(vscode
@@ -3423,7 +3433,7 @@ function hostVscodeSmokeSpec(composition: InitComposition): string {
    );
    return `${opening}
 
-import { _electron, expect, test, type Page } from '@playwright/test';
+import { _electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { downloadAndUnzipVSCode } from '@vscode/test-electron';
 import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -3439,23 +3449,24 @@ test('${hostVscodeSmokeTitle(composition)}', async () => {
    const scratch = mkdtempSync(join(tmpdir(), '${composition.projectId}-vscode-'));
    const workspace = join(scratch, 'workspace');
    cpSync(fileURLToPath(new URL('../../workspace', import.meta.url)), workspace, { recursive: true });
-   const app = await _electron.launch({
-      executablePath: await downloadAndUnzipVSCode({ version: VSCODE_VERSION, cachePath: VSCODE_CACHE }),
-      args: [
-         '--no-sandbox',
-         '--disable-gpu-sandbox',
-         '--disable-updates',
-         '--skip-welcome',
-         '--skip-release-notes',
-         '--disable-workspace-trust',
-         '--disable-extensions',
-         \`--extensionDevelopmentPath=\${extensionRoot}\`,
-         \`--user-data-dir=\${join(scratch, 'user-data')}\`,
-         \`--extensions-dir=\${join(scratch, 'extensions')}\`,
-         workspace
-      ]
-   });
+   let app: ElectronApplication | undefined;
    try {
+      app = await _electron.launch({
+         executablePath: await downloadAndUnzipVSCode({ version: VSCODE_VERSION, cachePath: VSCODE_CACHE }),
+         args: [
+            '--no-sandbox',
+            '--disable-gpu-sandbox',
+            '--disable-updates',
+            '--skip-welcome',
+            '--skip-release-notes',
+            '--disable-workspace-trust',
+            '--disable-extensions',
+            \`--extensionDevelopmentPath=\${extensionRoot}\`,
+            \`--user-data-dir=\${join(scratch, 'user-data')}\`,
+            \`--extensions-dir=\${join(scratch, 'extensions')}\`,
+            workspace
+         ]
+      });
       const page = await app.firstWindow();
       await expect(page.locator('.monaco-workbench')).toBeVisible();
       await quickOpen(page, '${file}');
@@ -3468,7 +3479,7 @@ ${showModelSteps}${diagramSteps}
       await page.keyboard.insertText('\\nnode Broken -> Missing');
       await expect(page.locator('.monaco-editor .squiggly-error').first()).toBeVisible();
    } finally {
-      await app.close();
+      await app?.close();
       rmSync(scratch, { recursive: true, force: true });
    }
 });
@@ -3589,8 +3600,8 @@ function hostVscodeFiles(composition: InitComposition): InitFile[] {
 }
 
 /**
- * The Theia release of both Theia members, the one the framework's own
- * Theia example takes, so a scaffold builds against what the repo tests: the
+ * The Theia release of every Theia member, the one the framework's own
+ * Theia examples take, so a scaffold builds against what the repo tests: the
  * Theia community release. Exact, as Theia's members pin each other, so a
  * workspace root declares it too and GLSP's open Theia peer resolves to it.
  */
@@ -3658,6 +3669,23 @@ const HOST_THEIA_BROWSER_DEV_DEPENDENCIES: readonly string[] = ['@theia/cli'];
 /** Every Theia package the application declares, for a workspace root's pins. */
 function hostTheiaBrowserTheiaDependencies(): Array<[string, string]> {
    return [...HOST_THEIA_BROWSER_DEPENDENCIES, ...HOST_THEIA_BROWSER_DEV_DEPENDENCIES].map(name => [name, THEIA_VERSION]);
+}
+
+/** The Electron application's Theia packages: the browser application's, and Theia's Electron integration. */
+const HOST_THEIA_ELECTRON_DEPENDENCIES: readonly string[] = [...HOST_THEIA_BROWSER_DEPENDENCIES, '@theia/electron'].sort();
+
+/** The Electron release `@theia/electron` peers on, exactly. */
+const ELECTRON_VERSION = '42.11.16';
+
+/** Every package the Electron application pins, for a workspace root's pins. */
+function hostTheiaElectronPins(): Array<[string, string]> {
+   return [
+      ...[...HOST_THEIA_ELECTRON_DEPENDENCIES, ...HOST_THEIA_BROWSER_DEV_DEPENDENCIES].map((name): [string, string] => [
+         name,
+         THEIA_VERSION
+      ]),
+      ['electron', ELECTRON_VERSION]
+   ];
 }
 
 /** The Theia extension's `theiaExtensions` entries: one per head it forwards, and one per diagram. */
@@ -3797,12 +3825,13 @@ function theiaReadme(composition: InitComposition): string {
    const data = composition.heads.includes('data');
    const glsp = composition.heads.includes('glsp');
    const diagrams = composition.grammars.filter(grammar => grammar.diagram);
+   const theiaApps = theiaApplicationPaths(composition);
    const intro = [
       `The ${composition.name} Theia extension: ${theiaParts(composition)}.`,
       socketHeads(composition).length > 0
          ? 'The language client is not here: the application sideloads `../vscode-servers`, which starts the server and answers each socket head’s port under a host command, and the backend modules forward the page’s channels to those ports.'
          : 'The language client is not here: the application sideloads `../vscode-servers`, which starts the server.',
-      'The application in `../host-theia-browser` runs it.'
+      theiaApps.length === 1 ? `The application in ${theiaApps[0]} runs it.` : `The applications in ${listPhrase(theiaApps)} run it.`
    ];
    const before = [...(socketHeads(composition).length > 0 ? ['protocol'] : []), ...(glsp ? ['client'] : [])];
    const lines = [
@@ -3944,9 +3973,11 @@ ${sortedBlock(devDependencies, '    ')}
 
 /**
  * The Theia smoke test: the application opens a copy of the starter
- * workspace, and each head answers.
+ * workspace, and each head answers. The steps are the same in both
+ * applications; the browser one's page is Chromium on the server the
+ * configuration starts, the Electron one's the window the test launches.
  */
-function hostTheiaBrowserSmokeSpec(composition: InitComposition): string {
+function theiaSmokeSpec(composition: InitComposition, target: 'browser' | 'electron'): string {
    const data = composition.heads.includes('data');
    const diagram = composition.grammars.find(grammar => grammar.diagram);
    const primary = diagram ?? composition.grammars[0];
@@ -3985,11 +4016,9 @@ function hostTheiaBrowserSmokeSpec(composition: InitComposition): string {
       ])}.`
    )}
 
-import { expect, test, type Page } from '@playwright/test';
-
+${target === 'browser' ? "import { expect, test, type Page } from '@playwright/test';\n" : theiaElectronSmokeFixture(composition)}
 test('${listPhrase([...(diagram ? ['draws the diagram'] : []), ...(data ? ['reads the model'] : []), 'reports a broken reference'])}', async ({ page }) => {
-   await page.goto('/');
-   // Up once the loading screen is gone; a key pressed before then is lost.
+${target === 'browser' ? "   await page.goto('/');\n" : ''}   // Up once the loading screen is gone; a key pressed before then is lost.
    await expect(page.locator('.theia-preload')).toHaveCount(0);
    await page.keyboard.press('ControlOrMeta+Shift+E');
    await expect(page.locator('.theia-FileTree .theia-TreeNode', { hasText: '${file}' })).toBeVisible();
@@ -4071,7 +4100,184 @@ function hostTheiaBrowserFiles(composition: InitComposition): InitFile[] {
       fixed('start.mjs'),
       fixed('playwright.config.mts'),
       fixed('tsconfig.e2e.json'),
-      { path: 'host-theia-browser/test/smoke.spec.mts', content: hostTheiaBrowserSmokeSpec(composition) }
+      { path: 'host-theia-browser/test/smoke.spec.mts', content: theiaSmokeSpec(composition, 'browser') }
+   ];
+}
+
+/**
+ * The Electron smoke test's imports and its `page`: the application's window,
+ * launched by the test on a scratch copy of the workspace.
+ */
+function theiaElectronSmokeFixture(composition: InitComposition): string {
+   return `import { expect, test as base, type ElectronApplication, type Page } from '@playwright/test';
+import { once } from 'node:events';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+/**
+ * The application in Electron, on a copy of the starter workspace, since the
+ * server writes its repairs to the folder it opens, with a profile of its own:
+ * Theia quits at once while another window holds one. Its settings are its own
+ * too, so a run never writes \`~/.theia/settings.json\`.
+ */
+const test = base.extend<{ page: Page }>({
+   page: async ({ playwright }, use) => {
+      const scratch = mkdtempSync(join(tmpdir(), '${composition.projectId}-theia-electron-'));
+      const workspace = join(scratch, 'workspace');
+      // The servers extension, sideloaded from a plugins folder as \`npm start\` does.
+      const plugins = join(scratch, 'plugins');
+      const link = join(plugins, '${composition.projectId}-vscode-servers');
+      let app: ElectronApplication | undefined;
+      try {
+         cpSync(fileURLToPath(new URL('../../workspace', import.meta.url)), workspace, { recursive: true });
+         mkdirSync(plugins);
+         symlinkSync(fileURLToPath(new URL('../../vscode-servers', import.meta.url)), link, 'junction');
+         // Playwright resolves Electron itself; given its path, Theia opens this
+         // folder instead of the workspace.
+         app = await playwright._electron.launch({
+            args: [
+               fileURLToPath(new URL('..', import.meta.url)),
+               '--no-sandbox',
+               \`--user-data-dir=\${join(scratch, 'user-data')}\`,
+               // In URI form, since Theia reads the argument as a URI.
+               \`--plugins=local-dir:\${pathToFileURL(plugins).pathname}\`,
+               workspace
+            ],
+            env: {
+               ...process.env,
+               THEIA_CONFIG_DIR: join(scratch, 'config'),
+               // Menus drawn in the page, where the test can click them.
+               THEIA_ELECTRON_DISABLE_NATIVE_ELEMENTS: '1'
+            }
+         });
+         await use(await app.firstWindow());
+      } finally {
+         try {
+            // Exited, not closed: closing asks whether to save the edited file. An
+            // app that is already gone is left alone, so the test's own error stands.
+            const child = app?.process();
+            if (app && child?.exitCode === null && child.signalCode === null) {
+               const exited = once(child, 'exit');
+               await app.evaluate(({ app: electron }) => electron.exit(0));
+               await exited;
+            }
+         } finally {
+            // Unlinked first, so the remove never reaches \`../vscode-servers\` through it.
+            rmSync(link, { force: true });
+            rmSync(scratch, { recursive: true, force: true });
+         }
+      }
+   }
+});
+`;
+}
+
+/**
+ * The Theia Electron application's `package.json`: the browser application's
+ * `theia` block with the Electron target. Always private, as every host is.
+ */
+function hostTheiaElectronPackageJson(composition: InitComposition): string {
+   const dependencies: Record<string, string> = {
+      [memberPackageName(composition, 'theia')]: MEMBER_PIN,
+      ...Object.fromEntries(HOST_THEIA_ELECTRON_DEPENDENCIES.map(name => [name, THEIA_VERSION]))
+   };
+   const devDependencies: Record<string, string> = {
+      // Built before this application, whose start links it into plugins/.
+      [memberPackageName(composition, 'vscode-servers')]: MEMBER_PIN,
+      '@playwright/test': '^1.55.0',
+      ...Object.fromEntries(HOST_THEIA_BROWSER_DEV_DEPENDENCIES.map(name => [name, THEIA_VERSION])),
+      '@types/node': '^22.0.0',
+      electron: ELECTRON_VERSION,
+      rimraf: '^5.0.0',
+      typescript: '^7.0.2'
+   };
+   const theia = {
+      target: 'electron',
+      frontend: {
+         config: {
+            applicationName: composition.name,
+            connectionBufferBytes: 102400,
+            preferences: { 'security.workspace.trust.enabled': false }
+         }
+      },
+      backend: { config: { connectionBufferBytes: 102400, frontendConnectionTimeout: 60000 } }
+   };
+   return `{
+  "name": "${memberPackageName(composition, 'host-theia-electron')}",
+  "version": "0.0.0",
+  "private": true,
+  "description": "${composition.name} in a Theia Electron application: the Theia extension, and the servers extension sideloaded for the language client.",
+  "license": "UNLICENSED",
+  "author": "",
+  "main": "lib/backend/electron-main.js",
+  "scripts": {
+    "build": "theia build --mode development && npm run typecheck",
+    "clean": "rimraf lib src-gen plugins gen-esbuild.browser.mjs gen-esbuild.electron.mjs gen-esbuild.node.mjs test-results playwright-report",
+${lintScript(forMember(composition, 'host-theia-electron'), 'test')}    "start": "node start.mjs",
+    "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
+    "typecheck": "tsc --noEmit -p tsconfig.e2e.json"
+  },
+  "dependencies": {
+${sortedBlock(dependencies, '    ')}
+  },
+  "devDependencies": {
+${sortedBlock(devDependencies, '    ')}
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "theia": ${jsonAt(theia, '  ')}
+}
+`;
+}
+
+/** The Theia Electron application's README. */
+function hostTheiaElectronReadme(composition: InitComposition): string {
+   const intro = [
+      `${composition.name} in a Theia Electron application: the Theia extension in \`../theia\`, and \`../vscode-servers\` sideloaded through \`@theia/plugin-ext\`, which starts the server and its language client.`,
+      'Electron runs the window, and a backend process it starts runs the server.',
+      ...(composition.grammars.some(grammar => grammar.diagram)
+         ? ['The servers extension contributes no editor, so a diagram file opens in the Theia diagram editor alone.']
+         : [])
+   ];
+   const lines = [
+      `# ${memberPackageName(composition, 'host-theia-electron')}`,
+      '',
+      ...wrapProse(intro.join(' ')),
+      '',
+      '```bash',
+      'npm run build      # bundle and type-check, and download Electron; build the members first',
+      'npm start          # the application on ../workspace',
+      'npm run test:e2e   # the smoke test, which launches the application itself',
+      '```',
+      '',
+      ...wrapProse(
+         'There is no `theia rebuild:electron` step: Theia’s native modules are N-API builds, which load in Electron as `npm install` built them for Node.'
+      ),
+      '',
+      '## Layout',
+      '',
+      '- `start.mjs` — `npm start`: links `../vscode-servers` into `plugins/`, then starts the application on a folder given as its argument or `../workspace`',
+      '- `playwright.config.mts` — the smoke tier',
+      '- `test/smoke.spec.mts` — Electron opens a copy of the workspace with a profile of its own, and each head answers',
+      ''
+   ];
+   return project(lines.join('\n'), composition);
+}
+
+/** The Theia Electron application: the browser application's extensions in a desktop window. */
+function hostTheiaElectronFiles(composition: InitComposition): InitFile[] {
+   const fixed = (file: string): InitFile => projectTemplate(`host-theia-electron/${file}`, composition);
+   return [
+      { path: 'host-theia-electron/package.json', content: hostTheiaElectronPackageJson(composition) },
+      ignoreFile('host-theia-electron'),
+      { path: 'host-theia-electron/README.md', content: hostTheiaElectronReadme(composition) },
+      fixed('start.mjs'),
+      fixed('playwright.config.mts'),
+      fixed('tsconfig.e2e.json'),
+      { path: 'host-theia-electron/test/smoke.spec.mts', content: theiaSmokeSpec(composition, 'electron') }
    ];
 }
 
@@ -4127,10 +4333,11 @@ export function buildInitTemplates(composition: InitComposition): InitFile[] {
       ...serverFiles(composition),
       ...(composition.heads.includes('glsp') ? clientFiles(composition) : []),
       ...(emitsVscodeServers(composition) ? vscodeServersFiles(composition) : []),
-      ...(composition.hosts.includes('theia-browser') ? theiaFiles(composition) : []),
+      ...(composition.hosts.some(isTheiaHost) ? theiaFiles(composition) : []),
       ...(composition.hosts.includes('browser') ? hostBrowserFiles(composition) : []),
       ...(composition.hosts.includes('vscode') ? hostVscodeFiles(composition) : []),
       ...(composition.hosts.includes('theia-browser') ? hostTheiaBrowserFiles(composition) : []),
+      ...(composition.hosts.includes('theia-electron') ? hostTheiaElectronFiles(composition) : []),
       ...workspaceFiles(composition)
    ];
 }

@@ -11,7 +11,7 @@
 // data head reads the file, the diagram file draws in its diagram editor, and
 // the server reports a reference that resolves to nothing.
 
-import { _electron, expect, test, type Page } from '@playwright/test';
+import { _electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { downloadAndUnzipVSCode } from '@vscode/test-electron';
 import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -27,23 +27,24 @@ test('reads the model, draws the diagram, and reports a broken reference', async
    const scratch = mkdtempSync(join(tmpdir(), 'bookstore-vscode-'));
    const workspace = join(scratch, 'workspace');
    cpSync(fileURLToPath(new URL('../../workspace', import.meta.url)), workspace, { recursive: true });
-   const app = await _electron.launch({
-      executablePath: await downloadAndUnzipVSCode({ version: VSCODE_VERSION, cachePath: VSCODE_CACHE }),
-      args: [
-         '--no-sandbox',
-         '--disable-gpu-sandbox',
-         '--disable-updates',
-         '--skip-welcome',
-         '--skip-release-notes',
-         '--disable-workspace-trust',
-         '--disable-extensions',
-         `--extensionDevelopmentPath=${extensionRoot}`,
-         `--user-data-dir=${join(scratch, 'user-data')}`,
-         `--extensions-dir=${join(scratch, 'extensions')}`,
-         workspace
-      ]
-   });
+   let app: ElectronApplication | undefined;
    try {
+      app = await _electron.launch({
+         executablePath: await downloadAndUnzipVSCode({ version: VSCODE_VERSION, cachePath: VSCODE_CACHE }),
+         args: [
+            '--no-sandbox',
+            '--disable-gpu-sandbox',
+            '--disable-updates',
+            '--skip-welcome',
+            '--skip-release-notes',
+            '--disable-workspace-trust',
+            '--disable-extensions',
+            `--extensionDevelopmentPath=${extensionRoot}`,
+            `--user-data-dir=${join(scratch, 'user-data')}`,
+            `--extensions-dir=${join(scratch, 'extensions')}`,
+            workspace
+         ]
+      });
       const page = await app.firstWindow();
       await expect(page.locator('.monaco-workbench')).toBeVisible();
       await quickOpen(page, 'nodes.bookstore');
@@ -77,7 +78,7 @@ test('reads the model, draws the diagram, and reports a broken reference', async
       await page.keyboard.insertText('\nnode Broken -> Missing');
       await expect(page.locator('.monaco-editor .squiggly-error').first()).toBeVisible();
    } finally {
-      await app.close();
+      await app?.close();
       rmSync(scratch, { recursive: true, force: true });
    }
 });

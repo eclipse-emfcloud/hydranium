@@ -380,12 +380,18 @@ interface ScaffoldShape {
    readonly vitest: string;
    /** `--grammar` arguments; the smoke drives the first, so it keeps the `my-lang` language id. */
    readonly grammars?: readonly string[];
-   /** `--hosts`; a host is built and its smoke test run, the browser and Theia ones' in Chromium and the VS Code one's in VS Code. */
+   /** `--hosts`; a host is built and its smoke test run, the browser and Theia browser ones' in Chromium, the VS Code one's in VS Code and the Theia Electron one's in Electron. */
    readonly hosts?: string;
 }
 
 const SCAFFOLD_SHAPES: readonly ScaffoldShape[] = [
-   { label: 'standalone, all heads', heads: 'lsp,data,glsp', hosts: 'browser,vscode,theia-browser', production: true, vitest: '~4.0.18' },
+   {
+      label: 'standalone, all heads',
+      heads: 'lsp,data,glsp',
+      hosts: 'browser,vscode,theia-browser,theia-electron',
+      production: true,
+      vitest: '~4.0.18'
+   },
    {
       label: 'standalone, LSP and data, two grammars',
       heads: 'lsp,data',
@@ -495,7 +501,16 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
       .devDependencies?.vitest;
    if (vitest !== shape.vitest) throw new Error(`${shape.label}: init emitted vitest ${vitest}, expected ${shape.vitest}`);
    // Every member declaring a framework package, so none of them fetches it from the registry.
-   const members = ['server', 'client', 'vscode-servers', 'host-browser', 'host-vscode', 'theia', 'host-theia-browser']
+   const members = [
+      'server',
+      'client',
+      'vscode-servers',
+      'host-browser',
+      'host-vscode',
+      'theia',
+      'host-theia-browser',
+      'host-theia-electron'
+   ]
       .map(name => (projectPath === undefined ? name : `${projectPath}/${name}`))
       .filter(path => existsSync(join(installRoot, path, 'package.json')));
    const repointedBy = new Map(members.map(path => [path, repointFramework(join(installRoot, path, 'package.json'), candidates)]));
@@ -547,7 +562,8 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
       ['vscode-servers', 'tsconfig.json', CLIENT_TYPESCRIPT_FLOOR],
       ...['', '.webview', '.e2e'].map(name => ['host-vscode', `tsconfig${name}.json`, CLIENT_TYPESCRIPT_FLOOR] as const),
       ['theia', 'tsconfig.json', CLIENT_TYPESCRIPT_FLOOR],
-      ['host-theia-browser', 'tsconfig.e2e.json', CLIENT_TYPESCRIPT_FLOOR]
+      ['host-theia-browser', 'tsconfig.e2e.json', CLIENT_TYPESCRIPT_FLOOR],
+      ['host-theia-electron', 'tsconfig.e2e.json', CLIENT_TYPESCRIPT_FLOOR]
    ];
    for (const [name, tsconfig, version] of floorCompiles) {
       const directory = join(installRoot, projectPath === undefined ? name : `${projectPath}/${name}`);
@@ -585,6 +601,15 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
       const headless = process.platform === 'linux' && !process.env.DISPLAY;
       const [program, args] = headless ? ['xvfb-run', ['-a', 'npm', 'run', 'test:e2e']] : ['npm', ['run', 'test:e2e']];
       run(`${shape.label}: VS Code smoke`, program, args, host, installEnv);
+   }
+   if (shape.hosts?.split(',').includes('theia-electron')) {
+      const host = join(project, 'host-theia-electron');
+      // Theia opens its window at two thirds of the screen; at `xvfb-run`'s default screen the workbench is cramped.
+      const headless = process.platform === 'linux' && !process.env.DISPLAY;
+      const [program, args] = headless
+         ? ['xvfb-run', ['-a', '-s', '-screen 0 1920x1080x24', 'npm', 'run', 'test:e2e']]
+         : ['npm', ['run', 'test:e2e']];
+      run(`${shape.label}: Theia Electron smoke`, program, args, host, installEnv);
    }
    if (shape.hosts?.split(',').includes('theia-browser')) {
       const host = join(project, 'host-theia-browser');

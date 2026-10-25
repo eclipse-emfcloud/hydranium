@@ -90,10 +90,10 @@ an older compiler reports, but those types then resolve to an error type.
 Nothing in your install enforces this floor.
 
 The `client/` package `init` emits with a diagram, the two VS Code extensions
-`--hosts vscode` emits, and the Theia extension `--hosts theia-browser` emits,
-need TypeScript 5.8. They are CommonJS, the client because GLSP's client is,
-and require the ES protocol package, which TypeScript allows from 5.8 under
-`nodenext`.
+`--hosts vscode` emits, and the Theia extension `--hosts theia-browser` or
+`--hosts theia-electron` emits, need TypeScript 5.8. They are CommonJS, the
+client because GLSP's client is, and require the ES protocol package, which
+TypeScript allows from 5.8 under `nodenext`.
 
 ## A resolver that reads `exports`
 
@@ -227,6 +227,14 @@ Without it, the console reports `Sending log message failed` during normal
 teardown, when a peer has already disconnected. Unexpected logging failures
 stay visible. `startLanguageServer` receives a connection already created, so
 it cannot add the features for you.
+
+## A C++ toolchain for the Theia Electron host
+
+`--hosts theia-electron` adds `@theia/electron`, which depends on
+`native-keymap`. That module ships no prebuilt binary, so `npm install`
+compiles it with `node-gyp`, which needs Python and a C++ compiler. On Linux it
+also needs the X11 and xkbfile development headers, `libx11-dev` and
+`libxkbfile-dev` on Debian and Ubuntu.
 
 ## Related
 

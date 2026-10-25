@@ -1,0 +1,7 @@
+{
+  // The browser app's e2e project, for this tier's config; the specs it runs
+  // live there. Why the tier is ESM and needs `--tsconfig`:
+  // ../theia-app/tsconfig.e2e.json.
+  "extends": "../theia-app/tsconfig.e2e.json",
+  "include": ["playwright.config.mts"]
+}

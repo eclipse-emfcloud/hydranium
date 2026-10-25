@@ -216,7 +216,8 @@ const HOST_QUESTIONS: Record<InitHost, string> = {
    browser: 'Add a browser host (every head in a web worker, no backend)?',
    vscode: 'Add a VS Code extension (the language client, Show Model with the data head, and a custom editor per diagram)?',
    'theia-browser':
-      'Add a Theia browser application (the language client, Show Model with the data head, and a diagram editor per diagram)?'
+      'Add a Theia browser application (the language client, Show Model with the data head, and a diagram editor per diagram)?',
+   'theia-electron': 'Add a Theia Electron application (the same as the Theia browser application, in a desktop window)?'
 };
 
 /**

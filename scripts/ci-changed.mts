@@ -175,6 +175,7 @@ const PINNED_GUARDS = {
       build: '${{ !cancelled() }}',
       'e2e-chromium': "${{ !cancelled() && inputs.skip_e2e != true && needs.changes.outputs.full != 'false' }}",
       'e2e-vscode': "${{ !cancelled() && inputs.skip_e2e != true && needs.changes.outputs.full != 'false' }}",
+      'e2e-theia-electron': "${{ !cancelled() && inputs.skip_e2e != true && needs.changes.outputs.full != 'false' }}",
       scaffold: "${{ !cancelled() && needs.changes.outputs.full != 'false' }}"
    },
    steps: {

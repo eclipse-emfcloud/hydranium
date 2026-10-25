@@ -77,8 +77,9 @@ Pitfalls:
   saw the log-capture environment, so no server log is produced.
 - **The suite runs the bundle, not `tsc` output.** Rebuild after changing
   framework code or you are testing stale bytes.
-- **`link:plugin` replaces the link on every build**, because a dangling link
-  from a moved extension directory fails with a message naming the target.
+- **`link:plugin` replaces the link on every build, start and e2e run**: a
+  cached build restores no `plugins/`, and a dangling link from a moved
+  extension directory fails with a message naming the target.
 
 Server logs land under `test-results/server-logs/`, renamed per spec once every
 server process has exited. A failed multi-process handshake shows as a promise

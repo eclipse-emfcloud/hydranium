@@ -8,13 +8,18 @@
  ********************************************************************************/
 
 import { defineConfig, devices } from '@playwright/test';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { mkdirSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { APP_PORT, BACKEND_LOG, PROXY_PORT } from './test/reconnect/reconnect-ports.mjs';
 
 // The backend appends to this itself, but the redirect below does not create
 // parent directories.
 mkdirSync(dirname(BACKEND_LOG), { recursive: true });
+
+// The backend's settings, so a run never writes `~/.theia/settings.json`; set in
+// the runner, whose `webServer` and workers inherit it.
+process.env.THEIA_CONFIG_DIR ??= mkdtempSync(join(tmpdir(), 'order-flow-theia-config-'));
 
 /**
  * Reconnect tests, kept out of the main suite because they need a differently

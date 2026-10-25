@@ -13,7 +13,8 @@ package.json
     "theia",
     "host-browser",
     "host-vscode",
-    "host-theia-browser"
+    "host-theia-browser",
+    "host-theia-electron"
   ],
   "scripts": {
     "build": "npm run build --workspaces",
@@ -32,6 +33,7 @@ package.json
     "@theia/cli": "1.74.3",
     "@theia/core": "1.74.3",
     "@theia/editor": "1.74.3",
+    "@theia/electron": "1.74.3",
     "@theia/filesystem": "1.74.3",
     "@theia/markers": "1.74.3",
     "@theia/messages": "1.74.3",
@@ -44,6 +46,7 @@ package.json
     "@theia/process": "1.74.3",
     "@theia/workspace": "1.74.3",
     "@vscode/codicons": "0.0.45",
+    "electron": "42.11.16",
     "langium": "4.3.1",
     "monaco-editor-core": "0.56.0",
     "vscode-jsonrpc": "9.0.0",
@@ -2300,11 +2303,11 @@ vscode-servers/README.md
 A VS Code extension that starts the Bookstore server and contributes no editor,
 view or command: the languages, their grammars and the server. With a socket
 head, it also answers each head’s port under a host command, which a host
-without a language client of its own runs: the Theia application in
-`../host-theia-browser`, which sideloads this extension. The VS Code extension
-in `../host-vscode` starts the server through the same function. Both work side
-by side, but each starts its own server and language client, so diagnostics may
-show twice: install one.
+without a language client of its own runs: the Theia applications in
+`../host-theia-browser` and `../host-theia-electron`, which sideload this
+extension. The VS Code extension in `../host-vscode` starts the server through
+the same function. Both work side by side, but each starts its own server and
+language client, so diagnostics may show twice: install one.
 
 ```bash
 npm run build   # copy the server’s grammars and compile into out/; build the server first
@@ -2489,7 +2492,7 @@ a file through the data head, and a diagram editor for each diagram. The
 language client is not here: the application sideloads `../vscode-servers`,
 which starts the server and answers each socket head’s port under a host
 command, and the backend modules forward the page’s channels to those ports. The
-application in `../host-theia-browser` runs it.
+applications in `../host-theia-browser` and `../host-theia-electron` run it.
 
 ```bash
 npm run build   # compile into lib/; build the protocol and client packages first
@@ -4494,7 +4497,7 @@ host-vscode/test/smoke.spec.mts
 // data head reads the file, the diagram file draws in its diagram editor, and
 // the server reports a reference that resolves to nothing.
 
-import { _electron, expect, test, type Page } from '@playwright/test';
+import { _electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
 import { downloadAndUnzipVSCode } from '@vscode/test-electron';
 import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -4510,23 +4513,24 @@ test('reads the model, draws the diagram, and reports a broken reference', async
    const scratch = mkdtempSync(join(tmpdir(), 'bookstore-vscode-'));
    const workspace = join(scratch, 'workspace');
    cpSync(fileURLToPath(new URL('../../workspace', import.meta.url)), workspace, { recursive: true });
-   const app = await _electron.launch({
-      executablePath: await downloadAndUnzipVSCode({ version: VSCODE_VERSION, cachePath: VSCODE_CACHE }),
-      args: [
-         '--no-sandbox',
-         '--disable-gpu-sandbox',
-         '--disable-updates',
-         '--skip-welcome',
-         '--skip-release-notes',
-         '--disable-workspace-trust',
-         '--disable-extensions',
-         `--extensionDevelopmentPath=${extensionRoot}`,
-         `--user-data-dir=${join(scratch, 'user-data')}`,
-         `--extensions-dir=${join(scratch, 'extensions')}`,
-         workspace
-      ]
-   });
+   let app: ElectronApplication | undefined;
    try {
+      app = await _electron.launch({
+         executablePath: await downloadAndUnzipVSCode({ version: VSCODE_VERSION, cachePath: VSCODE_CACHE }),
+         args: [
+            '--no-sandbox',
+            '--disable-gpu-sandbox',
+            '--disable-updates',
+            '--skip-welcome',
+            '--skip-release-notes',
+            '--disable-workspace-trust',
+            '--disable-extensions',
+            `--extensionDevelopmentPath=${extensionRoot}`,
+            `--user-data-dir=${join(scratch, 'user-data')}`,
+            `--extensions-dir=${join(scratch, 'extensions')}`,
+            workspace
+         ]
+      });
       const page = await app.firstWindow();
       await expect(page.locator('.monaco-workbench')).toBeVisible();
       await quickOpen(page, 'nodes.bookstore');
@@ -4560,7 +4564,7 @@ test('reads the model, draws the diagram, and reports a broken reference', async
       await page.keyboard.insertText('\nnode Broken -> Missing');
       await expect(page.locator('.monaco-editor .squiggly-error').first()).toBeVisible();
    } finally {
-      await app.close();
+      await app?.close();
       rmSync(scratch, { recursive: true, force: true });
    }
 });
@@ -4785,7 +4789,9 @@ host-theia-browser/playwright.config.mts
 // `npm start` serves what `npm run build` bundled, so build first.
 
 import { defineConfig, devices } from '@playwright/test';
-import { cpSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 /**
  * The port the smoke serves on, not `npm start`'s 3000, so a running
@@ -4799,6 +4805,8 @@ if (process.env.SMOKE_WORKSPACE_COPIED === undefined) {
    const workspace = new URL('smoke-workspace', import.meta.url);
    rmSync(workspace, { recursive: true, force: true });
    cpSync(new URL('../workspace', import.meta.url), workspace, { recursive: true });
+   // Settings of its own too, so a run never writes `~/.theia/settings.json`.
+   process.env.THEIA_CONFIG_DIR ??= mkdtempSync(join(tmpdir(), 'theia-smoke-config-'));
 }
 
 export default defineConfig({
@@ -4849,6 +4857,322 @@ import { expect, test, type Page } from '@playwright/test';
 
 test('draws the diagram, reads the model, and reports a broken reference', async ({ page }) => {
    await page.goto('/');
+   // Up once the loading screen is gone; a key pressed before then is lost.
+   await expect(page.locator('.theia-preload')).toHaveCount(0);
+   await page.keyboard.press('ControlOrMeta+Shift+E');
+   await expect(page.locator('.theia-FileTree .theia-TreeNode', { hasText: 'nodes.bookstore' })).toBeVisible();
+   await quickOpen(page, 'nodes.bookstore');
+
+   // The diagram file opens in its diagram, which draws the two starter nodes.
+   // In the editor's copy: sprotty measures shapes in a hidden one on the page.
+   await expect(page.locator('.sprotty:not(.sprotty-hidden) .sprotty-node')).toHaveCount(2);
+
+   // The data head reads the open file, with focus in the Explorer beside it.
+   await page.locator('.theia-FileTree .theia-TreeNode', { hasText: 'nodes.bookstore' }).click();
+   await expect(page.locator('.theia-FileTree:focus-within')).toHaveCount(1);
+   await runCommand(page, 'Bookstore: Show Model');
+   // `first()`: Theia lists a notification in its toast and in the notification centre.
+   await expect(
+      page.locator('.theia-notification-message').filter({ hasText: 'nodes.bookstore holds a BookstoreModel' }).first()
+   ).toBeVisible();
+
+   // Then as text, through the Explorer's Open With.
+   await page.locator('.theia-FileTree .theia-TreeNode', { hasText: 'nodes.bookstore' }).click({ button: 'right' });
+   await page.locator('.lm-Menu-item', { hasText: 'Open With...' }).click();
+   await page.locator('.quick-input-list .monaco-list-row', { hasText: 'Text Editor' }).click();
+   const editor = page.locator('.monaco-editor .view-lines').first();
+   await expect(editor).toContainText('node First');
+   await editor.click();
+   await page.keyboard.press('ControlOrMeta+End');
+   // In one edit: typed key by key, the half-typed reference is reported on the way.
+   await page.keyboard.insertText('\nnode Broken -> Missing');
+   await expect(page.locator('.monaco-editor .squiggly-error').first()).toBeVisible();
+});
+
+/** Open `file` through Quick Open, so it gets the editor a user would. */
+async function quickOpen(page: Page, file: string): Promise<void> {
+   await page.keyboard.press('ControlOrMeta+P');
+   const input = page.locator('.quick-input-widget input');
+   await input.fill(file);
+   await expect(page.locator('.quick-input-list .monaco-list-row').first()).toContainText(file);
+   await input.press('Enter');
+   await expect(page.locator('.quick-input-widget')).toBeHidden();
+}
+
+/** Run the command whose palette entry reads `label`, checked before Enter, since the match is fuzzy. */
+async function runCommand(page: Page, label: string): Promise<void> {
+   await page.keyboard.press('F1');
+   const input = page.locator('.quick-input-widget input');
+   await input.fill(`>${label}`);
+   await expect(page.locator('.quick-input-list .monaco-list-row.focused')).toContainText(label);
+   await input.press('Enter');
+   await expect(page.locator('.quick-input-widget')).toBeHidden();
+}
+
+==============================================================================
+host-theia-electron/package.json
+==============================================================================
+{
+  "name": "bookstore-host-theia-electron",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Bookstore in a Theia Electron application: the Theia extension, and the servers extension sideloaded for the language client.",
+  "license": "UNLICENSED",
+  "author": "",
+  "main": "lib/backend/electron-main.js",
+  "scripts": {
+    "build": "theia build --mode development && npm run typecheck",
+    "clean": "rimraf lib src-gen plugins gen-esbuild.browser.mjs gen-esbuild.electron.mjs gen-esbuild.node.mjs test-results playwright-report",
+    "start": "node start.mjs",
+    "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
+    "typecheck": "tsc --noEmit -p tsconfig.e2e.json"
+  },
+  "dependencies": {
+    "@theia/core": "1.74.3",
+    "@theia/editor": "1.74.3",
+    "@theia/electron": "1.74.3",
+    "@theia/filesystem": "1.74.3",
+    "@theia/markers": "1.74.3",
+    "@theia/messages": "1.74.3",
+    "@theia/monaco": "1.74.3",
+    "@theia/navigator": "1.74.3",
+    "@theia/output": "1.74.3",
+    "@theia/plugin-ext": "1.74.3",
+    "@theia/plugin-ext-vscode": "1.74.3",
+    "@theia/preferences": "1.74.3",
+    "@theia/process": "1.74.3",
+    "@theia/workspace": "1.74.3",
+    "bookstore-theia": "0.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@theia/cli": "1.74.3",
+    "@types/node": "^22.0.0",
+    "bookstore-vscode-servers": "0.0.0",
+    "electron": "42.11.16",
+    "rimraf": "^5.0.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "theia": {
+    "target": "electron",
+    "frontend": {
+      "config": {
+        "applicationName": "Bookstore",
+        "connectionBufferBytes": 102400,
+        "preferences": {
+          "security.workspace.trust.enabled": false
+        }
+      }
+    },
+    "backend": {
+      "config": {
+        "connectionBufferBytes": 102400,
+        "frontendConnectionTimeout": 60000
+      }
+    }
+  }
+}
+
+==============================================================================
+host-theia-electron/.gitignore
+==============================================================================
+node_modules/
+# What `theia build` generates. Not esbuild.mjs, which it writes only when none
+# is there: kept, it is the place to adjust the bundle.
+lib/
+src-gen/
+gen-esbuild.*.mjs
+plugins/
+test-results/
+playwright-report/
+
+==============================================================================
+host-theia-electron/README.md
+==============================================================================
+# bookstore-host-theia-electron
+
+Bookstore in a Theia Electron application: the Theia extension in `../theia`,
+and `../vscode-servers` sideloaded through `@theia/plugin-ext`, which starts the
+server and its language client. Electron runs the window, and a backend process
+it starts runs the server. The servers extension contributes no editor, so a
+diagram file opens in the Theia diagram editor alone.
+
+```bash
+npm run build      # bundle and type-check, and download Electron; build the members first
+npm start          # the application on ../workspace
+npm run test:e2e   # the smoke test, which launches the application itself
+```
+
+There is no `theia rebuild:electron` step: Theia’s native modules are N-API
+builds, which load in Electron as `npm install` built them for Node.
+
+## Layout
+
+- `start.mjs` — `npm start`: links `../vscode-servers` into `plugins/`, then starts the application on a folder given as its argument or `../workspace`
+- `playwright.config.mts` — the smoke tier
+- `test/smoke.spec.mts` — Electron opens a copy of the workspace with a profile of its own, and each head answers
+
+==============================================================================
+host-theia-electron/start.mjs
+==============================================================================
+// `npm start`: the Theia desktop application on the folder given as the
+// argument, `../workspace` when there is none.
+
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import { createRequire } from 'node:module';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Paths from this file, not the working directory, which a direct `node` run can set anywhere.
+const here = path.dirname(fileURLToPath(import.meta.url));
+const link = path.join(here, 'plugins', 'bookstore-vscode-servers');
+
+// The servers extension, sideloaded from plugins/ beside any other plugin there.
+// Linked here rather than in the build, which a build cache can replay without
+// it; replaced every time, since a dangling link left by a moved extension
+// fails `symlinkSync`.
+fs.mkdirSync(path.dirname(link), { recursive: true });
+const existing = fs.lstatSync(link, { throwIfNoEntry: false });
+// A link, a junction included, is unlinked, never handed to a recursive remove
+// that might reach `../vscode-servers` through it.
+if (existing?.isSymbolicLink()) {
+   fs.unlinkSync(link);
+} else {
+   fs.rmSync(link, { recursive: true, force: true });
+}
+fs.symlinkSync(path.join(here, '../vscode-servers'), link, 'junction');
+
+const workspace = path.resolve(process.argv[2] ?? path.join(here, '../workspace'));
+// The CLI run by this Node, with no shell: the workspace path reaches Theia as it is.
+// `local-dir:` relative to `cwd`, since Theia reads an absolute path as a URI.
+const cli = createRequire(import.meta.url).resolve('@theia/cli/bin/theia.js');
+const theia = spawn(process.execPath, [cli, 'start', '--plugins=local-dir:./plugins', workspace], {
+   cwd: here,
+   stdio: 'inherit'
+});
+for (const signal of ['SIGINT', 'SIGTERM']) {
+   process.on(signal, () => theia.kill(signal));
+}
+theia.on('exit', (code, signal) => {
+   if (signal === null) {
+      process.exit(code ?? 1);
+   }
+   // Ended by a signal, so end by it too: Ctrl+C is a stop, not a failure.
+   process.removeAllListeners(signal);
+   process.kill(process.pid, signal);
+});
+
+==============================================================================
+host-theia-electron/playwright.config.mts
+==============================================================================
+// The smoke tier: the test launches the application in Electron itself, so
+// there is no server to start here. It runs what `npm run build` bundled, so
+// build first.
+
+import { defineConfig } from '@playwright/test';
+
+export default defineConfig({
+   testDir: './test',
+   // The first window waits for the backend to start the server and build the workspace.
+   timeout: 120_000,
+   expect: { timeout: 60_000 }
+});
+
+==============================================================================
+host-theia-electron/tsconfig.e2e.json
+==============================================================================
+// The smoke tier, which runs in Node under Playwright. `test:e2e` passes it
+// with `--tsconfig`, since Playwright otherwise looks for a `tsconfig.json` in
+// the directories above.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["test", "playwright.config.mts"]
+}
+
+==============================================================================
+host-theia-electron/test/smoke.spec.mts
+==============================================================================
+// Theia opens a copy of the starter workspace with this application's
+// extensions, the diagram file draws in its diagram editor, the data head reads
+// the file, and the server reports a reference that resolves to nothing.
+
+import { expect, test as base, type ElectronApplication, type Page } from '@playwright/test';
+import { once } from 'node:events';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+/**
+ * The application in Electron, on a copy of the starter workspace, since the
+ * server writes its repairs to the folder it opens, with a profile of its own:
+ * Theia quits at once while another window holds one. Its settings are its own
+ * too, so a run never writes `~/.theia/settings.json`.
+ */
+const test = base.extend<{ page: Page }>({
+   page: async ({ playwright }, use) => {
+      const scratch = mkdtempSync(join(tmpdir(), 'bookstore-theia-electron-'));
+      const workspace = join(scratch, 'workspace');
+      // The servers extension, sideloaded from a plugins folder as `npm start` does.
+      const plugins = join(scratch, 'plugins');
+      const link = join(plugins, 'bookstore-vscode-servers');
+      let app: ElectronApplication | undefined;
+      try {
+         cpSync(fileURLToPath(new URL('../../workspace', import.meta.url)), workspace, { recursive: true });
+         mkdirSync(plugins);
+         symlinkSync(fileURLToPath(new URL('../../vscode-servers', import.meta.url)), link, 'junction');
+         // Playwright resolves Electron itself; given its path, Theia opens this
+         // folder instead of the workspace.
+         app = await playwright._electron.launch({
+            args: [
+               fileURLToPath(new URL('..', import.meta.url)),
+               '--no-sandbox',
+               `--user-data-dir=${join(scratch, 'user-data')}`,
+               // In URI form, since Theia reads the argument as a URI.
+               `--plugins=local-dir:${pathToFileURL(plugins).pathname}`,
+               workspace
+            ],
+            env: {
+               ...process.env,
+               THEIA_CONFIG_DIR: join(scratch, 'config'),
+               // Menus drawn in the page, where the test can click them.
+               THEIA_ELECTRON_DISABLE_NATIVE_ELEMENTS: '1'
+            }
+         });
+         await use(await app.firstWindow());
+      } finally {
+         try {
+            // Exited, not closed: closing asks whether to save the edited file. An
+            // app that is already gone is left alone, so the test's own error stands.
+            const child = app?.process();
+            if (app && child?.exitCode === null && child.signalCode === null) {
+               const exited = once(child, 'exit');
+               await app.evaluate(({ app: electron }) => electron.exit(0));
+               await exited;
+            }
+         } finally {
+            // Unlinked first, so the remove never reaches `../vscode-servers` through it.
+            rmSync(link, { force: true });
+            rmSync(scratch, { recursive: true, force: true });
+         }
+      }
+   }
+});
+
+test('draws the diagram, reads the model, and reports a broken reference', async ({ page }) => {
    // Up once the loading screen is gone; a key pressed before then is lost.
    await expect(page.locator('.theia-preload')).toHaveCount(0);
    await page.keyboard.press('ControlOrMeta+Shift+E');

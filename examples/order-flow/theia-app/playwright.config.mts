@@ -9,8 +9,9 @@
 
 import { captureServerLog, DEFAULT_SERVER_LOG_DIR_ENV } from '@hydranium/core/testing/playwright';
 import { defineConfig, devices } from '@playwright/test';
-import { mkdirSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdirSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 /**
  * Playwright configuration for the order-flow Theia demo app.
@@ -52,6 +53,10 @@ mkdirSync(serverLogDir, { recursive: true });
 // A config runs in the Playwright main process before any worker forks, so the
 // workers inherit it.
 const serverLog = captureServerLog({ dir: serverLogDir });
+
+// The backend's settings, so a run never writes `~/.theia/settings.json`; set in
+// the runner, whose `webServer` and workers inherit it.
+process.env.THEIA_CONFIG_DIR ??= mkdtempSync(join(tmpdir(), 'order-flow-theia-config-'));
 
 /**
  * Which invocation of this config is running, and therefore which subdirectory

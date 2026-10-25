@@ -7,9 +7,12 @@ through the GLSP head. The order-flow example splits it over three packages:
 [`theia-app`](../../examples/order-flow/theia-app/README.md), the application
 that loads it, and
 [`vscode-servers`](../../examples/order-flow/vscode-servers/README.md), which
-launches the server. `init --hosts theia-browser` scaffolds the same three for
-your own language, with the diagram editor, a command reading a file through
-the data head and the connection hardening, which
+launches the server;
+[`theia-electron-app`](../../examples/order-flow/theia-electron-app/README.md)
+loads the same extension in Electron. `init --hosts theia-browser` scaffolds
+the same three for your own language, and `--hosts theia-electron` the
+Electron application. The extension comes with the diagram editor, a command
+reading a file through the data head and the connection hardening, which
 [bookstore's](../../examples/bookstore/theia/README.md) shows as emitted.
 
 Heads: LSP · data · GLSP
@@ -83,7 +86,8 @@ starts a new plugin host for every page load; there, only a reconnect within
 Theia's `frontendConnectionTimeout` keeps the server and the unsaved text.
 The scaffold sets it and binds `bindConnectionResilience` from
 `@hydranium/client-theia` on both ends, so messages sent while the socket is
-down, up to `connectionBufferBytes`, wait for the reconnect.
+down, up to `connectionBufferBytes`, wait for the reconnect. In Electron the
+frontend call does nothing, and only the backend half runs.
 
 The window's id and token come from `WindowSessionService`, which keeps them in
 `sessionStorage`: a reload resumes, and a duplicated tab starts afresh. Rebind
