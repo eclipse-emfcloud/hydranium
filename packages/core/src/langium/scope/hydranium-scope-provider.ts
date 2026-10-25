@@ -30,7 +30,6 @@ import {
    type ReferenceInfo,
    type Scope,
    type ScopeOptions,
-   StreamScope,
    type URI,
    UriUtils,
    WorkspaceCache,
@@ -135,7 +134,8 @@ export interface ScopeContext {
  * - **{@link createScopeForNodes}** — inherited from Langium and re-keyed by
  *   the framework to bare own-names, so it is the helper a `getScope`
  *   override uses to resolve a dotted member reference against a container
- *   the reference chain cannot reach.
+ *   the reference chain cannot reach. Override {@link createNodeScope} to
+ *   change the scope it builds.
  *
  * **Do NOT override `getGlobalScope` itself** — that is the framework's
  * extension-assembly seam. Overriding it would hide the scope-extension
@@ -170,6 +170,12 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
     * when it recomputes them, so a rebuilt document never reads a stale entry.
     */
    protected readonly localScopes = new WeakMap<LocalSymbols, Map<AstNode, Map<string, Scope>>>();
+   /**
+    * {@link createScopeForNodes}' scope per list of nodes, keyed by the local
+    * symbols of the document the nodes belong to, which a rebuild of that
+    * document replaces.
+    */
+   protected readonly nodeScopes = new WeakMap<LocalSymbols, WeakMap<readonly AstNode[], Scope>>();
    protected readonly tracer: Tracer;
    /**
     * Narrows the inherited Langium {@link NameProvider} field to the framework's
@@ -265,7 +271,8 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
    /**
     * Keyed by name, where Langium's walks every element on each lookup. Every
     * description of a name is kept and the first answers, as in Langium's;
-    * `getAllElements` lists them grouped by name.
+    * `getAllElements` lists them in order, but with a description following
+    * the first of its name.
     */
    protected override createScope(elements: Iterable<AstNodeDescription>, outerScope?: Scope, options?: ScopeOptions): Scope {
       return new MultiMapScope(elements, outerScope, options);
@@ -540,6 +547,47 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
    }
 
    /**
+    * Langium's, with the scope cached: a member scope is asked for once per
+    * reference, and building it each time makes linking cost references times
+    * members.
+    *
+    * - Cached: the scope for a list of a built document's nodes, passed with
+    *   no `outerScope` or `options`, built once through {@link createNodeScope}.
+    * - Dropped: when that document's local symbols are replaced; a build that
+    *   leaves its nodes in place keeps it.
+    * - Any other list gets a scope per call.
+    *
+    * Override {@link createNodeScope} to change the scope; an override of this
+    * method keeps the cache only by calling `super`. The list must hold nodes
+    * of one document, which it is keyed by; a list changed in place between
+    * builds is answered as it was.
+    */
+   protected override createScopeForNodes(elements: Iterable<AstNode>, outerScope?: Scope, options?: ScopeOptions): Scope {
+      if (!Array.isArray(elements) || elements.length === 0 || outerScope !== undefined || options !== undefined) {
+         return this.createNodeScope(elements, outerScope, options);
+      }
+      const nodes: readonly AstNode[] = elements;
+      const root = AstUtils.findRootNode(nodes[0]);
+      const localSymbols = root.$document?.parseResult.value === root ? root.$document.localSymbols : undefined;
+      if (localSymbols === undefined) {
+         return this.createNodeScope(nodes);
+      }
+      let byList = this.nodeScopes.get(localSymbols);
+      if (byList === undefined) {
+         byList = new WeakMap();
+         this.nodeScopes.set(localSymbols, byList);
+      }
+      let scope = byList.get(nodes);
+      if (scope === undefined) {
+         scope = this.createNodeScope(nodes);
+         byList.set(nodes, scope);
+      }
+      return scope;
+   }
+
+   /**
+    * The scope {@link createScopeForNodes} answers with, keyed by name.
+    *
     * Keys the scope by {@link NameProvider.getOwnName} instead of Langium's
     * `getName`. Same correction
     * `HydraniumScopeComputation.addLocalSymbolByOwnName` makes to the
@@ -553,7 +601,7 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
     * reference to a member the container does not have must fail rather than
     * fall through to a same-named member on an unrelated type.
     */
-   protected override createScopeForNodes(elements: Iterable<AstNode>, outerScope?: Scope, options?: ScopeOptions): Scope {
+   protected createNodeScope(elements: Iterable<AstNode>, outerScope?: Scope, options?: ScopeOptions): Scope {
       const descriptions = stream(elements)
          .map(node => {
             const name = this.nameProvider.getOwnName(node);
@@ -562,7 +610,7 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
             return name ? this.descriptions.createDescription(node, name, AstUtils.getDocument(node)) : undefined;
          })
          .nonNullable();
-      return new StreamScope(descriptions, outerScope, options);
+      return new MultiMapScope(descriptions, outerScope, options);
    }
 
    /**

@@ -16,7 +16,15 @@
  * would make the test pass whatever the implementation did.
  */
 
-import { type AstNode, DefaultAstNodeLocator, DocumentState, type LangiumDocument, type Scope, URI } from '@hydranium/langium';
+import {
+   type AstNode,
+   DefaultAstNodeLocator,
+   DocumentState,
+   type LangiumDocument,
+   type Scope,
+   type ScopeOptions,
+   URI
+} from '@hydranium/langium';
 import { describe, expect, it } from 'vitest';
 import { type HydraniumLanguageServices } from '../../../src/langium/language-module.js';
 import { DefaultNameProvider } from '../../../src/langium/naming/name-provider.js';
@@ -67,13 +75,23 @@ class ProbeScopeProvider extends HydraniumScopeProvider {
    }
 }
 
+/** Counts the scopes {@link HydraniumScopeProvider.createNodeScope} builds, as an adopter's override would run. */
+class CountingScopeProvider extends ProbeScopeProvider {
+   built = 0;
+
+   protected override createNodeScope(elements: Iterable<AstNode>, outerScope?: Scope, options?: ScopeOptions): Scope {
+      this.built++;
+      return super.createNodeScope(elements, outerScope, options);
+   }
+}
+
 /**
  * Provider over the real naming + description services, in a project that
  * qualifies its names, with a global index holding {@link INDEX_ONLY_NAME}.
  * The index is what makes "closed" observable: `DefaultScopeProvider` reads
  * that slot, so a scope that fabricated an outer would answer from it.
  */
-function probe(): ProbeScopeProvider {
+function probe<TProvider extends ProbeScopeProvider>(Provider: new (services: HydraniumLanguageServices) => TProvider): TProvider {
    const bundle = makeTestServices<FakeContainer>({
       seedProjects: [{ id: 'projA', referenceName: 'projA' }],
       seedIndex: [makeFakeDescription(INDEX_ONLY_NAME, { type: 'TypeOne', documentUri: URI.parse('file:///workspace/projA/b.x') })]
@@ -92,13 +110,13 @@ function probe(): ProbeScopeProvider {
    };
    writable.references.NameProvider = new DefaultNameProvider(language);
    writable.workspace.AstNodeDescriptionProvider = new HydraniumAstNodeDescriptionProvider(language);
-   return new ProbeScopeProvider(language);
+   return new Provider(language);
 }
 
 describe('HydraniumScopeProvider.createScopeForNodes own-name keying', () => {
    it('keys entries by the bare own-name, which is the text a member reference carries', () => {
       const { container } = makeContainer();
-      const scope = probe().scopeFor(container.members);
+      const scope = probe(ProbeScopeProvider).scopeFor(container.members);
 
       expect(
          scope
@@ -111,7 +129,7 @@ describe('HydraniumScopeProvider.createScopeForNodes own-name keying', () => {
 
    it('would key them project-qualified under the getName the base helper reads', () => {
       const { container } = makeContainer();
-      const provider = probe();
+      const provider = probe(ProbeScopeProvider);
 
       // The contrast that makes the test above non-vacuous: `getName` — what
       // the base helper reads — returns a qualified form no reference text
@@ -126,12 +144,12 @@ describe('HydraniumScopeProvider.createScopeForNodes own-name keying', () => {
       // same-named declaration on an unrelated type.
       const { container } = makeContainer();
 
-      expect(probe().scopeFor(container.members).getElement(INDEX_ONLY_NAME)).toBeUndefined();
+      expect(probe(ProbeScopeProvider).scopeFor(container.members).getElement(INDEX_ONLY_NAME)).toBeUndefined();
    });
 
    it('falls through to an outer scope when one is passed', () => {
       const { container } = makeContainer();
-      const provider = probe();
+      const provider = probe(ProbeScopeProvider);
       const outer = provider.scopeFor(container.members);
 
       expect(provider.scopeFor([], outer).getElement('one')?.name).toBe('one');
@@ -142,7 +160,7 @@ describe('HydraniumScopeProvider.createScopeForNodes own-name keying', () => {
       const unnamed = makeFakeAstNode({ $type: 'TypeOne', $container: container, $document: document });
 
       expect(
-         probe()
+         probe(ProbeScopeProvider)
             .scopeFor([...container.members, unnamed])
             .getAllElements()
             .count()
@@ -151,8 +169,61 @@ describe('HydraniumScopeProvider.createScopeForNodes own-name keying', () => {
 
    it('stamps the local tier, since constructed member descriptions are never index entries', () => {
       const { container } = makeContainer();
-      const description = probe().scopeFor(container.members).getElement('one');
+      const description = probe(ProbeScopeProvider).scopeFor(container.members).getElement('one');
 
       expect((description as { tier?: string } | undefined)?.tier).toBe('local');
+   });
+});
+
+describe('HydraniumScopeProvider.createScopeForNodes once per build', () => {
+   /** Give `document` fresh local symbols, as a build that recomputes them does. */
+   const rebuild = (document: LangiumDocument): void => {
+      (document as { localSymbols?: object }).localSymbols = {};
+   };
+
+   it('answers a list of a built document with the same scope until the document is built again', () => {
+      const { container, document } = makeContainer();
+      const provider = probe(ProbeScopeProvider);
+      rebuild(document);
+      const first = provider.scopeFor(container.members);
+
+      // Identity compared as a boolean: `toBe` deep-compares on a mismatch,
+      // which reads description getters these stub services cannot serve.
+      expect(provider.scopeFor(container.members) === first).toBe(true);
+      rebuild(document);
+      expect(provider.scopeFor(container.members) === first).toBe(false);
+   });
+
+   it('keeps the cache for a subclass that changes the scope through createNodeScope', () => {
+      const { container, document } = makeContainer();
+      const provider = probe(CountingScopeProvider);
+      rebuild(document);
+
+      provider.scopeFor(container.members);
+      provider.scopeFor(container.members);
+      expect(provider.built).toBe(1);
+   });
+
+   it('builds a scope per call for a list outside the built root, such as an operation working copy', () => {
+      const { container, document } = makeContainer();
+      const provider = probe(ProbeScopeProvider);
+      rebuild(document);
+      const copy = makeFakeAstNode<FakeContainer>({ $type: 'BaseType', name: 'Base', members: [] });
+      (copy as { members: FakeMember[] }).members = container.members.map(member =>
+         makeFakeAstNode<FakeMember>({ $type: 'TypeOne', name: member.name, $container: copy, $containerProperty: 'members' })
+      );
+      (copy as { $document?: unknown }).$document = document;
+
+      expect(provider.scopeFor(copy.members) === provider.scopeFor(copy.members)).toBe(false);
+      expect(provider.scopeFor(copy.members).getElement('one')?.name).toBe('one');
+   });
+
+   it('builds a scope per call when an outer scope is passed', () => {
+      const { container, document } = makeContainer();
+      const provider = probe(ProbeScopeProvider);
+      rebuild(document);
+      const outer = provider.scopeFor([]);
+
+      expect(provider.scopeFor(container.members, outer) === provider.scopeFor(container.members, outer)).toBe(false);
    });
 });

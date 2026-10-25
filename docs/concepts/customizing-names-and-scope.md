@@ -120,6 +120,10 @@ Langium's linker and scopes use, returns the project-qualified one.
 - To pick another level, subclass `DefaultNameProvider` and override `getName`
   or one of the level methods.
 
+A name must come from the node's own text: one computed through a reference
+to another document is not recomputed when that document changes, unless the
+document builder's `refreshCrossDocumentComputedScopes` option is set.
+
 order-flow keeps the default: its projects do not qualify names, so the
 project-qualified name is already what its files write.
 
@@ -197,7 +201,9 @@ so you compute the candidates against a resolved target. This is safe only if
 your references depend one way (`.layout` → `.process` → `.domain`); a cycle
 would not terminate. Build the narrowed scope with `createScopeForNodes` and no
 outer scope, so that `Order.nosuchfield` fails rather than finds a same-named
-field on an unrelated type.
+field on an unrelated type. Pass the container's own list, such as
+`entity.fields`, rather than a copy: the scope for that list is built once per
+build, where a new list costs a scope per reference.
 
 **A reference that resolves is not the same as one that is scoped.** If a
 reference's meaning depends on another, the default scope will usually still
