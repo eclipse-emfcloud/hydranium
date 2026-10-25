@@ -39,6 +39,7 @@ export const QUERY_HELP: readonly string[] = [
    'Usage: hydranium-cli query --server "<cmd> [args...]" --uri <uri> [--cwd <dir>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    'Print the data-server document envelope for `<uri>` as a single JSON line.',
+   'Fails when the server holds no document at `<uri>`.',
    '',
    'Options:',
    '  --server "<cmd>"   Command-line for the data-server subprocess (required).',

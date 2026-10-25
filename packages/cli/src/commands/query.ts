@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { TransferElement } from '@hydranium/protocol';
+import { TransferDocument, type TransferElement } from '@hydranium/protocol';
 import type { DataServerProtocol } from '@hydranium/protocol/data';
 import { logEnv, type LogOptions } from '../log-level.js';
 import { withDataServer } from '../spawn-data-server.js';
@@ -17,7 +17,9 @@ import { withDataServer } from '../spawn-data-server.js';
  * current view of a document — invokes `getModelDocument({ uri })` on
  * the spawned subprocess and writes the response envelope as a single
  * JSON line. Adopters piping the output into `jq` get a complete record
- * per invocation.
+ * per invocation. A URI the server holds no document at fails the command,
+ * since the server answers it with an envelope of the URI alone, which a
+ * script would read as a document.
  *
  * Test-only `__proxyForTest` bypasses the spawn for unit tests; the
  * production CLI never passes it.
@@ -37,7 +39,7 @@ export async function runQuery(options: QueryCommandOptions): Promise<void> {
    if (options.__proxyForTest) {
       // One-shot, unsubscribed read — request validation so the dumped envelope carries diagnostics.
       const doc = await options.__proxyForTest.getModelDocument({ uri: options.uri, includeDiagnostics: true });
-      write(`${JSON.stringify(doc)}\n`);
+      write(`${JSON.stringify(TransferDocument.assertLoaded(doc))}\n`);
       return;
    }
 
@@ -50,7 +52,7 @@ export async function runQuery(options: QueryCommandOptions): Promise<void> {
       },
       async server => {
          const doc = await server.getModelDocument({ uri: options.uri, includeDiagnostics: true });
-         write(`${JSON.stringify(doc)}\n`);
+         write(`${JSON.stringify(TransferDocument.assertLoaded(doc))}\n`);
       }
    );
 }

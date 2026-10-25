@@ -36,7 +36,7 @@ describe('collectValidationResult', () => {
       const documents = [
          docWith('file:///ws/a.a', [
             diagnostic(DiagnosticSeverity.Error, 'boom', range(2, 4), { code: 'no-boom', source: 'integrity' }),
-            diagnostic(DiagnosticSeverity.Warning, 'careful', range(0, 0))
+            diagnostic(DiagnosticSeverity.Warning, 'careful', range(3, 0))
          ]),
          docWith('file:///ws/b.a', [
             diagnostic(DiagnosticSeverity.Information, 'fyi', range(1, 1)),
@@ -60,6 +60,29 @@ describe('collectValidationResult', () => {
       // Findings stay grouped by document, in build order.
       expect(result.findings.map(finding => finding.uri)).toEqual(['a.a', 'a.a', 'b.a', 'b.a']);
       expect(result.findings.map(finding => finding.severity)).toEqual(['error', 'warning', 'info', 'hint']);
+   });
+
+   it('orders the findings of a document by position, keeping the phase order of one position', () => {
+      // Langium appends phase after phase, so a linker error above a parser error arrives after it.
+      const documents = [
+         docWith('file:///ws/a.a', [
+            diagnostic(DiagnosticSeverity.Error, 'parser', range(4, 2)),
+            diagnostic(DiagnosticSeverity.Error, 'first at 1:5', range(1, 5)),
+            diagnostic(DiagnosticSeverity.Error, 'linker', range(1, 0)),
+            diagnostic(DiagnosticSeverity.Warning, 'second at 1:5', range(1, 5))
+         ]),
+         docWith('file:///ws/b.a', [diagnostic(DiagnosticSeverity.Error, 'other file', range(0, 0))])
+      ];
+
+      const result = collectValidationResult(documents, basename);
+
+      expect(result.findings.map(finding => [finding.uri, finding.message])).toEqual([
+         ['a.a', 'linker'],
+         ['a.a', 'first at 1:5'],
+         ['a.a', 'second at 1:5'],
+         ['a.a', 'parser'],
+         ['b.a', 'other file']
+      ]);
    });
 
    it('treats an omitted severity as an error so a rule that forgets one still blocks the gate', () => {
