@@ -14,6 +14,7 @@ import {
 } from '@hydranium/langium/lsp';
 import { HydraniumDocumentUpdateHandler } from './hydranium-document-update-handler.js';
 import { guardDiagnosticsConnection } from './diagnostics-connection.js';
+import { guardEditRequests } from './edit-requests-guard.js';
 import { installConsoleTee } from '../langium/diagnostics/console-tee.js';
 
 /**
@@ -59,20 +60,22 @@ export function assertLspHeadComposed(services: LangiumSharedServices): void {
 
 /**
  * The framework's LSP server entry point: {@link assertLspHeadComposed}, then
- * {@link guardDiagnosticsConnection} on the tree's connection, then the
- * console's wrapping for the log file, then Langium's `startLanguageServer`.
- * Signature-compatible with Langium's, so it is a drop-in for adopters
- * importing from `@hydranium/core/lsp`. Calling Langium's directly skips the
- * composition check, the guard without which a publish racing teardown fails
- * the build that validated the document, and the wrapping, which a stdio
- * connection discards where a logger was built before it (see
- * `installConsoleTee`).
+ * {@link guardDiagnosticsConnection} and {@link guardEditRequests} on the
+ * tree's connection, then the console's wrapping for the log file, then
+ * Langium's `startLanguageServer`. Signature-compatible with Langium's, so it
+ * is a drop-in for adopters importing from `@hydranium/core/lsp`. Calling
+ * Langium's directly skips the composition check, the guard without which a
+ * publish racing teardown fails the build that validated the document, the
+ * guard without which an edit lands on text the editor does not hold, and the
+ * wrapping, which a stdio connection discards where a logger was built before
+ * it (see `installConsoleTee`).
  */
 export function startLanguageServer(services: LangiumSharedServices, serviceRequirements: Partial<ServiceRequirements> = {}): void {
    assertLspHeadComposed(services);
    const connection = services.lsp.Connection;
    if (connection) {
       guardDiagnosticsConnection(connection);
+      guardEditRequests(connection, services);
    }
    installConsoleTee();
    startLangiumLanguageServer(services, serviceRequirements);

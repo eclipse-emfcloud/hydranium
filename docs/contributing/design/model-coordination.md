@@ -31,6 +31,13 @@ document lifecycle to several clients:
   of those pushes apart from its own edits. While the editor holds older text
   than the parse, semantic token requests answer `ContentModified`, as tokens
   carry no text version and the editor would apply them to the text it holds.
+  For the same reason, a request whose answer edits a document answers
+  `ContentModified` when it arrives while its editor holds older text than the
+  store, or when a document the answer edits changes while it is computed,
+  other than by the editor's own typing. Read-only answers are not refused,
+  since a refusal would blank them, and edits that arrive by a resolve
+  request, a file operation, `willSaveWaitUntil`, an inlay hint or a command's
+  `workspace/applyEdit` are not checked.
 - **A successful update changes shared memory only**; the caller's `save`
   persists it. The one other disk writer is an integrity repair, routed as
   [How an integrity repair is

@@ -11,6 +11,7 @@ export * from './completion/hydranium-completion-provider.js';
 export * from './lsp-latency.js';
 export * from './connection-features.js';
 export * from './diagnostics-connection.js';
+export * from './edit-requests-guard.js';
 export * from './semantic-token-provider.js';
 export * from './language-module.js';
 export * from './shared-module.js';
@@ -22,6 +23,6 @@ export * from './save-text-document.js';
  * head: framework overrides + the start function live behind one
  * `@hydranium/core/lsp` subpath, mirroring Langium's own `langium/lsp`
  * convention. Signature-compatible with Langium's `startLanguageServer`, plus
- * a guard that the head's shared module was composed.
+ * the composition check and the connection guards listed in its doc.
  */
 export * from './start-language-server.js';
