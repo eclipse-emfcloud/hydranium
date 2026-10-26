@@ -417,6 +417,7 @@ describe('planInitFiles', () => {
       expect(files.map(file => file.path).sort()).toEqual(
          [
             '.gitignore',
+            '.nvmrc',
             'package.json',
             'protocol/.gitignore',
             'protocol/README.md',
@@ -771,13 +772,19 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      expect(captured?.files).toHaveLength(32);
+      expect(captured?.files).toHaveLength(33);
       // `path.join`, not a literal: the target is produced by `path.resolve`,
       // which emits the platform separator, so a hardcoded `/` asserts nothing
       // on Windows beyond the separator itself.
       expect(captured?.targetDir.endsWith(path.join('out', 'bookstore'))).toBe(true);
       const output = lines.join('');
-      expect(output).toContain('Scaffolded Bookstore (32 files, heads: lsp,data, 1 grammar(s): Bookstore)');
+      expect(output).toContain('Scaffolded Bookstore (33 files, heads: lsp,data, 1 grammar(s): Bookstore)');
+      // The `.nvmrc` Node, before anything runs `langium generate`. A comment,
+      // not a command: a pasted block must run without nvm.
+      const nodeLine = '  # on Node 22, which .nvmrc names. With nvm: nvm install 22, then nvm use 22\n';
+      expect(output.indexOf(nodeLine)).toBeGreaterThan(-1);
+      expect(output.indexOf(nodeLine)).toBeLessThan(output.indexOf('  npm install'));
+      expect(output).not.toMatch(/^ {2}nvm /m);
       expect(output).toContain('npm run build');
       expect(output).toContain('npm test');
       // `npx`, not a bare invocation: the scaffold installs `@hydranium/cli` as a
@@ -798,10 +805,10 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      // 32 single-grammar files + two further grammars, their serializers and checks,
+      // 33 single-grammar files + two further grammars, their serializers and checks,
       // the shared fragment and two starter files each.
-      expect(captured?.files).toHaveLength(43);
-      expect(lines.join('')).toContain('Scaffolded OrderFlow (43 files, heads: lsp,data, 3 grammar(s): Domain, Process, Layout)');
+      expect(captured?.files).toHaveLength(44);
+      expect(lines.join('')).toContain('Scaffolded OrderFlow (44 files, heads: lsp,data, 3 grammar(s): Domain, Process, Layout)');
    });
 
    it('names the diagram grammar and the head set for a three-head scaffold', () => {
@@ -817,11 +824,11 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      // 43 multi-grammar files + the ten for the one diagram: eight in the
+      // 44 multi-grammar files + the ten for the one diagram: eight in the
       // server, its test, and its ids in protocol; + the client package's six.
-      expect(captured?.files).toHaveLength(59);
+      expect(captured?.files).toHaveLength(60);
       expect(lines.join('')).toContain(
-         'Scaffolded OrderFlow (59 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
+         'Scaffolded OrderFlow (60 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
       );
    });
 });
@@ -1252,7 +1259,7 @@ describe('planInitFiles with hosts', () => {
          __writeFilesForTest: () => undefined
       });
       const output = lines.join('');
-      expect(output).toContain('npm --prefix host-vscode start');
+      expect(output).toContain('npm run start:vscode');
       expect(output).toContain('npm --prefix host-vscode run test:e2e');
    });
 
@@ -1268,7 +1275,8 @@ describe('planInitFiles with hosts', () => {
       });
       const output = lines.join('');
       expect(output).toContain('npm --prefix host-theia-browser run test:e2e');
-      expect(output).toContain('npm --prefix host-theia-electron start');
+      expect(output).toContain('npm run start:theia-browser');
+      expect(output).toContain('npm run start:theia-electron');
       expect(output).toContain('npm --prefix host-theia-electron run test:e2e');
    });
 
@@ -1288,13 +1296,18 @@ describe('planInitFiles with hosts', () => {
       expect(output).toContain('npm --prefix host-browser run test:e2e');
    });
 
-   it('gives the root a `start:browser` script only with a browser host', () => {
-      const scripts = (hosts: InitHost[]): unknown =>
+   it('gives the root a `start:<host>` script for each scaffolded host', () => {
+      const scripts = (hosts: InitHost[]): Record<string, string> =>
          JSON.parse(
             contentOf(planInitFiles(resolveInitComposition('Bookstore', undefined, ['lsp'], undefined, hosts)), 'package.json') ?? '{}'
-         ).scripts['start:browser'];
-      expect(scripts(['browser'])).toBe('npm --prefix host-browser start');
-      expect(scripts([])).toBeUndefined();
+         ).scripts;
+      expect(scripts(['browser', 'vscode', 'theia-browser', 'theia-electron'])).toMatchObject({
+         'start:browser': 'npm --prefix host-browser start',
+         'start:vscode': 'npm --prefix host-vscode start',
+         'start:theia-browser': 'npm --prefix host-theia-browser start',
+         'start:theia-electron': 'npm --prefix host-theia-electron start'
+      });
+      expect(Object.keys(scripts([])).filter(name => name.startsWith('start:'))).toEqual([]);
    });
 
    it('watches every non-host member from the root, and each host only in its own `watch:<host>`', () => {
@@ -1565,6 +1578,15 @@ describe('runInit --monorepo', () => {
    function contentOf(files: readonly InitFile[], filePath: string): string | undefined {
       return files.find(file => file.path === filePath)?.content;
    }
+
+   it('emits no `.nvmrc`, prints no `nvm` step and starts each host by `--prefix`', () => {
+      const { files, output } = scaffold({ hosts: ['vscode', 'theia-browser', 'theia-electron'] });
+      expect(files.map(file => file.path)).not.toContain('.nvmrc');
+      expect(output).not.toContain('nvm ');
+      for (const host of ['vscode', 'theia-browser', 'theia-electron']) {
+         expect(output).toContain(`  npm --prefix packages/bookstore/host-${host} start   #`);
+      }
+   });
 
    it('prints a build for each member the server’s build does not reach', () => {
       const { output } = scaffold({ heads: ['lsp', 'data', 'glsp'], hosts: ['browser'] });

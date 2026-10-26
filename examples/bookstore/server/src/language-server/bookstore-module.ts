@@ -22,6 +22,10 @@
 //
 // A second grammar goes in the `additionalLanguages` option of
 // `createIntegrationServices`, generated from this same `langium-config.json`.
+// With several languages, bind `lsp.configurationRoot` in
+// `BookstoreSharedModule`, or the framework warns and takes the first
+// language's id. Type that module's second `Module` argument as
+// `PartialLangiumSharedServices & { lsp: { configurationRoot: string } }`.
 
 import {
    createLspServerLanguageModule,

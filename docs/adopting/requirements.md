@@ -9,6 +9,15 @@ The packages declare this floor in `engines.node`. The Theia client packages
 are CommonJS and `require()` the ES-module heads, which Node supports
 unflagged only from 22.13.
 
+On Node 24.20 and later, `langium generate` from `langium-cli` 4.3 fails with
+`TypeError: Invalid URL`
+([tdegrunt/jsonschema#423](https://github.com/tdegrunt/jsonschema/issues/423)),
+so the scaffold's first build fails there. A standalone scaffold's `.nvmrc`
+names Node 22, and the steps `init` prints say so before `npm install`. With
+nvm, or NVM for Windows, which ignores `.nvmrc`, run `nvm install 22` and
+`nvm use 22`. Any other Node 22 installation works the same. A workspace
+member gets no `.nvmrc`, so build it on a Node below 24.20.
+
 ## npm 11.6 or newer, or `vitest` below 4.1
 
 npm before 11.6, including every npm a Node 22 release bundles, crashes on a

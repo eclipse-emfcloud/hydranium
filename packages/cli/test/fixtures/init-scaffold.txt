@@ -34,6 +34,11 @@ package.json
 node_modules/
 
 ==============================================================================
+.nvmrc
+==============================================================================
+22
+
+==============================================================================
 protocol/package.json
 ==============================================================================
 {
@@ -321,6 +326,10 @@ A Hydranium language project scaffolded by `hydranium-cli init`.
 
 ## Getting started
 
+`langium generate` fails on Node 24.20 and later with `TypeError: Invalid URL`
+([tdegrunt/jsonschema#423](https://github.com/tdegrunt/jsonschema/issues/423)),
+so build on Node 22.
+
 ```bash
 npm install
 npm run langium:generate   # generate the AST from the grammar
@@ -473,6 +482,10 @@ server/src/language-server/bookstore-module.ts
 //
 // A second grammar goes in the `additionalLanguages` option of
 // `createIntegrationServices`, generated from this same `langium-config.json`.
+// With several languages, bind `lsp.configurationRoot` in
+// `BookstoreSharedModule`, or the framework warns and takes the first
+// language's id. Type that module's second `Module` argument as
+// `PartialLangiumSharedServices & { lsp: { configurationRoot: string } }`.
 
 import {
    createLspServerLanguageModule,
