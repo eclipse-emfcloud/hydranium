@@ -1,5 +1,5 @@
 {
-  "//": "The worker-side tier (`./browser`), a second project so `lib.webworker` reaches the IndexedDB store and the worker starters alone: the rest of core keeps the base `lib: [\"ES2022\"]`, where a DOM or worker global is a compile error. `types: []` drops the repo-wide Node types for the same reason, so a Node global is a compile error here. References the main project, so `tsc -b` on this file builds both.",
+  "//": "The worker-side tier (`./browser`), a second project so `lib.webworker` reaches the IndexedDB store and the worker starters alone: the rest of core keeps the base `lib: [\"ES2022\"]`, where a DOM or worker global Node does not also declare is a compile error. `types: []` drops the repo-wide Node types for the same reason, so a Node global is a compile error here. References the main project, so `tsc -b` on this file builds both.",
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "rootDir": "src",

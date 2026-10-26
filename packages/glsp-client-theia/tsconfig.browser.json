@@ -1,0 +1,20 @@
+{
+  "//": "The frontend tier and the root barrel that re-exports it, a second project so DOM reaches them alone: the diagram widget builds its loading overlay with `document`, and the window session listens for `pagehide`/`pageshow` and reads `PageTransitionEvent.persisted`. The `./node` tier keeps the base `lib: [\"ES2022\"]`, where a DOM global Node does not also declare is a compile error. References the main project, so `tsc -b` on this file builds both.",
+  "//noUncheckedSideEffectImports": "CSS imports are bundled by webpack or esbuild; tsc cannot resolve them.",
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib",
+    "tsBuildInfoFile": "tsconfig.browser.tsbuildinfo",
+    "strictPropertyInitialization": false,
+    "lib": ["ES2022", "DOM"],
+    "noUncheckedSideEffectImports": false
+  },
+  "include": ["src/browser", "src/index.ts"],
+  "references": [
+    { "path": "./tsconfig.json" },
+    { "path": "../protocol" },
+    { "path": "../glsp-client" },
+    { "path": "../client-theia" }
+  ]
+}

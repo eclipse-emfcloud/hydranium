@@ -26,14 +26,14 @@
 //
 // DOM-freedom is a SEPARATE and NARROWER claim, and this gate does not test it:
 // it comes from `lib: ["ES2022"]` (no DOM) in tsconfig.base.json, so it holds
-// only for the gated entries whose package inherits that `lib`. A Theia-host
-// package whose `./browser` tier genuinely renders raises the grant
-// package-wide, which lifts the ban off its neutral entries too — so the DOM
-// half is reported per entry from the tsconfigs (`domBannedFor`) rather than
-// claimed for all of them.
+// only for the gated entries whose project inherits that `lib`. A tier that
+// genuinely renders raises the grant for the project compiling it, which is
+// package-wide unless the tier is a second project — so the DOM half is
+// reported per entry from the project that compiles it (`domBannedFor`)
+// rather than claimed for all of them.
 
 import { build, type BuildFailure } from 'esbuild';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { builtinModules } from 'node:module';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
@@ -53,15 +53,35 @@ function packageOf(entry: string): string {
 }
 
 /**
- * Whether DOM globals are compile-errors in a package, read from its tsconfig
+ * The tsconfig that compiles a gated entry: the package's second project,
+ * `tsconfig.browser.json`, when its `include` lists the entry's source or a
+ * directory above it, else `tsconfig.json`. Throws when the derived source does
+ * not exist, since falling back would report the entry as DOM-banned unchecked.
+ */
+function projectOf(entry: string): string {
+   const pkg = packageOf(entry);
+   const source = entry
+      .slice(pkg.length + 1)
+      .replace(/^lib\//, 'src/')
+      .replace(/\.js$/, '.ts');
+   if (!existsSync(resolve(repoRoot, pkg, source))) {
+      throw new Error(`${entry}: no source at ${pkg}/${source}, so the project compiling it is unknown.`);
+   }
+   const second = resolve(repoRoot, pkg, 'tsconfig.browser.json');
+   const include = existsSync(second) ? ((JSON.parse(readFileSync(second, 'utf8')) as { include?: string[] }).include ?? []) : [];
+   return include.some(path => source === path || source.startsWith(`${path}/`)) ? second : resolve(repoRoot, pkg, 'tsconfig.json');
+}
+
+/**
+ * Whether DOM globals are compile-errors in a project, read from its tsconfig
  * rather than assumed from the base. Absent `lib` means it inherits
  * `tsconfig.base.json`'s DOM-free one; present `lib` decides on its own.
  * `JSON.parse` is safe because no package tsconfig carries comments — a `lib`
  * naming DOM would otherwise be reported as banned, which is the direction that
  * lies.
  */
-function domBannedFor(pkg: string): boolean {
-   const tsconfig = JSON.parse(readFileSync(resolve(repoRoot, pkg, 'tsconfig.json'), 'utf8')) as { compilerOptions?: { lib?: string[] } };
+function domBannedFor(project: string): boolean {
+   const tsconfig = JSON.parse(readFileSync(project, 'utf8')) as { compilerOptions?: { lib?: string[] } };
    const lib = tsconfig.compilerOptions?.lib;
    return lib === undefined || !lib.some(entry => /^dom(\.|$)/i.test(entry));
 }
@@ -498,15 +518,15 @@ if (failed) {
 // cover all of them, so it is derived and named rather than asserted — an
 // enumeration written here would read as universal the moment a package changed
 // its `lib`.
-const domGranted = [...new Set(TARGETS.map(target => packageOf(target.entry)))].filter(pkg => !domBannedFor(pkg));
+const exempt = TARGETS.filter(target => !domBannedFor(projectOf(target.entry)));
 console.log(`\nEvery one of the ${TARGETS.length} gated entries is neutral in the direction this gate tests: no node: imports.`);
-if (domGranted.length === 0) {
-   console.log('DOM is compile-banned for all of them (every package inherits `lib: ["ES2022"]`).');
+if (exempt.length === 0) {
+   console.log('DOM is compile-banned for all of them (every project inherits `lib: ["ES2022"]`).');
 } else {
-   const exempt = TARGETS.filter(target => domGranted.includes(packageOf(target.entry)));
+   const domGranted = [...new Set(exempt.map(target => packageOf(target.entry)))];
    console.log(
       `DOM is compile-banned for ${TARGETS.length - exempt.length} of them. NOT for the ${exempt.length} entries of ` +
-         `${domGranted.join(', ')}, each of which raises \`lib\` package-wide because one of its tiers renders.`
+         `${domGranted.join(', ')}, each compiled by a project that raises \`lib\` because its tier renders.`
    );
 }
 console.log(

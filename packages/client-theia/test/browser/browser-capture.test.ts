@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { captureBrowserRuntime, formatBrowserRuntime } from '../../src/browser/browser-capture';
 
-type MutablePerformance = Performance & {
+type MutablePerformance = {
    measureUserAgentSpecificMemory?: unknown;
    memory?: unknown;
 };

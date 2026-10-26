@@ -1,0 +1,13 @@
+// The browser test tree's project, for the same reasons as `../tsconfig.json`:
+// those files belong to the second project, so the test tree's project
+// excludes them. `references` are restated because `extends` drops them.
+{
+  "extends": "../../tsconfig.browser.test.json",
+  "include": ["../../src/browser", "../../src/index.ts", "."],
+  "references": [
+    { "path": "../../tsconfig.json" },
+    { "path": "../../../protocol" },
+    { "path": "../../../glsp-client" },
+    { "path": "../../../client-theia" }
+  ]
+}

@@ -54,13 +54,13 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -b",
-    "clean": "rimraf lib tsconfig.tsbuildinfo",
+    "build": "tsc -b tsconfig.browser.json",
+    "clean": "rimraf lib tsconfig.tsbuildinfo tsconfig.browser.tsbuildinfo",
     "lint": "oxlint --format stylish --config ../../oxlint.config.cjs src test --max-warnings 0",
     "prepack": "node -e \"const m=require('./package.json'),fs=require('node:fs');const missing=[m.main,...Object.values(m.bin||{})].filter(entry=>entry&&!fs.existsSync(entry));if(missing.length){console.error('prepack '+m.name+': not built ('+missing.join(', ')+' missing). Run the build before packing: a files entry that matches nothing is skipped silently, so the tarball would ship src only.');process.exit(1);}\"",
     "test": "npm run typecheck:test && vitest run",
-    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
-    "watch": "tsc -b -w --preserveWatchOutput"
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p tsconfig.browser.test.json",
+    "watch": "tsc -b tsconfig.browser.json -w --preserveWatchOutput"
   },
   "devDependencies": {
     "@eclipse-glsp/client": "2.7.0",

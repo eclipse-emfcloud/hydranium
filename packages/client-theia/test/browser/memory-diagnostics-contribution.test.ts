@@ -344,7 +344,7 @@ describe('MemoryDiagnosticsContribution', () => {
    });
 
    it('dumpFrontendState uses the precise memory API when available', async () => {
-      const perf = globalThis.performance as Performance & { measureUserAgentSpecificMemory?: unknown };
+      const perf = globalThis.performance as { measureUserAgentSpecificMemory?: unknown };
       perf.measureUserAgentSpecificMemory = async () => ({ bytes: 3 * 1024 * 1024, breakdown: [] });
       try {
          const { contribution, channels, messages } = makeContribution({});
