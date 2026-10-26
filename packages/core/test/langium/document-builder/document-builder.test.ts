@@ -807,6 +807,68 @@ describe('HydraniumDocumentBuilder', () => {
       });
    });
 
+   describe('awaitBuilderState', () => {
+      class PhaseBuilder extends HydraniumDocumentBuilder {
+         constructor() {
+            super(makeStubServices(makeNoopLogger()), { logLevel: 'off' });
+         }
+         /** Carry one document from `Linked` through the `IndexedReferences` phase. */
+         indexReferences(cancelToken = CancellationToken.None): Promise<void> {
+            const document = {
+               uri: URI.parse('file:///a.x'),
+               state: DocumentState.Linked,
+               textDocument: { version: 0 }
+            } as unknown as LangiumDocument;
+            return this.runCancelable([document], DocumentState.IndexedReferences, cancelToken, () => undefined);
+         }
+         /** Run a build over no documents: every phase, and no `onBuildPhase` notification. */
+         completeBuild(): Promise<void> {
+            return this.buildDocuments([], {}, CancellationToken.None);
+         }
+      }
+      const settled = (wait: Promise<void> | undefined): Promise<unknown> => Promise.race([wait, Promise.resolve('pending')]);
+
+      it('resolves a wait armed while the phase notifies its listeners, and not one for a later phase', async () => {
+         const builder = new PhaseBuilder();
+         const waits: Array<Promise<void>> = [];
+         builder.onBuildPhase(DocumentState.IndexedReferences, () => {
+            waits.push(builder.waitUntil(DocumentState.IndexedReferences), builder.waitUntil(DocumentState.Validated));
+         });
+
+         await builder.indexReferences();
+         expect(await Promise.all(waits.map(settled))).toEqual([undefined, 'pending']);
+      });
+
+      it('resolves a wait on a phase no document reached', async () => {
+         const builder = new PhaseBuilder();
+         const wait = builder.waitUntil(DocumentState.IndexedReferences);
+
+         await builder.completeBuild();
+         expect(await settled(wait)).toBeUndefined();
+      });
+
+      it('keeps a wait through a cancelled build and resolves it in the next', async () => {
+         const builder = new PhaseBuilder();
+         const wait = builder.waitUntil(DocumentState.IndexedReferences);
+         const source = new CancellationTokenSource();
+         source.cancel();
+
+         await expect(builder.indexReferences(source.token)).rejects.toBe(OperationCancelled);
+         expect(await settled(wait)).toBe('pending');
+         await builder.indexReferences();
+         expect(await settled(wait)).toBeUndefined();
+      });
+
+      it('rejects a wait whose token is cancelled', async () => {
+         const builder = new PhaseBuilder();
+         const source = new CancellationTokenSource();
+         const wait = builder.waitUntil(DocumentState.IndexedReferences, source.token);
+
+         source.cancel();
+         await expect(wait).rejects.toBe(OperationCancelled);
+      });
+   });
+
    describe('awaitDocumentState liveness of the replaced rejection', () => {
       // Langium rejects when the workspace has already passed the requested
       // state without carrying the document along; this class waits instead,

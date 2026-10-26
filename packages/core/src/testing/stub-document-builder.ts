@@ -19,7 +19,12 @@ import {
    type WorkspaceLock
 } from '@hydranium/langium';
 import { type CancellationToken, Disposable } from 'vscode-languageserver';
-import { type BuildEndedEvent, HydraniumDocumentBuilder } from '../langium/document-builder/document-builder.js';
+import {
+   type BuildEndedEvent,
+   type BuildEndedListener,
+   type DocumentPhaseDeliveredListener,
+   HydraniumDocumentBuilder
+} from '../langium/document-builder/document-builder.js';
 
 /** Recorded call to a stubbed {@link DocumentBuilder} method. */
 export interface RecordedBuilderCall<TArgs extends unknown[]> {
@@ -156,10 +161,10 @@ function reraise(result: unknown): void {
  */
 export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocumentBuilder {
    const phaseListeners = new Map<DocumentState, DocumentPhaseListener[]>();
-   const deliveredListeners = new Map<DocumentState, Array<(document: LangiumDocument, version: number) => void>>();
+   const deliveredListeners = new Map<DocumentState, DocumentPhaseDeliveredListener[]>();
    const buildPhaseListeners = new Map<DocumentState, DocumentBuildListener[]>();
    const onUpdateListeners: DocumentUpdateListener[] = [];
-   const buildEndedListeners: Array<(event: BuildEndedEvent) => void> = [];
+   const buildEndedListeners: BuildEndedListener[] = [];
    const gates: Array<{ take(release: () => void): void }> = [];
    const updateCalls: RecordedBuilderCall<[URI[], URI[]]>[] = [];
    const waitUntilCalls: RecordedBuilderCall<[DocumentState, URI | undefined]>[] = [];
@@ -250,7 +255,7 @@ export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocu
             }
          }
       },
-      onDocumentPhaseDelivered(state: DocumentState, listener: (document: LangiumDocument, version: number) => void) {
+      onDocumentPhaseDelivered(state: DocumentState, listener: DocumentPhaseDeliveredListener) {
          const list = deliveredListeners.get(state) ?? [];
          list.push(listener);
          deliveredListeners.set(state, list);
@@ -266,7 +271,7 @@ export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocu
             reraise(listener(changed, deleted));
          }
       },
-      onBuildEnded(listener: (event: BuildEndedEvent) => void) {
+      onBuildEnded(listener: BuildEndedListener) {
          buildEndedListeners.push(listener);
          return Disposable.create(() => {
             const idx = buildEndedListeners.indexOf(listener);
