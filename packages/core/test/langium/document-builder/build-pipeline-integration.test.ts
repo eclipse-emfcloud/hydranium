@@ -9,11 +9,12 @@
 
 import { describe, expect, it } from 'vitest';
 import { Disposable } from '@hydranium/protocol';
-import { DocumentState, URI, type LangiumDocument } from '@hydranium/langium';
+import { type AstNode, DocumentState, URI, type LangiumDocument, type LocalSymbols, stream } from '@hydranium/langium';
 import { CancellationToken } from 'vscode-languageserver';
 import type { ServerSharedServices } from '../../../src/langium/module.js';
 import { DefaultBuildPipelineIntegration } from '../../../src/langium/document-builder/build-pipeline-integration.js';
 import { DefaultBuildPhasePassService } from '../../../src/langium/build-phase-pass/build-phase-pass-service.js';
+import { builtLocalSymbols } from '../../../src/langium/scope/built-local-symbols.js';
 import { makeNoopSharedServices, makeStubServiceRegistry, type NoopLanguageServicesOverrides } from '../../../src/testing/index.js';
 
 /** Real registry — integrity dispatches through it, so the routing tests exercise the true path. */
@@ -139,11 +140,22 @@ describe('BuildPipelineIntegration listener wiring', () => {
       }
    });
 
-   it('attaches AST enrichment on every useful document phase', () => {
+   it('attaches AST enrichment on every useful document phase, and the local-symbols record at ComputedScopes', () => {
       const { builder } = setup();
       for (const phase of AST_PHASES) {
-         expect(builder.documentCount(phase)).toBe(1);
+         expect(builder.documentCount(phase)).toBe(phase === DocumentState.ComputedScopes ? 2 : 1);
       }
+   });
+
+   it('records the local symbols a document holds at ComputedScopes for its root', () => {
+      const { builder } = setup();
+      const root = { $type: 'Root' } as AstNode;
+      const localSymbols: LocalSymbols = { has: () => false, getStream: () => stream([]) };
+      const document = { uri: URI.parse('file:///a.x'), parseResult: { value: root }, localSymbols } as unknown as LangiumDocument;
+
+      builder.fireDocument(DocumentState.ComputedScopes, document);
+
+      expect(builtLocalSymbols.get(root)).toBe(localSymbols);
    });
 
    it('does not attach listeners for non-useful phases', () => {

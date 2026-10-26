@@ -31,6 +31,7 @@ import {
    URI
 } from '@hydranium/langium';
 import { type HydraniumLanguageServices } from '../../../src/langium/language-module.js';
+import { builtLocalSymbols } from '../../../src/langium/scope/built-local-symbols.js';
 import { HydraniumScopeProvider } from '../../../src/langium/scope/hydranium-scope-provider.js';
 import { type TieredAstNodeDescription } from '../../../src/langium/scope/scoped-ast-node-description.js';
 import { makeFakeAstNode, makeFakeDescription, makeFakeReflection, makeNoopTracer, makeTestServices } from '../../../src/testing/index.js';
@@ -698,5 +699,51 @@ describe('HydraniumScopeProvider document-local scope', () => {
       const inChild = provider.getScope(referenceIn(child));
       expect([inChild.getElement('x')?.type, inChild.getElement('onlyOuter')?.type]).toEqual(['Inner', 'Outer']);
       expect(provider.getScope(referenceIn(root)).getElement('x')?.type).toBe('Outer');
+   });
+
+   /** A root declaring `name`, its document built to it, its symbols recorded as the build pipeline does when `recorded`. */
+   function makeBuiltTree(
+      name: string,
+      recorded: boolean
+   ): { root: AstNode; child: AstNode; document: { parseResult: { value: AstNode }; localSymbols?: LocalSymbols } } {
+      const document = {} as { parseResult: { value: AstNode }; localSymbols?: LocalSymbols };
+      const root = makeFakeAstNode({ $type: 'Root', $document: document });
+      const child = makeFakeAstNode({ $type: 'Child', $container: root });
+      document.parseResult = { value: root };
+      document.localSymbols = makeLocalSymbols(new Map([[root, [makeFakeDescription(name, { type: 'Fake' })]]]));
+      if (recorded) {
+         builtLocalSymbols.set(root, document.localSymbols);
+      }
+      return { root, child, document };
+   }
+
+   it('answers a node of a root its document replaced from the symbols recorded for that root', () => {
+      const { child, document } = makeBuiltTree('old', true);
+      const rebuilt = makeFakeAstNode({ $type: 'Root', $document: document });
+      document.parseResult = { value: rebuilt };
+      document.localSymbols = makeLocalSymbols(new Map([[rebuilt, [makeFakeDescription('new', { type: 'Fake' })]]]));
+
+      expect(provider.getScope(referenceIn(child)).getElement('old')?.name).toBe('old');
+   });
+
+   it('answers from the recorded symbols while a rebuild has cleared the document', () => {
+      const { child, document } = makeBuiltTree('kept', true);
+      document.localSymbols = undefined;
+
+      expect(provider.getScope(referenceIn(child)).getElement('kept')?.name).toBe('kept');
+   });
+
+   it("prefers the document's symbols for its current root over the recorded ones", () => {
+      const { root, child, document } = makeBuiltTree('recorded', true);
+      document.localSymbols = makeLocalSymbols(new Map([[root, [makeFakeDescription('assigned', { type: 'Fake' })]]]));
+
+      const scope = provider.getScope(referenceIn(child));
+      expect([scope.getElement('assigned')?.name, scope.getElement('recorded')]).toEqual(['assigned', undefined]);
+   });
+
+   it("falls back to the document's symbols for a root no computation recorded", () => {
+      const { child } = makeBuiltTree('unrecorded', false);
+
+      expect(provider.getScope(referenceIn(child)).getElement('unrecorded')?.name).toBe('unrecorded');
    });
 });
