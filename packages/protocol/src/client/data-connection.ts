@@ -143,6 +143,7 @@ export class DataConnection<
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>,
    TClient extends object = DataClientProtocol<TTransfer>
 > extends RpcConnection<TServer, TClient> {
+   /** Backs {@link liveSessions}, and is what {@link createSession} checks a new id against. */
    protected readonly sessions = new Set<DataSession<TTransfer, TServer>>();
    protected readonly sessionFactory: DataSessionFactory<TTransfer, TServer>;
    protected readonly createSessionEmitter = new Emitter<DataSession<TTransfer, TServer>>();

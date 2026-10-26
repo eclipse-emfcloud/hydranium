@@ -96,6 +96,7 @@ export class DataEvents<
       this.projectsChangedEmitter.fire(event);
    }
 
+   /** Drop every listener. */
    dispose(): void {
       this.documentUpdatedEmitter.dispose();
       this.documentSavedEmitter.dispose();

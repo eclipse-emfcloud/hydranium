@@ -68,6 +68,7 @@ export interface ProfileSession {
  * {@link DefaultProfileSession.closeFrame}, so a subclass has to name it too.
  */
 export interface ProfileScopeFrame {
+   /** The {@link ProfileSession.scope} id, under which frames sharing it aggregate into one record. */
    readonly id: string;
    /** Session-stopwatch reading when this scope began. */
    readonly start: number;
@@ -83,7 +84,13 @@ export interface ProfileScopeFrame {
 export class DefaultProfileSession implements ProfileSession {
    /** Single monotonic timeline for the whole session; per-scope readings are deltas off it. */
    protected readonly sessionStopwatch: Stopwatch;
+   /**
+    * The scopes in flight, innermost last. They must end innermost first:
+    * {@link closeFrame} pops the top frame whichever scope ends, so
+    * overlapping async scopes misattribute their time.
+    */
    protected readonly stack: ProfileScopeFrame[] = [];
+   /** Self-time in milliseconds per id, one sample per closed scope, which {@link records} sums. */
    protected readonly entries = new Map<string, number[]>();
 
    constructor(
@@ -122,7 +129,10 @@ export class DefaultProfileSession implements ProfileSession {
       return result;
    }
 
-   /** Pop `frame`, charge its full duration to the parent, and record its self-time. */
+   /**
+    * Pop the top frame, which is `frame` when scopes end innermost first,
+    * charge its full duration to the new top, and record its self-time.
+    */
    protected closeFrame(frame: ProfileScopeFrame): void {
       this.stack.pop();
       const duration = this.sessionStopwatch.elapsedMs - frame.start;

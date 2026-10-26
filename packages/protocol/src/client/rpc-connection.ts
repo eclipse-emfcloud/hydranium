@@ -79,7 +79,17 @@ export interface ResolvedRpcConnectionOptions<TClient extends object> {
  * and {@link RpcConnection.awaitReady}, so an override has to name it too.
  */
 export interface RpcConnectionGeneration<TServer extends object> {
+   /**
+    * The port's connection. {@link RpcConnection.currentGeneration} reports a
+    * rejection to the port. An opened one is disposed by
+    * {@link RpcConnection.dropGeneration}, and stays with the port when the
+    * generation fails its readiness check.
+    */
    readonly connection: Promise<MessageConnection>;
+   /**
+    * The proxy over {@link connection}, whose calls queue until it opens. Dead
+    * once {@link RpcConnection.dropGeneration} disposes {@link connection}.
+    */
    readonly server: RpcProxy<TServer>;
    /** Set on first use; the shared readiness gate for this generation. */
    ready?: Promise<void>;
@@ -104,12 +114,17 @@ export interface RpcConnectionGeneration<TServer extends object> {
  * call the document methods; nothing at this layer does.
  */
 export class RpcConnection<TServer extends ReadyServer, TClient extends object> {
+   /** The wire prefix of every generation's proxy, fixed for the connection's life. */
    protected readonly methodNamespace: string;
+   /** The only methods of {@link localTarget} bound for the server to call, on each new generation. */
    protected readonly clientMethods: readonly (keyof TClient & string)[];
+   /** The caller's hooks composed with the port's, so both hear each transition. */
    protected readonly lifecycle: RpcConnectionLifecycle;
    /** The current generation, or `undefined` before the first request / after a teardown. */
    protected generation?: RpcConnectionGeneration<TServer>;
+   /** Set by {@link dispose}, after which {@link assertLive} throws. */
    protected disposed = false;
+   /** Drops the generation when the port disposes. Released by {@link dispose}. */
    protected readonly portDisposeListener: { dispose(): void };
 
    constructor(
@@ -222,8 +237,10 @@ export class RpcConnection<TServer extends ReadyServer, TClient extends object> 
 
    /** Await the connection and the server's startup gate for one generation. */
    protected async awaitReady(generation: RpcConnectionGeneration<TServer>): Promise<void> {
+      let opened = false;
       try {
          await generation.connection;
+         opened = true;
          // Dropped meanwhile: writing the request would hit a closed transport.
          if (this.generation !== generation) {
             return;
@@ -244,7 +261,10 @@ export class RpcConnection<TServer extends ReadyServer, TClient extends object> 
          if (this.generation === generation) {
             this.generation = undefined;
          }
-         this.port.reportError(error, resolve(DATA_SERVER_NOT_READY, { detail: describeError(error) }));
+         // A connection that never opened is already reported as a failed connect.
+         if (opened) {
+            this.port.reportError(error, resolve(DATA_SERVER_NOT_READY, { detail: describeError(error) }));
+         }
          throw error;
       }
    }
@@ -273,6 +293,7 @@ export class RpcConnection<TServer extends ReadyServer, TClient extends object> 
       generation.connection.then(connection => connection.dispose()).catch(() => undefined);
    }
 
+   /** Throw once disposed, a plain `Error` naming the class rather than a protocol error. */
    protected assertLive(): void {
       if (this.disposed) {
          throw new Error(`${this.constructor.name} is disposed`);

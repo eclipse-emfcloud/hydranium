@@ -63,6 +63,7 @@ export interface TextState {
  * see {@link TransferElement}).
  */
 export interface TransferDocument<TTransfer extends TransferElement, TDiagnostic = TransferDiagnostic> {
+   /** Need not be spelled as the request named it. */
    uri: string;
    /**
     * Absent when the document does not exist: the server answers an unknown
@@ -116,7 +117,7 @@ export type TransferCreatedDocument<TTransfer extends TransferElement, TDiagnost
 
 /** What a watch answers, once it is in place. */
 export interface TransferWatchedDocument {
-   /** The key the watch's events name the document by, which a symlinked URI does not spell. */
+   /** The key the watch's events name the document by, which need not be the spelling the watch was asked with. */
    readonly uri: string;
    /** Whether a document exists there; one the server fails to load counts, only a missing one does not. */
    readonly exists: boolean;

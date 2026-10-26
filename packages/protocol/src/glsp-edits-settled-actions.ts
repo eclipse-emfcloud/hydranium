@@ -23,6 +23,7 @@
  * `RejectAction`, which ends the wait too.
  */
 export interface RequestEditsSettledAction {
+   /** Answered only by a server that advertises this kind. The framework's dispatcher sends none to a server that does not. */
    kind: typeof RequestEditsSettledAction.KIND;
    /** The id the response echoes as its `responseId`. Empty until the dispatcher assigns one. */
    requestId: string;
@@ -46,6 +47,7 @@ export namespace RequestEditsSettledAction {
 
 /** The server's answer to a {@link RequestEditsSettledAction}. */
 export interface EditsSettledAction {
+   /** No client handler takes this kind: the dispatcher settles the request by {@link responseId} instead. */
    kind: typeof EditsSettledAction.KIND;
    /** The `requestId` of the request this answers. The server's dispatcher sets it. */
    responseId: string;

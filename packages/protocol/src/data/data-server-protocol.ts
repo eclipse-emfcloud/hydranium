@@ -84,7 +84,8 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
     * `created`. The answer is read after the create, so it can already hold
     * another client's write or an integrity repair; a write based on
     * `created.version` then conflicts. It reaches disk with the first save.
-    * Fails when the file exists or any client has the URI open, and with a
+    * Fails when the file exists, any client has the URI open, or a lost
+    * client's unsaved text is held for it, and with a
     * `SessionClosedError` code when `args.clientId` is not a session
     * registered on this connection.
     */

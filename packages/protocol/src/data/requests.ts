@@ -114,6 +114,10 @@ export interface CreateModelDocumentArgs {
 export interface TransferUpdateDocumentsArgs<TTransfer> {
    /** The id of a live session registered on this connection. */
    clientId: string;
+   /**
+    * One entry per document: a set naming one twice, by any spellings that
+    * share its canonical URI, is refused.
+    */
    updates: Omit<TransferUpdateDocumentArgs<TTransfer>, 'clientId'>[];
 }
 
@@ -130,6 +134,7 @@ export interface TransferUpdateDocumentsArgs<TTransfer> {
  * `clientId`).
  */
 export interface WatchModelDocumentArgs {
+   /** Any spelling that the document URI policy maps to the document. */
    uri: string;
    /** Stable identifier for the watching client. */
    clientId: string;

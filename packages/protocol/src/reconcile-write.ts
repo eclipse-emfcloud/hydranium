@@ -35,6 +35,7 @@ export interface ReconcileWriteHooks<TModel> {
    refetch(): Promise<VersionedModel<TModel> | undefined>;
    /** The last in-sync model the user's intent is measured against. */
    readonly base: TModel;
+   /** Asked for each conflict while writes remain. Its refetch callback runs {@link refetch} only when called. */
    readonly conflictResolver: ConflictResolver;
    /** Writes, the first included, after which a still-conflicting edit is dropped; 3 when absent. */
    readonly maxWrites?: number;
@@ -59,7 +60,9 @@ export type ReconcileWriteOutcome =
          * {@link ReconcileWriteHooks.onUnavailable} ran.
          */
         readonly status: 'merged' | 'already-applied' | 'unchanged' | 'conflict' | 'dropped' | 'unavailable';
+        /** The last conflict a write raised, which on `merged` is the one before the write that landed. */
         readonly conflict: ConflictError;
+        /** Writes made, the first included. `dropped` is reported once they reach {@link ReconcileWriteHooks.maxWrites}. */
         readonly writes: number;
      };
 
