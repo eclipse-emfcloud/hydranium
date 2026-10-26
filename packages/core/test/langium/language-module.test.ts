@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { Disposable } from '@hydranium/protocol';
-import type { AstNode, LangiumCoreServices } from '@hydranium/langium';
+import type { AstNode, AstNodeLocator, LangiumCoreServices } from '@hydranium/langium';
 import type { LangiumServices } from '@hydranium/langium/lsp';
 import { createServerLanguageModule, type HydraniumLanguageServices } from '../../src/langium/language-module.js';
 import type { ServerModuleContext } from '../../src/langium/module.js';
@@ -17,6 +17,7 @@ import { DefaultElementKeyProvider } from '../../src/langium/keys/default-elemen
 import { type ElementKeyProvider } from '../../src/langium/keys/element-key-provider.js';
 import { DefaultNameProvider, type NameProvider } from '../../src/langium/naming/name-provider.js';
 import type { Serializer } from '../../src/langium/serialization/serializer.js';
+import { HydraniumAstNodeLocator } from '../../src/langium/workspace/ast-node-locator.js';
 import { makeNoopTracer } from '../../src/testing/index.js';
 
 /**
@@ -32,6 +33,7 @@ interface LanguageModuleView {
       readonly NameProvider: (services: LangiumCoreServices) => NameProvider;
       readonly ElementKeyProvider: (services: LangiumCoreServices) => ElementKeyProvider;
    };
+   readonly workspace: { readonly AstNodeLocator: () => AstNodeLocator };
 }
 
 function moduleView(context: ServerModuleContext): LanguageModuleView {
@@ -114,6 +116,13 @@ describe('createServerLanguageModule', () => {
          const module = moduleView(emptyContext);
          const elementKeyProvider = module.references.ElementKeyProvider(servicesWithNameProvider());
          expect(elementKeyProvider).toBeInstanceOf(DefaultElementKeyProvider);
+      });
+   });
+
+   describe('workspace.AstNodeLocator default binding', () => {
+      it('binds a HydraniumAstNodeLocator', () => {
+         const module = moduleView(emptyContext);
+         expect(module.workspace.AstNodeLocator()).toBeInstanceOf(HydraniumAstNodeLocator);
       });
    });
 });

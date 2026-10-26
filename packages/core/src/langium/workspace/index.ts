@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+export * from './ast-node-locator.js';
 export * from './document-uri-policy.js';
 export * from './file-system-provider.js';
 export * from './in-memory-file-system-provider.js';
