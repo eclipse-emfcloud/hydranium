@@ -617,6 +617,55 @@ describe('YamlSerializer', () => {
          };
          expect(await serializer.serializeAst(node as never)).toBe('items:\n  - name: "x"\n  - name: "y"');
       });
+
+      // Formats every primitive and reference asynchronously, to cover the array helpers' async tails.
+      class AsyncValues extends YamlSerializer {
+         protected override formatPrimitive(value: unknown): Promise<string> {
+            return Promise.resolve(super.formatPrimitive(value) as string);
+         }
+         protected override formatReferenceValue(value: string): Promise<string> {
+            return Promise.resolve(super.formatReferenceValue(value) as string);
+         }
+      }
+
+      describe.each([
+         ['sync', YamlSerializer],
+         ['async', AsyncValues]
+      ])('list item alignment with %s formatting', (_mode, Serializer) => {
+         it.each([
+            [1, 'entity:\n attributes:\n   - id: "a"\n     name: "A"\n     tags:\n       - value: "t"\n refs:\n   - "x"'],
+            [2, 'entity:\n  attributes:\n    - id: "a"\n      name: "A"\n      tags:\n        - value: "t"\n  refs:\n    - "x"'],
+            [
+               3,
+               'entity:\n   attributes:\n       - id: "a"\n         name: "A"\n         tags:\n             - value: "t"\n   refs:\n       - "x"'
+            ],
+            [
+               4,
+               'entity:\n    attributes:\n      - id: "a"\n        name: "A"\n        tags:\n          - value: "t"\n    refs:\n      - "x"'
+            ]
+         ])('aligns every property of a list item with indentationAmount %i', async (indentationAmount, expected) => {
+            const serializer = buildYaml(Serializer, {
+               reflection: makeFakeReflection({ Root: {}, Entity: { refs: { referenceType: 'Entity' } }, Attribute: {}, Tag: {} }),
+               propertyOrder: new Map([
+                  ['Root', ['entity']],
+                  ['Entity', ['attributes', 'refs']],
+                  ['Attribute', ['id', 'name', 'tags']],
+                  ['Tag', ['value']]
+               ]),
+               indentationAmount
+            });
+
+            const attribute = { $type: 'Attribute', id: 'a', name: 'A', tags: [{ $type: 'Tag', value: 't' }] };
+            const node = { $type: 'Root', entity: { $type: 'Entity', attributes: [attribute], refs: ['x'] } };
+            expect(await serializer.serializeAst(node as never)).toBe(expected);
+         });
+      });
+
+      it.each([0, -1, 1.5])('rejects indentationAmount %d', indentationAmount => {
+         expect(() => buildYaml(YamlSerializer, { reflection: makeFakeReflection({}), indentationAmount })).toThrow(
+            'indentationAmount must be a positive integer'
+         );
+      });
    });
 
    describe('optional option maps omitted', () => {

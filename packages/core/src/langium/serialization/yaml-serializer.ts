@@ -118,6 +118,9 @@ export class YamlSerializer<TAst extends AstNode = AstNode, TTransfer extends Tr
       this.newlineChar = options.newlineChar ?? YamlSerializer.DEFAULT_NEWLINE_CHAR;
       this.indentationChar = options.indentationChar ?? YamlSerializer.DEFAULT_INDENTATION_CHAR;
       this.indentationAmount = options.indentationAmount ?? YamlSerializer.DEFAULT_INDENTATION_AMOUNT;
+      if (!Number.isInteger(this.indentationAmount) || this.indentationAmount < 1) {
+         throw new Error(`[hydranium] YamlSerializer indentationAmount must be a positive integer, got ${this.indentationAmount}.`);
+      }
       this.typeSpecificKeywords = options.typeSpecificKeywords ?? YamlSerializer.DEFAULT_TYPE_SPECIFIC_KEYWORDS;
    }
 
@@ -262,11 +265,11 @@ export class YamlSerializer<TAst extends AstNode = AstNode, TTransfer extends Tr
          if (isPromiseLike(maybe)) {
             const resumeAt = i + 1;
             return maybe.then(formatted => {
-               lines.push(this.indent(`  - ${formatted}`, indentationLevel - 1));
+               lines.push(this.arrayItemLine(formatted, indentationLevel));
                return this.collectReferenceArrayLines(items, indentationLevel, lines, resumeAt);
             });
          }
-         lines.push(this.indent(`  - ${maybe}`, indentationLevel - 1));
+         lines.push(this.arrayItemLine(maybe, indentationLevel));
       }
       return lines.join(this.newlineChar);
    }
@@ -290,7 +293,7 @@ export class YamlSerializer<TAst extends AstNode = AstNode, TTransfer extends Tr
          if (item === undefined) {
             continue;
          }
-         const maybe = this.serializePropertyValue(nodeType, key, item, indentationLevel, /* isArrayElement */ true);
+         const maybe = this.serializePropertyValue(nodeType, key, item, this.arrayItemLevel(indentationLevel), /* isArrayElement */ true);
          if (isPromiseLike(maybe)) {
             const resumeAt = i + 1;
             return maybe.then(serialized => {
@@ -307,7 +310,22 @@ export class YamlSerializer<TAst extends AstNode = AstNode, TTransfer extends Tr
       if (serialized === undefined) {
          return;
       }
-      lines.push(this.indent(`  - ${serialized}`, indentationLevel - 1));
+      lines.push(this.arrayItemLine(serialized, indentationLevel));
+   }
+
+   /**
+    * Level an array item's properties sit at: the first level at least four columns
+    * right of the array's key, so `- ` fits under the key and every property of the
+    * item starts at one column. Columns count {@link indentationChar} as one.
+    */
+   protected arrayItemLevel(indentationLevel: number): number {
+      return indentationLevel - 1 + Math.ceil(4 / this.indentationAmount);
+   }
+
+   /** Prefix an array item with `- `, placed so the item's content starts at {@link arrayItemLevel}. */
+   protected arrayItemLine(text: string, indentationLevel: number): string {
+      const column = this.arrayItemLevel(indentationLevel) * this.indentationAmount - '- '.length;
+      return `${this.indentationChar.repeat(column)}- ${text}`;
    }
 
    /**
