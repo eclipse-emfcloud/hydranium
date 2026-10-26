@@ -86,6 +86,16 @@ const LANGIUM_GRAMMAR_TYPES = [
    'StringLiteral'
 ];
 
+// Own fields every description payload has, as a literal or a class instance;
+// the segments are left out because a class may expose them as prototype getters.
+const isDescriptionPayload = props => has(props, 'name', 'type', 'documentUri', 'path');
+
+// The payload carries `type` = the described node's element kind. Labelled
+// `AstNodeDescription:base:<kind>` so it nests under the description family: L2
+// `base` aggregates all payloads (alongside the L2 scope-wrapper layers), L3
+// `<kind>` is the per-element-kind split.
+const descriptionPayloadLabel = node => `AstNodeDescription:base:${stringProp(node, 'type') ?? 'unknown'}`;
+
 /** @type {import('./concepts.mjs').ConceptClassifier} */
 export const langiumClassifier = {
    classify(node) {
@@ -115,6 +125,16 @@ export const langiumClassifier = {
             }
             return `CST:${cstRole}`;
          }
+         // Index manager is an attribution anchor but keeps its real name; Map/MultiMap
+         // stay their own names too (referrer edges show which are the scope index).
+         if (name.endsWith('IndexManager') || name === 'MultiMap' || name === 'Map') {
+            return name;
+         }
+         // A description built as a class instance carries the base payload's
+         // own fields; label it like the literal payload, whatever its class name.
+         if (isDescriptionPayload(propertySet(node))) {
+            return descriptionPayloadLabel(node);
+         }
          // Any class whose name ends in AstNodeDescription is a description wrapper;
          // the prefix is the scope layer (Local, Global, ...). Labelled
          // `AstNodeDescription:<layer>` so it nests under the description family at
@@ -122,11 +142,6 @@ export const langiumClassifier = {
          if (name.endsWith('AstNodeDescription')) {
             const layer = name.slice(0, -'AstNodeDescription'.length) || 'base';
             return `AstNodeDescription:${layer}`;
-         }
-         // Index manager is an attribution anchor but keeps its real name; Map/MultiMap
-         // stay their own names too (referrer edges show which are the scope index).
-         if (name.endsWith('IndexManager') || name === 'MultiMap' || name === 'Map') {
-            return name;
          }
          return undefined; // defer (engine → class:<name>, or a later classifier)
       }
@@ -161,12 +176,8 @@ export const langiumClassifier = {
       if (has(props, 'value', 'lexerErrors', 'parserErrors')) {
          return 'ParseResult';
       }
-      if (has(props, 'name', 'nameSegment', 'documentUri', 'node', 'selectionSegment')) {
-         // The base description payload carries `type` = the described node's element
-         // kind. Labelled `AstNodeDescription:base:<kind>` so it nests under the
-         // description family: L2 `base` aggregates all payloads (alongside the L2
-         // scope-wrapper layers above), L3 `<kind>` is the per-element-kind split.
-         return `AstNodeDescription:base:${stringProp(node, 'type') ?? 'unknown'}`;
+      if (isDescriptionPayload(props)) {
+         return descriptionPayloadLabel(node);
       }
       if (has(props, '$refText', 'ref')) {
          return 'Reference';

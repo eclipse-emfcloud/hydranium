@@ -221,6 +221,11 @@ describe('CstResidencyService.rehydrateNode', () => {
       const doc = addDoc('file:///resident.a');
       expect(() => service.rehydrateNode(doc.parseResult.value)).not.toThrow();
    });
+
+   it('is a no-op for a node outside any document', () => {
+      const { service } = makeService({ strategy: { kind: 'always-keep' } });
+      expect(() => service.rehydrateNode({ $type: 'Element' })).not.toThrow();
+   });
 });
 
 describe('isCstShed', () => {
