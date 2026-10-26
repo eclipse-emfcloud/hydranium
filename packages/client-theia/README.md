@@ -50,7 +50,7 @@ This package is a library, not a Theia extension: it declares no
 - For the websocket, call `bindConnectionResilience` in a `frontendPreload`
   module and in a backend module, and `bindConnectionDiagnostics` beside the
   logger. From a normal frontend module the first call comes too late and
-  silently does nothing.
+  silently does nothing; in Electron it does nothing by design.
 - In the backend, you usually subclass a head-specific handler from
   `@hydranium/data-client-theia` or `@hydranium/glsp-client-theia` rather than
   the base here.

@@ -38,6 +38,8 @@ its own directory.
   Theia extension forwarding the data and GLSP heads, with the same command
   and the diagram editor, and the Theia browser application running it, with
   `vscode-servers/` sideloaded for the language client.
+- `host-theia-electron/`, with `--hosts theia-electron`, holds the same
+  application in Electron, running the same `theia/` extension.
 - `workspace/` holds two starter model files, one referencing the other.
 
 Three flags shape it:
@@ -49,9 +51,10 @@ Three flags shape it:
 - `--hosts` adds host applications around the heads. `browser` emits the page
   and needs the `lsp` head or the `glsp` head, which the page saves through:
   without `lsp` it has no editor and saves through the diagram. `vscode` emits
-  the two extensions and `theia-browser` the Theia extension and
-  application; both need the `lsp` head, since the language client starts the
-  server. Leave `--hosts` out for a server you connect to from your own host.
+  the two extensions, and `theia-browser` and `theia-electron` the Theia
+  extension and an application; all three need the `lsp` head, since the
+  language client starts the server. Leave `--hosts` out for a server you
+  connect to from your own host.
 - Leave `--name` off on a terminal and `init` asks instead, then prints the
   command it composed.
 
@@ -126,6 +129,17 @@ npm --prefix host-theia-browser run test:e2e
 
 The smoke test starts the application itself, on a port of its own, so
 `npm start` can keep running.
+
+Scaffolded with `--hosts theia-electron`:
+
+```bash
+npm --prefix host-theia-electron start
+npm --prefix host-theia-electron run test:e2e
+```
+
+The same application opens `workspace/` in a desktop window, and the smoke
+test launches its own window on a copy of it. On Linux without a display, run
+the test under `xvfb-run -a -s '-screen 0 1920x1080x24'`.
 
 ## Validate a model
 

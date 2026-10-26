@@ -48,7 +48,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { generateTransferModel } from '../src/commands/generate-transfer-model.js';
 import { type InitGrammarSpec, type InitHead, runInit } from '../src/commands/init.js';
-import type { InitHost } from '../src/commands/init-hosts.js';
+import { type InitHost, isTheiaHost } from '../src/commands/init-hosts.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -68,8 +68,14 @@ const CASES: readonly CompileCase[] = [
    { label: 'the single-grammar default', name: 'Bookshelf', grammars: [{ name: 'Bookshelf', extensions: ['book'] }] },
    // The largest emission: further files the other shapes never reach, the
    // client package, a browser host running every head, a VS Code host with a
-   // diagram editor and a Theia extension forwarding every head.
-   { label: 'the GLSP head', name: 'Shelf', heads: ['lsp', 'data', 'glsp'], hosts: ['browser', 'vscode', 'theia-browser'] },
+   // diagram editor, a Theia extension forwarding every head and both Theia
+   // applications.
+   {
+      label: 'the GLSP head',
+      name: 'Shelf',
+      heads: ['lsp', 'data', 'glsp'],
+      hosts: ['browser', 'vscode', 'theia-browser', 'theia-electron']
+   },
    // The only shape emitting common.langium and the additionalLanguages wiring,
    // and every host with no diagram.
    {
@@ -268,7 +274,8 @@ describe('the emitted scaffold compiles', () => {
             // `platform: 'browser'` like the page.
             const servers = path.join(targetDir, 'vscode-servers');
             const vscodeHost = path.join(targetDir, 'host-vscode');
-            expect(fs.existsSync(servers)).toBe((hosts?.includes('vscode') ?? false) || (hosts?.includes('theia-browser') ?? false));
+            const theiaHosts = (hosts ?? []).filter(isTheiaHost);
+            expect(fs.existsSync(servers)).toBe((hosts?.includes('vscode') ?? false) || theiaHosts.length > 0);
             if (fs.existsSync(servers)) {
                link(servers, protocol);
                expect(() => runTool(servers, 'typescript', 'tsc', ['-p', path.join(servers, 'tsconfig.json')])).not.toThrow();
@@ -291,15 +298,17 @@ describe('the emitted scaffold compiles', () => {
                }
             }
 
-            // The Theia extension the app loads, and the app's smoke tier.
+            // The Theia extension the apps load, and each app's smoke tier.
             const theia = path.join(targetDir, 'theia');
-            const theiaHost = path.join(targetDir, 'host-theia-browser');
-            expect(fs.existsSync(theia)).toBe(hosts?.includes('theia-browser') ?? false);
+            expect(fs.existsSync(theia)).toBe(theiaHosts.length > 0);
             if (fs.existsSync(theia)) {
                for (const member of [protocol, ...(fs.existsSync(client) ? [client] : [])]) {
                   link(theia, member);
                }
                expect(() => runTool(theia, 'typescript', 'tsc', ['-p', path.join(theia, 'tsconfig.json')])).not.toThrow();
+            }
+            for (const host of theiaHosts) {
+               const theiaHost = path.join(targetDir, `host-${host}`);
                expect(() =>
                   runTool(theiaHost, 'typescript', 'tsc', ['--noEmit', '-p', path.join(theiaHost, 'tsconfig.e2e.json')])
                ).not.toThrow();

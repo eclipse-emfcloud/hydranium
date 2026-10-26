@@ -216,10 +216,13 @@ npm exec -w @hydranium/core -- vitest                               # watch
 ### End-to-end (L5)
 
 Order-flow has one Playwright suite per host: the Theia app
-([README](../../examples/order-flow/theia-app/README.md)), the browser page
-([README](../../examples/order-flow/browser/README.md)) and the VS Code
-extension ([README](../../examples/order-flow/vscode/README.md)), which adds an
-extension-host tier on `@vscode/test-cli` for what the extension API can see.
+([README](../../examples/order-flow/theia-app/README.md)), whose specs the
+Theia Electron app also runs
+([README](../../examples/order-flow/theia-electron-app/README.md)), the
+browser page ([README](../../examples/order-flow/browser/README.md)) and the
+VS Code extension ([README](../../examples/order-flow/vscode/README.md)), which
+adds an extension-host tier on `@vscode/test-cli` for what the extension API
+can see.
 The bookstore's browser host
 ([README](../../examples/bookstore/host-browser/README.md)), VS Code host
 ([README](../../examples/bookstore/host-vscode/README.md)) and Theia

@@ -25,7 +25,7 @@ import { WebSocketConnectionSource } from '@theia/core/lib/browser/messaging/ws-
 import { Container } from '@theia/core/shared/inversify';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FramedSocketWriteBuffer } from '../../src/common/framed-socket-write-buffer';
-import { SessionAwareConnectionSource } from '../../src/browser/session-aware-connection-source';
+import { bindConnectionResilience, SessionAwareConnectionSource } from '../../src/browser/session-aware-connection-source';
 import { ACKNOWLEDGEMENT_EVENT, InboundMessageSequence } from '../../src/common/inbound-message-sequence';
 
 /**
@@ -355,5 +355,34 @@ describe.skipIf(!injectsWriteBuffer())('SessionAwareConnectionSource', () => {
 
          expect(values).toEqual([6]);
       });
+   });
+});
+
+describe.skipIf(!injectsWriteBuffer())('bindConnectionResilience', () => {
+   /** The bindings Theia's browser `messagingFrontendModule` makes, which this rebinds. */
+   function messagingContainer(): Container {
+      const container = new Container();
+      container.bind(SocketWriteBuffer).toSelf();
+      container.bind(WebSocketConnectionSource).toSelf().inSingletonScope();
+      return container;
+   }
+
+   afterEach(() => {
+      vi.unstubAllGlobals();
+   });
+
+   it('replaces the write buffer in a browser', () => {
+      const container = messagingContainer();
+
+      expect(bindConnectionResilience(container.isBound.bind(container), container.rebind.bind(container))).toBe(true);
+      expect(container.get(SocketWriteBuffer)).toBeInstanceOf(FramedSocketWriteBuffer);
+   });
+
+   it('binds nothing in Electron, whose own connection source a rebind would duplicate', () => {
+      vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 Electron/42.8.1' });
+      const container = messagingContainer();
+
+      expect(bindConnectionResilience(container.isBound.bind(container), container.rebind.bind(container))).toBe(false);
+      expect(container.get(SocketWriteBuffer)).not.toBeInstanceOf(FramedSocketWriteBuffer);
    });
 });

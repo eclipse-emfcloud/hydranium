@@ -88,6 +88,10 @@ that npm for you**: npm ignores `packageManager`, and Corepack acts on it only
 once switched on. Install it with `npm install -g npm@<that version>`. CI
 installs and asserts the same versions.
 
+The install compiles `native-keymap`, which order-flow's Electron application
+needs, so it needs a C++ toolchain and, on Linux, two development headers; see
+[A C++ toolchain for the Theia Electron host](adopting/requirements.md#a-c-toolchain-for-the-theia-electron-host).
+
 ### A standing constraint on npm lifecycle scripts
 
 Install-time lifecycle scripts must not fail: a failing workspace `prepare`

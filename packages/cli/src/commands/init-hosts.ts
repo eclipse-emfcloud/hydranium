@@ -15,7 +15,7 @@
 import type { InitHead } from './init.js';
 
 /** The hosts a scaffold can emit, in the order a workspace lists them. */
-export const INIT_HOSTS = ['browser', 'vscode', 'theia-browser'] as const;
+export const INIT_HOSTS = ['browser', 'vscode', 'theia-browser', 'theia-electron'] as const;
 
 /** One host application — see {@link INIT_HOSTS}. */
 export type InitHost = (typeof INIT_HOSTS)[number];
@@ -31,12 +31,18 @@ export type InitHost = (typeof INIT_HOSTS)[number];
 const EDITING_HEADS: Record<InitHost, readonly InitHead[]> = {
    browser: ['lsp', 'glsp'],
    vscode: ['lsp'],
-   'theia-browser': ['lsp']
+   'theia-browser': ['lsp'],
+   'theia-electron': ['lsp']
 };
 
 /** True for a string naming one of {@link INIT_HOSTS}. */
 export function isInitHost(value: string): value is InitHost {
    return (INIT_HOSTS as readonly string[]).includes(value);
+}
+
+/** True for a host that is a Theia application, which runs the Theia extension. */
+export function isTheiaHost(host: InitHost): boolean {
+   return host === 'theia-browser' || host === 'theia-electron';
 }
 
 /** The heads {@link host} needs at least one of in the composition. */

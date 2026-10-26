@@ -18,8 +18,16 @@
 
 import { forwardBrowserConsole, serverLogFixtures, type ServerLogFixtures } from '@hydranium/core/testing/playwright';
 import { expect, test as base, type Browser, type PlaywrightWorkerArgs } from '@playwright/test';
-import { type TheiaApp, TheiaAppLoader, TheiaExplorerView, TheiaView, TheiaWorkspace } from '@theia/playwright';
+import {
+   type TheiaApp,
+   TheiaAppLoader,
+   TheiaExplorerView,
+   type TheiaPlaywrightTestConfig,
+   TheiaView,
+   TheiaWorkspace
+} from '@theia/playwright';
 import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import * as path from 'node:path';
 
@@ -106,10 +114,37 @@ export const test = base.extend<OrderFlowFixtures>({
  */
 export async function loadOrderFlowApp(args: PlaywrightWorkerArgs & { browser: Browser }, overlays: string[] = []): Promise<TheiaApp> {
    const workspace = new TheiaWorkspace([WORKSPACE_SOURCE, ...overlays]);
-   const app = await TheiaAppLoader.load(args, workspace);
+   const useElectron = process.env.USE_ELECTRON === 'true' ? electronApp() : undefined;
+   const app = await TheiaAppLoader.load({ ...args, useElectron }, workspace);
    activeWorkspacePath = app.workspace.path;
    forwardBrowserConsole(app.page, activeWorkspacePath);
    return app;
+}
+
+/**
+ * The Electron application `../theia-electron-app` runs these specs against,
+ * when its config sets `USE_ELECTRON`.
+ *
+ * Each launch gets its own user data directory: Theia's Electron main holds a
+ * single-instance lock on it, so a second launch sharing one quits at once.
+ * They live in the app's `test-results/e2e`, which Playwright empties at the
+ * start of a run. Its settings folder is in there too, so a run never writes
+ * `~/.theia/settings.json`; the loader passes Electron no `env`, so it goes
+ * through this process's, as the loader's own switches do.
+ */
+function electronApp(): TheiaPlaywrightTestConfig['useElectron'] {
+   const appPath = path.resolve(import.meta.dirname, '..', '..', '..', 'theia-electron-app');
+   const profiles = path.join(appPath, 'test-results', 'e2e', 'profiles');
+   mkdirSync(profiles, { recursive: true });
+   const userDataDir = mkdtempSync(path.join(profiles, 'profile-'));
+   process.env.THEIA_CONFIG_DIR = path.join(userDataDir, 'theia-config');
+   return {
+      launchOptions: {
+         additionalArgs: ['--no-sandbox', '--no-cluster', `--user-data-dir=${userDataDir}`],
+         electronAppPath: appPath,
+         pluginsPath: path.join(appPath, 'plugins')
+      }
+   };
 }
 
 /** Class the properties widget puts on its own node; the panel's DOM root. */

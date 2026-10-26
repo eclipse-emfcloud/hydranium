@@ -491,6 +491,18 @@ jobs:
             }
             overrides[name] = target;
           }
+          // `@theia/electron` peers on one exact `electron` per release, so
+          // the workspace's own `electron` pins have to move with it.
+          if (overrides['@theia/electron']) {
+            overrides.electron = JSON.parse(
+              execFileSync(
+                'npm',
+                ['view', '@theia/electron@' + target, 'peerDependencies.electron', '--json'],
+                { encoding: 'utf8' }
+              )
+            );
+            console.log('Pinned electron to ' + overrides.electron + ', the peer of @theia/electron ' + target + '.');
+          }
           // The pre-existing overrides pin langium to an exact version for
           // single-physical-copy identity.
           // Dropping one does not fail the install; it produces a second

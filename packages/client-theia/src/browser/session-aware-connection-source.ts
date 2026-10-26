@@ -13,6 +13,7 @@ import { type Event } from '@theia/core/lib/common/event';
 import { type AbstractChannel, ForwardingChannel } from '@theia/core/lib/common/message-rpc/channel';
 import { Uint8ArrayReadBuffer, Uint8ArrayWriteBuffer } from '@theia/core/lib/common/message-rpc/uint8-array-message-buffer';
 import { ConnectionManagementMessages } from '@theia/core/lib/common/messaging/connection-management';
+import { environment } from '@theia/core/shared/@theia/application-package/lib/environment';
 import { injectable, type interfaces } from '@theia/core/shared/inversify';
 import { SocketWriteBuffer } from '@theia/core/lib/common/messaging/socket-write-buffer';
 import { type ConnectionResilienceOptions } from '../common/connection-resilience-options';
@@ -177,14 +178,22 @@ export class SessionAwareConnectionSource extends WebSocketConnectionSource {
  *
  * Does nothing but warn on a Theia too old to expose the buffer binding, so the
  * package keeps one supported range rather than splitting its floor for this
- * feature. Returns whether the hardening was installed, for an adopter that
- * wants to branch on it.
+ * feature. Does nothing in Electron, which binds its own connection source;
+ * there only the backend half runs, and it resends nothing to a frontend
+ * without the hardening.
+ * Returns whether the hardening was installed, for an adopter that wants to
+ * branch on it.
  */
 export function bindConnectionResilience(
    isBound: interfaces.IsBound,
    rebind: interfaces.Rebind,
    options: ConnectionResilienceOptions = {}
 ): boolean {
+   // Electron binds `WebSocketConnectionSource` to its own source, so a rebind
+   // here adds a second socket under the same frontend id.
+   if (environment.electron.is()) {
+      return false;
+   }
    if (!supportsConnectionResilience(isBound)) {
       warnConnectionResilienceUnavailable('frontend');
       return false;

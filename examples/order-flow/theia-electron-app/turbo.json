@@ -1,0 +1,17 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    // As in ../theia-app/turbo.json: no `src`, no `tsc` build, so typechecking
+    // the config needs only the dependencies built.
+    "typecheck:test": {
+      "dependsOn": ["^build"],
+      "inputs": ["playwright.config.mts", "tsconfig.e2e.json", "../theia-app/tsconfig.e2e.json"]
+    },
+    // Lints the config, its one source file, for the same reason.
+    "lint": {
+      "dependsOn": ["^build"],
+      "inputs": ["playwright.config.mts"]
+    }
+  }
+}

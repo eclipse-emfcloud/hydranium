@@ -4,7 +4,9 @@
 // `npm start` serves what `npm run build` bundled, so build first.
 
 import { defineConfig, devices } from '@playwright/test';
-import { cpSync, rmSync } from 'node:fs';
+import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 /**
  * The port the smoke serves on, not `npm start`'s 3000, so a running
@@ -18,6 +20,8 @@ if (process.env.SMOKE_WORKSPACE_COPIED === undefined) {
    const workspace = new URL('smoke-workspace', import.meta.url);
    rmSync(workspace, { recursive: true, force: true });
    cpSync(new URL('../workspace', import.meta.url), workspace, { recursive: true });
+   // Settings of its own too, so a run never writes `~/.theia/settings.json`.
+   process.env.THEIA_CONFIG_DIR ??= mkdtempSync(join(tmpdir(), 'theia-smoke-config-'));
 }
 
 export default defineConfig({

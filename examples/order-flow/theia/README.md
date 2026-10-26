@@ -3,7 +3,9 @@
 The **Theia extension** for the order-flow example: it mounts the `.process`
 GLSP diagram, puts a properties panel into Theia's own Properties view, and
 registers the framework's memory-diagnostics commands. It is a library, not an
-application: [`../theia-app`](../theia-app/README.md) is the app that loads it.
+application: [`../theia-app`](../theia-app/README.md) and
+[`../theia-electron-app`](../theia-electron-app/README.md) are the apps that
+load it.
 
 Read it beside [Host in Theia](../../../docs/guides/host-in-theia.md), which
 walks you through the same steps for your own language. Most files here are a

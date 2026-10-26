@@ -21,6 +21,7 @@
     "examples/order-flow/server",
     "examples/order-flow/theia",
     "examples/order-flow/theia-app",
+    "examples/order-flow/theia-electron-app",
     "examples/order-flow/vscode",
     "examples/order-flow/vscode-servers"
   ],

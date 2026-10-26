@@ -1006,6 +1006,11 @@ describe('planInitFiles with hosts', () => {
       for (const file of several) {
          expect(file.content, `${file.path} still has a token`).not.toMatch(token);
       }
+      for (const heads of [['lsp'], ['lsp', 'data', 'glsp']] as InitHead[][]) {
+         for (const file of filesFor(heads, ['theia-browser', 'theia-electron'])) {
+            expect(file.content, `${heads.join(',')} ${file.path} still has a token`).not.toMatch(token);
+         }
+      }
       // The smoke test opens the diagram grammar's files, not the first grammar's.
       expect(several.find(file => file.path === 'host-browser/test/smoke.spec.mts')?.content).toContain(
          "selectOption('references.process')"
@@ -1067,6 +1072,23 @@ describe('planInitFiles with hosts', () => {
       expect(() => resolveInitComposition('Bookstore', undefined, ['data', 'glsp'], undefined, ['theia-browser'])).toThrow(
          "--hosts theia-browser needs the 'lsp' head, but the head set is 'data,glsp'."
       );
+      expect(() => resolveInitComposition('Bookstore', undefined, ['data', 'glsp'], undefined, ['theia-electron'])).toThrow(
+         "--hosts theia-electron needs the 'lsp' head, but the head set is 'data,glsp'."
+      );
+   });
+
+   it('names every Theia application in the READMEs of the extensions it loads', () => {
+      const readme = (hosts: InitHost[], path: string): string =>
+         (contentOf(filesFor(['lsp', 'data'], hosts), path) ?? '').replace(/\s+/g, ' ');
+      const both: InitHost[] = ['theia-browser', 'theia-electron'];
+      expect(readme(both, 'theia/README.md')).toContain('The applications in `../host-theia-browser` and `../host-theia-electron` run it.');
+      expect(readme(['theia-electron'], 'theia/README.md')).toContain('The application in `../host-theia-electron` runs it.');
+      expect(readme(both, 'vscode-servers/README.md')).toContain(
+         'the Theia applications in `../host-theia-browser` and `../host-theia-electron`, which sideload this extension.'
+      );
+      expect(readme(['theia-electron'], 'vscode-servers/README.md')).toContain(
+         'the Theia application in `../host-theia-electron`, which sideloads this extension.'
+      );
    });
 
    it('emits the servers extension and the Theia extension for a Theia host alone, before the application', () => {
@@ -1120,23 +1142,43 @@ describe('planInitFiles with hosts', () => {
       expect(app.theia.backend.config.connectionBufferBytes).toBe(app.theia.frontend.config.connectionBufferBytes);
    });
 
-   it("pins every Theia package both Theia members declare at the root, so GLSP's open Theia peer does not install the newest", () => {
+   it("pins every Theia package the Theia members declare at the root, so GLSP's open Theia peer does not install the newest", () => {
       for (const heads of [['lsp'], ['lsp', 'data'], ['lsp', 'glsp'], ['lsp', 'data', 'glsp']] as InitHead[][]) {
-         const files = filesFor(heads, ['theia-browser']);
+         const files = filesFor(heads, ['theia-browser', 'theia-electron']);
          const root = JSON.parse(contentOf(files, 'package.json') ?? '{}') as { devDependencies: Record<string, string> };
-         for (const member of ['theia', 'host-theia-browser']) {
+         for (const member of ['theia', 'host-theia-browser', 'host-theia-electron']) {
             const manifest = JSON.parse(contentOf(files, `${member}/package.json`) ?? '{}') as {
                dependencies?: Record<string, string>;
                devDependencies?: Record<string, string>;
             };
-            const theia = Object.entries({ ...manifest.dependencies, ...manifest.devDependencies }).filter(([name]) =>
-               name.startsWith('@theia/')
+            const theia = Object.entries({ ...manifest.dependencies, ...manifest.devDependencies }).filter(
+               ([name]) => name.startsWith('@theia/') || name === 'electron'
             );
             expect(theia.length, `${heads.join(',')} ${member}`).toBeGreaterThan(0);
             for (const [name, version] of theia) {
                expect(root.devDependencies[name], `${heads.join(',')} ${member} ${name}`).toBe(version);
             }
          }
+      }
+   });
+
+   it('emits the servers extension and the Theia extension for a Theia Electron host alone, before the application', () => {
+      const files = filesFor(['lsp'], ['theia-electron']);
+      const root = JSON.parse(contentOf(files, 'package.json') ?? '{}') as { workspaces: string[] };
+      expect(root.workspaces).toEqual(['protocol', 'server', 'vscode-servers', 'theia', 'host-theia-electron']);
+      expect(contentOf(files, 'theia/README.md')).toContain('The application in `../host-theia-electron` runs it.');
+   });
+
+   it('targets Electron in the Electron application, which runs the native modules as installed', () => {
+      type Manifest = { theia: { target: string }; scripts: Record<string, string> };
+      const both = filesFor(['lsp'], ['theia-browser', 'theia-electron']);
+      const electron = JSON.parse(contentOf(both, 'host-theia-electron/package.json') ?? '{}') as Manifest;
+      expect(electron.theia.target).toBe('electron');
+      const browser = JSON.parse(contentOf(both, 'host-theia-browser/package.json') ?? '{}') as Manifest;
+      // Theia's native modules are N-API builds, so neither application rebuilds them.
+      for (const manifest of [electron, browser]) {
+         expect(manifest.scripts.start).toBe('node start.mjs');
+         expect(manifest.scripts).not.toHaveProperty('rebuild');
       }
    });
 
@@ -1211,6 +1253,22 @@ describe('planInitFiles with hosts', () => {
       const output = lines.join('');
       expect(output).toContain('npm --prefix host-vscode start');
       expect(output).toContain('npm --prefix host-vscode run test:e2e');
+   });
+
+   it('prints how to start and test both Theia hosts', () => {
+      const lines: string[] = [];
+      runInit({
+         targetDir: 'out/bookstore',
+         name: 'Bookstore',
+         heads: ['lsp'],
+         hosts: ['theia-browser', 'theia-electron'],
+         write: line => lines.push(line),
+         __writeFilesForTest: () => undefined
+      });
+      const output = lines.join('');
+      expect(output).toContain('npm --prefix host-theia-browser run test:e2e');
+      expect(output).toContain('npm --prefix host-theia-electron start');
+      expect(output).toContain('npm --prefix host-theia-electron run test:e2e');
    });
 
    it('prints how to serve and test the browser host', () => {

@@ -9,7 +9,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { editingHeads, INIT_HOSTS, type InitHost, isInitHost } from './init-hosts.js';
+import { editingHeads, INIT_HOSTS, type InitHost, isInitHost, isTheiaHost } from './init-hosts.js';
 import { buildInitTemplates, readFrameworkVersion, workspaceRootPins } from './init-templates.js';
 import { kebab } from './kebab.js';
 import {
@@ -42,16 +42,16 @@ export type InitMember = 'protocol' | 'server' | 'client' | 'vscode-servers' | '
  * workspace lists them. `client` comes with the `glsp` head, which always
  * brings a diagram, and each host is a package of its own. `vscode-servers`
  * comes with the VS Code host, whose server launch it holds, and with a Theia
- * application, which sideloads it; `theia` is the Theia extension a Theia
- * application runs.
+ * application, which sideloads it; `theia` is the Theia extension the Theia
+ * applications run.
  */
 export function initMembers(heads: readonly InitHead[], hosts: readonly InitHost[]): InitMember[] {
    return [
       'protocol',
       'server',
       ...(heads.includes('glsp') ? (['client'] as const) : []),
-      ...(hosts.includes('vscode') || hosts.includes('theia-browser') ? (['vscode-servers'] as const) : []),
-      ...(hosts.includes('theia-browser') ? (['theia'] as const) : []),
+      ...(hosts.includes('vscode') || hosts.some(isTheiaHost) ? (['vscode-servers'] as const) : []),
+      ...(hosts.some(isTheiaHost) ? (['theia'] as const) : []),
       ...hosts.map(host => `host-${host}` as const)
    ];
 }
@@ -700,6 +700,11 @@ export function runInit(options: InitCommandOptions): void {
       write(`  npm --prefix ${theia} start   # Theia at http://localhost:3000 on the workspace, Ctrl+C to stop\n`);
       // The smoke test starts its own backend, on a port of its own.
       write(`  npm --prefix ${theia} run test:e2e:install && npm --prefix ${theia} run test:e2e\n`);
+   }
+   if (composition.hosts.includes('theia-electron')) {
+      const electron = detection === undefined ? 'host-theia-electron' : `${detection.targetPath}/host-theia-electron`;
+      write(`  npm --prefix ${electron} start   # the Theia desktop application on the workspace\n`);
+      write(`  npm --prefix ${electron} run test:e2e\n`);
    }
    write('\n');
    write('The emitted sources carry no license header — run your own header tool if\n');
