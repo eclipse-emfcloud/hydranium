@@ -925,6 +925,9 @@ describe('the copy nodes of an operation', () => {
    it('answer every node-routed seam as the built node they were copied from, on the primary and a foreign-language secondary', async () => {
       const harness = makeHarness();
       const state = createState(harness);
+      // Canonical uris differ from the documents' spellings, as under a realpath policy.
+      const workspace = (state as unknown as { sharedServices: { workspace: { DocumentUriPolicy: unknown } } }).sharedServices.workspace;
+      workspace.DocumentUriPolicy = { canonicalUri: (uri: string) => uri.toLowerCase() };
       const keyProviderFor = (prefix: string): { getElementKey(node?: AstNode): string | undefined } => ({
          getElementKey: node => (node ? `${prefix}:${node.$type}` : undefined)
       });
@@ -933,7 +936,7 @@ describe('the copy nodes of an operation', () => {
          { languageId: 'test', fileExtensions: ['.a'], services: { references: { ElementKeyProvider: keyProviderFor('dgm') } } },
          { languageId: 'other', fileExtensions: ['.other'], services: { references: { ElementKeyProvider: keyProviderFor('other') } } }
       ]);
-      const foreignUri = 'file:///b.other';
+      const foreignUri = 'file:///B.other';
       const foreignRoot = makeFakeAstNode<AstNode>({
          $type: 'ForeignRoot',
          $document: { uri: URI.parse(foreignUri) } as unknown as LangiumDocument,
@@ -948,18 +951,19 @@ describe('the copy nodes of an operation', () => {
       const primaryRoot = makeFakeAstNode<TestRoot>({
          $type: 'TestRoot',
          label: 'r',
-         $document: { uri: URI.parse('file:///a.a') } as unknown as LangiumDocument,
+         $document: { uri: URI.parse('file:///A.a') } as unknown as LangiumDocument,
          members: []
       });
       const primaryItem = memberOf(primaryRoot, 'PrimaryItem');
-      state.setSourceRoot('file:///a.a', primaryRoot);
+      state.setSourceRoot('file:///A.a', primaryRoot);
       state.index.indexSemanticElement(state.index.findId(foreignItem)!, foreignItem);
       const seams = (node: AstNode): unknown => ({
          findId: state.index.findId(node),
          createId: state.index.createId(node),
          resolves: state.index.findSemanticElement(state.index.findId(node) ?? '') !== undefined,
          language: state.languageServicesFor(node)?.LanguageMetaData.languageId,
-         indexLanguage: state.index.languageServicesFor(node)?.LanguageMetaData.languageId
+         indexLanguage: state.index.languageServicesFor(node)?.LanguageMetaData.languageId,
+         documentUri: state.index.documentUriOf(node)
       });
       const built = { primary: seams(primaryItem), foreign: seams(foreignItem) };
       let copied: unknown;
@@ -977,5 +981,38 @@ describe('the copy nodes of an operation', () => {
       });
 
       expect(copied).toEqual({ copies: true, primary: built.primary, foreign: built.foreign, resolvesToCopy: true });
+   });
+
+   it.each([
+      ['a document root under a canonical uri of another spelling', true],
+      ['a detached root', false]
+   ])('keep an id registered on a copy node for its built node, for %s', async (_case, inDocument) => {
+      const harness = makeHarness();
+      const state = createState(harness);
+      const services = (state as unknown as { sharedServices: { ServiceRegistry: unknown; workspace: { DocumentUriPolicy: unknown } } })
+         .sharedServices;
+      services.workspace.DocumentUriPolicy = { canonicalUri: (uri: string) => uri.toLowerCase() };
+      services.ServiceRegistry = makeStubServiceRegistry([
+         {
+            languageId: 'test',
+            fileExtensions: ['.a'],
+            services: { references: { ElementKeyProvider: { getElementKey: (node?: AstNode) => node?.$type } } }
+         }
+      ]);
+      const root = makeFakeAstNode<TestRoot>({
+         $type: 'TestRoot',
+         label: 'r',
+         ...(inDocument ? { $document: { uri: URI.parse('file:///A.a') } as unknown as LangiumDocument } : {}),
+         members: []
+      });
+      const item = memberOf(root, 'Item');
+      state.setSourceRoot('file:///A.a', root);
+
+      await runOperation(new HydraniumGlspOperationCommand<TestSourceModel>(state), () => {
+         state.index.registerElementId((state.sourceRoot as unknown as { members: AstNode[] }).members[0], 'item-label');
+         return undefined;
+      });
+
+      expect(state.index.findElementIds(item)).toEqual(['item-label']);
    });
 });

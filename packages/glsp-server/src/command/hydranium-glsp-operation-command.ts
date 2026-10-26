@@ -67,12 +67,14 @@ export interface OperationInternals {
 }
 
 const internals = new WeakMap<object, OperationInternals>();
-/** The canonical URI of every working root an operation made, by root. */
+/** The URI of the document every working root an operation made copies, by root. */
 const workingRootUris = new WeakMap<AstNode, string>();
 
 /**
- * The canonical URI of the document whose working copy `node` belongs to;
- * `undefined` for a node of no copy. A copy has no `$document`, so a lookup
+ * The URI of the document whose working copy `node` belongs to, spelled as
+ * that document's own, so a lookup keyed by it matches the built node's;
+ * `undefined` for a node of no copy or of a detached root's, as for the
+ * built node. A copy has no `$document`, so a lookup
  * that routes by a node's document routes a copy node through this instead.
  */
 export function workingUriOfCopy(node: AstNode): string | undefined {
@@ -314,7 +316,10 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
          );
          this.rebuildWorkingMultiReferences(working);
          this.workingRoots.set(key, working);
-         workingRootUris.set(working, key);
+         const uri = built.$document?.uri.toString();
+         if (uri !== undefined) {
+            workingRootUris.set(working, uri);
+         }
          this.modelState.index.remapSemanticAliases(node =>
             AstUtils.findRootNode(node) === built ? (this.trace.get(node) ?? node) : node
          );

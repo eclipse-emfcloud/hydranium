@@ -129,7 +129,7 @@ describe('HydraniumGlspIndex', () => {
          expect(index.findId(makeAstNodeInDoc('file:///m/element.other'))).toBe('other:TestNode');
       });
 
-      it('keys a node from the diagram own document with the diagram language key provider', () => {
+      it("keys a node from the diagram's own document with the diagram language key provider", () => {
          const index = createMultiLanguageIndex();
          index.indexSourceRoot(makeAstNodeInDoc('file:///m/diagram.dgm'));
          expect(index.findId(makeAstNodeInDoc('file:///m/other-diagram.dgm'))).toBe('dgm:TestNode');
@@ -342,6 +342,22 @@ describe('HydraniumGlspIndex', () => {
          const { index } = createIndex(new Map()); // no stable id for node
          index.registerElementId(node, 'gmodel-1');
          expect(index.findElementIds(node)).toEqual([]);
+      });
+
+      it('does not answer for a node of another document with the same stable id', () => {
+         const registered = makeAstNodeInDoc('file:///m/one.a');
+         const sameKey = makeAstNodeInDoc('file:///m/two.a');
+         const { index } = createIndex(
+            new Map([
+               [registered, 'elementStableId'],
+               [sameKey, 'elementStableId']
+            ])
+         );
+         index.registerElementId(registered, 'gmodel-1');
+         expect({ registered: index.findElementIds(registered), sameKey: index.findElementIds(sameKey) }).toEqual({
+            registered: ['gmodel-1'],
+            sameKey: []
+         });
       });
 
       it('returns empty for an unregistered or undefined element', () => {

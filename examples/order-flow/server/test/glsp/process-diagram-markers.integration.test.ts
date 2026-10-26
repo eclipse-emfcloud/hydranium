@@ -220,7 +220,7 @@ describe('order-flow .process diagram markers', () => {
       expect(diagram.harness.sessionContainer.get(ModelValidator)).toBeInstanceOf(HydraniumGlspModelValidator);
    });
 
-   it('marks an element of the diagram own document', async () => {
+   it("marks an element of the diagram's own document", async () => {
       const diagram = await openDiagram(workspace =>
          breakReference(workspace, WORKSPACE_FILES.fulfillmentProcess, 'reads Order.id', 'reads Order.noSuchField')
       );
@@ -280,5 +280,22 @@ describe('order-flow .process diagram markers', () => {
       // The negative: nothing on the `LineItem.price` chain is drawn here, so
       // the `isRendered` filter drops it. The text editor still reports it.
       expect(markers.map(marker => marker.label).join('\n')).not.toContain('NoSuchPriceType');
+   });
+
+   it('does not mark a task with the error of a same-named node of ANOTHER document', async () => {
+      // The `Pick` entity keys as `Pick`, the id of the `Pick` task drawn here.
+      const diagram = await openDiagram(workspace => {
+         const path = workspace.resolve(WORKSPACE_FILES.ordersDomain);
+         workspace.write(WORKSPACE_FILES.ordersDomain, readFileSync(path, 'utf8') + '\nentity Pick {\n   x: NoSuchType\n}\n');
+      });
+      const domainUri = URI.file(diagram.workspace.resolve(WORKSPACE_FILES.ordersDomain)).toString();
+      expect(diagram.harness.state.index.renderedDocumentUris()).toContain(domainUri);
+      expect(diagram.harness.state.index.find('Pick')).toBeDefined();
+      const messages = (await validateDocument(diagram, WORKSPACE_FILES.ordersDomain)).map(messageOf);
+      expect(messages.filter(message => message.includes('NoSuchType'))).toHaveLength(1);
+
+      const markers = await currentMarkers(diagram);
+
+      expect(markers.map(marker => marker.label).join('\n')).not.toContain('NoSuchType');
    });
 });

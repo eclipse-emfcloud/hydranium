@@ -36,9 +36,18 @@ import { type DiagnosticMarkerLookups, diagnosticsToMarkers } from './diagnostic
  * document the index reports as contributing a rendered element (the index's
  * `renderedDocumentUris`: the diagram's own document plus those reached via
  * reference projections) and lets the index's rendered-check keep only those
- * that map to an element drawn on this diagram; the rest fall away. The
- * `elements` argument of {@link validate} is ignored — the diagnostic set is
- * the source of truth, and the default `RequestMarkersAction` requests the
+ * that map to an element drawn on this diagram; the rest fall away.
+ *
+ * - A node of another document maps only through `registerElementId`: its
+ *   stable id alone would match a same-named node of the diagram's document.
+ * - A node of the diagram's document maps through its stable id only while
+ *   `findSemanticElement` answers a node of that document for it.
+ * - An id drawn twice, which the index prunes to its first element, carries
+ *   the markers of every node drawn under it, whichever document they come
+ *   from.
+ *
+ * The `elements` argument of {@link validate} is ignored — the diagnostic set
+ * is the source of truth, and the default `RequestMarkersAction` requests the
  * whole diagram anyway.
  */
 @injectable()
@@ -64,6 +73,20 @@ export class HydraniumGlspModelValidator<TRoot extends AstNode = AstNode> implem
          return [];
       }
       const index = this.modelState.index;
+      // Canonical on both sides: the source uri is the client's spelling, and a
+      // rendered uri the document's, and two spellings of one file compare unequal.
+      // Once per uri and call: a policy may read the file system for each.
+      const uriPolicy = this.sharedServices.workspace.DocumentUriPolicy;
+      const canonicalUris = new Map<string, string>();
+      const canonicalUri = (uri: string): string => {
+         let canonical = canonicalUris.get(uri);
+         if (canonical === undefined) {
+            canonical = uriPolicy.canonicalUri(uri);
+            canonicalUris.set(uri, canonical);
+         }
+         return canonical;
+      };
+      const ownUri = canonicalUri(this.modelState.sourceUri);
       const markers: Marker[] = [];
       // Scan only the documents that contribute rendered elements, not every
       // loaded document. The rendered-check below still keeps only what is
@@ -80,6 +103,7 @@ export class HydraniumGlspModelValidator<TRoot extends AstNode = AstNode> implem
          if (!diagnostics || diagnostics.length === 0) {
             continue;
          }
+         const own = canonicalUri(uri) === ownUri;
          const root = document.parseResult.value;
          const locator = this.sharedServices.ServiceRegistry.getServices(document.uri).workspace.AstNodeLocator;
          const lookups: DiagnosticMarkerLookups = {
@@ -87,11 +111,15 @@ export class HydraniumGlspModelValidator<TRoot extends AstNode = AstNode> implem
             renderedIdsFor: astNode => {
                // A node renders as: every GModel element explicitly registered as
                // representing it (reference projections, possibly several), plus its
-               // own stable id, for an element keyed directly by it. Keep only the
-               // ids actually drawn on this diagram.
+               // own stable id, for a node of the diagram's document keyed directly
+               // by it, while that id stands for a node of this document: a node of
+               // another document can be drawn under it. Keep only the ids actually
+               // drawn on this diagram.
                const candidates = new Set(index.findElementIds(astNode));
-               const stableId = index.findId(astNode);
-               if (stableId !== undefined) {
+               const stableId = own ? index.findId(astNode) : undefined;
+               const drawnAs = stableId === undefined ? undefined : index.findSemanticElement(stableId);
+               const drawnUri = drawnAs === undefined ? undefined : index.documentUriOf(drawnAs);
+               if (stableId !== undefined && drawnUri !== undefined && canonicalUri(drawnUri) === ownUri) {
                   candidates.add(stableId);
                }
                return [...candidates].filter(id => index.find(id) !== undefined);
