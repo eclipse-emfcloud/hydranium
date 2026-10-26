@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { ClientId, GModelIndex, GModelSerializer, ModelState, SOURCE_URI_ARG } from '@eclipse-glsp/server';
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
-import { type AstNode, DocumentState, type LangiumDocument, URI } from '@hydranium/langium';
+import { type AstNode, DocumentState, isAstNode, type LangiumDocument, URI } from '@hydranium/langium';
 import { AstDocument, type ClientSession, DefaultModelLedger, type ServerSharedServices } from '@hydranium/core';
 import {
    type BaseVersion,
@@ -19,7 +19,8 @@ import {
    ConflictError,
    type ConflictResolver,
    type ModelVersion,
-   type ReconcileOutcome
+   type ReconcileOutcome,
+   SyntheticStep
 } from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
@@ -523,6 +524,34 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          property: 'target',
          chain: ['stand-in', 'built item', 'built root']
       });
+   });
+
+   it('queries candidates for a path of nodes not created yet, under the built node it names and, in an operation, under the built node of a copy it names', async () => {
+      const state = createState(makeHarness());
+      const { built } = seedBuiltItem(state);
+      const chainOf = (node: AstNode | undefined): unknown[] => {
+         const chain: unknown[] = [];
+         for (let current = node; current; current = current.$container) {
+            chain.push(current === built ? 'built root' : `${current.$type}:${current.$containerProperty}@${current.$containerIndex}`);
+         }
+         return chain;
+      };
+      const path = [SyntheticStep.of('members', 'Item', 1), SyntheticStep.of('children', 'Leaf')];
+      const infoAt = (container: AstNode): unknown => {
+         const info = state.referenceInfoAt(container, path, 'target');
+         return info && { property: info.property, chain: chainOf(info.container) };
+      };
+      let inOperation: unknown;
+
+      const outside = infoAt(built);
+      await runOperation(new HydraniumGlspOperationCommand<TestSourceModel>(state), () => {
+         const copy = state.sourceRoot;
+         inOperation = isAstNode(copy) ? infoAt(copy) : 'no AstNode';
+         return undefined;
+      });
+
+      const expected = { property: 'target', chain: ['Leaf:children@undefined', 'Item:members@1', 'built root'] };
+      expect({ outside, inOperation }).toEqual({ outside: expected, inOperation: expected });
    });
 
    describe('JsonModelState compatibility', () => {

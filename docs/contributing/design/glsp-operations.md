@@ -44,6 +44,8 @@ off every container up the chain, so a query anchored higher, at the document
 or a named ancestor, misses them. The same construction serves a node not
 created yet, inside an operation or outside one: a stand-in the caller builds
 reaches its document through `$container` alone, so it need not be attached.
+`modelState.referenceInfoAt(container, path, property)` builds that stand-in
+chain from `SyntheticStep`s, as a protocol context's `syntheticPath` is built.
 
 ## What runs again on undo and redo
 
