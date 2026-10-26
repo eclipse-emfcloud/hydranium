@@ -114,6 +114,20 @@ export interface ModelServiceOptions extends LogNameOptions {
     * flipped without a restart.
     */
    readonly allowReentrantBuilds?: MaybeObservableValue<boolean>;
+   /**
+    * Let a structured write keep the text the document's root was parsed from
+    * when that text serializes to the same text as the written model, so an
+    * update that changes nothing in the model leaves hand formatting alone.
+    * Default `false`: every structured write applies the canonical text.
+    *
+    * Costs a parse, an encode and a serialization per write whose text
+    * differs; remembering the text last written instead would not cover a
+    * file formatted outside the framework. Text with lexer or parser errors is
+    * replaced as usual.
+    *
+    * Accepts a {@link MaybeObservableValue} so it can be bound to a setting.
+    */
+   readonly keepUnchangedText?: MaybeObservableValue<boolean>;
 }
 
 /** One {@link ModelService.onModelUpdated} subscription; `uri` is canonical, absent for every document. */
@@ -290,7 +304,9 @@ export interface ModelService<
     * as given, a structured one rewritten and serialised. Also the text to
     * create a document with: for a `uri` with no text the trivia preservers
     * still run, so it gets their defaults, such as
-    * `DocumentEndingPreserver.DEFAULT_ENDING`.
+    * `DocumentEndingPreserver.DEFAULT_ENDING`. With
+    * {@link ModelServiceOptions.keepUnchangedText} set, a model equal to the
+    * document's gives the text its root was parsed from instead.
     */
    modelToText(uri: string, model: TTransfer | string, cancelToken?: CancellationToken): Promise<string>;
    getDocument(uri: string): LangiumDocument | undefined;
@@ -400,6 +416,8 @@ export class DefaultModelService<
    protected readonly uriPolicy: DocumentUriPolicy;
    /** See {@link ModelServiceOptions.allowReentrantBuilds}. Defaults to `false`. */
    protected readonly allowReentrantBuilds: ObservableValue<boolean>;
+   /** See {@link ModelServiceOptions.keepUnchangedText}. Defaults to `false`. */
+   protected readonly keepUnchangedText: ObservableValue<boolean>;
 
    /**
     * Per-URI applyEdit coalescing: at most one in-flight `applyEditToLanguageClient`
@@ -475,6 +493,7 @@ export class DefaultModelService<
       this.tracer = services.Tracer.for(options.logName ?? 'ModelService').trace('instantiated');
       this.uriPolicy = services.workspace.DocumentUriPolicy;
       this.allowReentrantBuilds = ObservableValue.from(options.allowReentrantBuilds ?? false);
+      this.keepUnchangedText = ObservableValue.from(options.keepUnchangedText ?? false);
       // Optional-chain so a harness that binds no WorkspaceManager awaits
       // `undefined` and resolves immediately; production hosts always have it
       // bound.
@@ -1047,7 +1066,9 @@ export class DefaultModelService<
     *
     * The serialised text then takes the trivia of the text it replaces, or of
     * an empty one when `uri` has none, so a created document gets the
-    * preservers' defaults rather than the serializer's bare output.
+    * preservers' defaults rather than the serializer's bare output. Under
+    * {@link ModelServiceOptions.keepUnchangedText} the document's own text is
+    * returned when it parses to a model that serializes to the same text.
     */
    async modelToText(uri: string, model: TTransfer | string, cancelToken?: CancellationToken): Promise<string> {
       if (typeof model === 'string') {
@@ -1058,7 +1079,8 @@ export class DefaultModelService<
       const trivia = this.services.ServiceRegistry?.getServices(target)?.trivia?.TriviaService;
       // Extracted BEFORE serializing, so it reads the document the write is
       // about to replace rather than whatever a concurrent build left behind.
-      let document = this.services.workspace.LangiumDocuments.getDocument(target);
+      const existing = this.services.workspace.LangiumDocuments.getDocument(target);
+      let document = existing;
       if (trivia !== undefined && document === undefined) {
          // With no text, an empty one: every preserver still runs, so a created
          // document takes the defaults a blank one gets.
@@ -1066,8 +1088,38 @@ export class DefaultModelService<
          document = this.services.workspace.LangiumDocumentFactory.fromString(source, target);
       }
       const extracted = trivia !== undefined && document !== undefined ? trivia.extract(document) : undefined;
-      const serialized = await this.serialize(uri, rewritten);
-      return extracted === undefined ? serialized : trivia!.apply(serialized, extracted, target);
+      const withTrivia = (serialized: string): string =>
+         extracted === undefined ? serialized : trivia!.apply(serialized, extracted, target);
+      const text = withTrivia(await this.serialize(uri, rewritten));
+      if (!this.keepUnchangedText.value || existing === undefined) {
+         return text;
+      }
+      // The text the root was parsed from, not the store's: the store changes
+      // its text in place before the next build, and a root compared against
+      // newer text would keep that text for a model it does not hold.
+      const parsedText = existing.parseResult.value?.$cstNode?.root.fullText;
+      if (parsedText === undefined || parsedText === text) {
+         return text;
+      }
+      // Parsed afresh rather than the live root, which a writer may have
+      // mutated in place: every write of the mutated model would then compare
+      // equal and apply the text from before the mutation. Parsed into a
+      // document at `target`, so the encoder's hooks see the URI the written
+      // side was encoded with.
+      const {
+         value: root,
+         lexerErrors,
+         parserErrors
+      } = this.services.workspace.LangiumDocumentFactory.fromString(parsedText, target).parseResult;
+      if (lexerErrors.length > 0 || parserErrors.length > 0) {
+         return text;
+      }
+      // Through `serialize`, so an override of it applies to both sides. Not
+      // rewritten: a rewrite that changes the document's model then compares
+      // unequal and is written, rather than hidden behind the kept text.
+      const transfer = this.services.model.TransferEncoder.toTransfer(root, 'grammar') as TTransfer;
+      const current = withTrivia(await this.serialize(uri, transfer));
+      return current === text ? parsedText : text;
    }
 
    // ============================================================
