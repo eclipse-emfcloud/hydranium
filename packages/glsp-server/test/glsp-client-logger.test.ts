@@ -13,7 +13,7 @@ import type { ServerSharedServices } from '@hydranium/core';
 import { Logger, type LogThreshold } from '@hydranium/protocol';
 import { GlspClientLogger, glspLogLevelOf } from '../src/logging/glsp-client-logger.js';
 
-// These tests exercise only `combine` / `formatParam` / `enabled` / `derive`,
+// These tests exercise only `combine` / `formatArg` / `enabled` / `derive`,
 // none of which read the services tree (no `emit`, so no `Clock` access). A
 // blank stub satisfies the type.
 const stubServices = {} as ServerSharedServices;
@@ -22,8 +22,8 @@ class TestableGlspClientLogger extends GlspClientLogger {
    public testCombine(message: string, params: unknown[]): string {
       return this.combine(message, params);
    }
-   public testFormatParam(param: unknown): string {
-      return this.formatParam(param);
+   public testFormatArg(param: unknown): string {
+      return this.formatArg(param);
    }
    public testEnabled(level: LogLevel): boolean {
       return this.enabled(level);
@@ -162,24 +162,27 @@ describe('GlspClientLogger', () => {
          expect(logger.testCombine('Failed', [error])).toBe('Failed Error: boom\n    at test\nCaused by: Error: disk full\n    at write');
       });
       it('joins multiple params with comma-newline', () => {
-         expect(logger.testCombine('m', ['a', 'b'])).toBe('m "a",\n"b"');
+         expect(logger.testCombine('m', ['a', 'b'])).toBe('m a,\nb');
       });
    });
 
-   describe('formatParam', () => {
+   describe('formatArg', () => {
       const logger = new TestableGlspClientLogger(stubServices, { logLevel: LogLevel.info });
-      it('describes what JSON cannot render rather than dropping it', () => {
+      it('renders a cyclic param with its fields', () => {
          const circular: { self?: unknown } = {};
          circular.self = circular;
-         expect(logger.testFormatParam(circular)).toBe('[object Object]');
-         expect(logger.testFormatParam(10n)).toBe('10');
-         expect(logger.testFormatParam({ toJSON: () => undefined })).toBe('[object Object]');
+         expect(logger.testFormatArg(circular)).toBe('{\n    "self": "[Circular]"\n}');
+      });
+
+      it('describes what JSON cannot render rather than dropping it', () => {
+         expect(logger.testFormatArg(10n)).toBe('10');
+         expect(logger.testFormatArg({ toJSON: () => undefined })).toBe('[object Object]');
       });
 
       it('does not throw for a revoked proxy, on which even instanceof throws', () => {
          const { proxy, revoke } = Proxy.revocable({}, {});
          revoke();
-         expect(logger.testFormatParam(proxy)).toBe('[object]');
+         expect(logger.testFormatArg(proxy)).toBe('[object]');
       });
    });
 

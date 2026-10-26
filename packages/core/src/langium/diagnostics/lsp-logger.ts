@@ -25,7 +25,6 @@ import { type URI } from '@hydranium/langium';
 import type { Connection } from 'vscode-languageserver';
 import { type ServerSharedServices } from '../module.js';
 import { installConsoleTee } from './console-tee.js';
-import { formatLogArg } from './format-log-arg.js';
 import { setLogFilePath, teeLogLine } from './logger.js';
 import { processEnv, writeStderr } from '../../util/environment.js';
 
@@ -212,7 +211,7 @@ export class LspLogger extends AbstractLogger implements Logger {
 
    protected emit(level: LogLevel, label: string, message: string, args: readonly unknown[]): void {
       const prefix = this.formatLinePrefix(label);
-      const combined = args.length === 0 ? message : `${message} ${args.map(formatLogArg).join(' ')}`;
+      const combined = args.length === 0 ? message : `${message} ${args.map(arg => this.formatArg(arg)).join(' ')}`;
       const formatted = `${prefix} ${combined}`;
       const connection = this.services.lsp.Connection;
       // Route through the LSP `window/logMessage` channel so log lines stay

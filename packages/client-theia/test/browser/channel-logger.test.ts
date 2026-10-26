@@ -81,7 +81,7 @@ describe('ChannelLogger', () => {
       expect(lines[0]).toContain('visible');
    });
 
-   it('renders an argument JSON cannot, an error by its stack, and never throws', () => {
+   it('renders a cyclic argument, one JSON cannot, an error by its stack, and never throws', () => {
       const logger = makeLogger(channels, { channelName: 'Ch' });
       const unformattable: Record<string, unknown> = Object.create(null);
       unformattable.self = unformattable;
@@ -92,7 +92,7 @@ describe('ChannelLogger', () => {
 
       expect(() => logger.info('args', unformattable, { toJSON: () => undefined }, proxy, error)).not.toThrow();
       expect(channels.channels.get('Ch')?.lines[0]).toMatch(
-         / args \[object Object\] \[object Object\] \[object\] Error: boom\n {4}at test$/
+         / args \{"self":"\[Circular\]"\} \[object Object\] \[object\] Error: boom\n {4}at test$/
       );
    });
 });
