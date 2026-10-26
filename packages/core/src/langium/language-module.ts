@@ -40,6 +40,7 @@ import {
    DefaultValidationContributionCollector,
    type ValidationContributionCollector
 } from './validation/validation-contribution-collector.js';
+import { HydraniumAstNodeLocator } from './workspace/ast-node-locator.js';
 import { type ServerModuleContext, type ServerSharedServices } from './module.js';
 
 /**
@@ -355,7 +356,8 @@ export function createServerLanguageModule(
          CommentProvider: services => new HydraniumCommentProvider(services)
       },
       workspace: {
-         AstNodeDescriptionProvider: services => new HydraniumAstNodeDescriptionProvider(services)
+         AstNodeDescriptionProvider: services => new HydraniumAstNodeDescriptionProvider(services),
+         AstNodeLocator: () => new HydraniumAstNodeLocator()
       },
       ast: {
          AstExtensionService: services => new DefaultAstExtensionService(services),
