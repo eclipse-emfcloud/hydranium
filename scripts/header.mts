@@ -26,6 +26,7 @@
  *   node scripts/header.mts <file> [<file>...]
  *   node scripts/header.mts --check <file>...     # exit 1 if any file lacks the header
  *   node scripts/header.mts --check-all           # same, over every source file
+ *   node scripts/header.mts --self-test           # canaries only; every mode runs them first, exit 3 on failure
  */
 
 import { execFileSync } from 'node:child_process';
@@ -85,10 +86,11 @@ function splitShebang(src: string): { shebang: string; body: string } {
 }
 
 /**
- * Parse the leading block comment (if any) from `src`. Returns the comment
- * lines and the rest of the file.
+ * Parse the leading licence header (if any) from `src`. Returns its lines and
+ * the rest of the file. A leading block comment with neither a copyright nor
+ * an SPDX line is the first declaration's doc, so it stays in the rest.
  */
-function splitLeadingBlockComment(src: string): { commentLines: string[]; rest: string } {
+function splitLeadingHeader(src: string): { commentLines: string[]; rest: string } {
    if (!src.startsWith('/*')) {
       return { commentLines: [], rest: src };
    }
@@ -98,6 +100,9 @@ function splitLeadingBlockComment(src: string): { commentLines: string[]; rest: 
    }
    const commentBlock = src.slice(0, end + 2);
    const lines = commentBlock.split(/\r?\n/);
+   if (!lines.some(line => COPYRIGHT_RE.test(line) || line.includes(SPDX_LINE))) {
+      return { commentLines: [], rest: src };
+   }
    const after = src.slice(end + 2);
    const rest = after.replace(/^\r?\n/, '');
    return { commentLines: lines, rest };
@@ -128,20 +133,24 @@ function buildHeader(copyrights: string[]): string {
 }
 
 /**
- * Apply the canonical header to a file. Idempotent.
+ * Apply the canonical header to a file's source. Idempotent.
  *
  * The header is followed by exactly one blank line before the first line of
  * code — the convention every source file in the repo already follows. A
  * shebang, when present, is re-emitted above the header.
  */
-function applyHeader(file: string): boolean {
-   const src = readFileSync(file, 'utf-8');
+function withHeader(src: string): string {
    const { shebang, body: afterShebang } = splitShebang(src);
-   const { commentLines, rest } = splitLeadingBlockComment(afterShebang.replace(/^\r?\n+/, ''));
+   const { commentLines, rest } = splitLeadingHeader(afterShebang.replace(/^\r?\n+/, ''));
    const copyrights = extractCopyrights(commentLines);
    const header = buildHeader(copyrights);
    const body = rest.replace(/^\r?\n+/, '');
-   const next = shebang + header + (body.length === 0 ? '\n' : '\n\n' + body);
+   return shebang + header + (body.length === 0 ? '\n' : '\n\n' + body);
+}
+
+function applyHeader(file: string): boolean {
+   const src = readFileSync(file, 'utf-8');
+   const next = withHeader(src);
    if (next === src) {
       return false; // unchanged
    }
@@ -209,8 +218,49 @@ function listCoveredFiles() {
    );
 }
 
+const DEFAULT_HEADER = buildHeader([]);
+const HOLDER_HEADER = buildHeader([' * Copyright (c) 2020 Holder.']);
+const DOC = '/** Doc. */\nexport interface Element {}\n';
+
+/**
+ * Each canary's `src` must become `expected`. A canary whose `src` equals
+ * `expected` checks idempotence; the others check what a rewrite keeps.
+ */
+const CANARIES = [
+   { name: 'leading-doc-kept', src: DOC, expected: `${DEFAULT_HEADER}\n\n${DOC}` },
+   { name: 'shebang-and-doc', src: `#!/usr/bin/env node\n${DOC}`, expected: `#!/usr/bin/env node\n${DEFAULT_HEADER}\n\n${DOC}` },
+   { name: 'header-and-doc-unchanged', src: `${HOLDER_HEADER}\n\n${DOC}`, expected: `${HOLDER_HEADER}\n\n${DOC}` },
+   {
+      name: 'old-header-keeps-holder',
+      src: '/*\n * Copyright (c) 2020 Holder.\n * Some other licence.\n */\nexport interface Element {}\n',
+      expected: `${HOLDER_HEADER}\n\nexport interface Element {}\n`
+   },
+   {
+      name: 'spdx-only-header-replaced',
+      src: `/*\n * ${SPDX_LINE}\n */\n${DOC}`,
+      expected: `${DEFAULT_HEADER}\n\n${DOC}`
+   },
+   { name: 'empty-file', src: '', expected: `${DEFAULT_HEADER}\n` }
+];
+
+function runSelfTest(): string[] {
+   return CANARIES.filter(canary => withHeader(canary.src) !== canary.expected).map(
+      canary => `canary ${canary.name} produced:\n${withHeader(canary.src)}`
+   );
+}
+
 function main() {
+   const selfTestProblems = runSelfTest();
+   if (selfTestProblems.length > 0) {
+      console.error('Self-test FAILED — the rewrite no longer keeps what it must:');
+      selfTestProblems.forEach(problem => console.error(`  ${problem}`));
+      process.exit(3);
+   }
    const args = process.argv.slice(2);
+   if (args.includes('--self-test')) {
+      console.log(`✓ self-test: ${CANARIES.length} canaries behave as specified`);
+      return;
+   }
    const checkAll = args.includes('--check-all');
    const checkOnly = checkAll || args.includes('--check');
    const files = checkAll ? listCoveredFiles() : args.filter(arg => arg !== '--check');
