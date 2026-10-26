@@ -23,8 +23,10 @@ import { GLSPSaveable } from '@eclipse-glsp/theia-integration/lib/browser/diagra
  * gets no answer, and a failed save gets none either. Here each save sends a
  * `RequestSaveModelAction` and settles on the response to that request only:
  * it resolves when the server has saved, rejects when the server rejects it,
- * and rejects when {@link saveTimeout} runs out. A save sent while another is
- * pending is a request of its own, so an edit made between the two is saved.
+ * and rejects when {@link saveTimeout} runs out. A save that could not write
+ * some of its documents rejects with a `SaveFailedError` naming each one and
+ * why. A save sent while another is pending is a request of its own, so an
+ * edit made between the two is saved.
  *
  * GLSP's also reports not dirty from the moment it sends a save. Theia's exit
  * check asks only whether anything is dirty, so the window closes over a save

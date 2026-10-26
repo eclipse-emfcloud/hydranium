@@ -23,9 +23,10 @@ import { injectable } from 'inversify';
  *
  * `AbstractHydraniumGlspDiagramModule` registers it. A diagram module that does
  * not extend that base adds it in `configureActionHandlers`. Without it no
- * handler is advertised for the request, and the Theia client saves as GLSP's
- * saveable does: a save nothing answers, so a failed one surfaces only as a
- * timeout, and a window can close over a save still under way.
+ * handler is advertised for the request, and the Theia and VS Code clients
+ * save as GLSP does: a save nothing answers. In Theia a failed one surfaces
+ * only as a timeout, and a window can close over a save still under way. In
+ * VS Code a failed one never settles, until a later save that succeeds.
  */
 @injectable()
 export class HydraniumGlspRequestSaveModelActionHandler extends SaveModelActionHandler {

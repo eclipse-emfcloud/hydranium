@@ -12,10 +12,9 @@
 // data head, and a custom editor for each diagram. Node extension host only:
 // the server is forked and its socket heads reached over TCP.
 
-import { GlspVscodeConnector } from '@eclipse-glsp/vscode-integration';
 import { findPort } from '@hydranium/client-vscode/node';
 import { SocketDataPort } from '@hydranium/data-client-vscode/node';
-import { HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';
+import { HydraniumGlspVscodeConnector, HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';
 import { ConsoleLogger, DataConnectionWithEvents, describeError, renderFrameworkMessage } from '@hydranium/protocol';
 import {
    BOOKSTORE_DATA_SERVER_PORT_COMMAND,
@@ -52,7 +51,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
       findPort: () => findPort(running, BOOKSTORE_GLSP_SERVER_PORT_COMMAND),
       logger: new ConsoleLogger().with('GLSP head')
    });
-   const glspConnector = new GlspVscodeConnector({ server: glspServer, logging: false });
+   const glspConnector = new HydraniumGlspVscodeConnector({ server: glspServer, logging: false });
    context.subscriptions.push(glspServer, glspConnector);
    // Not awaited, so a session that opens no diagram does not wait on the port.
    // `start()` resolves either way; a failure is reported off `onReady`.

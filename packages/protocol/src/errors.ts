@@ -67,7 +67,8 @@ export const HYDRANIUM_ERROR_CODES = {
    sessionClosed: 42004,
    documentNotOpen: 42005,
    duplicateClientId: 42006,
-   reservedClientId: 42007
+   reservedClientId: 42007,
+   saveFailed: 42008
 } as const;
 
 /**
@@ -179,6 +180,8 @@ export const DOCUMENT_NOT_OPEN_ERROR_CODE = HYDRANIUM_ERROR_CODES.documentNotOpe
 export const DUPLICATE_CLIENT_ID_ERROR_CODE = HYDRANIUM_ERROR_CODES.duplicateClientId;
 /** JSON-RPC code for {@link ReservedClientIdError}. */
 export const RESERVED_CLIENT_ID_ERROR_CODE = HYDRANIUM_ERROR_CODES.reservedClientId;
+/** JSON-RPC code for {@link SaveFailedError}. */
+export const SAVE_FAILED_ERROR_CODE = HYDRANIUM_ERROR_CODES.saveFailed;
 
 /**
  * The catalogue declaration behind {@link SessionClosedError}'s default
@@ -315,6 +318,45 @@ export class ReservedClientIdError extends ResponseError<{ readonly clientId: st
 }
 
 /**
+ * The catalogue declaration behind {@link SaveFailedError}'s message. Its
+ * `failures` names each document with the writer's own reason, which stays as
+ * written.
+ */
+export const SAVE_FAILED = defineMessage('hydranium/protocol/save-failed', 'Could not save {failures}.');
+
+/** One document a save could not write, and why. */
+export interface SaveFailure {
+   readonly uri: string;
+   readonly reason: string;
+}
+
+/** Structured payload carried in {@link SaveFailedError.data}. */
+export interface SaveFailedErrorData extends HydraniumMessageData {
+   readonly failures: readonly SaveFailure[];
+}
+
+/**
+ * Thrown by a save that could not write one or more of its documents. A save
+ * of several documents writes the others, so the files on disk can be a mix
+ * until a later save succeeds.
+ */
+export class SaveFailedError extends ResponseError<SaveFailedErrorData> {
+   constructor(failures: readonly SaveFailure[]) {
+      const named = failures.map(failure => `${failure.uri} (${failure.reason})`).join(', ');
+      super(SAVE_FAILED_ERROR_CODE, SAVE_FAILED.format({ failures: named }), {
+         failures,
+         ...messageData(SAVE_FAILED, { failures: named })
+      });
+      this.name = 'SaveFailedError';
+      Object.setPrototypeOf(this, SaveFailedError.prototype);
+   }
+
+   get failures(): readonly SaveFailure[] {
+      return this.data!.failures;
+   }
+}
+
+/**
  * Rebuilds one typed error from the `data` that crossed the wire, or
  * `undefined` when `data` lacks the fields the class reads.
  */
@@ -335,8 +377,24 @@ const PROTOCOL_ERROR_REVIVERS: ReadonlyMap<number, ProtocolErrorReviver> = new M
       ({ uri, clientId }) => (typeof uri === 'string' && typeof clientId === 'string' ? new DocumentNotOpenError(uri, clientId) : undefined)
    ],
    [DUPLICATE_CLIENT_ID_ERROR_CODE, ({ clientId }) => (typeof clientId === 'string' ? new DuplicateClientIdError(clientId) : undefined)],
-   [RESERVED_CLIENT_ID_ERROR_CODE, ({ clientId }) => (typeof clientId === 'string' ? new ReservedClientIdError(clientId) : undefined)]
+   [RESERVED_CLIENT_ID_ERROR_CODE, ({ clientId }) => (typeof clientId === 'string' ? new ReservedClientIdError(clientId) : undefined)],
+   [SAVE_FAILED_ERROR_CODE, ({ failures }) => (isSaveFailureList(failures) ? new SaveFailedError(failures) : undefined)]
 ]);
+
+function isSaveFailureList(value: unknown): value is SaveFailure[] {
+   return (
+      Array.isArray(value) &&
+      value.every(
+         (failure: unknown) =>
+            typeof failure === 'object' &&
+            failure !== null &&
+            'uri' in failure &&
+            typeof failure.uri === 'string' &&
+            'reason' in failure &&
+            typeof failure.reason === 'string'
+      )
+   );
+}
 
 /**
  * Whether `error` is a `ResponseError` from any copy of `vscode-jsonrpc`. An
@@ -368,6 +426,30 @@ export function reviveProtocolError(error: unknown): unknown {
 }
 
 /**
+ * The error the JSON text `json` describes, as `JSON.stringify(error.toJson())`
+ * writes it, revived to its typed class as {@link reviveProtocolError} does, or
+ * `undefined` when `json` is not a JSON-RPC error envelope. For a transport
+ * that carries the error as text, such as a GLSP `RejectAction`'s `detail`.
+ */
+export function reviveProtocolErrorJson(json: string): ResponseError<unknown> | undefined {
+   let envelope: unknown;
+   try {
+      envelope = JSON.parse(json);
+   } catch {
+      return undefined;
+   }
+   if (typeof envelope !== 'object' || envelope === null || !('code' in envelope) || !('message' in envelope)) {
+      return undefined;
+   }
+   const { code, message } = envelope;
+   if (typeof code !== 'number' || !Number.isInteger(code) || typeof message !== 'string') {
+      return undefined;
+   }
+   const revived = reviveProtocolError(new ResponseError(code, message, 'data' in envelope ? envelope.data : undefined));
+   return isResponseError(revived) ? revived : undefined;
+}
+
+/**
  * Whether `error` is a {@link SessionClosedError}: by name in-process, by code
  * when it arrives as a plain `ResponseError`, through a path that does not
  * {@link reviveProtocolError revive} it.
@@ -389,6 +471,18 @@ export function isDuplicateClientIdError(error: unknown): error is DuplicateClie
 /** Whether `error` is a {@link ReservedClientIdError}; see {@link isSessionClosedError}. */
 export function isReservedClientIdError(error: unknown): error is ReservedClientIdError {
    return hasErrorIdentity(error, 'ReservedClientIdError', RESERVED_CLIENT_ID_ERROR_CODE);
+}
+
+/**
+ * Whether `error` is a {@link SaveFailedError} that holds its `failures`: one
+ * thrown, or one {@link reviveProtocolError revived}. Unlike the other guards,
+ * a bare `ResponseError` with its code is not one, since it has no `failures`
+ * to read. Revive it first.
+ */
+export function isSaveFailedError(error: unknown): error is SaveFailedError {
+   return (
+      hasErrorIdentity(error, 'SaveFailedError', SAVE_FAILED_ERROR_CODE) && isSaveFailureList((error as Partial<SaveFailedError>).failures)
+   );
 }
 
 function hasErrorIdentity(error: unknown, name: string, code: number): boolean {

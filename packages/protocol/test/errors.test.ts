@@ -21,18 +21,23 @@ import {
    HYDRANIUM_ERROR_CODES,
    RESERVED_CLIENT_ID_ERROR_CODE,
    ReservedClientIdError,
+   SAVE_FAILED,
+   SAVE_FAILED_ERROR_CODE,
    SESSION_CLOSED,
    SESSION_CLOSED_ERROR_CODE,
    STALE_BASE_VERSION_SAVE,
    STALE_BASE_VERSION_UPDATE,
+   SaveFailedError,
    SessionClosedError,
    isConflictError,
    isDocumentNotOpenError,
    isDuplicateClientIdError,
    isReservedClientIdError,
    isResponseError,
+   isSaveFailedError,
    isSessionClosedError,
-   reviveProtocolError
+   reviveProtocolError,
+   reviveProtocolErrorJson
 } from '../src/errors';
 import { hasMessageIdentity, resolvedFromResponseError } from '../src/messages/primitives';
 import { asModelVersion } from '../src/model-service/base-version';
@@ -72,6 +77,27 @@ describe('reviveProtocolError', () => {
       const revived = reviveProtocolError(arrived);
       expect(revived).toBeInstanceOf(DuplicateClientIdError);
       expect(revived).toMatchObject({ clientId: 'client-1', message: 'Taken.' });
+   });
+});
+
+describe('reviveProtocolErrorJson', () => {
+   it('revives a typed error from its JSON-RPC envelope', () => {
+      const revived = reviveProtocolErrorJson(JSON.stringify(new DuplicateClientIdError('client-1').toJson()));
+      expect(revived).toBeInstanceOf(DuplicateClientIdError);
+      expect(revived).toMatchObject({ clientId: 'client-1' });
+   });
+
+   it('answers a plain ResponseError for a code no typed error claims', () => {
+      const revived = reviveProtocolErrorJson('{"code":4242,"message":"Elsewhere.","data":{"detail":1}}');
+      expect(revived).toBeInstanceOf(ResponseError);
+      expect(revived).toMatchObject({ code: 4242, message: 'Elsewhere.', data: { detail: 1 } });
+   });
+
+   it('answers undefined for text that is not an envelope', () => {
+      expect(reviveProtocolErrorJson('Error: plain failure')).toBeUndefined();
+      expect(reviveProtocolErrorJson('"a string"')).toBeUndefined();
+      expect(reviveProtocolErrorJson('{"code":1.5,"message":"Half."}')).toBeUndefined();
+      expect(reviveProtocolErrorJson('{"code":4242}')).toBeUndefined();
    });
 });
 
@@ -149,11 +175,17 @@ describe('HYDRANIUM_ERROR_CODES', () => {
          SESSION_CLOSED_ERROR_CODE,
          DOCUMENT_NOT_OPEN_ERROR_CODE,
          DUPLICATE_CLIENT_ID_ERROR_CODE,
-         RESERVED_CLIENT_ID_ERROR_CODE
+         RESERVED_CLIENT_ID_ERROR_CODE,
+         SAVE_FAILED_ERROR_CODE
       ];
       expect(defined.filter(code => !codes.includes(code))).toEqual([]);
    });
 });
+
+const FAILURES = [
+   { uri: 'file:///a.x', reason: 'EACCES: permission denied' },
+   { uri: 'file:///a.layout', reason: 'ENOSPC: no space left on device' }
+];
 
 describe('client session errors', () => {
    const cases = [
@@ -184,6 +216,15 @@ describe('client session errors', () => {
          code: RESERVED_CLIENT_ID_ERROR_CODE,
          guard: isReservedClientIdError,
          data: { clientId: 'integrity' }
+      },
+      {
+         name: 'SaveFailedError',
+         make: () => new SaveFailedError(FAILURES),
+         code: SAVE_FAILED_ERROR_CODE,
+         guard: isSaveFailedError,
+         data: { failures: FAILURES },
+         // It promises `failures`, which a bare ResponseError does not hold.
+         bareRecognised: false
       }
    ] as const;
 
@@ -204,7 +245,9 @@ describe('client session errors', () => {
       it(`${entry.name} is recognised in-process and after reconstruction, and nothing else is`, () => {
          expect(entry.guard(entry.make())).toBe(true);
          // What a client holds after an RPC: a plain ResponseError with the code.
-         expect(entry.guard(new ResponseError(entry.code, 'transport-wrapped', entry.data))).toBe(true);
+         const bare = new ResponseError(entry.code, 'transport-wrapped', entry.data);
+         expect(entry.guard(bare)).toBe(!('bareRecognised' in entry));
+         expect(entry.guard(reviveProtocolError(bare))).toBe(true);
          expect(entry.guard(new ConflictError('file:///a.x', asModelVersion(1), 2))).toBe(false);
          for (const other of cases.filter(candidate => candidate !== entry)) {
             expect(entry.guard(other.make())).toBe(false);
@@ -301,5 +344,30 @@ describe('isConflictError', () => {
       expect(isConflictError(null)).toBe(false);
       expect(isConflictError('ConflictError')).toBe(false);
       expect(isConflictError({ name: 'ConflictError' })).toBe(false);
+   });
+});
+
+describe('SaveFailedError', () => {
+   it('names every document with its reason, in its message and its identity', () => {
+      const error = new SaveFailedError(FAILURES);
+      expect(error.message).toBe(
+         'Could not save file:///a.x (EACCES: permission denied), file:///a.layout (ENOSPC: no space left on device).'
+      );
+      expect(resolvedFromResponseError(error)?.code).toBe(SAVE_FAILED.code);
+      expect(resolvedFromResponseError(error)?.params).toEqual({
+         failures: 'file:///a.x (EACCES: permission denied), file:///a.layout (ENOSPC: no space left on device)'
+      });
+   });
+
+   it('is revived with its failures from the JSON-RPC envelope', () => {
+      const { code, message, data } = new SaveFailedError(FAILURES).toJson();
+      const revived = reviveProtocolError(new ResponseError(code, message, data));
+      expect(revived).toBeInstanceOf(SaveFailedError);
+      expect(revived).toMatchObject({ failures: FAILURES, message });
+   });
+
+   it('is not revived from failures that lack a uri or a reason', () => {
+      const arrived = new ResponseError(SAVE_FAILED_ERROR_CODE, 'Could not save.', { failures: [{ uri: 'file:///a.x' }] });
+      expect(reviveProtocolError(arrived)).toBe(arrived);
    });
 });

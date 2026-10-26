@@ -35,7 +35,8 @@ import {
 import { ContainerModule, inject, injectable } from 'inversify';
 import type { AstNode } from '@hydranium/langium';
 import type { ServerSharedServices } from '@hydranium/core';
-import { asModelVersion, ConflictError, ReconcilingConflictResolver, RequestSaveModelAction } from '@hydranium/protocol';
+import { asModelVersion, ConflictError, ReconcilingConflictResolver, RequestSaveModelAction, SaveFailedError } from '@hydranium/protocol';
+import { ResponseError } from 'vscode-jsonrpc';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { HydraniumGlspSubmissionHandler } from '../src/submission/hydranium-glsp-submission-handler.js';
@@ -222,6 +223,7 @@ function stubSharedServices(): ServerSharedServices {
    };
    return {
       Tracer: { for: () => ({ withUri: () => childLogger }) },
+      MessageRenderer: { renderError: (error: Error) => error.message },
       workspace: { LangiumDocuments: { getDocument: () => undefined } },
       model: { ModelService: { ensureDocumentState: () => Promise.resolve(), snapshot: () => undefined, getDocument: () => undefined } }
    } as unknown as ServerSharedServices;
@@ -242,17 +244,20 @@ function makeFixtureHarness(serverModule = new ServerModule(), createLogger?: (c
 }
 
 /** Drive a request that fails with `error`, and answer with the reject the client receives. */
-async function rejectDetailFor(error: unknown): Promise<string | undefined> {
+async function rejectFor(error: unknown): Promise<RejectAction> {
    loadFailure = error;
    const harness = makeFixtureHarness();
    try {
       await harness.start();
       harness.dispatch(RequestModelAction.create());
-      const reject = await harness.nextAction<RejectAction>(RejectAction.KIND);
-      return reject.detail;
+      return await harness.nextAction<RejectAction>(RejectAction.KIND);
    } finally {
       harness.dispose();
    }
+}
+
+async function rejectDetailFor(error: unknown): Promise<string | undefined> {
+   return (await rejectFor(error)).detail;
 }
 
 describe('a failed GLSP request', () => {
@@ -269,6 +274,29 @@ describe('a failed GLSP request', () => {
 
    it('leaves a plain Error unchanged', async () => {
       await expect(rejectDetailFor(new Error('plain failure'))).resolves.toBe('Error: plain failure');
+   });
+
+   it("names a GLSPServerError's message, written for the user, as the reject's message", async () => {
+      await expect(rejectFor(new GLSPServerError('The diagram could not be saved'))).resolves.toMatchObject({
+         message: 'The diagram could not be saved'
+      });
+   });
+
+   it('names the request in the message of any other failure, as upstream does', async () => {
+      const reject = await rejectFor(new Error('plain failure'));
+      expect(reject.message).toMatch(/^Failed to handle request 'requestModel' \(.+\)$/);
+   });
+
+   it('answers a request whose typed error carries data JSON cannot hold with the error as text', async () => {
+      const data: { self?: unknown } = {};
+      data.self = data;
+      const error = new ResponseError(1, 'cyclic', data);
+      await expect(rejectDetailFor(error)).resolves.toBe(String(error));
+   });
+
+   it('carries a typed error as its JSON-RPC envelope in JSON text, so the client can revive it', async () => {
+      const error = new SaveFailedError([{ uri: 'file:///x.a', reason: 'disk full' }]);
+      await expect(rejectDetailFor(error)).resolves.toBe(JSON.stringify(error.toJson()));
    });
 });
 
@@ -393,6 +421,19 @@ describe('HydraniumGlspServer logging the failures it ends', () => {
       server.failAction(new DiagramEditDroppedError('The undo of an operation was dropped'));
       expect({ errors: server.errors, warnings: server.warnings }).toEqual({ errors: [], warnings: [] });
       expect(server.sent.map(message => message.action.kind)).toEqual(['message']);
+   });
+
+   it("heads a typed error's notification with its rendered message, or its own without shared services", () => {
+      const error = new SaveFailedError([{ uri: 'file:///a.x', reason: 'disk full' }]);
+      const bare = new RecordingServer();
+      bare.failAction(error);
+      const rendering = new RecordingServer();
+      Object.assign(rendering, { sharedServices: { MessageRenderer: { renderError: (typed: Error) => `rendered: ${typed.message}` } } });
+      rendering.failAction(error);
+      expect([bare.sent[0].action, rendering.sent[0].action]).toMatchObject([
+         { message: error.message },
+         { message: `rendered: ${error.message}` }
+      ]);
    });
 
    it('logs a failed request once', async () => {

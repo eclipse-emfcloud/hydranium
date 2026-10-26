@@ -20,6 +20,7 @@
   "hydranium/protocol/stale-base-version-save": "Das Speichern von {uri} wurde nicht übernommen: Es wurde an einer älteren Version des Dokuments vorgenommen.",
   "hydranium/protocol/document-not-open": "Das Dokument {uri} ist in dieser Bearbeitungssitzung nicht geöffnet.",
   "hydranium/protocol/duplicate-client-id": "Die Bearbeitungssitzung konnte nicht gestartet werden: Die Kennung der Sitzung wird noch von einem anderen Editor verwendet.",
+  "hydranium/protocol/save-failed": "Speichern fehlgeschlagen: {failures}.",
   "hydranium/data-server/no-active-profile": "Es läuft keine Profiling-Aufzeichnung; rufen Sie zuerst startProfiling auf.",
   "hydranium/data-server/reference-settle-timeout": "Das Modell wird noch verarbeitet; bitte versuchen Sie es gleich noch einmal.",
   "hydranium/glsp-server/diagram-edit-dropped": "Ihre Änderung am Diagramm wurde nicht übernommen: Dasselbe Element wurde zuvor in einem anderen Editor geändert. Nehmen Sie die Änderung erneut vor, wenn Sie sie weiterhin möchten.",

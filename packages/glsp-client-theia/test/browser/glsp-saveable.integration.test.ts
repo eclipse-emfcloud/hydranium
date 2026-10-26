@@ -26,7 +26,6 @@ import {
    ActionHandlerRegistry,
    DefaultModelInitializationConstraint,
    EditorContextService,
-   GLSPActionDispatcher,
    NullLogger,
    SaveModelAction,
    SetDirtyStateAction
@@ -61,7 +60,8 @@ import {
 } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import { DefaultModelLedger, type ServerSharedServices } from '@hydranium/core';
-import { ReconcilingConflictResolver, RequestSaveModelAction } from '@hydranium/protocol';
+import { HydraniumGlspActionDispatcher } from '@hydranium/glsp-client';
+import { isSaveFailedError, NoopLogger, ReconcilingConflictResolver, RequestSaveModelAction, SaveFailedError } from '@hydranium/protocol';
 import { ContainerModule, inject, injectable } from 'inversify';
 import { HydraniumGlspSaveable } from '../../src/browser/glsp-saveable';
 
@@ -202,7 +202,9 @@ function stubSharedServices(): ServerSharedServices {
  * server does not advertise has no handler here, so the save request only
  * reaches the server if the server advertises it.
  */
-class WiredDispatcher extends GLSPActionDispatcher {
+class WiredDispatcher extends HydraniumGlspActionDispatcher {
+   protected override readonly hydraniumLogger = new NoopLogger();
+
    constructor(context: EditorContextService, serverKinds: readonly string[], toServer: (action: Action) => void) {
       super();
       const registry = new ActionHandlerRegistry([], []);
@@ -337,6 +339,20 @@ describe('HydraniumGlspSaveable against the GLSP client and server', () => {
       await expect(saveable.save()).resolves.toBeUndefined();
       expect(savedEdits).toEqual([1]);
       expect(saveable.dirty).toBe(false);
+   });
+
+   it('rejects with the documents a save could not write, and why', async () => {
+      const { saveable, edit } = await openDiagram();
+      await edit();
+      const failures = [{ uri: 'test://fixture.layout', reason: 'EACCES: permission denied' }];
+      saveFailure = new SaveFailedError(failures);
+
+      const rejection = await saveable.save().then(
+         () => undefined,
+         (reason: unknown) => reason
+      );
+      expect(isSaveFailedError(rejection)).toBe(true);
+      expect(rejection).toMatchObject({ failures });
    });
 
    it('saves as GLSP does when the server does not advertise the save request', async () => {

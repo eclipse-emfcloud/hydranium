@@ -43,10 +43,11 @@ webview's messages over one `vscode-messenger` hop shared by every head.
 
 2. **Connect the diagram.** Create a `HydraniumGlspVscodeServer`, with a
    `findPort` that calls `findPort` on your language client and the head's
-   port request, and give it to a `GlspVscodeConnector` without a `messenger`
-   option: the connector's own keeps messages flowing to a hidden tab. Start
-   the server without awaiting it, and report its failure off `onReady`, since
-   `start()` resolves either way. Register a subclass of
+   port request, and give it to a `HydraniumGlspVscodeConnector` without a
+   `messenger` option: the connector's own keeps messages flowing to a hidden
+   tab, and a save that fails rejects with the documents it could not write.
+   Start the server without awaiting it, and report its failure off `onReady`,
+   since `start()` resolves either way. Register a subclass of
    `HydraniumGlspEditorProvider` that names the diagram type, the webview
    bundle and a title, under the view type your manifest's
    `contributes.customEditors` declares, with `retainContextWhenHidden`.

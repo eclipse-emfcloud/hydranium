@@ -8,4 +8,5 @@
  ********************************************************************************/
 
 export * from './glsp-editor-provider';
+export * from './glsp-vscode-connector';
 export * from './glsp-vscode-server';
