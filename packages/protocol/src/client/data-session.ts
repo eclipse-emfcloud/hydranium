@@ -416,7 +416,9 @@ export class DataSession<
    protected readonly resumeToken: string = randomUuid();
    /** The proxy the session is registered on; another one means the connection was replaced. */
    protected registeredOn?: RpcProxy<TServer>;
+   /** The registration on {@link registeredOn}, which {@link connected} awaits. Replaced when the proxy changes. */
    protected registration?: Promise<void>;
+   /** Set by {@link dispose} or {@link detach}, whichever comes first, after which {@link assertLive} throws. */
    protected disposed = false;
    /**
     * Disposed through {@link detach} rather than {@link dispose}, so nothing may
@@ -1552,6 +1554,11 @@ export class DataSession<
       await this.clock.raceTimer(Promise.all(pending.map(tracker => tracker.whenSettled())), this.settleBeforeCloseMs);
    }
 
+   /**
+    * Throw a `SessionClosedError` once the session has ended. {@link connected}
+    * runs it again after each of its waits, since a session disposed during
+    * one would otherwise register or send after the close.
+    */
    protected assertLive(): void {
       if (this.disposed) {
          throw new SessionClosedError(this.clientId);

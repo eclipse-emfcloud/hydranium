@@ -17,15 +17,23 @@
 
 /** Which dimensions to capture, and the two sampling knobs. All off by default. */
 export interface ProfileCaptureOptions {
+   /** Sample the CPU at {@link cpuIntervalMicros} into a `server-cpu` artefact. */
    cpu?: boolean;
+   /** Sample allocations at {@link allocationIntervalBytes} into a `server-alloc` artefact. */
    allocation?: boolean;
+   /** Record every GC pause, summed by kind in `server-summary` rather than as its own artefact. */
    gc?: boolean;
+   /**
+    * Sample event-loop delay, summarised as mean, p50, p99 and max in
+    * `server-summary` rather than as its own artefact. Absent there when the
+    * sampler recorded nothing.
+    */
    eventLoopDelay?: boolean;
    /** Also drop a retained `.heapsnapshot` at stop (for the memory analyzer). */
    heapSnapshot?: boolean;
-   /** CPU sampling interval in µs (implementation default 1000). */
+   /** CPU sampling interval in µs (implementation default `DEFAULT_CPU_INTERVAL_MICROS`). */
    cpuIntervalMicros?: number;
-   /** Allocation sampling interval in bytes (implementation default 32768). */
+   /** Allocation sampling interval in bytes (implementation default `DEFAULT_ALLOCATION_INTERVAL_BYTES`). */
    allocationIntervalBytes?: number;
 }
 
@@ -72,12 +80,17 @@ export interface ProfilingArtifact {
 
 /** What a skill reads to know what to expect from a run (browser entries only in `app` mode, etc.). */
 export interface ProfilingEnvironment {
+   /** `harness` for a headless run, `app` for one that drove the real app. */
    mode: 'harness' | 'app';
    /** Whether a cgroup memory controller is present (running in a pod) vs local. */
    container: boolean;
+   /** The commit the run reflects, which a finding's `file:line` is read against. Absent when the caller named none. */
    commit?: string;
+   /** The workspace under test as the caller named it. Absent when it named none. */
    workspace?: string;
+   /** The `process.version` of the process that wrote the manifest, which for an e2e run is the test runner, not the server. */
    node: string;
+   /** Captured windows in capture order, each with its duration in milliseconds. */
    windows: { label: string; ms: number }[];
 }
 

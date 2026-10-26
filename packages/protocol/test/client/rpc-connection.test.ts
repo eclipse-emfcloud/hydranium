@@ -20,7 +20,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MessageConnection } from 'vscode-jsonrpc';
 import type { ReadyServer, RpcConnectionLifecycle } from '../../src/client/rpc-connection';
-import { RpcConnection } from '../../src/client/rpc-connection';
+import { DATA_SERVER_CONNECT_FAILED, RpcConnection } from '../../src/client/rpc-connection';
 import { bindRpcMethods } from '../../src/rpc/bind-rpc-methods';
 import type { RpcProxy } from '../../src/rpc/create-rpc-proxy';
 import { tick, waitFor } from '../../src/testing';
@@ -158,6 +158,22 @@ describe('RpcConnection.lifecycle', () => {
       } finally {
          rpc.dispose();
          pair.dispose();
+         port.dispose();
+      }
+   });
+
+   it('reports a transport that never opens once, as a failed connect', async () => {
+      const port = makeFakeDataPort({ connect: () => Promise.reject(new Error('no transport')) });
+      const rpc = new ProbeRpcConnection<TestServer, RecordingClient>(port, new RecordingClient(), {
+         methodNamespace: WIRE_PREFIX,
+         clientMethods: CLIENT_METHODS,
+         lifecycle: {}
+      });
+      try {
+         await expect(rpc.connected()).rejects.toThrow('no transport');
+         expect(port.reported.map(report => report.message.code)).toEqual([DATA_SERVER_CONNECT_FAILED.code]);
+      } finally {
+         rpc.dispose();
          port.dispose();
       }
    });

@@ -41,7 +41,9 @@ export const RELAY_REPLAY_FAILED = defineMessage(
  * only who owns the framing, which is why this tier never needs to know.
  */
 export interface RelayTransport {
+   /** Its close or error fires {@link MessageRelay.onClose}. */
    readonly reader: MessageReader;
+   /** A write that rejects is not retried, and whether its message arrived is unknown. */
    readonly writer: MessageWriter;
    /** Release the transport. Called when the relay is disposed. */
    dispose?(): void;

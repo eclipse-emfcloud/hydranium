@@ -82,6 +82,10 @@ export const CONFLICT_ERROR_CODE = HYDRANIUM_ERROR_CODES.conflict;
 
 /** Structured payload carried in {@link ConflictError.data}. */
 export interface ConflictErrorData extends HydraniumMessageData {
+   /**
+    * The document whose version moved. A write of several documents names
+    * the first stale one in request order, and others may be stale too.
+    */
    readonly uri: string;
    /** The base version the caller authored against. */
    readonly baseVersion: ModelVersion;
@@ -144,6 +148,7 @@ export class ConflictError extends ResponseError<ConflictErrorData> {
       Object.setPrototypeOf(this, ConflictError.prototype);
    }
 
+   /** The document whose version moved, see {@link ConflictErrorData.uri}. */
    get uri(): string {
       return this.data!.uri;
    }

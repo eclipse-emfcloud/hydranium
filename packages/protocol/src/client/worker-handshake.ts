@@ -63,6 +63,7 @@ export function isWorkerBootstrapMessage(value: unknown): value is WorkerBootstr
 export const WORKER_READY_MESSAGE_TYPE = 'hydranium/ready';
 
 export interface WorkerReadyMessage {
+   /** The only field {@link isWorkerReadyMessage} checks, so {@link workspace} is taken on trust. */
    readonly type: typeof WORKER_READY_MESSAGE_TYPE;
    /** The files the heads came up on, when the worker's host named a root to read them under. */
    readonly workspace?: WorkerWorkspace;
@@ -74,6 +75,7 @@ export interface WorkerReadyMessage {
  * the seed, an editor opened on the seed overwrites the restored document.
  */
 export interface WorkerWorkspace {
+   /** The root the worker's host was given. */
    readonly rootUri: string;
    /** Every file's content, keyed by its path relative to {@link rootUri}. */
    readonly files: Readonly<Record<string, string>>;
@@ -98,9 +100,11 @@ export const WORKER_ERROR_MESSAGE_TYPE = 'hydranium/worker-error';
 export const WORKER_BOOTSTRAP_PHASE = 'bootstrap';
 
 export interface WorkerErrorMessage {
+   /** The page raises this type too, on its own error event, when the `Worker` fires `error`. */
    readonly type: typeof WORKER_ERROR_MESSAGE_TYPE;
    /** What the worker was doing, {@link WORKER_BOOTSTRAP_PHASE} for a failed bootstrap. */
    readonly phase: string;
+   /** The failure described for a log. Never branch on it. */
    readonly message: string;
 }
 

@@ -50,7 +50,9 @@ export interface DebouncerOptions {
  * than a breaking change.
  */
 export class Debouncer implements Disposable {
+   /** {@link DebouncerOptions.delayMs}, read at each {@link schedule}. An armed timer keeps the delay it was armed with. */
    protected readonly delay: ObservableValue<number>;
+   /** {@link DebouncerOptions.maxWaitMs}, fixed at construction unlike {@link delay}. */
    protected readonly maxWaitMs?: number;
    protected timer?: Disposable;
    /** Running since the first {@link schedule} of the current pending window; drives {@link DebouncerOptions.maxWaitMs}. */
@@ -87,7 +89,7 @@ export class Debouncer implements Disposable {
       this.timer = this.clock.setTimer(() => this.fire(), wait);
    }
 
-   /** If a fire is pending, run {@link fn} now and clear the window; otherwise a no-op. */
+   /** Run {@link fn} now if a fire is pending, clearing the window first, and do nothing otherwise. */
    flush(): void {
       if (this.timer !== undefined) {
          this.fire();
@@ -106,6 +108,7 @@ export class Debouncer implements Disposable {
       this.cancel();
    }
 
+   /** Clears the window before it runs {@link fn}, so a {@link schedule} from inside `fn` opens a new one. */
    protected fire(): void {
       this.timer?.dispose();
       this.timer = undefined;

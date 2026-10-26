@@ -124,7 +124,9 @@ function percentile(sortedAscending: readonly number[], percent: number): number
  * deterministic on a fake clock.
  */
 export class LatencyCollector {
+   /** One tally per method name. Emptied by {@link reset}. */
    protected readonly durations = new Map<string, MethodLatencyTally>();
+   /** Restarted by {@link reset}. Its reading is the report's `windowMs`. */
    protected window: Stopwatch;
 
    constructor(

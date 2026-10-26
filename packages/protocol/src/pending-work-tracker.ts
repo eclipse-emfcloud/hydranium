@@ -14,6 +14,7 @@
  * races {@link whenSettled} against its own bound.
  */
 export class PendingWorkTracker {
+   /** The tracked work. {@link track} removes each entry once it settles. */
    protected readonly pending = new Set<Promise<unknown>>();
 
    /** Watch `work` until it settles, and hand it back. */

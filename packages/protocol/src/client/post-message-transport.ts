@@ -75,7 +75,12 @@ export interface PostMessageChannel {
  * the same copy of `vscode-jsonrpc`.
  */
 export interface PostMessageTransport {
+   /** Closes only when the channel's `onClose` fires. */
    readonly reader: MessageReader;
+   /**
+    * A write resolves once the channel's `post` returns, not once the message
+    * arrives, and rejects when `post` throws.
+    */
    readonly writer: MessageWriter;
    /**
     * Release the channel subscriptions. A {@link createMessagePortTransport}

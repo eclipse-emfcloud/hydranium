@@ -24,6 +24,10 @@
  * whether a save failed.
  */
 export interface RequestSaveModelAction {
+   /**
+    * Answered only by a server that advertises this kind. The framework's
+    * Theia saveable sends GLSP's `SaveModelAction` to one that does not.
+    */
    kind: typeof RequestSaveModelAction.KIND;
    /** The id the response echoes as its `responseId`. Empty until the dispatcher assigns one. */
    requestId: string;
@@ -45,6 +49,7 @@ export namespace RequestSaveModelAction {
 
 /** The server's answer to a {@link RequestSaveModelAction} that saved. */
 export interface ModelSavedAction {
+   /** No client handler takes this kind: the dispatcher settles the save by {@link responseId} instead. */
    kind: typeof ModelSavedAction.KIND;
    /** The `requestId` of the save this answers. The server's dispatcher sets it. */
    responseId: string;

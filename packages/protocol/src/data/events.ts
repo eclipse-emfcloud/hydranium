@@ -44,14 +44,12 @@ export type TransferDocumentUpdateReason = 'changed' | 'rebuilt' | 'saved';
 /**
  * Delivered on the data-server when a document's content (or existence)
  * changed. Subscribers receive this via `DocumentServerProtocol.watchModelDocument`.
- *
- * The `document` field carries the latest built state — diagnostics + root
- * are coherent with each other at the time the event fired.
  */
 export interface TransferDocumentUpdatedEvent<
    TTransfer extends TransferElement,
    TDiagnostic extends TransferDiagnostic = TransferDiagnostic
 > {
+   /** The latest built state: diagnostics and root are coherent with each other at the time the event fired. */
    document: TransferDocument<TTransfer, TDiagnostic>;
    /**
     * The client whose write this event echoes: the author of the version on a
@@ -61,6 +59,7 @@ export interface TransferDocumentUpdatedEvent<
     * instead.
     */
    sourceClientId: string;
+   /** See {@link TransferDocumentUpdateReason} for which reasons the framework sends. */
    reason: TransferDocumentUpdateReason;
    /**
     * The position of this event among the update and deletion events the
@@ -77,29 +76,25 @@ export type TransferDocumentUpdatedListener<
 > = (event: TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>) => void;
 
 /**
- * Delivered on the data-server when a document was persisted to disk via
- * `DataServerProtocol.saveModelDocument` or `persistModelDocument`. Distinct
- * from {@link TransferDocumentUpdatedEvent}: subscribers that only care about
- * persistence (external sync, editor "saved" indicators, dirty-flag
- * clear) listen for this event family instead of filtering an update
- * stream for `reason: 'saved'`.
- *
- * The `document` field carries the post-save built state — same shape
- * the synchronous `saveModelDocument` RPC response returns, delivered
- * to subscribers (`DataClientProtocol.onDocumentSaved`) so non-caller
- * clients see the persistence event too.
+ * Delivered on the data-server when a subscribed document was saved to disk,
+ * whichever client saved it, an editor's save through the LSP head included.
+ * Distinct from {@link TransferDocumentUpdatedEvent}: subscribers that only
+ * care about persistence (external sync, editor "saved" indicators,
+ * dirty-flag clear) listen for this event family instead of filtering an
+ * update stream for `reason: 'saved'`.
  */
 export interface TransferDocumentSavedEvent<
    TTransfer extends TransferElement,
    TDiagnostic extends TransferDiagnostic = TransferDiagnostic
 > {
+   /** The latest built state, taken after the save. */
    document: TransferDocument<TTransfer, TDiagnostic>;
    /**
-    * The client whose `saveModelDocument` or `persistModelDocument` call
-    * produced this, also when another client wrote the persisted text. Every
-    * subscriber receives the event including the originator, which already had
-    * the same state as the RPC response — compare against your own id to drop
-    * the echo rather than re-rendering from it.
+    * The client whose save produced this, also when another client wrote the
+    * persisted text: the caller of `saveModelDocument` or
+    * `persistModelDocument`, or `LANGUAGE_CLIENT_ID` for an editor's save
+    * through the LSP head. Every subscriber receives the event, the saving
+    * client included, so compare against your own id to drop the echo.
     */
    sourceClientId: string;
 }
