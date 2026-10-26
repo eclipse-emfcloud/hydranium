@@ -157,6 +157,19 @@ export interface BuildEndedEvent {
    readonly completed: boolean;
 }
 
+/** Registered through {@link HydraniumDocumentBuilder.onBuildEnded}. */
+export type BuildEndedListener = (event: BuildEndedEvent) => void;
+
+/** Registered through {@link HydraniumDocumentBuilder.onDocumentPhaseDelivered}. */
+export type DocumentPhaseDeliveredListener = (document: LangiumDocument, version: number) => void;
+
+/** A wait {@link HydraniumDocumentBuilder.awaitBuilderState} holds until the builder reaches its state. */
+export interface BuilderStateWait {
+   readonly state: DocumentState;
+   /** Settles the wait and stops holding it. */
+   readonly resolve: () => void;
+}
+
 /**
  * One locked build {@link HydraniumDocumentBuilder.scheduleUpdate} queued,
  * which later requests merge into while it waits and join while it runs.
@@ -198,7 +211,9 @@ function sameClients(taken: readonly string[] | undefined, current: readonly str
  *
  * - **Bug-fixes** (always on): an {@link awaitDocumentState} that waits where
  *   the default rejects (re-queuing, under the workspace lock, a document no
- *   build will carry), a {@link prepareBuild} that keeps a cancelled
+ *   build will carry), an {@link awaitBuilderState} that resolves once a
+ *   phase ends, whether armed during its notification or on a phase no
+ *   document reached, a {@link prepareBuild} that keeps a cancelled
  *   non-validating build from suppressing validation, and a
  *   {@link shouldRelink} that never judges a document unaffected on an index
  *   that does not describe it.
@@ -278,9 +293,11 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     */
    protected lastCancelledTraceId?: number;
    /** Registered through {@link onDocumentPhaseDelivered}, by phase. */
-   protected readonly documentPhaseDeliveredListeners = new MultiMap<DocumentState, (document: LangiumDocument, version: number) => void>();
+   protected readonly documentPhaseDeliveredListeners = new MultiMap<DocumentState, DocumentPhaseDeliveredListener>();
    /** Registered through {@link onBuildEnded}. */
-   protected readonly buildEndedListeners = new Set<(event: BuildEndedEvent) => void>();
+   protected readonly buildEndedListeners = new Set<BuildEndedListener>();
+   /** Held by {@link awaitBuilderState} until {@link runCancelable} sees their state reached. */
+   protected readonly builderStateWaits = new Set<BuilderStateWait>();
    /** Set while the lock read {@link checkWaitsOnceDrained} queued has not run. */
    protected drainCheckQueued = false;
    /** Resolved per call: the sync service reaches this builder. */
@@ -339,7 +356,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * late: a cancel after this document but before the batch ends skips it,
     * although every listener of this document ran.
     */
-   onDocumentPhaseDelivered(state: DocumentState, listener: (document: LangiumDocument, version: number) => void): Disposable {
+   onDocumentPhaseDelivered(state: DocumentState, listener: DocumentPhaseDeliveredListener): Disposable {
       this.documentPhaseDeliveredListeners.add(state, listener);
       return Disposable.create(() => this.documentPhaseDeliveredListeners.delete(state, listener));
    }
@@ -354,7 +371,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * that waits for the drain, so it must not wait on a build. One that
     * throws is logged and skipped; the build and the other listeners go on.
     */
-   onBuildEnded(listener: (event: BuildEndedEvent) => void): Disposable {
+   onBuildEnded(listener: BuildEndedListener): Disposable {
       this.buildEndedListeners.add(listener);
       return Disposable.create(() => this.buildEndedListeners.delete(listener));
    }
@@ -641,6 +658,50 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     */
    protected isOrphaned(document: LangiumDocument, state: DocumentState): boolean {
       return document.state < state && this.currentState >= state;
+   }
+
+   /**
+    * Resolve once `currentState` reaches `state`, which {@link runCancelable}
+    * checks after every phase.
+    *
+    * Langium's waits for `onBuildPhase(state)`, which never fires for a wait
+    * armed while that phase notifies its listeners: the notification calls a
+    * copy of the listener list taken before it yields to the event loop, and
+    * `currentState` is raised only after it. Nor does it fire for a phase no
+    * document reached. Either way the wait never ends, and neither does the
+    * request Langium holds on it.
+    */
+   protected override awaitBuilderState(state: DocumentState, cancelToken: CancellationToken): Promise<void> {
+      if (this.currentState >= state) {
+         return Promise.resolve();
+      }
+      if (cancelToken.isCancellationRequested) {
+         return Promise.reject(OperationCancelled);
+      }
+      return new Promise((resolve, reject) => {
+         const settle = (outcome: () => void): void => {
+            this.builderStateWaits.delete(wait);
+            cancelled.dispose();
+            outcome();
+         };
+         const wait: BuilderStateWait = { state, resolve: () => settle(resolve) };
+         const cancelled = cancelToken.onCancellationRequested(() => settle(() => reject(OperationCancelled)));
+         this.builderStateWaits.add(wait);
+      });
+   }
+
+   protected override async runCancelable(
+      documents: LangiumDocument[],
+      targetState: DocumentState,
+      cancelToken: CancellationToken,
+      callback: (document: LangiumDocument) => unknown
+   ): Promise<void> {
+      await super.runCancelable(documents, targetState, cancelToken, callback);
+      for (const wait of this.builderStateWaits) {
+         if (this.currentState >= wait.state) {
+            wait.resolve();
+         }
+      }
    }
 
    /**
