@@ -25,6 +25,7 @@ import {
    CreateNodeOperation,
    DeleteElementOperation,
    GEdge,
+   GModelFactory,
    GNode,
    ModelValidator,
    RedoAction,
@@ -50,6 +51,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { BookstoreDiagramModule } from '../src/glsp/bookstore/diagram-module.js';
 import { BookstoreGModelFactory } from '../src/glsp/bookstore/gmodel-factory.js';
 import type { BookstoreGlspState } from '../src/glsp/bookstore/state.js';
+import { isBookstoreModel } from '../src/language-server/ast.js';
 import { createServices } from '../src/node/services.js';
 
 let workspace: ScratchWorkspace | undefined;
@@ -247,6 +249,46 @@ describe('Bookstore diagram', () => {
       ]);
       const targets = children.filter(child => child instanceof GEdge).map(edge => edge.targetId);
       expect(targets).toEqual([external?.id, external?.id]);
+   });
+
+   it('draws one external node per document when two documents declare the same name', async () => {
+      workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
+      workspace.write('one.bookstore', 'node second');
+      workspace.write('two.bookstore', 'node second');
+      const file = workspace.write('referencing.bookstore', 'node first -> second\nnode third -> second');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      const harness = makeGlspHarness<BookstoreGlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
+         diagramType: BOOKSTORE_DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      diagram = harness;
+      await harness.start();
+      await harness.openDocument(file);
+      // A name resolves to one node per document, so point each reference at a
+      // different document's node the way a qualified reference would.
+      const [first, third] = harness.state.sourceRoot.nodes;
+      for (const [node, declaring] of [
+         [first, 'one.bookstore'],
+         [third, 'two.bookstore']
+      ] as const) {
+         const declared = shared.workspace.LangiumDocuments.getDocument(URI.parse(workspace.uri(declaring)))?.parseResult.value;
+         if (!node.target || !isBookstoreModel(declared)) {
+            throw new Error(`no reference from ${node.name} or no model in ${declaring}`);
+         }
+         Object.defineProperty(node.target, 'ref', { value: declared.nodes[0] });
+      }
+      harness.sessionContainer.get<GModelFactory>(GModelFactory).createModel();
+
+      const children = harness.state.root.children;
+      const externals = children.filter(child => child.type === BOOKSTORE_EXTERNAL_NODE_TYPE);
+      expect(externals.map(external => external.children[0])).toMatchObject([
+         { text: 'second (one.bookstore)' },
+         { text: 'second (two.bookstore)' }
+      ]);
+      const targets = children.filter(child => child instanceof GEdge).map(edge => edge.targetId);
+      expect(targets).toEqual(externals.map(external => external.id));
    });
 
    it('places each node a row above its target, cutting a cycle', async () => {

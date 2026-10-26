@@ -43,15 +43,50 @@ interface Fakes {
    elementIds?: Map<AstNode, string[]>;
    /** GModel ids currently drawn on this diagram. */
    rendered?: Set<string>;
+   /** The uri the diagram was loaded with, as the client spelled it. */
+   sourceUri?: string;
+   /** uri → canonical uri, as the bound `DocumentUriPolicy` maps it; others are canonical already. */
+   canonical?: Map<string, string>;
+   /** GModel id → node, added with `indexSemanticElement`; it wins over the walk of the diagram's document. */
+   aliases?: Map<string, AstNode>;
+   /** node → document uri, for a node no document's `nodesByPath` holds. */
+   nodeDocs?: Map<AstNode, string>;
+   /** Every uri the bound `DocumentUriPolicy` was asked to canonicalise, in call order. */
+   canonicalised?: string[];
 }
 
 function createValidator(fakes: Fakes): HydraniumGlspModelValidator {
    const { loaded = true, documents = [], idsByNode = new Map(), elementIds = new Map(), rendered = new Set() } = fakes;
+   const { sourceUri = 'file:///m/diagram.a', canonical = new Map<string, string>(), aliases = new Map<string, AstNode>() } = fakes;
    const renderedUris = fakes.renderedUris ?? documents.map(doc => doc.uri);
    const byUri = new Map(documents.map(doc => [doc.uri, doc]));
+   const canonicalUri = (uri: string): string => canonical.get(uri) ?? uri;
+   const docOf = new Map(fakes.nodeDocs);
+   for (const doc of documents) {
+      for (const node of doc.nodesByPath?.values() ?? []) {
+         docOf.set(node, doc.uri);
+      }
+   }
+   // The index walks only the diagram's document, then lays the aliases over it.
+   const semantic = new Map<string, AstNode>();
+   for (const [node, id] of idsByNode) {
+      const uri = docOf.get(node);
+      if (uri !== undefined && canonicalUri(uri) === canonicalUri(sourceUri)) {
+         semantic.set(id, node);
+      }
+   }
+   for (const [id, node] of aliases) {
+      semantic.set(id, node);
+   }
 
    const sharedServices = makeNoopSharedServices<ServerSharedServices>({
       workspace: {
+         DocumentUriPolicy: {
+            canonicalUri: (uri: string): string => {
+               fakes.canonicalised?.push(uri);
+               return canonicalUri(uri);
+            }
+         },
          LangiumDocuments: {
             // The validator resolves each rendered-document uri to its document.
             getDocument(uri: { toString(): string }): unknown {
@@ -77,12 +112,14 @@ function createValidator(fakes: Fakes): HydraniumGlspModelValidator {
       }
    });
    const modelState = {
-      sourceUri: loaded ? 'file:///m/diagram.a' : undefined,
+      sourceUri: loaded ? sourceUri : undefined,
       index: {
          renderedDocumentUris: (): readonly string[] => renderedUris,
          findId: (node: AstNode | undefined): string | undefined => (node ? idsByNode.get(node) : undefined),
          findElementIds: (node?: AstNode): readonly string[] => (node ? (elementIds.get(node) ?? []) : []),
-         find: (id: string): object | undefined => (rendered.has(id) ? { id } : undefined)
+         find: (id: string): object | undefined => (rendered.has(id) ? { id } : undefined),
+         findSemanticElement: (id: string): AstNode | undefined => semantic.get(id),
+         documentUriOf: (node: AstNode): string | undefined => docOf.get(node)
       }
    };
 
@@ -114,30 +151,116 @@ describe('HydraniumGlspModelValidator', () => {
       expect(validator.validate([], 'batch')).toEqual([{ elementId: 'e1', kind: MarkerKind.WARNING, label: 'dup', description: 'dup' }]);
    });
 
-   it('maps a diagnostic from a DIFFERENT referenced document onto its rendered element', () => {
-      // The cross-document case: the element (and its error) live in another
-      // file, while the diagram's own document carries no diagnostic.
-      const child = makeFakeAstNode<AstNode>({ $type: 'Child' });
+   it("maps a diagnostic on the diagram's own document loaded under another spelling of its uri", () => {
+      const element = makeFakeAstNode<AstNode>({ $type: 'Element' });
+      const validator = createValidator({
+         sourceUri: 'file:///m/link/diagram.a',
+         canonical: new Map([['file:///m/link/diagram.a', 'file:///m/diagram.a']]),
+         documents: [
+            {
+               uri: 'file:///m/diagram.a',
+               diagnostics: [diagnostic('elements@0', DiagnosticSeverity.Warning, 'dup')],
+               nodesByPath: new Map([['elements@0', element]])
+            }
+         ],
+         idsByNode: new Map([[element, 'e1']]),
+         rendered: new Set(['e1'])
+      });
+      expect(validator.validate([], 'batch')).toEqual([{ elementId: 'e1', kind: MarkerKind.WARNING, label: 'dup', description: 'dup' }]);
+   });
+
+   it('does not mark a diagram node that shares its stable id with a node of another document', () => {
+      // Stable ids carry no document: the foreign node keys as `Element1`, the
+      // id a node of the diagram's own document is drawn under.
+      const foreign = makeFakeAstNode<AstNode>({ $type: 'Element' });
       const validator = createValidator({
          documents: [
             { uri: 'file:///m/diagram.a', diagnostics: [] },
             {
                uri: 'file:///m/other.a',
-               diagnostics: [diagnostic('elements@0/children@2', DiagnosticSeverity.Error, 'Must provide a unique id.')],
-               nodesByPath: new Map([['elements@0/children@2', child]])
+               diagnostics: [diagnostic('elements@0', DiagnosticSeverity.Error, 'foreign')],
+               nodesByPath: new Map([['elements@0', foreign]])
             }
          ],
-         idsByNode: new Map([[child, 'element.child.2']]),
-         rendered: new Set(['element.child.2'])
+         idsByNode: new Map([[foreign, 'Element1']]),
+         rendered: new Set(['Element1'])
       });
-      expect(validator.validate([], 'batch')).toEqual([
-         {
-            elementId: 'element.child.2',
-            kind: MarkerKind.ERROR,
-            label: 'Must provide a unique id.',
-            description: 'Must provide a unique id.'
-         }
+      expect(validator.validate([], 'batch')).toEqual([]);
+   });
+
+   it("does not mark a node of another document drawn under the stable id of a node of the diagram's own document", () => {
+      // Only the foreign node is drawn, aliased under the id the diagram's own
+      // node keys as.
+      const own = makeFakeAstNode<AstNode>({ $type: 'Element' });
+      const foreign = makeFakeAstNode<AstNode>({ $type: 'Element' });
+      const validator = createValidator({
+         documents: [
+            {
+               uri: 'file:///m/diagram.a',
+               diagnostics: [diagnostic('elements@0', DiagnosticSeverity.Error, 'own')],
+               nodesByPath: new Map([['elements@0', own]])
+            }
+         ],
+         nodeDocs: new Map([[foreign, 'file:///m/other.a']]),
+         idsByNode: new Map([[own, 'Element1']]),
+         aliases: new Map([['Element1', foreign]]),
+         rendered: new Set(['Element1'])
+      });
+      expect(validator.validate([], 'batch')).toEqual([]);
+   });
+
+   it('marks the one element left of an id drawn twice with the diagnostics of every node drawn under it, whichever document they come from', () => {
+      // The index prunes the second element of a duplicate id; the first is the
+      // own node's, the foreign node is registered under the same id.
+      const own = makeFakeAstNode<AstNode>({ $type: 'Element' });
+      const foreign = makeFakeAstNode<AstNode>({ $type: 'Element' });
+      const validator = createValidator({
+         documents: [
+            {
+               uri: 'file:///m/diagram.a',
+               diagnostics: [diagnostic('elements@0', DiagnosticSeverity.Error, 'own')],
+               nodesByPath: new Map([['elements@0', own]])
+            },
+            {
+               uri: 'file:///m/other.a',
+               diagnostics: [diagnostic('elements@0', DiagnosticSeverity.Error, 'foreign')],
+               nodesByPath: new Map([['elements@0', foreign]])
+            }
+         ],
+         idsByNode: new Map([[own, 'Element1']]),
+         elementIds: new Map([[foreign, ['Element1']]]),
+         rendered: new Set(['Element1'])
+      });
+      expect(validator.validate([], 'batch').map(marker => [marker.elementId, marker.label])).toEqual([
+         ['Element1', 'own'],
+         ['Element1', 'foreign']
       ]);
+   });
+
+   it('canonicalises each uri once per validation, however many diagnosed nodes are drawn under it', () => {
+      const first = makeFakeAstNode<AstNode>({ $type: 'Element' });
+      const second = makeFakeAstNode<AstNode>({ $type: 'Element' });
+      const canonicalised: string[] = [];
+      const validator = createValidator({
+         canonicalised,
+         documents: [
+            {
+               uri: 'file:///m/diagram.a',
+               diagnostics: [diagnostic('elements@0'), diagnostic('elements@1')],
+               nodesByPath: new Map([
+                  ['elements@0', first],
+                  ['elements@1', second]
+               ])
+            }
+         ],
+         idsByNode: new Map([
+            [first, 'e1'],
+            [second, 'e2']
+         ]),
+         rendered: new Set(['e1', 'e2'])
+      });
+      expect(validator.validate([], 'batch')).toHaveLength(2);
+      expect(canonicalised).toEqual(['file:///m/diagram.a']);
    });
 
    it('aggregates diagnostics across multiple documents, dropping those not drawn on this diagram', () => {
@@ -146,7 +269,7 @@ describe('HydraniumGlspModelValidator', () => {
       const validator = createValidator({
          documents: [
             {
-               uri: 'file:///m/a.a',
+               uri: 'file:///m/diagram.a',
                diagnostics: [diagnostic('e', DiagnosticSeverity.Error, 'on diagram')],
                nodesByPath: new Map([['e', shown]])
             },
@@ -156,10 +279,9 @@ describe('HydraniumGlspModelValidator', () => {
                nodesByPath: new Map([['e', elsewhere]])
             }
          ],
-         idsByNode: new Map([
-            [shown, 'shown'],
-            [elsewhere, 'elsewhere']
-         ]),
+         idsByNode: new Map([[shown, 'shown']]),
+         // Registered, so only the rendered-check drops it.
+         elementIds: new Map([[elsewhere, ['elsewhere']]]),
          rendered: new Set(['shown'])
       });
       expect(validator.validate([], 'batch')).toEqual([
@@ -182,7 +304,7 @@ describe('HydraniumGlspModelValidator', () => {
             }
          ],
          renderedUris: ['file:///m/diagram.a'], // ghost.a not among the rendered docs
-         idsByNode: new Map([[ghost, 'g1']]),
+         elementIds: new Map([[ghost, ['g1']]]),
          rendered: new Set(['g1'])
       });
       expect(validator.validate([], 'batch')).toEqual([]);

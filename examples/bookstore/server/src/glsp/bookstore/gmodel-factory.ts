@@ -64,7 +64,10 @@ export class BookstoreGModelFactory implements GModelFactory {
       const nodes = [...drawn].map(([id, node]) => ({ id, builder: this.createNode(id, BOOKSTORE_NODE_TYPE, node.name) }));
       const edges: GEdge[] = [];
       const targetOf = new Map<string, string>();
-      const externalIds = new Set<string>();
+      // By document and id: same-named targets of two documents get separate
+      // nodes, the second with a counter, not a uri in a client-visible id.
+      const externalIds = new Map<string, string>();
+      const externalCounts = new Map<string, number>();
       for (const [sourceId, node] of drawn) {
          const target = node.target?.ref;
          if (!target) {
@@ -72,10 +75,17 @@ export class BookstoreGModelFactory implements GModelFactory {
          }
          let targetId = index.createId(target);
          if (AstUtils.findRootNode(target) !== root) {
-            targetId = `${targetId}-external`;
-            if (!externalIds.has(targetId)) {
-               externalIds.add(targetId);
-               const file = UriUtils.basename(AstUtils.getDocument(target).uri);
+            const uri = AstUtils.getDocument(target).uri;
+            const key = `${uri.toString()} ${targetId}`;
+            const known = externalIds.get(key);
+            if (known !== undefined) {
+               targetId = known;
+            } else {
+               const count = (externalCounts.get(targetId) ?? 0) + 1;
+               externalCounts.set(targetId, count);
+               targetId = count === 1 ? `${targetId}-external` : `${targetId}-external-${count}`;
+               externalIds.set(key, targetId);
+               const file = UriUtils.basename(uri);
                const external = this.createNode(targetId, BOOKSTORE_EXTERNAL_NODE_TYPE, `${target.name} (${file})`);
                nodes.push({ id: targetId, builder: external.addCssClass('external') });
             }

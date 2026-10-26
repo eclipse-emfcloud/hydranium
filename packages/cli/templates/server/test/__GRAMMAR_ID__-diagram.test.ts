@@ -16,6 +16,7 @@ import {
    CreateNodeOperation,
    DeleteElementOperation,
    GEdge,
+   GModelFactory,
    GNode,
    ModelValidator,
    RedoAction,
@@ -41,6 +42,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { __GRAMMAR__DiagramModule } from '../src/glsp/__GRAMMAR_ID__/diagram-module.js';
 import { __GRAMMAR__GModelFactory } from '../src/glsp/__GRAMMAR_ID__/gmodel-factory.js';
 import type { __GRAMMAR__GlspState } from '../src/glsp/__GRAMMAR_ID__/state.js';
+import { is__ENTRY_RULE__ } from '../src/language-server/ast.js';
 import { createServices } from '../src/node/services.js';
 
 let workspace: ScratchWorkspace | undefined;
@@ -238,6 +240,46 @@ describe('__GRAMMAR__ diagram', () => {
       ]);
       const targets = children.filter(child => child instanceof GEdge).map(edge => edge.targetId);
       expect(targets).toEqual([external?.id, external?.id]);
+   });
+
+   it('draws one external node per document when two documents declare the same name', async () => {
+      workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
+      workspace.write('one.__EXTENSION__', 'node second');
+      workspace.write('two.__EXTENSION__', 'node second');
+      const file = workspace.write('referencing.__EXTENSION__', 'node first -> second\nnode third -> second');
+      const { shared } = createServices();
+      await initializeWorkspaceProgrammatically(shared, workspace.root);
+      const harness = makeGlspHarness<__GRAMMAR__GlspState>({
+         serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
+         diagramType: __GRAMMAR_ID_CONST___DIAGRAM_TYPE,
+         appModules: [new HydraniumGlspAppModule({ shared })]
+      });
+      diagram = harness;
+      await harness.start();
+      await harness.openDocument(file);
+      // A name resolves to one node per document, so point each reference at a
+      // different document's node the way a qualified reference would.
+      const [first, third] = harness.state.sourceRoot.nodes;
+      for (const [node, declaring] of [
+         [first, 'one.__EXTENSION__'],
+         [third, 'two.__EXTENSION__']
+      ] as const) {
+         const declared = shared.workspace.LangiumDocuments.getDocument(URI.parse(workspace.uri(declaring)))?.parseResult.value;
+         if (!node.target || !is__ENTRY_RULE__(declared)) {
+            throw new Error(`no reference from ${node.name} or no model in ${declaring}`);
+         }
+         Object.defineProperty(node.target, 'ref', { value: declared.nodes[0] });
+      }
+      harness.sessionContainer.get<GModelFactory>(GModelFactory).createModel();
+
+      const children = harness.state.root.children;
+      const externals = children.filter(child => child.type === __GRAMMAR_ID_CONST___EXTERNAL_NODE_TYPE);
+      expect(externals.map(external => external.children[0])).toMatchObject([
+         { text: 'second (one.__EXTENSION__)' },
+         { text: 'second (two.__EXTENSION__)' }
+      ]);
+      const targets = children.filter(child => child instanceof GEdge).map(edge => edge.targetId);
+      expect(targets).toEqual(externals.map(external => external.id));
    });
 
    it('places each node a row above its target, cutting a cycle', async () => {

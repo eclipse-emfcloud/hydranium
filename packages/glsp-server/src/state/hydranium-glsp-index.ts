@@ -66,20 +66,21 @@ export class HydraniumGlspIndex extends GModelIndex {
    protected diagramLanguage?: ServerLanguageServices;
 
    /**
-    * Reverse map: the *stable id* of the AST element a GModel element
-    * represents → the GModel id(s) that render it. Multi-valued because one
-    * element can be drawn as several GModel nodes — placed twice on the same
-    * canvas, or projected by several referencing nodes.
+    * Reverse map: the document and *stable id* of the AST element a GModel
+    * element represents → the GModel id(s) that render it. The stable id alone
+    * names no document, so a same-named node of another document would match.
+    * Multi-valued because one element can be drawn as several GModel nodes —
+    * placed twice on the same canvas, or projected by several referencing nodes.
     * Populated explicitly by adopters via {@link registerElementId} (the forward
     * {@link idToSemanticNode} keys by GModel id and can't express the same
     * element rendering more than once). Consumed by diagnostic→marker mapping to
     * find every node to mark for a given element.
     *
-    * Keyed by the element's stable id (a string), NOT the `AstNode` itself, so
-    * it never retains AST node references across rebuilds. Cleared with the
-    * forward index in {@link indexSourceRoot}; re-registration each GModel
-    * rebuild is idempotent (a Set), and any id no longer drawn is filtered by
-    * the consumer's rendered-check, so stale entries are harmless.
+    * Keyed by a string, NOT the `AstNode` itself, so it never retains AST node
+    * references across rebuilds. Cleared with the forward index in
+    * {@link indexSourceRoot}; re-registration each GModel rebuild is idempotent
+    * (a Set), and any id no longer drawn is filtered by the consumer's
+    * rendered-check, so stale entries are harmless.
     */
    protected elementToIds = new Map<string, Set<string>>();
 
@@ -261,9 +262,15 @@ export class HydraniumGlspIndex extends GModelIndex {
     * diagram node keyed by its own id while visually standing for the element
     * it references. Additive: registering the same `element` under several ids
     * records every occurrence.
+    *
+    * A node of another document gets diagnostic markers only through this: a
+    * stable id names no document, so the validator takes it only for nodes of
+    * the diagram's document. Drawn under its own stable id, the node also needs
+    * {@link indexSemanticElement} under that id, or a same-named node of the
+    * diagram's document takes its markers, as {@link findSemanticElement} does.
     */
    registerElementId(element: AstNode, id: string): void {
-      const key = this.doFindId(element);
+      const key = this.registeredKey(element);
       if (key === undefined) {
          return;
       }
@@ -283,15 +290,26 @@ export class HydraniumGlspIndex extends GModelIndex {
 
    /** Record `node`'s document uri (if it has one) as contributing rendered elements. */
    protected addRenderedDocUri(node: AstNode): void {
-      const uri = AstUtils.findRootNode(node).$document?.uri.toString() ?? workingUriOfCopy(node);
+      const uri = this.documentUriOf(node);
       if (uri !== undefined) {
          this.renderedDocUris.add(uri);
       }
    }
 
+   /** The uri of `node`'s document, or of the document a working copy stands for; `undefined` for a detached node. */
+   documentUriOf(node: AstNode): string | undefined {
+      return AstUtils.findRootNode(node).$document?.uri.toString() ?? workingUriOfCopy(node);
+   }
+
+   /** The {@link elementToIds} key of `element`: its document uri and stable id. A uri holds no space. */
+   protected registeredKey(element: AstNode): string | undefined {
+      const key = this.doFindId(element);
+      return key === undefined ? undefined : `${this.documentUriOf(element) ?? ''} ${key}`;
+   }
+
    /** The GModel ids registered (via {@link registerElementId}) as rendering `element`; empty if none. */
    findElementIds(element?: AstNode): readonly string[] {
-      const key = element ? this.doFindId(element) : undefined;
+      const key = element ? this.registeredKey(element) : undefined;
       const ids = key !== undefined ? this.elementToIds.get(key) : undefined;
       return ids ? [...ids] : [];
    }
