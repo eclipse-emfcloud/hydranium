@@ -7,8 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Format, LEVEL_LABELS, type LogLevel, SystemClock } from '@hydranium/protocol';
-import { formatLogArg } from './format-log-arg.js';
+import { Format, formatLogArg, LEVEL_LABELS, type LogLevel, SystemClock } from '@hydranium/protocol';
 import { teeLogLine } from './logger.js';
 import { hasProcessStderr } from '../../util/environment.js';
 import { isConnectionGoneError } from '../../util/connection-liveness.js';
@@ -119,7 +118,7 @@ function formatArgs(args: unknown[]): string {
          // Described below instead.
       }
    }
-   return args.map(formatLogArg).join(' ');
+   return args.map(arg => formatLogArg(arg)).join(' ');
 }
 
 /**

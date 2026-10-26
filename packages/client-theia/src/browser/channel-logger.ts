@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { AbstractLogger, DefaultTracer, type LogLevel, type MemoryReader, SystemClock, describeErrorWithStack } from '@hydranium/protocol';
+import { AbstractLogger, DefaultTracer, type LogLevel, type MemoryReader, SystemClock } from '@hydranium/protocol';
 import { injectable, type interfaces, unmanaged, inject } from '@theia/core/shared/inversify';
 import { type OutputChannel, OutputChannelManager } from '@theia/output/lib/browser/output-channel';
 import { Clock } from '../common/clock';
@@ -66,7 +66,7 @@ export class ChannelLogger extends AbstractLogger {
    }
 
    protected emit(_level: LogLevel, label: string, message: string, args: readonly unknown[]): void {
-      const formattedArgs = args.length > 0 ? ' ' + args.map(stringifyArg).join(' ') : '';
+      const formattedArgs = args.length > 0 ? ' ' + args.map(arg => this.formatArg(arg)).join(' ') : '';
       this.channel.appendLine(`${this.formatLinePrefix(label)} ${message}${formattedArgs}`);
    }
 
@@ -150,20 +150,3 @@ const readBrowserMemory: MemoryReader = () => {
    const mem = (performance as unknown as ChromiumPerformance).memory;
    return mem ? { usedBytes: mem.usedJSHeapSize, totalBytes: mem.totalJSHeapSize } : undefined;
 };
-
-/** Render a log argument: an error by its stack, else as JSON, else described. Never throws, or the line is lost. */
-function stringifyArg(arg: unknown): string {
-   if (typeof arg === 'string') {
-      return arg;
-   }
-   try {
-      // `undefined` for `undefined`, a function, a symbol, or a `toJSON` returning nothing.
-      const json: string | undefined = arg instanceof Error ? undefined : JSON.stringify(arg);
-      if (json !== undefined) {
-         return json;
-      }
-   } catch {
-      // Cyclic, a BigInt, or a revoked proxy; described below instead.
-   }
-   return describeErrorWithStack(arg);
-}

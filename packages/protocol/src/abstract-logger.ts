@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { type Clock, SystemClock } from './clock';
+import { formatLogArg } from './format-log-arg';
 import { Format, LEVEL_LABELS, type LogLevel, Logger, type LogThreshold } from './logger';
 
 /** Default time source for every {@link AbstractLogger}; overridable per subclass via {@link AbstractLogger.clock}. */
@@ -52,6 +53,15 @@ export abstract class AbstractLogger implements Logger {
     */
    protected formatLinePrefix(label: string): string {
       return `[${label.padEnd(5)} - ${this.timestamp()}]${this.component ? ` [${this.component}]` : ''}`;
+   }
+
+   /**
+    * One log argument as the text a sink appends to its line; {@link formatLogArg}
+    * by default. `ConsoleLogger` hands its arguments to the console instead.
+    * Never throws, since a log call that throws loses the line.
+    */
+   protected formatArg(arg: unknown): string {
+      return formatLogArg(arg);
    }
 
    error(message?: string, ...args: unknown[]): this {

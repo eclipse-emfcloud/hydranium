@@ -9,7 +9,7 @@
 
 import { type Logger as GlspLogger, LogLevel } from '@eclipse-glsp/server';
 import { LspLogger, type LspLoggerOptions, type ServerSharedServices } from '@hydranium/core';
-import { describeErrorWithStack, LEVEL_ORDER, Logger, type LogThreshold } from '@hydranium/protocol';
+import { formatLogArg, LEVEL_ORDER, Logger, type LogThreshold } from '@hydranium/protocol';
 
 /**
  * Options accepted by {@link GlspClientLogger}. Extends
@@ -79,7 +79,7 @@ export function glspLogLevelOf(threshold: LogThreshold): LogLevel {
  *   contract; it is backed by {@link LspLogger}'s `component` field.
  * - {@link info} / {@link warn} / {@link error} / {@link debug} accept GLSP's
  *   `(message, ...params)` shape and {@link combine} the params into the
- *   message via {@link formatParam} so objects render as JSON and errors
+ *   message via {@link formatArg} so objects render as JSON and errors
  *   render with stack. GLSP server code routinely calls
  *   `logger.error('Failed', error)` expecting the second argument to be
  *   surfaced in the log line.
@@ -158,27 +158,14 @@ export class GlspClientLogger extends LspLogger implements GlspLogger {
       return this.logLevel !== LogLevel.none && level <= this.logLevel;
    }
 
-   /** Concatenate a message with its varargs, formatting each via {@link formatParam}. */
+   /** Concatenate a message with its varargs, formatting each via {@link formatArg}. */
    protected combine(message: string, params: readonly unknown[]): string {
-      return params.length === 0 ? message : `${message} ${params.map(p => this.formatParam(p)).join(',\n')}`;
+      return params.length === 0 ? message : `${message} ${params.map(param => this.formatArg(param)).join(',\n')}`;
    }
 
-   /**
-    * Format a single param: errors → their stack and causes; everything else →
-    * JSON.stringify(p, undefined, 4), or where JSON renders nothing or throws,
-    * its description. Never throws, since a log call that throws loses the line.
-    */
-   protected formatParam(param: unknown): string {
-      try {
-         // `undefined` for `undefined`, a function, a symbol, or a `toJSON` returning nothing.
-         const json: string | undefined = param instanceof Error ? undefined : JSON.stringify(param, undefined, 4);
-         if (json !== undefined) {
-            return json;
-         }
-      } catch {
-         // Cyclic, a BigInt, or a revoked proxy; described below instead.
-      }
-      return describeErrorWithStack(param);
+   /** {@link formatLogArg}, indented, since GLSP's params are typically whole actions. */
+   protected override formatArg(arg: unknown): string {
+      return formatLogArg(arg, { indent: 4 });
    }
 
    /**

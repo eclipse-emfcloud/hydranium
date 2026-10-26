@@ -130,8 +130,8 @@ describe('the first LspLogger of a module', () => {
          expect(readFileSync(path, 'utf-8')).toMatch(/^\[Error - [\d:.]+\] \[console\] Sending log message failed$/m);
       });
 
-      it('passes on and logs a value that neither JSON nor String can render', () => {
-         // Cyclic, so `JSON.stringify` throws; no prototype, so `String` throws too.
+      it('passes on and logs a cyclic value that String cannot render', () => {
+         // No prototype, so `String` throws for it as a cause; as an argument it renders as bounded JSON.
          const unformattable: Record<string, unknown> = Object.create(null);
          unformattable.self = unformattable;
 
@@ -143,9 +143,14 @@ describe('the first LspLogger of a module', () => {
          expect(passedOn).toHaveBeenCalledWith('unformattable-console', unformattable);
          const contents = readFileSync(path, 'utf-8');
          expect(contents).toMatch(/\[console\] unformattable-console <ref \*1> \[Object: null prototype\] \{ self: \[Circular \*1\] \}$/m);
-         expect(contents).toMatch(/unformattable-logger \[object Object\]$/m);
+         expect(contents).toMatch(/unformattable-logger \{"self":"\[Circular\]"\}$/m);
          expect(contents).toMatch(/unformattable-cause Error: wrapped$/m);
          expect(contents).toMatch(/^Caused by: \[object Object\]$/m);
+      });
+
+      it('renders every object argument on the one line', () => {
+         logger.error('two-args-logger', { first: 1 }, { second: [2] });
+         expect(readFileSync(path, 'utf-8')).toMatch(/two-args-logger \{"first":1\} \{"second":\[2\]\}$/m);
       });
 
       it('logs a value whose JSON is nothing rather than dropping it', () => {

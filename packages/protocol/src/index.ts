@@ -26,6 +26,7 @@ export * from './glsp-edits-settled-actions';
 export * from './glsp-request-model-args';
 export * from './glsp-save-model-actions';
 export * from './errors';
+export * from './format-log-arg';
 export * from './host-diagnostics';
 export * from './logger';
 export * from './latency-collector';
