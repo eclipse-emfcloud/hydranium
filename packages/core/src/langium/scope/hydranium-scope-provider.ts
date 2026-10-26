@@ -41,7 +41,7 @@ import { type HydraniumLanguageServices } from '../language-module.js';
 import { type NameProvider } from '../naming/name-provider.js';
 import { type HydraniumDocumentRegistry } from '../workspace/langium-documents.js';
 import { FallbackScope } from './fallback-scope.js';
-import { type ScopeExtensionService } from './scope-extension-service.js';
+import { type ScopeExtensionDescriptions, type ScopeExtensionService } from './scope-extension-service.js';
 import { type TieredAstNodeDescription, isTieredDescription } from './scoped-ast-node-description.js';
 
 /**
@@ -97,7 +97,7 @@ export interface ScopeContext {
 /**
  * Per-language scope provider that owns the full scope chain in ONE
  * class. Bridges the protocol-layer {@link ReferenceContext} to
- * Langium's {@link ReferenceInfo}, layers per-context scope-extension
+ * Langium's {@link ReferenceInfo}, layers scope-extension
  * contributions ({@link ScopeExtensionService}) at their declared tier,
  * and composes the cached project-tier chain (own-project → dependency
  * → universal) on top of Langium's unfiltered global index.
@@ -106,9 +106,9 @@ export interface ScopeContext {
  *
  * ```
  *   document-local (Langium precomputed)        [getScope, CACHED per build in localScope]
- *     extension:local                           [layerLocalExtension, per-context]
+ *     extension:local                           [layerLocalExtension, CACHED per descriptions]
  *       own-project → dependency → universal-index   [createGlobalScope default, CACHED per ${project}::${refType}]
- *         extension:universal                   [layerUniversalExtension, per-context, outermost]
+ *         extension:universal                   [layerUniversalExtension, CACHED per descriptions, outermost]
  * ```
  *
  * Implementation: {@link getScope} layers document-local on top of
@@ -176,6 +176,12 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
     * document replaces.
     */
    protected readonly nodeScopes = new WeakMap<LocalSymbols, WeakMap<readonly AstNode[], Scope>>();
+   /**
+    * The scope of each scope extension's descriptions of one tier, keyed by
+    * the array: an extension with a cache key answers every reference of that
+    * key with the same one.
+    */
+   protected readonly extensionScopes = new WeakMap<readonly TieredAstNodeDescription[], Scope>();
    protected readonly tracer: Tracer;
    /**
     * Narrows the inherited Langium {@link NameProvider} field to the framework's
@@ -289,8 +295,8 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
    protected override getGlobalScope(referenceType: string, context: ReferenceInfo): Scope {
       const projectChain = this.createGlobalScope(referenceType, context);
       const extensions = this.scopeExtensionService.getDescriptions(referenceType, context.container);
-      const withUniversal = this.layerUniversalExtension(extensions.universal, projectChain, referenceType, context);
-      return this.layerLocalExtension(extensions.local, withUniversal, referenceType, context);
+      const withUniversal = this.layerUniversalExtension(extensions, projectChain, referenceType, context);
+      return this.layerLocalExtension(extensions, withUniversal, referenceType, context);
    }
 
    /**
@@ -325,32 +331,66 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
    }
 
    /**
-    * Layer the scope extensions' `local`-tier `descriptions` on top of
-    * `inner`, through {@link createScope}. Returns `inner` unchanged when there
-    * are none.
+    * Layer each scope extension's `local`-tier descriptions on top of `inner`,
+    * an earlier extension's above a later one's, through {@link extensionScope}.
+    * Returns `inner` unchanged when there are none.
     */
    protected layerLocalExtension(
-      descriptions: readonly TieredAstNodeDescription[],
+      extensions: readonly ScopeExtensionDescriptions[],
       inner: Scope,
       _referenceType: string,
       _context: ReferenceInfo
    ): Scope {
-      return descriptions.length === 0 ? inner : this.createScope(descriptions, inner);
+      return (
+         this.chainExtensionScopes(
+            extensions.map(extension => extension.local),
+            inner
+         ) ?? inner
+      );
    }
 
    /**
-    * Layer the scope extensions' `universal`-tier `descriptions` below
-    * `inner`, which shadows them, through {@link createScope} and a
-    * {@link FallbackScope}, so `inner` keeps its own lookup. Returns `inner`
-    * unchanged when there are none.
+    * Layer each scope extension's `universal`-tier descriptions below `inner`,
+    * which shadows them, an earlier extension's above a later one's, through
+    * {@link extensionScope}. Returns `inner` unchanged when there are none.
     */
    protected layerUniversalExtension(
-      descriptions: readonly TieredAstNodeDescription[],
+      extensions: readonly ScopeExtensionDescriptions[],
       inner: Scope,
       _referenceType: string,
       _context: ReferenceInfo
    ): Scope {
-      return descriptions.length === 0 ? inner : new FallbackScope(inner, this.createScope(descriptions));
+      const below = this.chainExtensionScopes(extensions.map(extension => extension.universal));
+      return below ? new FallbackScope(inner, below) : inner;
+   }
+
+   /**
+    * Chain the scope of each non-empty array above `outer`, an earlier array's
+    * above a later one's; `undefined` when there is neither.
+    */
+   protected chainExtensionScopes(tiers: ReadonlyArray<readonly TieredAstNodeDescription[]>, outer?: Scope): Scope | undefined {
+      let result = outer;
+      for (let i = tiers.length - 1; i >= 0; i--) {
+         if (tiers[i].length > 0) {
+            const scope = this.extensionScope(tiers[i]);
+            result = result ? new FallbackScope(scope, result) : scope;
+         }
+      }
+      return result;
+   }
+
+   /**
+    * The scope of one extension's descriptions of one tier, through
+    * {@link createScope}, built once per array and shared by every reference
+    * it answers, so an override of `createScope` sees no reference context.
+    */
+   protected extensionScope(descriptions: readonly TieredAstNodeDescription[]): Scope {
+      let scope = this.extensionScopes.get(descriptions);
+      if (scope === undefined) {
+         scope = this.createScope(descriptions);
+         this.extensionScopes.set(descriptions, scope);
+      }
+      return scope;
    }
 
    /**

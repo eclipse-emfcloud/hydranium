@@ -371,7 +371,7 @@ describe('HydraniumScopeProvider', () => {
       return {
          references: {
             NameProvider: { getName: () => undefined, getNameNode: () => undefined, nameSeparator: '.' },
-            ScopeExtensionService: { getDescriptions: () => ({ local: [], universal: [] }) }
+            ScopeExtensionService: { getDescriptions: () => [] }
          },
          workspace: {
             AstNodeLocator: { getAstNode: () => undefined },
@@ -539,10 +539,12 @@ describe('HydraniumScopeProvider extension tiers', () => {
          makeStubServices({
             getDescriptions: () => {
                asked.count++;
-               return {
-                  local: local.map(name => extensionDescription(name, 'local')),
-                  universal: universal.map(name => extensionDescription(name, 'universal'))
-               };
+               return [
+                  {
+                     local: local.map(name => extensionDescription(name, 'local')),
+                     universal: universal.map(name => extensionDescription(name, 'universal'))
+                  }
+               ];
             }
          })
       );
@@ -578,8 +580,30 @@ describe('HydraniumScopeProvider extension tiers', () => {
 
    it('resolves two universal descriptions of one name to the first, as the local tier does', () => {
       const universal = [extensionDescription('dup', 'universal', 'First'), extensionDescription('dup', 'universal', 'Second')];
-      const provider = new ExtensionLayeringProvider(makeStubServices({ getDescriptions: () => ({ local: [], universal }) }));
+      const provider = new ExtensionLayeringProvider(makeStubServices({ getDescriptions: () => [{ local: [], universal }] }));
       expect(provider.globalScope().getElement('dup')?.type).toBe('First');
+   });
+
+   it('builds the scope of an extension answering the same descriptions once', () => {
+      const answered = [{ local: [extensionDescription('localSym', 'local')], universal: [extensionDescription('stdSym', 'universal')] }];
+      const provider = new ExtensionLayeringProvider(makeStubServices({ getDescriptions: () => answered }));
+      provider.globalScope();
+      const scope = provider.globalScope();
+      expect(provider.createScopeCalls).toBe(2);
+      expect([scope.getElement('localSym')?.name, scope.getElement('stdSym')?.name]).toEqual(['localSym', 'stdSym']);
+   });
+
+   it("resolves a name two extensions answer to the earlier extension's, in both tiers", () => {
+      const provider = new ExtensionLayeringProvider(
+         makeStubServices({
+            getDescriptions: () => [
+               { local: [extensionDescription('dup', 'local', 'First')], universal: [extensionDescription('std', 'universal', 'First')] },
+               { local: [extensionDescription('dup', 'local', 'Second')], universal: [extensionDescription('std', 'universal', 'Second')] }
+            ]
+         })
+      );
+      const scope = provider.globalScope();
+      expect([scope.getElement('dup')?.type, scope.getElement('std')?.type]).toEqual(['First', 'First']);
    });
 
    it('returns the project scope itself when no extension contributes', () => {
@@ -619,11 +643,11 @@ describe('HydraniumScopeProvider document-local scope', () => {
       return { reference: { $refText: 'x' }, container, property } as unknown as ReferenceInfo;
    }
 
-   const provider = new LocalScopeProvider(makeStubServices({ getDescriptions: () => ({ local: [], universal: [] }) }));
+   const provider = new LocalScopeProvider(makeStubServices({ getDescriptions: () => [] }));
 
    /** A reference through `one` targets `TypeOne`, any other `TypeTwo`; each type is a subtype of itself only. */
    function makeTypedProvider(): LocalScopeProvider {
-      const services = makeStubServices({ getDescriptions: () => ({ local: [], universal: [] }) });
+      const services = makeStubServices({ getDescriptions: () => [] });
       const reflection = {
          ...services.shared.AstReflection,
          getReferenceType: (context: ReferenceInfo) => (context.property === 'one' ? 'TypeOne' : 'TypeTwo'),

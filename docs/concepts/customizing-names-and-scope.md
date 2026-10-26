@@ -205,6 +205,11 @@ field on an unrelated type. Pass the container's own list, such as
 `entity.fields`, rather than a copy: the scope for that list is built once per
 build, where a new list costs a scope per reference.
 
+A scope extension that answers a container's members runs once per reference
+too. If its descriptions depend on that container alone, return it from the
+extension's `cacheKey`: while a document is being linked, they and their scope
+are built once per container.
+
 **A reference that resolves is not the same as one that is scoped.** If a
 reference's meaning depends on another, the default scope will usually still
 answer: correctly on your first example file, and wrongly on the second.
