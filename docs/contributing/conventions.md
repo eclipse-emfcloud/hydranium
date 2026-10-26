@@ -187,6 +187,16 @@ compile and run without the status bindings and the transactional operation
 and undo handlers. Enforced by the ast-grep rule `glsp-diagram-module-base`
 over framework and example source.
 
+**A cache drops an entry when what it was derived from changes.** Take
+Langium's `DocumentCache` or `WorkspaceCache` when one of its eviction events
+is that change: an edit of the document itself, or, with a `state` of
+`Linked`, the end of a link, which a change in a document it reads also
+causes. Nothing announces the start of a relink, so a cache dropped at its end
+is filled only during the link. Key by identity in a `WeakMap` when the value
+belongs to an object a rebuild replaces, such as a document's local symbols or
+a node list. A name or an element key outlives the change, so it keys only a
+cache dropped whole.
+
 **Chainable interface methods return `this`**, because returning the interface
 drops the implementation type and the next call in the chain fails to compile.
 

@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type AstNode, AstUtils, type LangiumDocument } from '@hydranium/langium';
+import { type AstNode, AstUtils, DocumentCache, DocumentState, type LangiumDocument } from '@hydranium/langium';
 import { type Disposable } from 'vscode-languageserver';
 import { Format, Logger, type ProfileRecord, type ProfileSession, type Tracer } from '@hydranium/protocol';
 import { type LogNameOptions } from '../diagnostics/logger.js';
@@ -84,9 +84,24 @@ export interface ScopeExtension extends RegistryItem {
     * build the data up-front and hand a sync acceptor here.
     */
    addDescriptions(context: AstNode, referenceType: string, document: LangiumDocument, accept: ScopeDescriptionAcceptor): void;
+   /**
+    * The node the descriptions for `context` belong to, so that while the
+    * referencing document is being linked, they, and the scope made of them,
+    * are built once per node rather than once per reference: a reference with
+    * the same node is answered with the first one's descriptions. Without it, for
+    * `undefined`, outside a link, such as a completion request, or for a
+    * `context` outside a built document, such as an operation's working copy,
+    * {@link addDescriptions} runs for every reference.
+    *
+    * The descriptions must depend on the node and `referenceType` alone. What
+    * they read through the node may come from another document: each link
+    * builds them afresh. A change made during one link, in place, is not seen
+    * until the next.
+    */
+   cacheKey?(context: AstNode, referenceType: string): AstNode | undefined;
 }
 
-/** The scope-extension descriptions for one reference, split by tier. */
+/** One scope extension's descriptions for a reference, split by tier. */
 export interface ScopeExtensionDescriptions {
    readonly local: readonly TieredAstNodeDescription[];
    readonly universal: readonly TieredAstNodeDescription[];
@@ -100,17 +115,19 @@ export interface ScopeExtensionDescriptions {
  */
 export interface ScopeExtensionService extends ScopeExtensionRegistry {
    /**
-    * Run every extension registered for `referenceType` once against
-    * `context`, and answer its descriptions by tier. A caller that needs
-    * both tiers takes them from one call: a call per tier runs every
-    * extension twice.
+    * The descriptions of each extension registered for `referenceType` that
+    * contributes to `context`, in registration order. An extension's entry is
+    * the same object for every reference of one {@link ScopeExtension.cacheKey},
+    * so a caller can key what it builds of it by identity. A caller that needs
+    * both tiers takes them from one call: a call per tier runs every extension
+    * twice.
     */
-   getDescriptions(referenceType: string, context: AstNode): ScopeExtensionDescriptions;
+   getDescriptions(referenceType: string, context: AstNode): readonly ScopeExtensionDescriptions[];
 }
 
 export type ScopeExtensionServiceOptions = LogNameOptions;
 
-const NO_DESCRIPTIONS: ScopeExtensionDescriptions = { local: [], universal: [] };
+const NO_DESCRIPTIONS: readonly ScopeExtensionDescriptions[] = [];
 
 /**
  * Default {@link ScopeExtensionService} implementation. Per-language
@@ -134,6 +151,13 @@ export class DefaultScopeExtensionService implements ScopeExtensionService {
    protected readonly tracer: Tracer;
    /** Open from the first profiled call until {@link reportProfile}. */
    protected profileSession?: ProfileSession;
+   /**
+    * Per referencing document, key node, extension and reference type, the
+    * descriptions answered during that document's link, dropped when it ends,
+    * when a build starts and right before its link. Absent without a document
+    * builder, which leaves every extension uncached.
+    */
+   protected readonly kept?: DocumentCache<AstNode, Map<ScopeExtension, Map<string, ScopeExtensionDescriptions>>>;
 
    constructor(
       protected readonly services: ServerLanguageServices,
@@ -153,6 +177,12 @@ export class DefaultScopeExtensionService implements ScopeExtensionService {
       const builder = services.shared.workspace.DocumentBuilder;
       builder?.onUpdate(() => this.reportProfile());
       builder?.onBuildEnded(() => this.reportProfile());
+      // Dropped once the document is linked, and all of it when a build starts and
+      // again right before its link, so neither a lookup made after the build starts
+      // nor a link a cancelled build left unfinished answers this link.
+      this.kept = builder ? new DocumentCache(services.shared, DocumentState.Linked) : undefined;
+      builder?.onUpdate(() => this.kept?.clear());
+      builder?.onBuildPhase(DocumentState.ComputedScopes, () => this.kept?.clear());
    }
 
    /**
@@ -169,21 +199,68 @@ export class DefaultScopeExtensionService implements ScopeExtensionService {
     * Holds the profile wrap, which an override would have to copy; to change
     * which extensions run, override {@link extensionsFor}.
     */
-   getDescriptions(referenceType: string, context: AstNode): ScopeExtensionDescriptions {
+   getDescriptions(referenceType: string, context: AstNode): readonly ScopeExtensionDescriptions[] {
       const extensionsForType = this.extensionsFor(referenceType, context);
       if (extensionsForType.length === 0) {
          return NO_DESCRIPTIONS;
       }
       const document = AstUtils.getDocument(context);
+      // Only while the document is being linked: nothing tells a cache that a relink is about to start.
+      const linking = document.state < DocumentState.Linked && AstUtils.findRootNode(context) === document.parseResult.value;
+      const answered: ScopeExtensionDescriptions[] = [];
+      for (const extension of extensionsForType) {
+         const node = linking ? extension.cacheKey?.(context, referenceType) : undefined;
+         const descriptions = node
+            ? this.keptDescriptions(document, node, extension, referenceType, () =>
+                 this.runExtension(extension, referenceType, context, document)
+              )
+            : this.runExtension(extension, referenceType, context, document);
+         if (descriptions.local.length > 0 || descriptions.universal.length > 0) {
+            answered.push(descriptions);
+         }
+      }
+      return answered;
+   }
+
+   /** The descriptions kept for `node` in `document`, built through `build` when there are none. */
+   protected keptDescriptions(
+      document: LangiumDocument,
+      node: AstNode,
+      extension: ScopeExtension,
+      referenceType: string,
+      build: () => ScopeExtensionDescriptions
+   ): ScopeExtensionDescriptions {
+      const byExtension = this.kept?.get(document.uri, node, () => new Map());
+      if (byExtension === undefined) {
+         return build();
+      }
+      let byType = byExtension.get(extension);
+      if (byType === undefined) {
+         byType = new Map();
+         byExtension.set(extension, byType);
+      }
+      let descriptions = byType.get(referenceType);
+      if (descriptions === undefined) {
+         descriptions = build();
+         byType.set(referenceType, descriptions);
+      }
+      return descriptions;
+   }
+
+   /** Run `extension` against `context`, inside the profile session at `debug`. */
+   protected runExtension(
+      extension: ScopeExtension,
+      referenceType: string,
+      context: AstNode,
+      document: LangiumDocument
+   ): ScopeExtensionDescriptions {
       const collected: TieredAstNodeDescription[] = [];
       const accept = createScopeDescriptionAcceptor(collected, this.services.workspace.AstNodeDescriptionProvider);
       const session = Logger.isLevelEnabled('debug') ? (this.profileSession ??= this.tracer.profile('scope-extension')) : undefined;
-      for (const extension of extensionsForType) {
-         if (session) {
-            session.scope(extension.id, () => extension.addDescriptions(context, referenceType, document, accept));
-         } else {
-            extension.addDescriptions(context, referenceType, document, accept);
-         }
+      if (session) {
+         session.scope(extension.id, () => extension.addDescriptions(context, referenceType, document, accept));
+      } else {
+         extension.addDescriptions(context, referenceType, document, accept);
       }
       return {
          local: collected.filter(description => description.tier === 'local'),

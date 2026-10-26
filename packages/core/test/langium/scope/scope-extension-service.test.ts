@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { type AstNode, type LangiumDocument } from '@hydranium/langium';
+import { type AstNode, DocumentState, type LangiumDocument, URI } from '@hydranium/langium';
 import { Logger } from '@hydranium/protocol';
 import { makeFakeClock } from '@hydranium/protocol/testing';
 import { type HydraniumAstNodeDescriptionProvider } from '../../../src/langium/scope/ast-node-description-provider.js';
@@ -79,9 +79,29 @@ describe('ScopeExtensionService.getDescriptions', () => {
          }
       });
 
-      const result = service.getDescriptions('TypeOne', contextWithDocument());
+      const [result] = service.getDescriptions('TypeOne', contextWithDocument());
       expect(names(result.local)).toEqual(['localSym']);
       expect(names(result.universal)).toEqual(['stdSym']);
+   });
+
+   it('answers each contributing extension apart, in registration order, and skips one that adds nothing', () => {
+      const service = makeService();
+      const register = (id: string, name?: string) =>
+         service.register({
+            id,
+            referenceTypes: ['TypeOne'],
+            addDescriptions: (_ctx, _type, doc, accept) => {
+               if (name) {
+                  accept.local({ node: makeFakeAstNode({ $type: 'A' }), name, document: doc });
+               }
+            }
+         });
+      register('first', 'one');
+      register('silent');
+      register('second', 'two');
+
+      const result = service.getDescriptions('TypeOne', contextWithDocument());
+      expect(result.map(entry => names(entry.local))).toEqual([['one'], ['two']]);
    });
 
    it('answers no descriptions when no extension applies to the reference type', () => {
@@ -93,9 +113,7 @@ describe('ScopeExtensionService.getDescriptions', () => {
             accept.local({ node: makeFakeAstNode({ $type: 'Foo' }), name: 'foo', document: doc })
       });
 
-      const result = service.getDescriptions('OtherType', contextWithDocument());
-      expect(result.local).toHaveLength(0);
-      expect(result.universal).toHaveLength(0);
+      expect(service.getDescriptions('OtherType', contextWithDocument())).toEqual([]);
    });
 
    it('does not resolve the context document when no extension matches the reference type', () => {
@@ -124,9 +142,174 @@ describe('ScopeExtensionService.getDescriptions', () => {
          }
       });
 
-      const result = service.getDescriptions('TypeOne', contextWithDocument());
+      const [result] = service.getDescriptions('TypeOne', contextWithDocument());
       expect(names(result.local)).toEqual(['prebuiltSym']);
       expect(result.universal).toHaveLength(0);
+   });
+});
+
+describe('ScopeExtensionService cache key', () => {
+   /** A context inside the root of a built document at `uri`, by default one being linked. */
+   function builtContext(uri = 'file:///a.x', state = DocumentState.ComputedScopes): { context: AstNode; document: LangiumDocument } {
+      const root = makeFakeAstNode({ $type: 'Root' });
+      const document = { uri: URI.parse(uri), state, parseResult: { value: root } } as unknown as LangiumDocument;
+      (root as { $document?: LangiumDocument }).$document = document;
+      return { context: makeFakeAstNode({ $type: 'Container', $container: root }), document };
+   }
+
+   /** A service over a stub builder, with one extension keyed on `key()`, counting its runs. */
+   function keyed(key: () => AstNode | undefined) {
+      const builder = makeStubDocumentBuilder();
+      const service = new DefaultScopeExtensionService(
+         makeNoopLanguageServices({
+            shared: { workspace: { DocumentBuilder: builder } },
+            workspace: { AstNodeDescriptionProvider: descriptions }
+         })
+      );
+      const runs = { count: 0 };
+      service.register({
+         id: 'keyed',
+         referenceTypes: ['TypeOne', 'TypeTwo'],
+         cacheKey: () => key(),
+         addDescriptions: (_ctx, type, doc, accept) => {
+            runs.count++;
+            accept.local({ node: makeFakeAstNode({ $type: 'A' }), name: type, document: doc });
+         }
+      });
+      return { service, builder, runs };
+   }
+
+   it('answers every reference of one node with the descriptions the first got', () => {
+      const node = makeFakeAstNode({ $type: 'Container' });
+      const { service, runs } = keyed(() => node);
+      const { context } = builtContext();
+
+      const first = service.getDescriptions('TypeOne', context);
+      const second = service.getDescriptions('TypeOne', context);
+
+      expect(runs.count).toBe(1);
+      expect(second[0]).toBe(first[0]);
+   });
+
+   it('runs for every reference of a document already linked, such as a completion request', () => {
+      const node = makeFakeAstNode({ $type: 'Container' });
+      const { service, runs } = keyed(() => node);
+      const { context } = builtContext('file:///a.x', DocumentState.Linked);
+
+      service.getDescriptions('TypeOne', context);
+      service.getDescriptions('TypeOne', context);
+
+      expect(runs.count).toBe(2);
+   });
+
+   it('runs again once a build starts, so a link a cancelled build left unfinished does not answer the next', () => {
+      const node = makeFakeAstNode({ $type: 'Container' });
+      const { service, builder, runs } = keyed(() => node);
+      const { context } = builtContext();
+
+      service.getDescriptions('TypeOne', context);
+      builder.fireOnUpdate([], []);
+      service.getDescriptions('TypeOne', context);
+
+      expect(runs.count).toBe(2);
+   });
+
+   it('runs again once a build reaches its link, so a lookup made after the build started does not answer the link', () => {
+      const node = makeFakeAstNode({ $type: 'Container' });
+      const { service, builder, runs } = keyed(() => node);
+      const { context, document } = builtContext();
+
+      service.getDescriptions('TypeOne', context);
+      builder.fireBuildPhase(DocumentState.ComputedScopes, [document]);
+      service.getDescriptions('TypeOne', context);
+
+      expect(runs.count).toBe(2);
+   });
+
+   it('keeps registration order when a keyed extension between two others is answered from the cache', () => {
+      const builder = makeStubDocumentBuilder();
+      const service = new DefaultScopeExtensionService(
+         makeNoopLanguageServices({
+            shared: { workspace: { DocumentBuilder: builder } },
+            workspace: { AstNodeDescriptionProvider: descriptions }
+         })
+      );
+      const addOwnId =
+         (id: string): ScopeExtension['addDescriptions'] =>
+         (_ctx, _type, doc, accept) =>
+            accept.local({ node: makeFakeAstNode({ $type: 'A' }), name: id, document: doc });
+      const node = makeFakeAstNode({ $type: 'Container' });
+      service.register({ id: 'before', referenceTypes: ['TypeOne'], addDescriptions: addOwnId('before') });
+      service.register({ id: 'keyed', referenceTypes: ['TypeOne'], cacheKey: () => node, addDescriptions: addOwnId('keyed') });
+      service.register({ id: 'after', referenceTypes: ['TypeOne'], addDescriptions: addOwnId('after') });
+      const { context } = builtContext();
+
+      const first = service.getDescriptions('TypeOne', context);
+      const second = service.getDescriptions('TypeOne', context);
+
+      expect({
+         order: second.map(entry => names(entry.local)),
+         keyedFromCache: second[1] === first[1],
+         othersRan: second[0] !== first[0] && second[2] !== first[2]
+      }).toEqual({ order: [['before'], ['keyed'], ['after']], keyedFromCache: true, othersRan: true });
+   });
+
+   it('runs again once the referencing document is linked', () => {
+      const node = makeFakeAstNode({ $type: 'Container' });
+      const { service, builder, runs } = keyed(() => node);
+      const { context, document } = builtContext();
+
+      service.getDescriptions('TypeOne', context);
+      builder.firePhase(DocumentState.Linked, document);
+      service.getDescriptions('TypeOne', context);
+
+      expect(runs.count).toBe(2);
+   });
+
+   it('keeps the descriptions when another document is linked', () => {
+      const node = makeFakeAstNode({ $type: 'Container' });
+      const { service, builder, runs } = keyed(() => node);
+      const { context } = builtContext();
+
+      service.getDescriptions('TypeOne', context);
+      builder.firePhase(DocumentState.Linked, builtContext('file:///b.x').document);
+      service.getDescriptions('TypeOne', context);
+
+      expect(runs.count).toBe(1);
+   });
+
+   it('runs again for another node, and per reference type', () => {
+      let node = makeFakeAstNode({ $type: 'Container' });
+      const { service, runs } = keyed(() => node);
+      const { context } = builtContext();
+
+      service.getDescriptions('TypeOne', context);
+      const [other] = service.getDescriptions('TypeTwo', context);
+      node = makeFakeAstNode({ $type: 'Container' });
+      service.getDescriptions('TypeOne', context);
+
+      expect(runs.count).toBe(3);
+      expect(names(other.local)).toEqual(['TypeTwo']);
+   });
+
+   it('runs for every reference outside a built document, such as a working copy', () => {
+      const node = makeFakeAstNode({ $type: 'Container' });
+      const { service, runs } = keyed(() => node);
+
+      service.getDescriptions('TypeOne', contextWithDocument());
+      service.getDescriptions('TypeOne', contextWithDocument());
+
+      expect(runs.count).toBe(2);
+   });
+
+   it('runs for every reference when the key is undefined', () => {
+      const { service, runs } = keyed(() => undefined);
+      const { context } = builtContext();
+
+      service.getDescriptions('TypeOne', context);
+      service.getDescriptions('TypeOne', context);
+
+      expect(runs.count).toBe(2);
    });
 });
 

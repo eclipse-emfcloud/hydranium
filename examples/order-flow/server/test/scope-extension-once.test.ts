@@ -17,10 +17,10 @@
 
 import { type ScopeExtensionContribution, type ScopeExtensionRegistry } from '@hydranium/core';
 import { makeCapturingTracer } from '@hydranium/core/testing';
-import { type ReferenceInfo, URI } from '@hydranium/langium';
+import { AstUtils, DocumentState, type ReferenceInfo, URI } from '@hydranium/langium';
 import { Logger } from '@hydranium/protocol';
 import { describe, expect, it } from 'vitest';
-import type { ProcessModel } from '../src/language-server/ast.js';
+import { type ProcessModel, isProcessModel } from '../src/language-server/ast.js';
 import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from './order-flow-harness.js';
 
 const LOCAL_NAME = 'probeLocal';
@@ -63,6 +63,67 @@ describe('order-flow scope extensions', () => {
          expect(contribution.calls).toBe(1);
          expect(scope.getElement(LOCAL_NAME)).toBeDefined();
          expect(scope.getElement(UNIVERSAL_NAME)).toBeDefined();
+      } finally {
+         workspace.dispose();
+      }
+   });
+});
+
+const NODE_NAME = 'probeNode';
+
+/** Answers a description per process, keyed on the process. */
+class KeyedScopeContribution implements ScopeExtensionContribution {
+   calls = 0;
+
+   registerScopeExtensions(registry: ScopeExtensionRegistry): void {
+      registry.register({
+         id: 'test:keyed',
+         referenceTypes: ['FlowNode'],
+         cacheKey: context => AstUtils.getContainerOfType(context, isProcessModel),
+         addDescriptions: (context, _referenceType, document, accept) => {
+            this.calls++;
+            accept.local({ node: context, name: NODE_NAME, document });
+         }
+      });
+   }
+}
+
+describe('order-flow keyed scope extensions', () => {
+   it('runs a keyed extension afresh and once while a process is relinked, and per lookup after', async () => {
+      const contribution = new KeyedScopeContribution();
+      const { harness, workspace } = await makeScratchWorkspaceHarness(undefined, {
+         extraLanguageModules: [{ references: { scopes: { keyed: () => contribution } } }]
+      });
+      try {
+         const returnsUri = URI.file(workspace.resolve(WORKSPACE_FILES.returnsProcess));
+         const returnsDocument = harness.shared.workspace.LangiumDocuments.getDocument(returnsUri);
+         const returns = returnsDocument?.parseResult.value as ProcessModel | undefined;
+         const transition = returns?.transitions[0];
+         if (!returnsDocument || !returns || !transition) {
+            throw new Error(`No transition in ${WORKSPACE_FILES.returnsProcess}`);
+         }
+         const scopeOf = (property: 'source' | 'target') =>
+            harness.process.references.ScopeProvider.getScope({ reference: transition[property], container: transition, property });
+
+         // Lookups after the link, as a completion request makes, and one after the relink's build
+         // starts; the relink must reuse none of them.
+         contribution.calls = 0;
+         const scopes = [scopeOf('source'), scopeOf('target')];
+         const afterLink = contribution.calls;
+         const builder = harness.shared.workspace.DocumentBuilder;
+         builder.resetToState(returnsDocument, DocumentState.ComputedScopes);
+         const lookupWhileBuilding = builder.onUpdate(() => {
+            scopeOf('source');
+            contribution.calls = 0;
+         });
+         try {
+            await builder.build([returnsDocument]);
+         } finally {
+            lookupWhileBuilding.dispose();
+         }
+
+         expect({ afterLink, relink: contribution.calls }).toEqual({ afterLink: 2, relink: 1 });
+         expect(scopes.map(scope => scope.getElement(NODE_NAME) !== undefined)).toEqual([true, true]);
       } finally {
          workspace.dispose();
       }
