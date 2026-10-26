@@ -290,11 +290,11 @@ export function gate(): Gate {
  * `createCommand` would, and resolve with its result once the operation has
  * ended. The operation creates no command.
  */
-export async function insideOperation<T>(diagram: Diagram, body: () => T): Promise<T> {
+export async function insideOperation<T>(diagram: Diagram, body: () => T | Promise<T>): Promise<T> {
    const create = createTask();
    let result: { value: T } | undefined;
-   vi.spyOn(handlerOf(diagram, create), 'createCommand').mockImplementationOnce(() => {
-      result = { value: body() };
+   vi.spyOn(handlerOf(diagram, create), 'createCommand').mockImplementationOnce(async () => {
+      result = { value: await body() };
       return undefined;
    });
    diagram.dispatch(create);

@@ -40,6 +40,7 @@ import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type HydraniumLanguageServices } from '../language-module.js';
 import { type NameProvider } from '../naming/name-provider.js';
 import { type HydraniumDocumentRegistry } from '../workspace/langium-documents.js';
+import { builtLocalSymbols } from './built-local-symbols.js';
 import { FallbackScope } from './fallback-scope.js';
 import { type ScopeExtensionDescriptions, type ScopeExtensionService } from './scope-extension-service.js';
 import { type TieredAstNodeDescription, isTieredDescription } from './scoped-ast-node-description.js';
@@ -231,7 +232,7 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
     */
    override getScope(context: ReferenceInfo): Scope {
       const referenceType = this.reflection.getReferenceType(context);
-      const localSymbols = AstUtils.getDocument(context.container).localSymbols;
+      const localSymbols = this.localSymbolsOf(context.container);
       let result = this.getGlobalScope(referenceType, context);
       if (localSymbols === undefined) {
          return result;
@@ -247,6 +248,22 @@ export class HydraniumScopeProvider extends DefaultScopeProvider {
          result = new FallbackScope(this.localScope(localSymbols, containers[i], referenceType), result);
       }
       return result;
+   }
+
+   /**
+    * The local symbols of the build that `node`'s root came from: the
+    * document's while they are set for that root, else the ones the build
+    * pipeline recorded for it when its document computed scopes. A rebuild
+    * clears the document's, then keys them by the new root's nodes.
+    */
+   protected localSymbolsOf(node: AstNode): LocalSymbols | undefined {
+      const root = AstUtils.findRootNode(node);
+      const document = AstUtils.getDocument(root);
+      const recorded = builtLocalSymbols.get(root);
+      if (recorded === undefined || (document.parseResult.value === root && document.localSymbols !== undefined)) {
+         return document.localSymbols;
+      }
+      return recorded;
    }
 
    /**

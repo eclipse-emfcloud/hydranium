@@ -69,6 +69,16 @@ function targetsOf(diagram: Diagram, node: AstNode): string[] | undefined {
    );
 }
 
+/** The names the `target` scope of `transition` lists. */
+function targetScopeOf(diagram: Diagram, transition: Transition): string[] {
+   return [
+      ...(diagram.state
+         .scopeProviderFor(transition)
+         ?.getScope({ container: transition, property: 'target', reference: transition.target })
+         .getAllElements() ?? [])
+   ].map(description => description.name);
+}
+
 describe('a diagram edit before its write commits', () => {
    it('is not visible to other readers while its reconcile waits', async () => {
       const opened = await openDiagram();
@@ -365,21 +375,61 @@ describe('the working copies a handler edits', () => {
    it('answers a scope lookup for the built node a copy node was made from', async () => {
       const opened = await openDiagram();
       const { diagram } = opened;
-      const names = (transition: Transition): string[] =>
-         [
-            ...(diagram.state
-               .scopeProviderFor(transition)
-               ?.getScope({ container: transition, property: 'target', reference: transition.target })
-               .getAllElements() ?? [])
-         ].map(description => description.name);
       const built = builtProcessRoot(opened).transitions[0];
 
       const viaBuilt = await insideOperation(diagram, () => {
          const copy = diagram.state.sourceRoot.transitions[0];
-         return { copy: copy !== built, same: diagram.state.builtNodeOf(copy) === built, names: names(diagram.state.builtNodeOf(copy)) };
+         return {
+            copy: copy !== built,
+            same: diagram.state.builtNodeOf(copy) === built,
+            names: targetScopeOf(diagram, diagram.state.builtNodeOf(copy))
+         };
       });
 
-      expect(viaBuilt).toEqual({ copy: true, same: true, names: names(built) });
+      expect(viaBuilt).toEqual({ copy: true, same: true, names: targetScopeOf(diagram, built) });
+   });
+
+   it('answers lookups from the build it opened on while and after another client rebuilds the document', async () => {
+      const opened = await openDiagram();
+      const { diagram } = opened;
+      const gatewayOf = (root: ProcessModel): Gateway => root.nodes.find(node => node.name === 'PaymentOk') as Gateway;
+      const lookups = (): { targets?: string[]; scope: string[] } => {
+         const copy = diagram.state.sourceRoot;
+         return {
+            targets: targetsOf(diagram, gatewayOf(copy).branches[0]),
+            scope: targetScopeOf(diagram, diagram.state.builtNodeOf(copy.transitions[0]))
+         };
+      };
+      const builtRoot = builtProcessRoot(opened);
+      const before = {
+         targets: targetsOf(diagram, gatewayOf(builtRoot).branches[0]) ?? [],
+         scope: targetScopeOf(diagram, builtRoot.transitions[0])
+      };
+      const localNames = before.scope.filter(name => !name.includes('.'));
+
+      const inside = await insideOperation(diagram, async () => {
+         // Langium clears the document's local symbols before this fires and parses after it.
+         let whileRebuilding: ReturnType<typeof lookups> | undefined;
+         const listener = opened.services.shared.workspace.DocumentBuilder.onUpdate(() => {
+            whileRebuilding ??= lookups();
+         });
+         try {
+            await changeTextBuilt(opened, opened.processUri, text => text.replace('   task Cancel', '   task Audit\n   task Cancel'));
+         } finally {
+            listener.dispose();
+         }
+         return { whileRebuilding, rebuilt: builtProcessRoot(opened) !== builtRoot, after: lookups() };
+      });
+
+      // The index tier is the one of the moment, so names the edit added or moved may join or leave.
+      expect({ local: localNames.includes('Cancel') && before.targets.includes('Cancel'), inside }).toEqual({
+         local: true,
+         inside: {
+            whileRebuilding: { targets: expect.arrayContaining(localNames), scope: expect.arrayContaining(localNames) },
+            rebuilt: true,
+            after: { targets: expect.arrayContaining(before.targets), scope: expect.arrayContaining(before.scope) }
+         }
+      });
    });
 
    it('keeps the root an operation captured over an older one the storage settled meanwhile', async () => {

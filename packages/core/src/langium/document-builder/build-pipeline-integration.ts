@@ -13,6 +13,7 @@ import { IntegrityPhase } from '../integrity/integrity-rule.js';
 import { AstExtensionPhase } from '../ast-extension/ast-extension-service.js';
 import { BuildPassPhase, groupDocumentsByLanguage } from '../build-phase-pass/build-phase-pass.js';
 import { type ServerSharedServices } from '../module.js';
+import { builtLocalSymbols } from '../scope/built-local-symbols.js';
 import { labelPhaseListener } from './labeled-phase-listener.js';
 
 /**
@@ -50,6 +51,10 @@ export interface BuildPipelineIntegrationOptions {
  * and they compare by declaration rather than by shape. The cost of the empty
  * shape is that any non-null value satisfies it, so a mis-bound slot compiles
  * and the framework's phase listeners are then never attached.
+ *
+ * A replacement that does not subclass {@link DefaultBuildPipelineIntegration}
+ * also drops the local symbols it records, so `HydraniumScopeProvider` answers
+ * a node of a root a rebuild replaced with index names only.
  */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- the slot has no public member to name
 export interface BuildPipelineIntegration {}
@@ -72,7 +77,8 @@ export interface BuildPipelineIntegration {}
  *
  * Adopters subclass to change *how* a feature is invoked by overriding one
  * protected per-feature helper — {@link callIntegrity} (integrity enforcement),
- * {@link extendAst} (per-document AST enrichment), or {@link runBuildPhase}
+ * {@link extendAst} (per-document AST enrichment), {@link recordLocalSymbols}
+ * (local symbols per root), or {@link runBuildPhase}
  * (batch-level build-phase pass dispatch) — or to wire an additional phase
  * (override the constructor).
  *
@@ -125,6 +131,12 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
       builder.onDocumentPhase(
          DocumentState.IndexedContent,
          labelPhaseListener(() => this.clearScopeCaches(), 'BuildPipeline.clearScopeCaches')
+      );
+
+      // Per document, once the builder assigned the map, whichever computation made it.
+      builder.onDocumentPhase(
+         DocumentState.ComputedScopes,
+         labelPhaseListener((document: LangiumDocument) => this.recordLocalSymbols(document), 'BuildPipeline.recordLocalSymbols')
       );
 
       // AST enrichment stays per-document (onDocumentPhase) and node-granular —
@@ -185,6 +197,18 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
    protected clearScopeCaches(): void {
       for (const languageServices of this.services.ServiceRegistry.all) {
          languageServices.references.ScopeProvider.clearScopeCaches();
+      }
+   }
+
+   /**
+    * Keep `document`'s local symbols for the root they were computed for. A
+    * rebuild clears and re-keys `document.localSymbols`, and
+    * `HydraniumScopeProvider.localSymbolsOf` answers a node of the old root
+    * from what this kept.
+    */
+   protected recordLocalSymbols(document: LangiumDocument): void {
+      if (document.localSymbols !== undefined) {
+         builtLocalSymbols.set(document.parseResult.value, document.localSymbols);
       }
    }
 
