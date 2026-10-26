@@ -301,6 +301,8 @@ discover:
 
 - Layout is transient even though comments are not. If your language's users
   hand-format their files, a form or diagram write normalises that formatting.
+  Set `ModelServiceOptions.keepUnchangedText` to keep it when a write leaves
+  the model unchanged.
 - A text editor and a form editor over the same file is still supported. The
   LSP head mirrors the rewritten text straight back into the open editor, but
   the diff a user sees after one field edit spans the file.

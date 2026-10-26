@@ -23,7 +23,9 @@ import {
    type ClientSessionWriteArgs,
    DefaultClientSession,
    DefaultModelService,
+   DefaultTransferEncoder,
    DocumentNotOpenError,
+   type EncodeContext,
    DuplicateClientIdError,
    LANGUAGE_CLIENT_ID,
    RealpathDocumentUriPolicy,
@@ -1457,5 +1459,186 @@ describe('ClientSessionFactory', () => {
 
       expect(() => models.createSession('form', 'form-1')).toThrow('no handle');
       expect(() => scratch?.harness.shared.workspace.TextDocuments.registerSession('form-1')).not.toThrow();
+   });
+});
+
+describe('ModelServiceOptions.keepUnchangedText', () => {
+   const HAND_FORMATTED = 'entity Solo {\n  a: string\n}\n';
+   const CANONICAL = 'entity Solo {\n   a: string\n}\n';
+
+   type ModelOverrides = {
+      ModelService?: (services: OrderFlowSharedServices) => DefaultModelService<AstNode>;
+      TransferEncoder?: (services: OrderFlowSharedServices) => DefaultTransferEncoder;
+   };
+
+   /** With `text` written to `FILE`, or the default workspace when `text` is absent. */
+   async function bootWith(
+      keepUnchangedText: boolean,
+      text?: string,
+      model: ModelOverrides = {}
+   ): Promise<{ harness: OrderFlowHarness; uri: string; workspace: ScratchOrderFlowHarness['workspace'] }> {
+      scratch = await makeScratchWorkspaceHarness(text === undefined ? undefined : workspace => workspace.write(FILE, text), {
+         extraSharedModules: [
+            {
+               model: {
+                  ModelService: (services: OrderFlowSharedServices) => new DefaultModelService(services, { keepUnchangedText }),
+                  ...model
+               }
+            }
+         ]
+      });
+      return { harness: scratch.harness, uri: scratch.workspace.uri(FILE), workspace: scratch.workspace };
+   }
+
+   async function updateWith(
+      harness: OrderFlowHarness,
+      uri: string,
+      model: (root: AstNode) => TransferElement
+   ): Promise<string | undefined> {
+      const session = harness.shared.model.ModelService.createSession('form');
+      await session.open(uri);
+      const root = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))!.parseResult.value;
+      await session.update({ uri, model: model(root), baseVersion: 'any' });
+      return harness.shared.workspace.TextDocuments.get(uri)?.getText();
+   }
+
+   const transferOf = (harness: OrderFlowHarness) => (root: AstNode) => harness.shared.model.TransferEncoder.toTransfer(root, 'grammar');
+
+   type Declarations = { declarations: Array<{ name: string }> };
+
+   it.each([
+      ['keeps the hand formatting and the version', { keepUnchangedText: true, text: HAND_FORMATTED, advanced: false }],
+      ['applies the canonical text at a new version', { keepUnchangedText: false, text: CANONICAL, advanced: true }]
+   ] as const)('%s for an unchanged model, as its option says', async (_outcome, { keepUnchangedText, text, advanced }) => {
+      const { harness, uri } = await bootWith(keepUnchangedText, HAND_FORMATTED);
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      const session = harness.shared.model.ModelService.createSession('form');
+      await session.open(uri);
+      const before = textDocuments.version(uri);
+      const root = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))!.parseResult.value;
+
+      await session.update({ uri, model: transferOf(harness)(root), baseVersion: 'any' });
+
+      expect({ text: textDocuments.get(uri)?.getText(), advanced: textDocuments.version(uri) > before }).toEqual({ text, advanced });
+   });
+
+   it('writes the canonical text for a changed model', async () => {
+      const { harness, uri } = await bootWith(true, HAND_FORMATTED);
+      const edited = (root: AstNode): TransferElement => {
+         const transfer = transferOf(harness)(root) as TransferElement & Declarations;
+         transfer.declarations[0].name = 'Renamed';
+         return transfer;
+      };
+
+      expect(await updateWith(harness, uri, edited)).toBe(CANONICAL.replace('Solo', 'Renamed'));
+   });
+
+   it('writes the edit of a writer that mutates the live root in place and hands it over', async () => {
+      const { harness, uri } = await bootWith(true, HAND_FORMATTED);
+      const mutated = (root: AstNode): TransferElement => {
+         (root as unknown as Declarations).declarations[0].name = 'Renamed';
+         return root as unknown as TransferElement;
+      };
+
+      expect(await updateWith(harness, uri, mutated)).toBe(CANONICAL.replace('Solo', 'Renamed'));
+   });
+
+   it('writes the edit of a writer that mutates the live root in place and hands over a copy', async () => {
+      const { harness, uri } = await bootWith(true, HAND_FORMATTED);
+      const mutatedCopy = (root: AstNode): TransferElement => {
+         (root as unknown as Declarations).declarations[0].name = 'Renamed';
+         return transferOf(harness)(root);
+      };
+
+      expect(await updateWith(harness, uri, mutatedCopy)).toBe(CANONICAL.replace('Solo', 'Renamed'));
+   });
+
+   it('keeps the text of an unchanged model whose cross-references are not linked in the comparison', async () => {
+      const { harness, workspace } = await bootWith(true);
+      const uri = workspace.uri(WORKSPACE_FILES.fulfillmentProcess);
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      const session = harness.shared.model.ModelService.createSession('form');
+      await session.open(uri);
+      const reindented = textDocuments
+         .get(uri)!
+         .getText()
+         .replace(/^ {3}(?=\S)/gm, '    ');
+      await session.update({ uri, model: reindented, baseVersion: 'any' });
+      const root = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))!.parseResult.value;
+
+      await session.update({ uri, model: transferOf(harness)(root), baseVersion: 'any' });
+
+      expect(textDocuments.get(uri)?.getText()).toBe(reindented);
+   });
+
+   it('compares through an override of serialize on both sides', async () => {
+      class TwoSpaceModelService extends DefaultModelService<AstNode> {
+         protected override async serialize(uri: string, root: TransferElement): Promise<string> {
+            return (await super.serialize(uri, root)).replace(/^ {3}(?=\S)/gm, '  ');
+         }
+      }
+      const fourSpace = HAND_FORMATTED.replace('  a', '    a');
+      const { harness, uri } = await bootWith(true, fourSpace, {
+         ModelService: services => new TwoSpaceModelService(services, { keepUnchangedText: true })
+      });
+
+      expect(await updateWith(harness, uri, transferOf(harness))).toBe(fourSpace);
+   });
+
+   it('writes the text of a rewrite that changes the model, for an otherwise unchanged one', async () => {
+      class RenamingModelService extends DefaultModelService<AstNode> {
+         protected override async rewriteModel(
+            uri: string,
+            model: TransferElement,
+            cancelToken?: CancellationToken
+         ): Promise<TransferElement> {
+            const rewritten = (await super.rewriteModel(uri, model, cancelToken)) as TransferElement & Declarations;
+            rewritten.declarations[0].name = 'Renamed';
+            return rewritten;
+         }
+      }
+      const { harness, uri } = await bootWith(true, HAND_FORMATTED, {
+         ModelService: services => new RenamingModelService(services, { keepUnchangedText: true })
+      });
+
+      expect(await updateWith(harness, uri, transferOf(harness))).toBe(CANONICAL.replace('Solo', 'Renamed'));
+   });
+
+   it('encodes the document side with the document URI, as the written side is', async () => {
+      class UriBoundEncoder extends DefaultTransferEncoder {
+         protected override shouldEmitProperty(ast: AstNode, key: string, context: EncodeContext): boolean {
+            return context.uri !== undefined && super.shouldEmitProperty(ast, key, context);
+         }
+      }
+      const { harness, uri } = await bootWith(true, HAND_FORMATTED, { TransferEncoder: services => new UriBoundEncoder(services) });
+
+      expect(await updateWith(harness, uri, transferOf(harness))).toBe(HAND_FORMATTED);
+   });
+
+   it('writes the canonical text over text with parse errors', async () => {
+      const { harness, uri } = await bootWith(true, 'entity Solo {\n  a: string\n  ?\n}\n');
+
+      expect(await updateWith(harness, uri, transferOf(harness))).toBe(CANONICAL);
+   });
+
+   it('writes the model, not newer unbuilt text, when the store moved past the root', async () => {
+      const { harness, uri } = await bootWith(true, HAND_FORMATTED);
+      const form = harness.shared.model.ModelService.createSession('form');
+      await form.open(uri);
+      const other = harness.shared.model.ModelService.createSession('other');
+      await other.open(uri);
+      // A session write first, so the built document holds the store's own text object.
+      await other.update({ uri, model: HAND_FORMATTED.replace('  a', '    a'), baseVersion: 'any' });
+      const root = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))!.parseResult.value;
+      const unbuilt = harness.shared.workspace.AstDocumentManager.update(uri, HAND_FORMATTED.replace('}', '  b: string\n}'), 'other');
+      const before = harness.shared.workspace.TextDocuments.version(uri);
+
+      const written = await form.update({ uri, model: transferOf(harness)(root), baseVersion: 'any' });
+      await unbuilt.catch(() => undefined);
+
+      expect({ version: written.written.version > before, text: harness.shared.workspace.TextDocuments.get(uri)?.getText() }).toEqual({
+         version: true,
+         text: HAND_FORMATTED.replace('  a', '    a')
+      });
    });
 });
