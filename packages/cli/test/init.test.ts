@@ -416,8 +416,11 @@ describe('planInitFiles', () => {
    it('emits the full project file set with tokens substituted into paths', () => {
       expect(files.map(file => file.path).sort()).toEqual(
          [
+            '.editorconfig',
             '.gitignore',
             '.nvmrc',
+            '.oxfmtrc.json',
+            '.oxlintrc.json',
             'package.json',
             'protocol/.gitignore',
             'protocol/README.md',
@@ -772,13 +775,13 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      expect(captured?.files).toHaveLength(33);
+      expect(captured?.files).toHaveLength(36);
       // `path.join`, not a literal: the target is produced by `path.resolve`,
       // which emits the platform separator, so a hardcoded `/` asserts nothing
       // on Windows beyond the separator itself.
       expect(captured?.targetDir.endsWith(path.join('out', 'bookstore'))).toBe(true);
       const output = lines.join('');
-      expect(output).toContain('Scaffolded Bookstore (33 files, heads: lsp,data, 1 grammar(s): Bookstore)');
+      expect(output).toContain('Scaffolded Bookstore (36 files, heads: lsp,data, 1 grammar(s): Bookstore)');
       // The `.nvmrc` Node, before anything runs `langium generate`. A comment,
       // not a command: a pasted block must run without nvm.
       const nodeLine = '  # on Node 22, which .nvmrc names. With nvm: nvm install 22, then nvm use 22\n';
@@ -805,10 +808,10 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      // 33 single-grammar files + two further grammars, their serializers and checks,
+      // 36 single-grammar files + two further grammars, their serializers and checks,
       // the shared fragment and two starter files each.
-      expect(captured?.files).toHaveLength(44);
-      expect(lines.join('')).toContain('Scaffolded OrderFlow (44 files, heads: lsp,data, 3 grammar(s): Domain, Process, Layout)');
+      expect(captured?.files).toHaveLength(47);
+      expect(lines.join('')).toContain('Scaffolded OrderFlow (47 files, heads: lsp,data, 3 grammar(s): Domain, Process, Layout)');
    });
 
    it('names the diagram grammar and the head set for a three-head scaffold', () => {
@@ -824,11 +827,11 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      // 44 multi-grammar files + the ten for the one diagram: eight in the
+      // 47 multi-grammar files + the ten for the one diagram: eight in the
       // server, its test, and its ids in protocol; + the client package's six.
-      expect(captured?.files).toHaveLength(60);
+      expect(captured?.files).toHaveLength(63);
       expect(lines.join('')).toContain(
-         'Scaffolded OrderFlow (60 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
+         'Scaffolded OrderFlow (63 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
       );
    });
 });
@@ -875,6 +878,8 @@ describe('planInitFiles with hosts', () => {
          concurrently: '^9.0.0',
          langium: '4.3.1',
          'monaco-editor-core': '0.56.0',
+         oxfmt: '0.71.0',
+         oxlint: '1.82.0',
          'vscode-jsonrpc': '9.0.0',
          'vscode-languageserver': '10.0.1',
          'vscode-languageserver-protocol': '3.18.1',

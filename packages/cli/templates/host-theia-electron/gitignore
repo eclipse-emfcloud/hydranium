@@ -1,6 +1,5 @@
 node_modules/
-# What `theia build` generates. Not esbuild.mjs, which it writes only when none
-# is there: kept, it is the place to adjust the bundle.
+# What `theia build` generates.
 lib/
 src-gen/
 gen-esbuild.*.mjs

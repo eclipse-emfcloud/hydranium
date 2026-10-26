@@ -1371,7 +1371,7 @@ const { shared } = create__NAME__Services({ ...NodeFileSystem });
 // this one to read the ports from: the one line that starts with \`{\`. Each
 // head brings the workspace up before it listens; a head that fails to start
 // has logged why and ends the process, which would otherwise serve without it.
-Promise.all([${servers.map(server => `${server}.started`).join(', ')}]).then(
+${servers.length === 1 ? `${servers[0]}.started` : `Promise.all([${servers.map(server => `${server}.started`).join(', ')}])`}.then(
    () => process.stdout.write(\`\${JSON.stringify({ ${servers.map(server => `${server}: ${server}.port`).join(', ')} })}\\n\`),
    () => process.exit(1)
 );
@@ -4079,7 +4079,9 @@ async function quickOpen(page: Page, file: string): Promise<void> {
    await input.press('Enter');
    await expect(page.locator('.quick-input-widget')).toBeHidden();
 }
-
+${
+   data
+      ? `
 /** Run the command whose palette entry reads \`label\`, checked before Enter, since the match is fuzzy. */
 async function runCommand(page: Page, label: string): Promise<void> {
    await page.keyboard.press('F1');
@@ -4089,7 +4091,9 @@ async function runCommand(page: Page, label: string): Promise<void> {
    await input.press('Enter');
    await expect(page.locator('.quick-input-widget')).toBeHidden();
 }
-`;
+`
+      : ''
+}`;
 }
 
 /** The Theia application's README. */
@@ -4120,6 +4124,7 @@ function hostTheiaBrowserReadme(composition: InitComposition): string {
       '',
       '## Layout',
       '',
+      '- `esbuild.mjs` — the bundling `theia build` runs. It keeps this file, so it is the place to adjust the bundle',
       '- `start.mjs` — `npm start`: links `../vscode-servers` into `plugins/`, then starts the backend on `THEIA_PORT`, on a folder given as its argument or `../workspace`',
       '- `playwright.config.mts` — the smoke tier, on port 4938 or `THEIA_PORT`, on a copy of `../workspace` in `smoke-workspace/`',
       '- `test/smoke.spec.mts` — Theia opens the workspace and each head answers',
@@ -4135,6 +4140,7 @@ function hostTheiaBrowserFiles(composition: InitComposition): InitFile[] {
       { path: 'host-theia-browser/package.json', content: hostTheiaBrowserPackageJson(composition) },
       ignoreFile('host-theia-browser'),
       { path: 'host-theia-browser/README.md', content: hostTheiaBrowserReadme(composition) },
+      fixed('esbuild.mjs'),
       fixed('start.mjs'),
       fixed('playwright.config.mts'),
       fixed('tsconfig.e2e.json'),
@@ -4298,11 +4304,12 @@ function hostTheiaElectronReadme(composition: InitComposition): string {
       ),
       '',
       ...wrapProse(
-         '`npm run watch` reports a `theia-source-map-paths` JSON error as it starts: Theia’s generated `esbuild.mjs` starts the browser and electron builds together, and they share `lib/frontend`. Later rebuilds are clean.'
+         '`npm run watch` reports a `theia-source-map-paths` JSON error as it starts: `esbuild.mjs` starts the browser and electron builds together, and they share `lib/frontend`. Later rebuilds are clean.'
       ),
       '',
       '## Layout',
       '',
+      '- `esbuild.mjs` — the bundling `theia build` runs. It keeps this file, so it is the place to adjust the bundle',
       '- `start.mjs` — `npm start`: links `../vscode-servers` into `plugins/`, then starts the application on a folder given as its argument or `../workspace`',
       '- `playwright.config.mts` — the smoke tier',
       '- `test/smoke.spec.mts` — Electron opens a copy of the workspace with a profile of its own, and each head answers',
@@ -4318,11 +4325,48 @@ function hostTheiaElectronFiles(composition: InitComposition): InitFile[] {
       { path: 'host-theia-electron/package.json', content: hostTheiaElectronPackageJson(composition) },
       ignoreFile('host-theia-electron'),
       { path: 'host-theia-electron/README.md', content: hostTheiaElectronReadme(composition) },
+      fixed('esbuild.mjs'),
       fixed('start.mjs'),
       fixed('playwright.config.mts'),
       fixed('tsconfig.e2e.json'),
       { path: 'host-theia-electron/test/smoke.spec.mts', content: theiaSmokeSpec(composition, 'electron') }
    ];
+}
+
+/**
+ * The formatter and linter a standalone root runs. Exact, because a formatter
+ * release that changes its output would fail the project's `format:check`.
+ */
+const ROOT_STYLE_DEV_DEPENDENCIES: Readonly<Record<string, string>> = { oxfmt: '0.71.0', oxlint: '1.82.0' };
+
+/**
+ * The standalone root's formatter config: the style every template is written
+ * in, at the width the emitted sources wrap at. Generated code is ignored
+ * because each run of its generator rewrites it in that generator's style.
+ */
+function oxfmtConfig(composition: InitComposition): string {
+   return `{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "arrowParens": "avoid",
+  "endOfLine": "lf",
+  "ignorePatterns": ["**/generated", "**/generated-hydranium", "**/syntaxes", "**/*.md"],
+  "jsxSingleQuote": true,
+  "printWidth": ${columnsFor(composition)},
+  "singleQuote": true,
+  "sortPackageJson": true,
+  "tabWidth": 3,
+  "trailingComma": "none",
+  "overrides": [
+    {
+      "files": ["*.json", "*.yml", "*.yaml"],
+      "options": {
+        "printWidth": 100,
+        "tabWidth": 2
+      }
+    }
+  ]
+}
+`;
 }
 
 /**
@@ -4340,9 +4384,16 @@ function hostTheiaElectronFiles(composition: InitComposition): InitFile[] {
  *
  * `watch` keeps every non-host member built; `watch:<host>` adds one host, so
  * only the bundler of the host being worked on runs.
+ *
+ * `format` and `lint` run at the root over every member, which is why the
+ * members get no `lint` of their own here.
  */
 function rootFiles(composition: InitComposition): InitFile[] {
-   const devDependencies = { ...Object.fromEntries(workspaceRootPins(composition)), concurrently: '^9.0.0' };
+   const devDependencies = {
+      ...Object.fromEntries(workspaceRootPins(composition)),
+      concurrently: '^9.0.0',
+      ...ROOT_STYLE_DEV_DEPENDENCIES
+   };
    const members = initMembers(composition.heads, composition.hosts);
    // Only the server's watch is `tsc -b`, so protocol is built by one process
    // rather than two writing the same `lib/`; a host's watch joins only in its
@@ -4355,6 +4406,9 @@ function rootFiles(composition: InitComposition): InitFile[] {
    const scripts: Record<string, string> = {
       build: 'npm run build --workspaces',
       clean: 'npm run clean --workspaces --if-present',
+      format: 'oxfmt',
+      'format:check': 'oxfmt --check',
+      lint: 'oxlint --report-unused-disable-directives --max-warnings 0',
       ...Object.fromEntries(composition.hosts.map(host => [`start:${host}`, `npm --prefix host-${host} start`])),
       test: 'npm test --workspaces --if-present',
       watch: parallel(Object.fromEntries(watched.map(member => [member, `npm --prefix ${member} run watch`]))),
@@ -4389,7 +4443,14 @@ ${sortedBlock(devDependencies, '    ')}
   }
 }
 `;
-   return [{ path: 'package.json', content }, ignoreFile(''), { path: '.nvmrc', content: `${SCAFFOLD_NODE_MAJOR}\n` }];
+   return [
+      { path: 'package.json', content },
+      ignoreFile(''),
+      { path: '.editorconfig', content: template('editorconfig') },
+      { path: '.oxfmtrc.json', content: oxfmtConfig(composition) },
+      { path: '.oxlintrc.json', content: template('oxlintrc.json') },
+      { path: '.nvmrc', content: `${SCAFFOLD_NODE_MAJOR}\n` }
+   ];
 }
 
 /**

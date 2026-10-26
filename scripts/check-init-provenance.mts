@@ -71,7 +71,9 @@
  * and the golden fixtures pin it instead.
  */
 
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -560,6 +562,7 @@ const BOOKSTORE_MANIFEST: Manifest = {
    'host-theia-browser/tsconfig.e2e.json': { verdict: 'identical', reason: 'the emitted smoke-tier project, self-contained' },
    'host-theia-browser/playwright.config.mts': { verdict: 'identical', reason: 'the emitted smoke-tier configuration' },
    'host-theia-browser/start.mjs': { verdict: 'identical', reason: 'the emitted Theia launch for npm start' },
+   'host-theia-browser/esbuild.mjs': { verdict: 'identical', reason: 'the bundling theia build keeps' },
    'host-theia-browser/test/smoke.spec.mts': { verdict: 'identical', reason: 'the emitted smoke test' },
    'workspace/nodes.bookstore': { verdict: 'identical', reason: 'the starter model every host and the CLI open' },
    'workspace/references.bookstore': { verdict: 'identical', reason: 'the starter model referencing the other file' }
@@ -975,6 +978,9 @@ const SCAFFOLD_PIN_SOURCES: Record<string, PinSource> = {
    esbuild: { file: 'package.json', path: ['devDependencies', 'esbuild'], rule: 'exact' },
    '@types/node': { file: 'package.json', path: ['devDependencies', '@types/node'], rule: 'exact' },
    concurrently: { file: 'package.json', path: ['devDependencies', 'concurrently'], rule: 'exact' },
+   // The oxfmt `init` formats the scaffold with, and the oxlint this repo lints with.
+   oxfmt: { file: 'packages/cli/package.json', path: ['dependencies', 'oxfmt'], rule: 'exact' },
+   oxlint: { file: 'package.json', path: ['devDependencies', 'oxlint'], rule: 'exact' },
    rimraf: { file: 'package.json', path: ['devDependencies', 'rimraf'], rule: 'exact' },
    typescript: { file: 'package.json', path: ['devDependencies', 'typescript'], rule: 'exact' },
    vitest: { file: 'package.json', path: ['devDependencies', 'vitest'], rule: 'exact' }
@@ -986,6 +992,41 @@ const VSCODE_VERSION_TEMPLATE = 'packages/cli/templates/host-vscode/test/vscode-
 /** The `VSCODE_VERSION` literal of a `vscode-version.mts`, or `undefined` when it has none. */
 function readVscodeVersion(file: string): string | undefined {
    return /export const VSCODE_VERSION = '([^']+)';/.exec(readFileSync(file, 'utf-8'))?.[1];
+}
+
+/**
+ * The `esbuild.mjs` `theia build` writes for a host without one, formatted as
+ * this repo formats. A Theia host's template has to stay that file, since
+ * `theia build` keeps an existing one through any Theia upgrade.
+ */
+function theiaDefaultBundling(electron: boolean): string {
+   const cliRequire = createRequire(join(REPO_ROOT, 'packages/cli/package.json'));
+   const theiaCli = cliRequire.resolve('@theia/cli/package.json');
+   const { BundlerGenerator } = createRequire(theiaCli)('@theia/application-manager/lib/generator/bundler-generator.js') as {
+      BundlerGenerator: { prototype: object };
+   };
+   // Only the two package queries the user config reads, for an application that is not browser-only.
+   const generator = Object.assign(Object.create(BundlerGenerator.prototype) as { compileESBuildUserConfig(): string }, {
+      pck: {
+         ifBrowserOnly: (_value: string, otherwise = '') => otherwise,
+         ifElectron: (value: string, otherwise = '') => (electron ? value : otherwise)
+      }
+   });
+   // The CLI's oxfmt, which formats every scaffold.
+   const oxfmtManifest = cliRequire.resolve('oxfmt/package.json');
+   const oxfmtBin = (JSON.parse(readFileSync(oxfmtManifest, 'utf-8')) as { bin: Record<string, string> }).bin.oxfmt;
+   const oxfmt = join(dirname(oxfmtManifest), oxfmtBin);
+   const result = spawnSync(process.execPath, [oxfmt, '--stdin-filepath', 'esbuild.mjs'], {
+      cwd: REPO_ROOT,
+      input: generator.compileESBuildUserConfig(),
+      encoding: 'utf-8'
+   });
+   if (result.status !== 0) {
+      throw new Error(
+         `oxfmt could not format Theia's default esbuild.mjs: ${result.error?.message ?? `${result.stderr}${result.signal === null ? '' : `killed by ${result.signal}`}`}`
+      );
+   }
+   return result.stdout;
 }
 
 /** Strip a range operator, then keep `major.minor`. */
@@ -1143,28 +1184,33 @@ function comparePins(emitted: Record<string, string | undefined>, sources: Recor
 
 /**
  * Every version the scaffold emits, across its packages, at the head set that
- * carries all of them. Placed as a member of this repository under
- * {@link DECLARED_NPM}: a standalone scaffold holds `vitest` below the version
- * the root declares, for an npm older than the root's.
+ * carries all of them. The members are planned as a member of this repository
+ * under {@link DECLARED_NPM}: a standalone scaffold holds `vitest` below the
+ * version the root declares, for an npm older than the root's. The standalone
+ * root manifest is added on its own, for the tools only it declares.
  *
  * A package's pin on a sibling package is left out: it names a version of the
  * scaffold's own, which no manifest of this repo could declare.
  */
 function emittedPins(init: InitModule): Record<string, string> {
-   const packaging = init.resolveInitPackaging(join(REPO_ROOT, 'examples/pin-probe'), { monorepo: true, npmVersion: DECLARED_NPM });
-   const composition = init.resolveInitComposition('PinProbe', undefined, ['lsp', 'data', 'glsp'], packaging, [
-      'browser',
-      'vscode',
-      'theia-browser',
-      'theia-electron'
-   ]);
-   const manifests = init
-      .planInitFiles(composition)
-      .filter(file => file.path.endsWith('/package.json'))
-      .map(
-         file =>
-            JSON.parse(file.content) as { name: string; dependencies?: Record<string, string>; devDependencies?: Record<string, string> }
+   const plan = (targetDir: string, options: { monorepo?: boolean; npmVersion?: string }) =>
+      init.planInitFiles(
+         init.resolveInitComposition('PinProbe', undefined, ['lsp', 'data', 'glsp'], init.resolveInitPackaging(targetDir, options), [
+            'browser',
+            'vscode',
+            'theia-browser',
+            'theia-electron'
+         ])
       );
+   const members = plan(join(REPO_ROOT, 'examples/pin-probe'), { monorepo: true, npmVersion: DECLARED_NPM }).filter(file =>
+      file.path.endsWith('/package.json')
+   );
+   const standaloneRoot = plan(join(REPO_ROOT, 'out/pin-probe-standalone'), { npmVersion: DECLARED_NPM }).filter(
+      file => file.path === 'package.json'
+   );
+   const manifests = [...members, ...standaloneRoot].map(
+      file => JSON.parse(file.content) as { name: string; dependencies?: Record<string, string>; devDependencies?: Record<string, string> }
+   );
    if (manifests.length === 0) {
       throw new Error('the scaffold emitted no package manifest, so its pins cannot be checked');
    }
@@ -1542,6 +1588,26 @@ async function main() {
       );
    } else {
       console.log(`✓ the scaffold's VS Code smoke test runs the VS Code order-flow's tiers run, ${vscodeVersions[0]}`);
+   }
+
+   let staleBundling: string[] | undefined;
+   try {
+      staleBundling = (['browser', 'electron'] as const).filter(
+         target =>
+            readFileSync(join(REPO_ROOT, `packages/cli/templates/host-theia-${target}/esbuild.mjs`), 'utf-8') !==
+            theiaDefaultBundling(target === 'electron')
+      );
+   } catch (error: unknown) {
+      failed = true;
+      console.error(`✗ could not derive the esbuild.mjs theia build writes: ${error instanceof Error ? error.message : String(error)}`);
+   }
+   if (staleBundling !== undefined && staleBundling.length > 0) {
+      failed = true;
+      console.error(
+         `✗ the esbuild.mjs of ${staleBundling.map(target => `host-theia-${target}`).join(' and ')} is no longer the one theia build writes. Copy Theia's default into the template and format it.`
+      );
+   } else if (staleBundling !== undefined) {
+      console.log("✓ each Theia host's esbuild.mjs is the one theia build writes");
    }
 
    for (const target of TARGETS) {

@@ -71,7 +71,16 @@ cd my-lang
 npm install
 npm run build    # generate the AST and the transfer model, compile every package
 npm test         # the server's tests, starting with one that composes your services
+npm run lint     # oxlint over every package
+npm run format   # oxfmt in the scaffold's style, or format:check to only check
 ```
+
+`init` formats every file it writes with oxfmt, so `npm run format:check`
+passes from the start. `.oxfmtrc.json`, `.oxlintrc.json` and `.editorconfig` at
+the root hold the style for the tools and your editor. Generated code is
+excluded. Both tools also skip whatever an enclosing Git repository ignores, so
+in a folder another repository ignores they find no file until you run
+`git init` there. `init` prints that step when it applies.
 
 Each package's own README describes the files `init` wrote there.
 
