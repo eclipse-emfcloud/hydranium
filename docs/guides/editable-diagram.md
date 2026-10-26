@@ -74,9 +74,10 @@ export class AppDiagramModule extends AbstractHydraniumGlspDiagramModule {
      for reference candidates with
      `modelState.referenceInfoOf(node, property)`, passed to
      `modelState.candidateProviderFor(node)?.find`. For a node not created
-     yet, as in a palette, pass a stand-in from `buildAstNode` whose
-     `$container` and `$containerProperty` name the container and property
-     it would join, without adding it there.
+     yet, as in a palette, use
+     `modelState.referenceInfoAt(container, path, property)`, with one
+     `SyntheticStep` from `@hydranium/protocol` per level from `container`
+     down to the new node.
    - One gesture is one operation. Combine edits in a `CompoundOperation`,
      and never dispatch an operation and await it from a GModel factory, a
      submit or an undo: the two wait for each other forever.

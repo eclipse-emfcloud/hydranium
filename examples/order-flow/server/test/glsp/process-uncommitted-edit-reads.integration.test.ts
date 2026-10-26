@@ -23,15 +23,17 @@ import {
 } from '@eclipse-glsp/server';
 import { buildAstNode } from '@hydranium/core';
 import type { AstNode } from '@hydranium/langium';
+import { SyntheticStep } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import { readFileSync, unlinkSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import {
    Branch,
    type DiagramNode,
-   type Gateway,
+   Gateway,
+   isGateway,
    type LayoutModel,
-   type ProcessModel,
+   ProcessModel,
    type Transition
 } from '../../src/language-server/ast.js';
 import { processNode } from '../../src/language-server/order-flow-ast-builder.js';
@@ -77,6 +79,15 @@ function targetScopeOf(diagram: Diagram, transition: Transition): string[] {
          ?.getScope({ container: transition, property: 'target', reference: transition.target })
          .getAllElements() ?? [])
    ].map(description => description.name);
+}
+
+/** The fixture's `PaymentOk` gateway in `root`. */
+function paymentOkOf(root: ProcessModel): Gateway {
+   const gateway = root.nodes.find(node => node.name === 'PaymentOk');
+   if (!isGateway(gateway)) {
+      throw new Error(`the fixture's PaymentOk is no gateway: ${gateway?.$type}`);
+   }
+   return gateway;
 }
 
 describe('a diagram edit before its write commits', () => {
@@ -350,11 +361,10 @@ describe('the working copies a handler edits', () => {
       const opened = await openDiagram();
       const { diagram } = opened;
       const targets = (node: AstNode): string[] | undefined => targetsOf(diagram, node);
-      const gatewayOf = (root: ProcessModel): Gateway => root.nodes.find(node => node.name === 'PaymentOk') as Gateway;
-      const built = targets(gatewayOf(builtProcessRoot(opened)).branches[0]);
+      const built = targets(paymentOkOf(builtProcessRoot(opened)).branches[0]);
 
       const inside = await insideOperation(diagram, () => {
-         const gateway = gatewayOf(diagram.state.sourceRoot);
+         const gateway = paymentOkOf(diagram.state.sourceRoot);
          // The builder requires a target; a branch being created has none chosen yet.
          const created = processNode(Branch, {
             $container: gateway,
@@ -392,17 +402,16 @@ describe('the working copies a handler edits', () => {
    it('answers lookups from the build it opened on while and after another client rebuilds the document', async () => {
       const opened = await openDiagram();
       const { diagram } = opened;
-      const gatewayOf = (root: ProcessModel): Gateway => root.nodes.find(node => node.name === 'PaymentOk') as Gateway;
       const lookups = (): { targets?: string[]; scope: string[] } => {
          const copy = diagram.state.sourceRoot;
          return {
-            targets: targetsOf(diagram, gatewayOf(copy).branches[0]),
+            targets: targetsOf(diagram, paymentOkOf(copy).branches[0]),
             scope: targetScopeOf(diagram, diagram.state.builtNodeOf(copy.transitions[0]))
          };
       };
       const builtRoot = builtProcessRoot(opened);
       const before = {
-         targets: targetsOf(diagram, gatewayOf(builtRoot).branches[0]) ?? [],
+         targets: targetsOf(diagram, paymentOkOf(builtRoot).branches[0]) ?? [],
          scope: targetScopeOf(diagram, builtRoot.transitions[0])
       };
       const localNames = before.scope.filter(name => !name.includes('.'));
@@ -482,7 +491,7 @@ describe('a candidate query outside an operation', () => {
    it('asks about a node not created yet through an unattached stand-in under its built container', async () => {
       const opened = await openDiagram();
       const { diagram, services } = opened;
-      const gateway = builtProcessRoot(opened).nodes.find(node => node.name === 'PaymentOk') as Gateway;
+      const gateway = paymentOkOf(builtProcessRoot(opened));
       const standIn = buildAstNode<Branch>(services.shared.AstReflection, Branch.$type, {
          $container: gateway,
          $containerProperty: 'branches'
@@ -494,6 +503,32 @@ describe('a candidate query outside an operation', () => {
       expect({ standIn: targetsOf(diagram, standIn), built: targetsOf(diagram, gateway.branches[0]) }).toEqual({
          standIn: expect.arrayContaining(['Pick', 'Cancel']),
          built: targetsOf(diagram, standIn)
+      });
+   });
+
+   it('asks about a branch of a gateway not created yet through a synthetic path under the process root', async () => {
+      const opened = await openDiagram();
+      const { diagram } = opened;
+      const root = builtProcessRoot(opened);
+      const gateway = paymentOkOf(root);
+
+      const query = diagram.state.referenceInfoAt(
+         root,
+         SyntheticStep.chain([ProcessModel.nodes, Gateway.$type], [Gateway.branches, Branch.$type]),
+         Branch.target
+      );
+      // As above, this grammar names nothing below the root, so the answer
+      // equals a built branch's whatever the levels' slots and indexes.
+      const candidates =
+         query &&
+         diagram.state
+            .candidateProviderFor(root)
+            ?.find(query)
+            .map(candidate => candidate.value);
+
+      expect({ path: candidates, built: targetsOf(diagram, gateway.branches[0]) }).toEqual({
+         path: expect.arrayContaining(['Pick', 'Cancel']),
+         built: candidates
       });
    });
 });

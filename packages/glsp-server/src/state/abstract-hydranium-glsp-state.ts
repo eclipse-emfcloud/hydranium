@@ -25,6 +25,7 @@ import {
    type BaseVersion,
    type ModelVersion,
    type ConflictResolver,
+   type SyntheticStep,
    type Logger,
    type Tracer,
    type TransferElement,
@@ -363,7 +364,8 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     *
     * A node not created yet is asked about through a stand-in built with
     * `buildAstNode`: its type, `$container` the container it would join, and
-    * `$containerProperty`, left unattached.
+    * `$containerProperty`, left unattached. {@link referenceInfoAt} builds
+    * that chain from a container and a path.
     */
    referenceInfoOf(node: AstNode, property: string): ReferenceInfo | undefined {
       let container = this.builtContextOf(node);
@@ -375,13 +377,32 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
          created.unshift(level);
       }
       for (const level of created) {
-         container = buildAstNode(this.sharedServices.AstReflection, level.$type, {
-            $container: container,
-            $containerProperty: level.$containerProperty,
-            $containerIndex: level.$containerIndex
-         });
+         container = this.buildStandIn(container, level.$type, level.$containerProperty, level.$containerIndex);
       }
       return { reference: { $refText: '', ref: undefined }, container, property };
+   }
+
+   /**
+    * {@link referenceInfoOf} for a node not created yet, `path` steps below
+    * `container`: one unattached stand-in per step, built the way
+    * `HydraniumScopeProvider.referenceContextToInfo` builds a protocol
+    * context's `syntheticPath`, and the leaf asked about.
+    */
+   referenceInfoAt(container: AstNode, path: readonly SyntheticStep[], property: string): ReferenceInfo | undefined {
+      let leaf = container;
+      for (const step of path) {
+         leaf = this.buildStandIn(leaf, step.type, step.containerProperty, step.index);
+      }
+      return this.referenceInfoOf(leaf, property);
+   }
+
+   /** An unattached node of `type` that names `container` and its slot there. */
+   protected buildStandIn(container: AstNode, type: string, containerProperty?: string, containerIndex?: number): AstNode {
+      return buildAstNode(this.sharedServices.AstReflection, type, {
+         $container: container,
+         $containerProperty: containerProperty,
+         $containerIndex: containerIndex
+      });
    }
 
    /**
