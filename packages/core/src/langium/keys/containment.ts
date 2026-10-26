@@ -13,8 +13,9 @@
  *
  * **These live beside the key provider because the constraint is the key
  * provider's.** `NameBasedKeyProvider` keys a node the `NameProvider` gives no
- * name from its position, as `` `${$containerProperty}@${$containerIndex}` ``,
- * so a node appended with a bare `array.push` carries neither and
+ * name from its position, as `` `${$containerProperty}@${$containerIndex}` ``
+ * (`` `${$containerProperty}@` `` in a single-valued property), so a node
+ * appended with a bare `array.push` carries neither and
  * `getElementKey` answers `undefined` — the element has no key at all, and the
  * GLSP index cannot address it. Deleting from the middle of such a list must
  * renumber the survivors, or an id derived later in the same command names the
