@@ -650,7 +650,7 @@ jobs:
   # parses three grammars and builds a workspace, once per test, so a shard buys
   # cores rather than just concurrency — the worker count alone was measured and
   # does nothing, a four-core runner already being saturated at two workers.
-  # Each shard re-pays about 134s of checkout, install, build and browser
+  # Each shard re-pays about a minute of checkout, install, build and browser
   # install, which is what bounds how many are worth having.
   e2e-chromium:
     name: e2e (${{ matrix.label }})
@@ -720,11 +720,11 @@ jobs:
       - name: Build
         run: npm run build:all
 
-      # `--with-deps` rather than the package's own `test:e2e:install`: the
-      # shared runners carry no guarantee of Chromium's system libraries, and
-      # the failure is a browser that will not launch rather than a missing one.
+      # No `--with-deps`: the runner image carries Chromium's system libraries,
+      # and their apt install can stall for minutes on a slow mirror. A library
+      # missing or too old fails the launch with Playwright's or Chromium's error.
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
 
       # Each tier boots its own server through Playwright's `webServer`, which
       # sets `reuseExistingServer: false` under CI — so every run here is a COLD
@@ -1044,11 +1044,6 @@ jobs:
       - name: Install dependencies
         if: steps.node-modules-cache.outputs.cache-hit != 'true'
         run: npm ci --no-fund --no-audit
-
-      # The browser shapes run their smoke test in the Chromium each scaffold's
-      # own Playwright downloads; the libraries it needs are the system's.
-      - name: Install Chromium's system libraries
-        run: npx playwright install-deps chromium
 
       - name: Scaffold, install, build and smoke
         run: npm run check:init-scaffold
