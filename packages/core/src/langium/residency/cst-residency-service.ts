@@ -195,8 +195,9 @@ function rehydrateCst(document: LangiumDocument, factory: LangiumDocumentFactory
  * the idle window of the documents in its batch; when a closed, sheddable
  * document's window elapses, every AST node's `$cstNode` and every reference's
  * `$refNode` are nulled, and the CST becomes unreachable with the `Range`s
- * and `Position`s only it holds. A description's segments and the reference
- * index's segments share the CST's `Range` objects, so those stay.
+ * and `Position`s only it holds. The reference index's segments, and a
+ * description's segments once read, share the CST's `Range` objects, so
+ * those stay.
  *
  * **Terminology.** *Residency* is the state axis (is the CST in memory? —
  * `resident` vs `shed`); *shed* is both the act and the policy vocabulary (drop
@@ -248,7 +249,8 @@ export interface CstResidencyService {
    /**
     * Node-level convenience over {@link rehydrate}, cheap enough for an
     * unconditional call: a node whose `$cstNode` is already set returns
-    * without resolving its document.
+    * without resolving its document, and a node outside any document, such as
+    * a detached synthetic node, has nothing to restore and returns too.
     */
    rehydrateNode(node: AstNode): void;
 }
@@ -317,7 +319,10 @@ export class DefaultCstResidencyService implements CstResidencyService {
       if (node.$cstNode !== undefined) {
          return;
       }
-      this.rehydrate(AstUtils.getDocument(node));
+      const document = AstUtils.findRootNode(node).$document;
+      if (document) {
+         this.rehydrate(document);
+      }
    }
 
    /**

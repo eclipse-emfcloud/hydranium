@@ -28,9 +28,7 @@ is the order to read the report in, and that structure.
    heap edge names it:
    - the document, through `ParseResult.value`;
    - the CST, through `_astNode`;
-   - every description, through `node` and again through the closure of its
-     lazy `nameSegment` getter (`system / Context.node`), so clearing `node`
-     alone frees nothing;
+   - every description, through `node`;
    - every resolved reference, through `_ref` and through the description in
      `_nodeDescription`, often from another document; a multi-reference holds
      its targets through `_items`;
@@ -51,8 +49,9 @@ is the order to read the report in, and that structure.
    closed, file-backed document only when constructed with the
    `shed-closed-when-idle` strategy. Shedding nulls `$cstNode` and
    `$refNode`, which frees the CST and the ranges and positions only the CST
-   holds. A description's segments and each `referenceIndex` segment share
-   the CST's `Range` objects and keep them; the AST and the descriptions stay.
+   holds. Each `referenceIndex` segment, and a description's segments once
+   read, share the CST's `Range` objects and keep them; the AST and the
+   descriptions stay.
 7. **Check every claim against the code before stating it.** A holder in the
    report is a heap edge name; find the field with `git grep` in `packages/`
    or in `node_modules/langium/lib` before naming the class that owns it.
