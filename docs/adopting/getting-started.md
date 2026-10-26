@@ -71,6 +71,19 @@ npm test         # the server's tests, starting with one that composes your serv
 
 Each package's own README describes the files `init` wrote there.
 
+## Rebuild as you work
+
+After one `npm run build`, keep everything built while you edit:
+
+```bash
+npm run watch:browser   # or watch:vscode, watch:theia-browser, watch:theia-electron
+```
+
+A grammar change regenerates the AST and the transfer model, every package
+recompiles, and the host you named rebundles; reload it to see the change.
+`npm run watch` alone keeps the packages built without any host. Ctrl+C stops
+everything.
+
 ## Open it in a browser
 
 ```bash

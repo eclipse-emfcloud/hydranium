@@ -63,7 +63,8 @@ covers its own e2e commands and launch configurations.
 npm run build:all                                  # every package, in dependency order
 
 npm run start:order-flow                           # build + Theia app on http://localhost:3001
-npm run dev:order-flow                             # watch: framework + server/client/theia/app
+npm run dev:order-flow                             # watch: framework + order-flow packages
+npm run dev:order-flow:theia-browser               # the same + the Theia app; also :browser, :vscode, :theia-electron
 
 npm --prefix examples/order-flow/browser run build
 npm --prefix examples/order-flow/browser start     # http://localhost:3002

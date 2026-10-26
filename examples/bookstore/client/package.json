@@ -15,7 +15,7 @@
     "build": "tsc -b",
     "clean": "rimraf lib tsconfig.tsbuildinfo",
     "lint": "oxlint --report-unused-disable-directives --format stylish --config ../../../oxlint.config.cjs src --max-warnings 0",
-    "watch": "tsc -b --watch"
+    "watch": "tsc --watch"
   },
   "dependencies": {
     "@eclipse-glsp/client": "2.7.0",

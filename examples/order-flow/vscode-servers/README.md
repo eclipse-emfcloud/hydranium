@@ -46,6 +46,7 @@ imports `out/language-client` by module path.
 purpose: each extension must stand alone in whichever host installs it. The
 TextMate grammars are copied by `copy:grammar` from the server's
 `langium generate` output, which is gitignored, so **build the server first**.
+`watch:grammar` copies them again on every change; `dev:order-flow` runs it.
 
 ## Building
 

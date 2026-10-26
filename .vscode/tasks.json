@@ -20,9 +20,9 @@
       "problemMatcher": ["$tsc-watch"]
     },
     {
-      "label": "dev:order-flow",
+      "label": "dev:order-flow:theia-browser",
       "type": "shell",
-      "command": "npm run dev:order-flow",
+      "command": "npm run dev:order-flow:theia-browser",
       "options": { "cwd": "${workspaceFolder}" },
       "isBackground": true,
       "presentation": { "reveal": "always", "panel": "dedicated" },
@@ -75,15 +75,6 @@
       "options": { "cwd": "${workspaceFolder}/examples/order-flow/theia-app" },
       "presentation": { "reveal": "silent", "panel": "shared" },
       "problemMatcher": ["$tsc"]
-    },
-    {
-      "label": "order-flow-theia: watch:all",
-      "type": "shell",
-      "command": "npm run watch:all",
-      "options": { "cwd": "${workspaceFolder}/examples/order-flow/theia-app" },
-      "isBackground": true,
-      "presentation": { "reveal": "always", "panel": "dedicated" },
-      "problemMatcher": ["$tsc-watch"]
     },
     {
       "label": "order-flow-theia: start",

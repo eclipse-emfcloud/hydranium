@@ -8,6 +8,7 @@ so a diagram file opens in the Theia diagram editor alone.
 
 ```bash
 npm run build              # bundle and type-check; build the members first
+npm run watch              # rebundle whenever the members’ builds change; reload the page to pick it up
 npm start                  # Theia at http://localhost:3000 on ../workspace; THEIA_PORT picks another port
 npm run test:e2e:install   # download the Chromium the smoke test drives, once
 npm run test:e2e           # the smoke test, which starts the application itself

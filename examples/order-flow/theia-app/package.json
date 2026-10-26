@@ -26,8 +26,7 @@
     "test:e2e:restart": "npm run link:plugin && playwright test --tsconfig tsconfig.e2e.json --grep @restart --workers=1",
     "test:e2e:ui": "npm run link:plugin && playwright test --tsconfig tsconfig.e2e.json --ui",
     "typecheck:test": "tsc --noEmit -p tsconfig.e2e.json",
-    "watch": "theia build --watch --mode development",
-    "watch:all": "concurrently --kill-others --names \"server,client,theia,app\" --prefix-colors \"yellow,green,cyan,magenta\" \"npm --prefix ../server run watch\" \"npm --prefix ../client run watch\" \"npm --prefix ../theia run watch\" \"npm run watch\""
+    "watch": "theia build --watch --mode development"
   },
   "dependencies": {
     "@hydranium/example-order-flow-theia": "0.0.0",
@@ -54,7 +53,6 @@
     "@theia/bundle-plugin": "1.74.3",
     "@theia/cli": "1.74.3",
     "@theia/playwright": "1.74.3",
-    "concurrently": "^9.0.0",
     "esbuild-plugins-node-modules-polyfill": "^1.6.7",
     "rimraf": "^5.0.0",
     "yargs": "^17.7.3"

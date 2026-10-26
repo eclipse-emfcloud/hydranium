@@ -974,6 +974,7 @@ const SCAFFOLD_PIN_SOURCES: Record<string, PinSource> = {
    '@vscode/codicons': { file: 'package-lock.json', path: ['packages', 'node_modules/@vscode/codicons', 'version'], rule: 'exact' },
    esbuild: { file: 'package.json', path: ['devDependencies', 'esbuild'], rule: 'exact' },
    '@types/node': { file: 'package.json', path: ['devDependencies', '@types/node'], rule: 'exact' },
+   concurrently: { file: 'package.json', path: ['devDependencies', 'concurrently'], rule: 'exact' },
    rimraf: { file: 'package.json', path: ['devDependencies', 'rimraf'], rule: 'exact' },
    typescript: { file: 'package.json', path: ['devDependencies', 'typescript'], rule: 'exact' },
    vitest: { file: 'package.json', path: ['devDependencies', 'vitest'], rule: 'exact' }

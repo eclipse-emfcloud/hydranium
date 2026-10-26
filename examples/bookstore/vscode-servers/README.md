@@ -11,6 +11,7 @@ show twice: install one.
 
 ```bash
 npm run build   # copy the server’s grammars and compile into out/; build the server first
+npm run watch   # the same on every change
 ```
 
 - `src/extension.ts` — activation, which starts the server and, with a socket head, registers its port commands

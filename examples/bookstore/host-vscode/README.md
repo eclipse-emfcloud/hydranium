@@ -12,6 +12,7 @@ webview reaches the data head too: see the Host in VS Code guide.
 
 ```bash
 npm run build              # copy the server’s grammars, type-check and compile, then bundle
+npm run watch              # copy the grammars and recompile and rebundle on every change; Developer: Reload Window picks it up
 npm start                  # VS Code with this extension, on ../workspace; needs `code` on the PATH
 npm run test:e2e:install   # download the VS Code the smoke test drives, once
 npm run test:e2e           # the smoke test; under `xvfb-run -a` on Linux without a display

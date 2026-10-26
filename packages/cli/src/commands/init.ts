@@ -668,6 +668,7 @@ export function runInit(options: InitCommandOptions): void {
       write('  npm install\n');
       write('  npm run build            # langium generate + tsc, every package\n');
       write('  npm test                 # the server tests\n');
+      write('  npm run watch            # rebuild the members on every change; watch:<host> adds a host\n');
    } else {
       write(`  cd ${detection.rootDir}\n`);
       write('  npm install\n');

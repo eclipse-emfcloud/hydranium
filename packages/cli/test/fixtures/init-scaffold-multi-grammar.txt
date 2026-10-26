@@ -12,9 +12,11 @@ package.json
   "scripts": {
     "build": "npm run build --workspaces",
     "clean": "npm run clean --workspaces --if-present",
-    "test": "npm test --workspaces --if-present"
+    "test": "npm test --workspaces --if-present",
+    "watch": "concurrently --kill-others --names server \"npm --prefix server run watch\""
   },
   "devDependencies": {
+    "concurrently": "^9.0.0",
     "langium": "4.3.1",
     "vscode-jsonrpc": "9.0.0",
     "vscode-languageserver": "10.0.1",
@@ -189,7 +191,7 @@ server/package.json
     "start": "node lib/main.js --stdio",
     "test": "npm run typecheck:test && vitest run",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
-    "watch": "tsc -b --watch"
+    "watch": "concurrently --kill-others --names langium,transfer-model,tsc \"npm run langium:watch\" \"npm run generate:transfer-model -- --watch\" \"tsc -b --watch\""
   },
   "dependencies": {
     "@hydranium/core": "^__FRAMEWORK_VERSION__",
@@ -206,6 +208,7 @@ server/package.json
   "devDependencies": {
     "@hydranium/cli": "^__FRAMEWORK_VERSION__",
     "@types/node": "^22.0.0",
+    "concurrently": "^9.0.0",
     "langium-cli": "4.3.0",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",
@@ -338,6 +341,7 @@ A Hydranium language project scaffolded by `hydranium-cli init`.
 npm install
 npm run langium:generate   # generate the AST from the grammar
 npm run build              # generate + compile to lib/
+npm run watch              # regenerate and recompile on every grammar or source change
 npm test                   # typecheck the tests, then run them
 ```
 
