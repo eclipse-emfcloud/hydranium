@@ -44,20 +44,25 @@ import { type NameProvider } from '../naming/name-provider.js';
  * `NameProvider` gives no name. For grammars with unnamed element types the
  * reorder / insert / delete stability above does NOT apply to those nodes:
  * their keys move when their index moves, so a mid-array insert or delete
- * renumbers every later sibling.
+ * renumbers every later sibling. A node held in a single-valued property has
+ * no `$containerIndex` and falls back to `` `${$containerProperty}@` ``; the
+ * trailing `@` keeps its key apart from a sibling named after the property.
  *
  * Two consequences for a caller creating such nodes programmatically
  * (a GLSP operation handler is the usual case):
  *
- * - A node appended with a bare `array.push` has no `$containerProperty` /
- *   `$containerIndex`, so `getElementKey` returns `undefined` and the node
- *   has no key at all. The containment plumbing has to be stamped.
+ * - A node appended with a bare `array.push`, or assigned to a single-valued
+ *   property without its `$containerProperty`, has no container position, so
+ *   `getElementKey` returns `undefined` and the node has no key at all. The
+ *   containment plumbing has to be stamped.
  * - After a removal, surviving siblings need their `$containerIndex`
  *   renumbered, or a key derived afterwards addresses the wrong node.
  *
- * {@link appendChild} and {@link removeChildren} discharge both, and ship
- * beside this provider because the constraint is this provider's rather than
- * any caller's.
+ * {@link appendChild} and {@link removeChildren} discharge both for arrays,
+ * and ship beside this provider because the constraint is this provider's
+ * rather than any caller's. A single-valued property needs no helper: build
+ * the node with its `$container` and `$containerProperty`, which
+ * `buildAstNode` accepts.
  *
  * Adopters that need insert / delete stability for unnamed types should
  * give those types a name in the grammar, or bind a key provider whose
@@ -137,14 +142,21 @@ export class NameBasedKeyProvider implements ElementKeyProvider {
    }
 
    /**
-    * Fallback segment for unnamed intermediate ancestors —
-    * `containerProperty@containerIndex`. Returns `undefined` when the
-    * node has no container position, which short-circuits the walk.
+    * Segment for a node the `NameProvider` gives no name —
+    * `containerProperty@containerIndex`, or `containerProperty@` when the
+    * container holds no array in that property, attached or not. Returns
+    * `undefined` when the node has no container position: the node itself
+    * then has no key, and an ancestor's level is left out of the key.
     */
    protected unidentifiedSegment(node: AstNode): string | undefined {
-      if (node.$containerProperty === undefined || node.$containerIndex === undefined) {
+      const property = node.$containerProperty;
+      if (property === undefined) {
          return undefined;
       }
-      return `${node.$containerProperty}@${node.$containerIndex}`;
+      if (node.$containerIndex !== undefined) {
+         return `${property}@${node.$containerIndex}`;
+      }
+      // An array member without its index stays keyless rather than share `property@` with its siblings.
+      return Array.isArray((node.$container as Record<string, unknown> | undefined)?.[property]) ? undefined : `${property}@`;
    }
 }

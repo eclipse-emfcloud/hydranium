@@ -150,6 +150,63 @@ describe('NameBasedKeyProvider', () => {
       expect(provider.getElementKey(leaf)).toBe('members@2.Element2');
    });
 
+   it('keys an unnamed node in a single-valued property as `<property>@`', () => {
+      // Langium sets no $containerIndex outside arrays.
+      const wrapper = makeFakeAstNode<AnyNode>({ $type: 'Root' });
+      const semanticRoot = makeFakeAstNode<AnyNode>({ $type: 'BaseType', $container: wrapper, name: 'Element1' });
+      const unnamed = makeFakeAstNode<AnyNode>({ $type: 'TypeTwo', $container: semanticRoot });
+      semanticRoot.member = unnamed;
+      asMutable(unnamed).$containerProperty = 'member';
+      const leaf = makeFakeAstNode<AnyNode>({ $type: 'TypeOne', $container: unnamed, name: 'Element2' });
+      const provider = new NameBasedKeyProvider(makeServices() as never);
+      expect(provider.getElementKey(unnamed)).toBe('member@');
+      expect(provider.getElementKey(leaf)).toBe('member@.Element2');
+   });
+
+   it('keeps a single-valued property key apart from a sibling named after the property', () => {
+      const wrapper = makeFakeAstNode<AnyNode>({ $type: 'Root' });
+      const semanticRoot = makeFakeAstNode<AnyNode>({ $type: 'BaseType', $container: wrapper, name: 'Element1' });
+      const unnamed = makeFakeAstNode<AnyNode>({ $type: 'TypeTwo', $container: semanticRoot });
+      semanticRoot.member = unnamed;
+      asMutable(unnamed).$containerProperty = 'member';
+      const named = makeFakeAstNode<AnyNode>({ $type: 'TypeOne', $container: semanticRoot, name: 'member' });
+      const provider = new NameBasedKeyProvider(makeServices() as never);
+      expect(provider.getElementKey(unnamed)).not.toBe(provider.getElementKey(named));
+   });
+
+   it('leaves an array member without its containerIndex keyless', () => {
+      const wrapper = makeFakeAstNode<AnyNode>({ $type: 'Root' });
+      const semanticRoot = makeFakeAstNode<AnyNode>({ $type: 'BaseType', $container: wrapper, name: 'Element1' });
+      const unnamed = makeFakeAstNode<AnyNode>({ $type: 'TypeTwo', $container: semanticRoot });
+      semanticRoot.members = [unnamed];
+      asMutable(unnamed).$containerProperty = 'members';
+      const provider = new NameBasedKeyProvider(makeServices() as never);
+      expect(provider.getElementKey(unnamed)).toBeUndefined();
+   });
+
+   it('keys an unattached stand-in for a single-valued slot as `<property>@`, as one for an array slot', () => {
+      // Stand-ins name their slot but are never assigned into it.
+      const wrapper = makeFakeAstNode<AnyNode>({ $type: 'Root' });
+      const semanticRoot = makeFakeAstNode<AnyNode>({ $type: 'BaseType', $container: wrapper, name: 'Element1' });
+      const single = makeFakeAstNode<AnyNode>({ $type: 'TypeTwo', $container: semanticRoot });
+      asMutable(single).$containerProperty = 'member';
+      const listed = makeFakeAstNode<AnyNode>({ $type: 'TypeTwo', $container: semanticRoot });
+      asMutable(listed).$containerProperty = 'members';
+      asMutable(listed).$containerIndex = 0;
+      const provider = new NameBasedKeyProvider(makeServices() as never);
+      expect(provider.getElementKey(single)).toBe('member@');
+      expect(provider.getElementKey(listed)).toBe('members@0');
+   });
+
+   it('keys an unnamed semantic root in a single-valued wrapper property', () => {
+      const wrapper = makeFakeAstNode<AnyNode>({ $type: 'Root' });
+      const semanticRoot = makeFakeAstNode<AnyNode>({ $type: 'BaseType', $container: wrapper });
+      wrapper.element = semanticRoot;
+      asMutable(semanticRoot).$containerProperty = 'element';
+      const provider = new NameBasedKeyProvider(makeServices() as never);
+      expect(provider.getElementKey(semanticRoot)).toBe('element@');
+   });
+
    it('returns undefined when the node has no name and no container position', () => {
       const node = makeFakeAstNode<AnyNode>({ $type: 'UnknownType' });
       const provider = new NameBasedKeyProvider(makeServices() as never);
@@ -198,15 +255,15 @@ describe('NameBasedKeyProvider', () => {
       expect(provider.getElementKey(leaf)).toBe('Element2');
    });
 
-   it('treats an intermediate with a containerProperty but no containerIndex as having no segment', () => {
+   it('treats an array-slot intermediate without its containerIndex as having no segment', () => {
       const wrapper = makeFakeAstNode<AnyNode>({ $type: 'Root' });
       const semanticRoot = makeFakeAstNode<AnyNode>({ $type: 'BaseType', $container: wrapper, name: 'Element1' });
       const intermediate = makeFakeAstNode<AnyNode>({ $type: 'TypeTwo', $container: semanticRoot });
+      semanticRoot.members = [intermediate];
       asMutable(intermediate).$containerProperty = 'members';
-      // $containerIndex deliberately left undefined.
       const leaf = makeFakeAstNode<AnyNode>({ $type: 'TypeOne', $container: intermediate, name: 'Element2' });
       const provider = new NameBasedKeyProvider(makeServices() as never);
-      // With `&&` instead of `||`, or with the guard dropped, this would be 'members@undefined.Element2'.
+      // Without the array check, this would be 'members@.Element2'.
       expect(provider.getElementKey(leaf)).toBe('Element2');
    });
 
@@ -375,6 +432,18 @@ describe('NameBasedKeyProvider.resolveElement', () => {
       const key = provider.getElementKey(first);
       expect(key).toBe('Element1.Element2');
       expect(provider.resolveElement(key!, semanticRoot)).toBe(first);
+   });
+
+   it('round-trips the keys of an unnamed node in a single-valued property and of its child', () => {
+      const { semanticRoot } = buildTree();
+      const unnamed = makeFakeAstNode<AnyNode>({ $type: 'TypeTwo', $container: semanticRoot });
+      semanticRoot.member = unnamed;
+      asMutable(unnamed).$containerProperty = 'member';
+      const leaf = makeFakeAstNode<AnyNode>({ $type: 'TypeOne', name: 'Element2' });
+      linkChildren(unnamed, 'members', [leaf]);
+      const provider = new NameBasedKeyProvider(makeServices() as never);
+      expect(provider.resolveElement('member@', semanticRoot)).toBe(unnamed);
+      expect(provider.resolveElement('member@.Element2', semanticRoot)).toBe(leaf);
    });
 
    it('returns undefined for a key that matches nothing in scope', () => {
