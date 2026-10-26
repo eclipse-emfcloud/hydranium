@@ -434,6 +434,13 @@ const HOST_VSCODE_DEV_DEPENDENCIES: Readonly<Record<string, string>> = {
 };
 
 /**
+ * The Node major a standalone scaffold's `.nvmrc` and printed steps name.
+ * `langium generate` from the pinned `langium-cli` fails on Node 24.20 and
+ * later, which `engines` still admits.
+ */
+export const SCAFFOLD_NODE_MAJOR = '22';
+
+/**
  * The exact pins of every member the composition emits, for a workspace root
  * to declare too. npm installs a root's own dependencies at the top of the
  * tree, so another member's version of one nests beneath that member instead of
@@ -959,7 +966,11 @@ export const __CONFIG_ROOT_CONST___CONFIGURATION_ROOT = '__PROJECT_ID__';
          : `
 //
 // A second grammar goes in the \`additionalLanguages\` option of
-// \`createIntegrationServices\`, generated from this same \`langium-config.json\`.`
+// \`createIntegrationServices\`, generated from this same \`langium-config.json\`.
+// With several languages, bind \`lsp.configurationRoot\` in
+// \`__NAME__SharedModule\`, or the framework warns and takes the first
+// language's id. Type that module's second \`Module\` argument as
+// \`PartialLangiumSharedServices & { lsp: { configurationRoot: string } }\`.`
    }
 
 ${importList(
@@ -1765,6 +1776,10 @@ function readme(composition: InitComposition): string {
       'A Hydranium language project scaffolded by `hydranium-cli init`.',
       '',
       '## Getting started',
+      '',
+      '`langium generate` fails on Node 24.20 and later with `TypeError: Invalid URL`',
+      '([tdegrunt/jsonschema#423](https://github.com/tdegrunt/jsonschema/issues/423)),',
+      'so build on Node 22.',
       '',
       '```bash',
       'npm install',
@@ -4340,7 +4355,7 @@ function rootFiles(composition: InitComposition): InitFile[] {
    const scripts: Record<string, string> = {
       build: 'npm run build --workspaces',
       clean: 'npm run clean --workspaces --if-present',
-      ...(composition.hosts.includes('browser') ? { 'start:browser': 'npm --prefix host-browser start' } : {}),
+      ...Object.fromEntries(composition.hosts.map(host => [`start:${host}`, `npm --prefix host-${host} start`])),
       test: 'npm test --workspaces --if-present',
       watch: parallel(Object.fromEntries(watched.map(member => [member, `npm --prefix ${member} run watch`]))),
       // The browser host's `start` is its watch: it rebundles the page as it serves it.
@@ -4374,7 +4389,7 @@ ${sortedBlock(devDependencies, '    ')}
   }
 }
 `;
-   return [{ path: 'package.json', content }, ignoreFile('')];
+   return [{ path: 'package.json', content }, ignoreFile(''), { path: '.nvmrc', content: `${SCAFFOLD_NODE_MAJOR}\n` }];
 }
 
 /**

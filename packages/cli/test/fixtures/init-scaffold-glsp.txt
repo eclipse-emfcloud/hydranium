@@ -20,6 +20,9 @@ package.json
     "build": "npm run build --workspaces",
     "clean": "npm run clean --workspaces --if-present",
     "start:browser": "npm --prefix host-browser start",
+    "start:vscode": "npm --prefix host-vscode start",
+    "start:theia-browser": "npm --prefix host-theia-browser start",
+    "start:theia-electron": "npm --prefix host-theia-electron start",
     "test": "npm test --workspaces --if-present",
     "watch": "concurrently --kill-others --names server,client,vscode-servers,theia \"npm --prefix server run watch\" \"npm --prefix client run watch\" \"npm --prefix vscode-servers run watch\" \"npm --prefix theia run watch\"",
     "watch:browser": "concurrently --kill-others --names watch,host-browser \"npm run watch\" \"npm --prefix host-browser start\"",
@@ -69,6 +72,11 @@ package.json
 .gitignore
 ==============================================================================
 node_modules/
+
+==============================================================================
+.nvmrc
+==============================================================================
+22
 
 ==============================================================================
 protocol/package.json
@@ -432,6 +440,10 @@ A Hydranium language project scaffolded by `hydranium-cli init`.
 
 ## Getting started
 
+`langium generate` fails on Node 24.20 and later with `TypeError: Invalid URL`
+([tdegrunt/jsonschema#423](https://github.com/tdegrunt/jsonschema/issues/423)),
+so build on Node 22.
+
 ```bash
 npm install
 npm run langium:generate   # generate the AST from the grammar
@@ -585,6 +597,10 @@ server/src/language-server/bookstore-module.ts
 //
 // A second grammar goes in the `additionalLanguages` option of
 // `createIntegrationServices`, generated from this same `langium-config.json`.
+// With several languages, bind `lsp.configurationRoot` in
+// `BookstoreSharedModule`, or the framework warns and takes the first
+// language's id. Type that module's second `Module` argument as
+// `PartialLangiumSharedServices & { lsp: { configurationRoot: string } }`.
 
 import {
    createLspServerLanguageModule,

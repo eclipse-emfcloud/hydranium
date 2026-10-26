@@ -10,7 +10,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { editingHeads, INIT_HOSTS, type InitHost, isInitHost, isTheiaHost } from './init-hosts.js';
-import { buildInitTemplates, readFrameworkVersion, workspaceRootPins } from './init-templates.js';
+import { buildInitTemplates, readFrameworkVersion, SCAFFOLD_NODE_MAJOR, workspaceRootPins } from './init-templates.js';
 import { kebab } from './kebab.js';
 import {
    createNodeWorkspaceProbe,
@@ -665,6 +665,11 @@ export function runInit(options: InitCommandOptions): void {
    const server = detection === undefined ? 'server' : `${detection.targetPath}/server`;
    if (detection === undefined) {
       write(`  cd ${options.targetDir}\n`);
+      // A comment, so a pasted block runs without nvm. NVM for Windows ignores
+      // `.nvmrc` and its `install` does not switch, hence both commands.
+      write(
+         `  # on Node ${SCAFFOLD_NODE_MAJOR}, which .nvmrc names. With nvm: nvm install ${SCAFFOLD_NODE_MAJOR}, then nvm use ${SCAFFOLD_NODE_MAJOR}\n`
+      );
       write('  npm install\n');
       write('  npm run build            # langium generate + tsc, every package\n');
       write('  npm test                 # the server tests\n');
@@ -683,28 +688,29 @@ export function runInit(options: InitCommandOptions): void {
    // `npx`, not a bare invocation: `@hydranium/cli` is a devDependency of the
    // scaffold, so the binary is on PATH inside an npm script and nowhere else.
    write(`  npx hydranium-cli reflect --services ./${server}/lib/node/services.js\n`);
+   const hostDir = (host: InitHost): string => (detection === undefined ? `host-${host}` : `${detection.targetPath}/host-${host}`);
+   // A standalone root runs a host as `start:<host>`. A surrounding workspace's root is not ours to add to.
+   const start = (host: InitHost): string => (detection === undefined ? `npm run start:${host}` : `npm --prefix ${hostDir(host)} start`);
    if (composition.hosts.includes('browser')) {
-      const browser = detection === undefined ? 'host-browser' : `${detection.targetPath}/host-browser`;
-      // A standalone root runs it as `start:browser`; a surrounding workspace's root is not ours to add to.
-      const start = detection === undefined ? 'npm run start:browser' : `npm --prefix ${browser} start`;
-      write(`  ${start}   # serve the page at http://localhost:4937, Ctrl+C to stop\n`);
+      const browser = hostDir('browser');
+      write(`  ${start('browser')}   # serve the page at http://localhost:4937, Ctrl+C to stop\n`);
       // The smoke test serves the page itself, on the same port.
       write(`  npm --prefix ${browser} run test:e2e:install && npm --prefix ${browser} run test:e2e   # with start stopped\n`);
    }
    if (composition.hosts.includes('vscode')) {
-      const vscode = detection === undefined ? 'host-vscode' : `${detection.targetPath}/host-vscode`;
-      write(`  npm --prefix ${vscode} start   # VS Code with the extension, on the workspace; needs \`code\` on the PATH\n`);
+      const vscode = hostDir('vscode');
+      write(`  ${start('vscode')}   # VS Code with the extension, on the workspace (needs \`code\` on the PATH)\n`);
       write(`  npm --prefix ${vscode} run test:e2e:install && npm --prefix ${vscode} run test:e2e\n`);
    }
    if (composition.hosts.includes('theia-browser')) {
-      const theia = detection === undefined ? 'host-theia-browser' : `${detection.targetPath}/host-theia-browser`;
-      write(`  npm --prefix ${theia} start   # Theia at http://localhost:3000 on the workspace, Ctrl+C to stop\n`);
+      const theia = hostDir('theia-browser');
+      write(`  ${start('theia-browser')}   # Theia at http://localhost:3000 on the workspace, Ctrl+C to stop\n`);
       // The smoke test starts its own backend, on a port of its own.
       write(`  npm --prefix ${theia} run test:e2e:install && npm --prefix ${theia} run test:e2e\n`);
    }
    if (composition.hosts.includes('theia-electron')) {
-      const electron = detection === undefined ? 'host-theia-electron' : `${detection.targetPath}/host-theia-electron`;
-      write(`  npm --prefix ${electron} start   # the Theia desktop application on the workspace\n`);
+      const electron = hostDir('theia-electron');
+      write(`  ${start('theia-electron')}   # the Theia desktop application on the workspace\n`);
       write(`  npm --prefix ${electron} run test:e2e\n`);
    }
    write('\n');

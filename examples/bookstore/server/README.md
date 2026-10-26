@@ -4,6 +4,10 @@ A Hydranium language project scaffolded by `hydranium-cli init`.
 
 ## Getting started
 
+`langium generate` fails on Node 24.20 and later with `TypeError: Invalid URL`
+([tdegrunt/jsonschema#423](https://github.com/tdegrunt/jsonschema/issues/423)),
+so build on Node 22.
+
 ```bash
 npm install
 npm run langium:generate   # generate the AST from the grammar

@@ -62,6 +62,10 @@ Three flags shape it:
 
 ## Build and test
 
+Build on the Node version in the scaffold's `.nvmrc`.
+[Requirements](requirements.md#node-2213-or-newer) says why and how to switch
+with nvm.
+
 ```bash
 cd my-lang
 npm install
@@ -106,11 +110,11 @@ serves the page itself, so stop `start:browser` first.
 ## Open it in VS Code
 
 ```bash
-npm --prefix host-vscode start
+npm run start:vscode
 ```
 
-VS Code opens `workspace/` with the extension loaded; `npm start` needs `code`
-on your `PATH`. `nodes.my-lang` opens as its diagram, and Reopen Editor With
+VS Code opens `workspace/` with the extension loaded, which needs `code` on
+your `PATH`. `nodes.my-lang` opens as its diagram, and Reopen Editor With
 offers the text editor, where the server reports problems as you type.
 
 ```bash
@@ -127,7 +131,7 @@ reports a broken reference. On Linux without a display, run it under
 Scaffolded with `--hosts theia-browser`:
 
 ```bash
-npm --prefix host-theia-browser start
+npm run start:theia-browser
 ```
 
 Theia serves `workspace/` at http://localhost:3000; `THEIA_PORT` picks
@@ -141,12 +145,12 @@ npm --prefix host-theia-browser run test:e2e
 ```
 
 The smoke test starts the application itself, on a port of its own, so
-`npm start` can keep running.
+`start:theia-browser` can keep running.
 
 Scaffolded with `--hosts theia-electron`:
 
 ```bash
-npm --prefix host-theia-electron start
+npm run start:theia-electron
 npm --prefix host-theia-electron run test:e2e
 ```
 
