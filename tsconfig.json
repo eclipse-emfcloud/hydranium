@@ -11,6 +11,7 @@
     { "path": "packages/glsp-client" },
     { "path": "packages/client-theia" },
     { "path": "packages/glsp-client-theia" },
+    { "path": "packages/glsp-client-theia/tsconfig.browser.json" },
     { "path": "packages/data-client-theia" },
     { "path": "packages/client-vscode" },
     { "path": "packages/data-client-vscode" },

@@ -33,7 +33,7 @@ interface MemoryCapablePerformance {
  * CDP source (`nodes`/`jsEventListeners`/… + delta) is the e2e bridge's job.
  */
 export async function captureBrowserRuntime(): Promise<BrowserRuntimeReport> {
-   const perf = globalThis.performance as (Performance & MemoryCapablePerformance) | undefined;
+   const perf = globalThis.performance as MemoryCapablePerformance | undefined;
    if (perf?.measureUserAgentSpecificMemory) {
       try {
          const result = await perf.measureUserAgentSpecificMemory();

@@ -1,17 +1,11 @@
 {
   "extends": "../../tsconfig.base.json",
-  "//noUncheckedSideEffectImports": "CSS imports are bundled by webpack or esbuild; tsc cannot resolve them.",
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "lib",
-    "strictPropertyInitialization": false,
-    "lib": ["ES2022", "DOM"],
-    "noUncheckedSideEffectImports": false
+    "strictPropertyInitialization": false
   },
   "include": ["src"],
-  "references": [
-    { "path": "../protocol" },
-    { "path": "../glsp-client" },
-    { "path": "../client-theia" }
-  ]
+  "exclude": ["src/browser", "src/index.ts"],
+  "references": [{ "path": "../client-theia" }]
 }
