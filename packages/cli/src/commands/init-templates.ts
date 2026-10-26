@@ -422,12 +422,13 @@ const HOST_VSCODE_DATA_FRAMEWORK_DEPENDENCIES: readonly string[] = [
 // Exact, as the server's is: the socket's connection and the framework's must be one copy.
 const HOST_VSCODE_DATA_THIRD_PARTY_DEPENDENCIES: Readonly<Record<string, string>> = { 'vscode-jsonrpc': '9.0.0' };
 
-/** The VS Code extension's tools: the smoke tier, the download it runs in and the type check. */
+/** The VS Code extension's tools: the smoke tier, the download it runs in, the type check and the watch. */
 const HOST_VSCODE_DEV_DEPENDENCIES: Readonly<Record<string, string>> = {
    '@playwright/test': '^1.55.0',
    '@types/node': '^22.0.0',
    '@types/vscode': VSCODE_ENGINE,
    '@vscode/test-electron': '^3.1.0',
+   concurrently: '^9.0.0',
    rimraf: '^5.0.0',
    typescript: '^7.0.2'
 };
@@ -581,7 +582,7 @@ __BIN__  },
 __LINT__    "start": "node lib/main.js__START_ARGS__",
     "test": "npm run typecheck:test && vitest run",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
-    "watch": "tsc -b --watch"
+    "watch": "concurrently --kill-others --names langium,transfer-model,tsc \\"npm run langium:watch\\" \\"npm run generate:transfer-model -- --watch\\" \\"tsc -b --watch\\""
   },
   "dependencies": {
 __DEPENDENCIES__
@@ -589,6 +590,7 @@ __DEPENDENCIES__
   "devDependencies": {
     "@hydranium/cli": "__FRAMEWORK_PIN__",
     "@types/node": "^22.0.0",
+    "concurrently": "^9.0.0",
     "langium-cli": "4.3.0",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",
@@ -1768,6 +1770,7 @@ function readme(composition: InitComposition): string {
       'npm install',
       'npm run langium:generate   # generate the AST from the grammar',
       'npm run build              # generate + compile to lib/',
+      'npm run watch              # regenerate and recompile on every grammar or source change',
       'npm test                   # typecheck the tests, then run them',
       '```',
       '',
@@ -2377,7 +2380,7 @@ ${composition.packaging.private ? '  "private": true,\n' : ''}  "description": "
   "scripts": {
     "build": "tsc -b",
     "clean": "rimraf lib tsconfig.tsbuildinfo",
-${lintScript(forMember(composition, 'client'), 'src')}    "watch": "tsc -b --watch"
+${lintScript(forMember(composition, 'client'), 'src')}    "watch": "tsc --watch"
   },
   "dependencies": {
 ${sortedBlock(dependencies, '    ')}
@@ -2961,7 +2964,11 @@ function vscodeLanguageContributions(composition: InitComposition): Record<strin
 }
 
 /** VS Code finds the grammars only inside the extension, so the build copies the server's. */
-const COPY_SYNTAXES = `node -e \\"require('node:fs').cpSync('../server/syntaxes', 'syntaxes', { recursive: true })\\"`;
+const COPY_SYNTAXES_SCRIPT = "require('node:fs').cpSync('../server/syntaxes', 'syntaxes', { recursive: true })";
+const COPY_SYNTAXES = `node -e \\"${COPY_SYNTAXES_SCRIPT}\\"`;
+
+/** `copy:syntaxes`, then again each time the server's `langium:watch` rewrites a grammar. */
+const WATCH_SYNTAXES = `node -e \\"const copy = () => ${COPY_SYNTAXES_SCRIPT}; copy(); require('node:fs').watch('../server/syntaxes', copy)\\"`;
 
 /**
  * The servers-only extension's `package.json`. Always private, like a host:
@@ -2993,13 +3000,14 @@ function vscodeServersPackageJson(composition: InitComposition): string {
     "build": "npm run copy:syntaxes && tsc",
     "clean": "rimraf out syntaxes tsconfig.tsbuildinfo",
     "copy:syntaxes": "${COPY_SYNTAXES}",
-${lintScript(forMember(composition, 'vscode-servers'), 'src')}    "watch": "tsc --watch"
+${lintScript(forMember(composition, 'vscode-servers'), 'src')}    "watch": "concurrently --kill-others --names syntaxes,tsc \\"npm run watch:syntaxes\\" \\"tsc --watch\\"",
+    "watch:syntaxes": "${WATCH_SYNTAXES}"
   },
   "dependencies": {
 ${sortedBlock(dependencies, '    ')}
   },
   "devDependencies": {
-${sortedBlock({ '@types/node': '^22.0.0', '@types/vscode': VSCODE_ENGINE, rimraf: '^5.0.0', typescript: '^7.0.2' }, '    ')}
+${sortedBlock({ '@types/node': '^22.0.0', '@types/vscode': VSCODE_ENGINE, concurrently: '^9.0.0', rimraf: '^5.0.0', typescript: '^7.0.2' }, '    ')}
   },
   "contributes": ${jsonAt(vscodeLanguageContributions(composition), '  ')},
   "activationEvents": [
@@ -3128,6 +3136,7 @@ function vscodeServersReadme(composition: InitComposition): string {
       '',
       '```bash',
       'npm run build   # copy the server’s grammars and compile into out/; build the server first',
+      'npm run watch   # the same on every change',
       '```',
       '',
       '- `src/extension.ts` — activation, which starts the server and, with a socket head, registers its port commands',
@@ -3187,6 +3196,15 @@ function hostVscodePackageJson(composition: InitComposition): string {
       }
    }
    const devDependencies = { ...HOST_VSCODE_DEV_DEPENDENCIES, ...(diagrams.length > 0 ? { esbuild: '^0.28.0' } : {}) };
+   const watches: Record<string, string> = {
+      syntaxes: 'npm run watch:syntaxes',
+      tsc: 'tsc --watch',
+      ...(diagrams.length > 0 ? { webview: 'node esbuild.mjs --watch' } : {})
+   };
+   const watchNames = Object.keys(watches).join(',');
+   const watchCommands = Object.values(watches)
+      .map(command => `\\"${command}\\"`)
+      .join(' ');
    const contributes = {
       ...(composition.heads.includes('data')
          ? { commands: [{ command: `${composition.projectId}.showModel`, title: 'Show Model', category: composition.name }] }
@@ -3223,7 +3241,9 @@ function hostVscodePackageJson(composition: InitComposition): string {
 ${lintScript(forMember(composition, 'host-vscode'), 'src test')}    "start": "node start.mjs",
     "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
     "test:e2e:install": "node --experimental-strip-types test/install-vscode.mts",
-    "typecheck": "${typecheck}"
+    "typecheck": "${typecheck}",
+    "watch": "concurrently --kill-others --names ${watchNames} ${watchCommands}",
+    "watch:syntaxes": "${WATCH_SYNTAXES}"
   },
   "dependencies": {
 ${sortedBlock(dependencies, '    ')}
@@ -3543,6 +3563,7 @@ function hostVscodeReadme(composition: InitComposition): string {
       '',
       '```bash',
       `npm run build              # copy the server’s grammars, type-check and compile${diagrams.length > 0 ? ', then bundle' : ''}`,
+      `npm run watch              # copy the grammars and recompile${diagrams.length > 0 ? ' and rebundle' : ''} on every change; Developer: Reload Window picks it up`,
       'npm start                  # VS Code with this extension, on ../workspace; needs `code` on the PATH',
       'npm run test:e2e:install   # download the VS Code the smoke test drives, once',
       'npm run test:e2e           # the smoke test; under `xvfb-run -a` on Linux without a display',
@@ -3955,7 +3976,8 @@ function hostTheiaBrowserPackageJson(composition: InitComposition): string {
 ${lintScript(forMember(composition, 'host-theia-browser'), 'test')}    "start": "node start.mjs",
     "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
     "test:e2e:install": "playwright install chromium",
-    "typecheck": "tsc --noEmit -p tsconfig.e2e.json"
+    "typecheck": "tsc --noEmit -p tsconfig.e2e.json",
+    "watch": "theia build --watch --mode development"
   },
   "dependencies": {
 ${sortedBlock(dependencies, '    ')}
@@ -4071,6 +4093,7 @@ function hostTheiaBrowserReadme(composition: InitComposition): string {
       '',
       '```bash',
       'npm run build              # bundle and type-check; build the members first',
+      'npm run watch              # rebundle whenever the members’ builds change; reload the page to pick it up',
       'npm start                  # Theia at http://localhost:3000 on ../workspace; THEIA_PORT picks another port',
       'npm run test:e2e:install   # download the Chromium the smoke test drives, once',
       'npm run test:e2e           # the smoke test, which starts the application itself',
@@ -4217,7 +4240,8 @@ function hostTheiaElectronPackageJson(composition: InitComposition): string {
     "clean": "rimraf lib src-gen plugins gen-esbuild.browser.mjs gen-esbuild.electron.mjs gen-esbuild.node.mjs test-results playwright-report",
 ${lintScript(forMember(composition, 'host-theia-electron'), 'test')}    "start": "node start.mjs",
     "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
-    "typecheck": "tsc --noEmit -p tsconfig.e2e.json"
+    "typecheck": "tsc --noEmit -p tsconfig.e2e.json",
+    "watch": "theia build --watch --mode development"
   },
   "dependencies": {
 ${sortedBlock(dependencies, '    ')}
@@ -4249,12 +4273,17 @@ function hostTheiaElectronReadme(composition: InitComposition): string {
       '',
       '```bash',
       'npm run build      # bundle and type-check, and download Electron; build the members first',
+      'npm run watch      # rebundle whenever the members’ builds change; reload the window to pick it up',
       'npm start          # the application on ../workspace',
       'npm run test:e2e   # the smoke test, which launches the application itself',
       '```',
       '',
       ...wrapProse(
          'There is no `theia rebuild:electron` step: Theia’s native modules are N-API builds, which load in Electron as `npm install` built them for Node.'
+      ),
+      '',
+      ...wrapProse(
+         '`npm run watch` reports a `theia-source-map-paths` JSON error as it starts: Theia’s generated `esbuild.mjs` starts the browser and electron builds together, and they share `lib/frontend`. Later rebuilds are clean.'
       ),
       '',
       '## Layout',
@@ -4293,25 +4322,52 @@ function hostTheiaElectronFiles(composition: InitComposition): InitFile[] {
  * same reason: a package ranging over one, such as a framework package's peer,
  * otherwise takes the top of the tree with the newest match, and each member's
  * exact copy nests beneath it.
+ *
+ * `watch` keeps every non-host member built; `watch:<host>` adds one host, so
+ * only the bundler of the host being worked on runs.
  */
 function rootFiles(composition: InitComposition): InitFile[] {
-   const pins = workspaceRootPins(composition).map(([name, version]) => `    "${name}": "${version}"`);
+   const devDependencies = { ...Object.fromEntries(workspaceRootPins(composition)), concurrently: '^9.0.0' };
+   const members = initMembers(composition.heads, composition.hosts);
+   // Only the server's watch is `tsc -b`, so protocol is built by one process
+   // rather than two writing the same `lib/`; a host's watch joins only in its
+   // own `watch:<host>`.
+   const watched = members.filter(member => member !== 'protocol' && !member.startsWith('host-'));
+   const parallel = (commands: Readonly<Record<string, string>>): string =>
+      `concurrently --kill-others --names ${Object.keys(commands).join(',')} ${Object.values(commands)
+         .map(command => `\\"${command}\\"`)
+         .join(' ')}`;
+   const scripts: Record<string, string> = {
+      build: 'npm run build --workspaces',
+      clean: 'npm run clean --workspaces --if-present',
+      ...(composition.hosts.includes('browser') ? { 'start:browser': 'npm --prefix host-browser start' } : {}),
+      test: 'npm test --workspaces --if-present',
+      watch: parallel(Object.fromEntries(watched.map(member => [member, `npm --prefix ${member} run watch`]))),
+      // The browser host's `start` is its watch: it rebundles the page as it serves it.
+      ...Object.fromEntries(
+         composition.hosts.map(host => [
+            `watch:${host}`,
+            parallel({
+               watch: 'npm run watch',
+               [`host-${host}`]: `npm --prefix host-${host} ${host === 'browser' ? 'start' : 'run watch'}`
+            })
+         ])
+      )
+   };
    const content = `{
   "name": "${composition.projectId}-root",
   "version": "0.0.0",
   "private": true,
   "workspaces": [
-${initMembers(composition.heads, composition.hosts)
-   .map(member => `    "${member}"`)
-   .join(',\n')}
+${members.map(member => `    "${member}"`).join(',\n')}
   ],
   "scripts": {
-    "build": "npm run build --workspaces",
-    "clean": "npm run clean --workspaces --if-present",
-${composition.hosts.includes('browser') ? '    "start:browser": "npm --prefix host-browser start",\n' : ''}    "test": "npm test --workspaces --if-present"
+${Object.entries(scripts)
+   .map(([name, command]) => `    "${name}": "${command}"`)
+   .join(',\n')}
   },
   "devDependencies": {
-${pins.join(',\n')}
+${sortedBlock(devDependencies, '    ')}
   },
   "engines": {
     "node": ">=22.13"

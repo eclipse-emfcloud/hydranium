@@ -12,7 +12,8 @@
     "start": "node start.mjs",
     "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
     "test:e2e:install": "playwright install chromium",
-    "typecheck": "tsc --noEmit -p tsconfig.e2e.json"
+    "typecheck": "tsc --noEmit -p tsconfig.e2e.json",
+    "watch": "theia build --watch --mode development"
   },
   "dependencies": {
     "@hydranium/bookstore-theia": "0.0.0",

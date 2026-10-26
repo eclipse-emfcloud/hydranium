@@ -30,6 +30,7 @@
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "typecheck:webview": "tsc --noEmit -p tsconfig.webview.json",
     "watch": "tsc --watch --preserveWatchOutput",
+    "watch:grammar": "node -e \"const copy = () => require('node:fs').cpSync('../server/syntaxes', 'syntaxes', { recursive: true }); copy(); require('node:fs').watch('../server/syntaxes', copy)\"",
     "watch:webview": "node esbuild.mjs --watch"
   },
   "dependencies": {

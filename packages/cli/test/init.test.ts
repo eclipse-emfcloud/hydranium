@@ -865,6 +865,7 @@ describe('planInitFiles with hosts', () => {
    it('pins the copies every member shares at the standalone root, so no range takes the top of the tree', () => {
       const root = JSON.parse(contentOf(filesFor(['lsp']), 'package.json') ?? '{}') as { devDependencies: Record<string, string> };
       expect(root.devDependencies).toEqual({
+         concurrently: '^9.0.0',
          langium: '4.3.1',
          'monaco-editor-core': '0.56.0',
          'vscode-jsonrpc': '9.0.0',
@@ -1294,6 +1295,31 @@ describe('planInitFiles with hosts', () => {
          ).scripts['start:browser'];
       expect(scripts(['browser'])).toBe('npm --prefix host-browser start');
       expect(scripts([])).toBeUndefined();
+   });
+
+   it('watches every non-host member from the root, and each host only in its own `watch:<host>`', () => {
+      const scripts = JSON.parse(
+         contentOf(
+            planInitFiles(
+               resolveInitComposition('Bookstore', undefined, ['lsp', 'glsp'], undefined, ['browser', 'vscode', 'theia-browser'])
+            ),
+            'package.json'
+         ) ?? '{}'
+      ).scripts as Record<string, string>;
+      expect(scripts.watch).toBe(
+         'concurrently --kill-others --names server,client,vscode-servers,theia "npm --prefix server run watch" "npm --prefix client run watch" ' +
+            '"npm --prefix vscode-servers run watch" "npm --prefix theia run watch"'
+      );
+      expect(scripts['watch:browser']).toBe(
+         'concurrently --kill-others --names watch,host-browser "npm run watch" "npm --prefix host-browser start"'
+      );
+      expect(scripts['watch:vscode']).toBe(
+         'concurrently --kill-others --names watch,host-vscode "npm run watch" "npm --prefix host-vscode run watch"'
+      );
+      expect(scripts['watch:theia-browser']).toBe(
+         'concurrently --kill-others --names watch,host-theia-browser "npm run watch" "npm --prefix host-theia-browser run watch"'
+      );
+      expect(scripts['watch:theia-electron']).toBeUndefined();
    });
 });
 

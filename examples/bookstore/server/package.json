@@ -46,7 +46,7 @@
     "start": "node lib/main.js --stdio",
     "test": "npm run typecheck:test && vitest run",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
-    "watch": "tsc -b --watch"
+    "watch": "concurrently --kill-others --names langium,transfer-model,tsc \"npm run langium:watch\" \"npm run generate:transfer-model -- --watch\" \"tsc -b --watch\""
   },
   "dependencies": {
     "@eclipse-glsp/graph": "2.7.0",
@@ -68,6 +68,7 @@
   "devDependencies": {
     "@hydranium/cli": "^1.0.0-next",
     "@types/node": "^22.0.0",
+    "concurrently": "^9.0.0",
     "langium-cli": "4.3.0",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",

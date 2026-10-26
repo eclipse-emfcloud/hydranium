@@ -35,8 +35,8 @@ npm --prefix examples/order-flow/theia-app start      # http://localhost:3001
 ```
 
 `npm run start:order-flow` from the repo root does both, and
-`npm run dev:order-flow` runs the whole watch chain (framework, server, client,
-theia, app). `build` is three steps: a native rebuild
+`npm run dev:order-flow:theia-browser` runs the whole watch chain (framework,
+the order-flow packages, app). `build` is three steps: a native rebuild
 (`theia rebuild:browser`), `link:plugin`, then `theia build`.
 
 `npm start` opens `../workspace` in place; read the

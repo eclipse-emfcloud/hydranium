@@ -8,6 +8,7 @@ A Hydranium language project scaffolded by `hydranium-cli init`.
 npm install
 npm run langium:generate   # generate the AST from the grammar
 npm run build              # generate + compile to lib/
+npm run watch              # regenerate and recompile on every grammar or source change
 npm test                   # typecheck the tests, then run them
 ```
 

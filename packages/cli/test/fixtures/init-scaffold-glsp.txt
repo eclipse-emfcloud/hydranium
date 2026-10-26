@@ -20,7 +20,12 @@ package.json
     "build": "npm run build --workspaces",
     "clean": "npm run clean --workspaces --if-present",
     "start:browser": "npm --prefix host-browser start",
-    "test": "npm test --workspaces --if-present"
+    "test": "npm test --workspaces --if-present",
+    "watch": "concurrently --kill-others --names server,client,vscode-servers,theia \"npm --prefix server run watch\" \"npm --prefix client run watch\" \"npm --prefix vscode-servers run watch\" \"npm --prefix theia run watch\"",
+    "watch:browser": "concurrently --kill-others --names watch,host-browser \"npm run watch\" \"npm --prefix host-browser start\"",
+    "watch:vscode": "concurrently --kill-others --names watch,host-vscode \"npm run watch\" \"npm --prefix host-vscode run watch\"",
+    "watch:theia-browser": "concurrently --kill-others --names watch,host-theia-browser \"npm run watch\" \"npm --prefix host-theia-browser run watch\"",
+    "watch:theia-electron": "concurrently --kill-others --names watch,host-theia-electron \"npm run watch\" \"npm --prefix host-theia-electron run watch\""
   },
   "devDependencies": {
     "@eclipse-glsp/client": "2.7.0",
@@ -46,6 +51,7 @@ package.json
     "@theia/process": "1.74.3",
     "@theia/workspace": "1.74.3",
     "@vscode/codicons": "0.0.45",
+    "concurrently": "^9.0.0",
     "electron": "42.11.16",
     "langium": "4.3.1",
     "monaco-editor-core": "0.56.0",
@@ -291,7 +297,7 @@ server/package.json
     "start": "node lib/main.js --stdio",
     "test": "npm run typecheck:test && vitest run",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
-    "watch": "tsc -b --watch"
+    "watch": "concurrently --kill-others --names langium,transfer-model,tsc \"npm run langium:watch\" \"npm run generate:transfer-model -- --watch\" \"tsc -b --watch\""
   },
   "dependencies": {
     "@eclipse-glsp/graph": "2.7.0",
@@ -313,6 +319,7 @@ server/package.json
   "devDependencies": {
     "@hydranium/cli": "^__FRAMEWORK_VERSION__",
     "@types/node": "^22.0.0",
+    "concurrently": "^9.0.0",
     "langium-cli": "4.3.0",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",
@@ -429,6 +436,7 @@ A Hydranium language project scaffolded by `hydranium-cli init`.
 npm install
 npm run langium:generate   # generate the AST from the grammar
 npm run build              # generate + compile to lib/
+npm run watch              # regenerate and recompile on every grammar or source change
 npm test                   # typecheck the tests, then run them
 ```
 
@@ -2072,7 +2080,7 @@ client/package.json
   "scripts": {
     "build": "tsc -b",
     "clean": "rimraf lib tsconfig.tsbuildinfo",
-    "watch": "tsc -b --watch"
+    "watch": "tsc --watch"
   },
   "dependencies": {
     "@eclipse-glsp/client": "2.7.0",
@@ -2245,7 +2253,8 @@ vscode-servers/package.json
     "build": "npm run copy:syntaxes && tsc",
     "clean": "rimraf out syntaxes tsconfig.tsbuildinfo",
     "copy:syntaxes": "node -e \"require('node:fs').cpSync('../server/syntaxes', 'syntaxes', { recursive: true })\"",
-    "watch": "tsc --watch"
+    "watch": "concurrently --kill-others --names syntaxes,tsc \"npm run watch:syntaxes\" \"tsc --watch\"",
+    "watch:syntaxes": "node -e \"const copy = () => require('node:fs').cpSync('../server/syntaxes', 'syntaxes', { recursive: true }); copy(); require('node:fs').watch('../server/syntaxes', copy)\""
   },
   "dependencies": {
     "@hydranium/client-vscode": "^__FRAMEWORK_VERSION__",
@@ -2256,6 +2265,7 @@ vscode-servers/package.json
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.101.0",
+    "concurrently": "^9.0.0",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2"
   },
@@ -2311,6 +2321,7 @@ language client, so diagnostics may show twice: install one.
 
 ```bash
 npm run build   # copy the server’s grammars and compile into out/; build the server first
+npm run watch   # the same on every change
 ```
 
 - `src/extension.ts` — activation, which starts the server and, with a socket head, registers its port commands
@@ -4042,7 +4053,9 @@ host-vscode/package.json
     "start": "node start.mjs",
     "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
     "test:e2e:install": "node --experimental-strip-types test/install-vscode.mts",
-    "typecheck": "tsc --noEmit -p tsconfig.webview.json && tsc --noEmit -p tsconfig.e2e.json"
+    "typecheck": "tsc --noEmit -p tsconfig.webview.json && tsc --noEmit -p tsconfig.e2e.json",
+    "watch": "concurrently --kill-others --names syntaxes,tsc,webview \"npm run watch:syntaxes\" \"tsc --watch\" \"node esbuild.mjs --watch\"",
+    "watch:syntaxes": "node -e \"const copy = () => require('node:fs').cpSync('../server/syntaxes', 'syntaxes', { recursive: true }); copy(); require('node:fs').watch('../server/syntaxes', copy)\""
   },
   "dependencies": {
     "@eclipse-glsp/client": "2.7.0",
@@ -4065,6 +4078,7 @@ host-vscode/package.json
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.101.0",
     "@vscode/test-electron": "^3.1.0",
+    "concurrently": "^9.0.0",
     "esbuild": "^0.28.0",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2"
@@ -4144,6 +4158,7 @@ webview reaches the data head too: see the Host in VS Code guide.
 
 ```bash
 npm run build              # copy the server’s grammars, type-check and compile, then bundle
+npm run watch              # copy the grammars and recompile and rebundle on every change; Developer: Reload Window picks it up
 npm start                  # VS Code with this extension, on ../workspace; needs `code` on the PATH
 npm run test:e2e:install   # download the VS Code the smoke test drives, once
 npm run test:e2e           # the smoke test; under `xvfb-run -a` on Linux without a display
@@ -4370,20 +4385,20 @@ host-vscode/tsconfig.webview.json
 host-vscode/esbuild.mjs
 ==============================================================================
 // Bundles each diagram webview in `src/webview/` into `out/webview/`, its
-// stylesheet beside it. The extension itself is `tsc`'s, since the extension
-// host loads it with its `node_modules`.
+// stylesheet beside it: once, or on every change with `--watch`. The extension
+// itself is `tsc`'s, since the extension host loads it with its `node_modules`.
 //
 // At `platform: 'browser'` esbuild refuses a `node:*` import rather than
 // shimming it, so a Node import reaching a webview fails here rather than in
 // the webview's own console.
 
-import { build } from 'esbuild';
+import { context } from 'esbuild';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 
-await build({
+const build = await context({
    absWorkingDir: root,
    entryPoints: readdirSync(new URL('src/webview/', import.meta.url))
       .filter(file => file.endsWith('.ts'))
@@ -4400,6 +4415,13 @@ await build({
    loader: { '.ttf': 'dataurl' },
    logLevel: 'info'
 });
+
+if (process.argv.includes('--watch')) {
+   await build.watch();
+} else {
+   await build.rebuild();
+   await build.dispose();
+}
 
 ==============================================================================
 host-vscode/src/webview/diagram.css
@@ -4634,7 +4656,8 @@ host-theia-browser/package.json
     "start": "node start.mjs",
     "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
     "test:e2e:install": "playwright install chromium",
-    "typecheck": "tsc --noEmit -p tsconfig.e2e.json"
+    "typecheck": "tsc --noEmit -p tsconfig.e2e.json",
+    "watch": "theia build --watch --mode development"
   },
   "dependencies": {
     "@theia/core": "1.74.3",
@@ -4710,6 +4733,7 @@ so a diagram file opens in the Theia diagram editor alone.
 
 ```bash
 npm run build              # bundle and type-check; build the members first
+npm run watch              # rebundle whenever the members’ builds change; reload the page to pick it up
 npm start                  # Theia at http://localhost:3000 on ../workspace; THEIA_PORT picks another port
 npm run test:e2e:install   # download the Chromium the smoke test drives, once
 npm run test:e2e           # the smoke test, which starts the application itself
@@ -4925,7 +4949,8 @@ host-theia-electron/package.json
     "clean": "rimraf lib src-gen plugins gen-esbuild.browser.mjs gen-esbuild.electron.mjs gen-esbuild.node.mjs test-results playwright-report",
     "start": "node start.mjs",
     "test:e2e": "playwright test --tsconfig tsconfig.e2e.json",
-    "typecheck": "tsc --noEmit -p tsconfig.e2e.json"
+    "typecheck": "tsc --noEmit -p tsconfig.e2e.json",
+    "watch": "theia build --watch --mode development"
   },
   "dependencies": {
     "@theia/core": "1.74.3",
@@ -5002,12 +5027,17 @@ diagram file opens in the Theia diagram editor alone.
 
 ```bash
 npm run build      # bundle and type-check, and download Electron; build the members first
+npm run watch      # rebundle whenever the members’ builds change; reload the window to pick it up
 npm start          # the application on ../workspace
 npm run test:e2e   # the smoke test, which launches the application itself
 ```
 
 There is no `theia rebuild:electron` step: Theia’s native modules are N-API
 builds, which load in Electron as `npm install` built them for Node.
+
+`npm run watch` reports a `theia-source-map-paths` JSON error as it starts:
+Theia’s generated `esbuild.mjs` starts the browser and electron builds together,
+and they share `lib/frontend`. Later rebuilds are clean.
 
 ## Layout
 

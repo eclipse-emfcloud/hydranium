@@ -116,10 +116,14 @@ hydranium/
 ```bash
 npm run build:all      # framework and every example app via turbo
 npm run watch:all      # one tsc -b -w daemon for the framework graph
-npm run dev:order-flow # framework watch plus the order-flow example's watches
+npm run dev:order-flow:theia-browser   # framework, order-flow packages and Theia app
 # then, in a second terminal, the order-flow Theia application:
 npm --prefix examples/order-flow/theia-app run start
 ```
+
+`dev:order-flow` and `dev:bookstore` keep the framework and the example's
+packages built, grammar included; `dev:<example>:<host>` adds one host's
+bundler, so only the host you are working on runs.
 
 ## Linting and formatting
 
