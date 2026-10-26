@@ -36,7 +36,7 @@ import { type DuplexConnectionPair, makeDuplexConnectionPair } from '@hydranium/
 import { DataServer, type DataServerUriWatchRecord } from '@hydranium/data-server';
 import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-server/testing';
 import {
-   type AstDocument,
+   type WrittenAstDocument,
    type ClientSessionUpdateAllArgs,
    type ClientSessionWriteArgs,
    DefaultClientSession,
@@ -434,7 +434,7 @@ describe('data head sessions', () => {
          protected override updateDocument(
             args: ClientSessionWriteArgs<TransferElement>,
             cancelToken?: CancellationToken
-         ): Promise<AstDocument<AstNode>> {
+         ): Promise<WrittenAstDocument<AstNode>> {
             writes.push({ ...args });
             return super.updateDocument(args, cancelToken);
          }
@@ -442,7 +442,7 @@ describe('data head sessions', () => {
          protected override updateDocuments(
             args: ClientSessionUpdateAllArgs<TransferElement>,
             cancelToken?: CancellationToken
-         ): Promise<AstDocument<AstNode>[]> {
+         ): Promise<WrittenAstDocument<AstNode>[]> {
             writes.push(...args.updates.map(update => ({ ...update })));
             return super.updateDocuments(args, cancelToken);
          }

@@ -22,7 +22,7 @@ import {
 } from '@hydranium/protocol';
 import { type AstNode, isOperationCancelled, UriUtils } from '@hydranium/langium';
 import { type CancellationToken, type Disposable, Emitter, type Event } from 'vscode-languageserver';
-import { type AstDocument, type SavedAstDocument } from '../../documents/ast-document-manager.js';
+import { type SavedAstDocument, type WrittenAstDocument } from '../../documents/ast-document-manager.js';
 import { DocumentNotOpenError, SessionClosedError } from '../../documents/client-session-errors.js';
 import { type OpenOptions, type SessionEndCause } from '../../documents/client-session-registry.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
@@ -116,16 +116,19 @@ export interface ClientSession<
     * rebuilt document once it is validated, in whichever build carried the
     * write, so the answer holds every diagnostic its update event does: that
     * event names this session, and a client dropping its own echo would
-    * otherwise never see them.
+    * otherwise never see them. `written` names the version the text took.
     */
-   update(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>>;
+   update(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<WrittenAstDocument<TAst, TDiagnostic>>;
    /**
     * Write several documents this session has open, all or none: a
     * `ConflictError` or `DocumentNotOpenError` for any of them is thrown before
     * any text applies. Resolves to the rebuilt documents, in the order given,
     * each validated as {@link update}'s is.
     */
-   updateAll(args: ClientSessionUpdateAllArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>[]>;
+   updateAll(
+      args: ClientSessionUpdateAllArgs<TTransfer>,
+      cancelToken?: CancellationToken
+   ): Promise<WrittenAstDocument<TAst, TDiagnostic>[]>;
    /** Write `args.model` as {@link update} does, then persist the document. */
    save(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<SavedAstDocument<TAst, TDiagnostic>>;
    /**
@@ -261,12 +264,15 @@ export class DefaultClientSession<
       return this.createDocument(uri, text);
    }
 
-   update(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>> {
+   update(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<WrittenAstDocument<TAst, TDiagnostic>> {
       this.assertLive();
       return this.updateDocument(args, cancelToken);
    }
 
-   updateAll(args: ClientSessionUpdateAllArgs<TTransfer>, cancelToken?: CancellationToken): Promise<AstDocument<TAst, TDiagnostic>[]> {
+   updateAll(
+      args: ClientSessionUpdateAllArgs<TTransfer>,
+      cancelToken?: CancellationToken
+   ): Promise<WrittenAstDocument<TAst, TDiagnostic>[]> {
       this.assertLive();
       return this.updateDocuments(args, cancelToken);
    }
@@ -368,7 +374,7 @@ export class DefaultClientSession<
    protected async updateDocument(
       args: ClientSessionWriteArgs<TTransfer>,
       cancelToken?: CancellationToken
-   ): Promise<AstDocument<TAst, TDiagnostic>> {
+   ): Promise<WrittenAstDocument<TAst, TDiagnostic>> {
       const service = this.modelService;
       const slowWarn = this.slowUpdateWarn && { threshold: this.slowUpdateWarn, stopwatch: this.services.Clock.stopwatch() };
       const uri = this.canonicalKey(args.uri);
@@ -403,7 +409,7 @@ export class DefaultClientSession<
          }
       }
       profile?.report('debug');
-      return doc;
+      return { ...doc, written: { version: appliedVersion } };
    }
 
    /**
@@ -419,7 +425,7 @@ export class DefaultClientSession<
    protected async updateDocuments(
       args: ClientSessionUpdateAllArgs<TTransfer>,
       cancelToken?: CancellationToken
-   ): Promise<AstDocument<TAst, TDiagnostic>[]> {
+   ): Promise<WrittenAstDocument<TAst, TDiagnostic>[]> {
       const service = this.modelService;
       const { updates } = args;
       const textDocuments = this.services.workspace.TextDocuments;
@@ -443,12 +449,14 @@ export class DefaultClientSession<
       // was checked, and the set then half-applies before a later check fails.
       check();
       const applied = uris.map((uri, i) => this.services.workspace.AstDocumentManager.update(uri, texts[i], this.clientId));
-      await Promise.all(applied);
+      const versions = await Promise.all(applied);
       const state = this.services.workspace.DocumentBuilder.finalBuildState();
       const rebuilt = await Promise.allSettled(uris.map(uri => service.rebuild(uri, state, cancelToken)));
       const failures = rebuilt.flatMap((result, i) => (result.status === 'rejected' ? [{ uri: uris[i], reason: result.reason }] : []));
       if (failures.length === 0) {
-         return rebuilt.flatMap(result => (result.status === 'fulfilled' ? [result.value] : []));
+         return rebuilt.flatMap((result, i) =>
+            result.status === 'fulfilled' ? [{ ...result.value, written: { version: versions[i] } }] : []
+         );
       }
       // The first is thrown as it is, so a typed failure keeps its type; one build
       // usually carries the set and fails each with the same error. Any other

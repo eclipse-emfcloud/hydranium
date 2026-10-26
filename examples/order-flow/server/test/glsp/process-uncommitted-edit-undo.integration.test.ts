@@ -30,6 +30,7 @@ import {
 } from '@hydranium/glsp-server/messages';
 import { ConflictError, asModelVersion } from '@hydranium/protocol';
 import { readFileSync, writeFileSync } from 'node:fs';
+import { DocumentState } from '@hydranium/langium';
 import { describe, expect, it, vi } from 'vitest';
 import { OrderFlowCommand } from '../../src/glsp/order-flow-command.js';
 import { WORKSPACE_FILES } from '../order-flow-harness.js';
@@ -231,6 +232,36 @@ describe('the side effects of an operation in order', () => {
          foreign: layout.includes('node PaymentOk at 270, 95')
       }).toEqual({ pay: true, ship: true, foreign: true });
    });
+
+   it('undoes an operation whose write was built with a foreign edit, keeping the foreign edit', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri, services } = opened;
+      const workspace = services.shared.workspace;
+      const listener = workspace.DocumentBuilder.onDocumentPhase(DocumentState.Parsed, async document => {
+         if (document.uri.toString() === layoutUri) {
+            listener.dispose();
+            const text = workspace.TextDocuments.get(layoutUri)?.getText() ?? '';
+            workspace.TextDocuments.applyContentChange(
+               layoutUri,
+               text.replace('node PaymentOk at 260, 90', 'node PaymentOk at 270, 95'),
+               'text-editor'
+            );
+         }
+      });
+      try {
+         await apply(diagram, move(diagram, 'Pay', 50, 110));
+      } finally {
+         listener.dispose();
+      }
+
+      await undoOrRedo(diagram, UndoAction.create());
+
+      const layout = textOf(opened, layoutUri);
+      expect({ pay: layout.includes('node Pay at 40, 100'), foreign: layout.includes('node PaymentOk at 270, 95') }).toEqual({
+         pay: true,
+         foreign: true
+      });
+   });
 });
 
 describe('undo and redo of an operation', () => {
@@ -397,13 +428,13 @@ describe('undo and redo of an operation', () => {
          });
       });
 
-      it('serializes only the document a move changed, once to write it and once for each end', async () => {
+      it('serializes only the document a move changed, once to write it and once for the end before it', async () => {
          const opened = await openDiagram();
          const toText = vi.spyOn(opened.services.shared.model.ModelService, 'modelToText');
 
          await apply(opened.diagram, move(opened.diagram, 'Pay', 50, 110));
 
-         expect(toText.mock.calls.map(([uri]) => uri)).toEqual([opened.layoutUri, opened.layoutUri, opened.layoutUri]);
+         expect(toText.mock.calls.map(([uri]) => uri)).toEqual([opened.layoutUri, opened.layoutUri]);
       });
    });
 

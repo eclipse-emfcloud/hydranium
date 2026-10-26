@@ -60,11 +60,13 @@ document is never reopened behind a write.
 
 A write answers with the document once it is validated, in whichever build
 carried it: its update event names the writer, so a client that drops its own
-echo gets the diagnostics only from the answer. The first event for a version
-is `changed` and names its author; a later one is `rebuilt` and names
-`UNKNOWN_CLIENT_ID`, since a rebuild caused by a referenced document is news to
-every client. `AstDocumentManager.attributeUpdate` decides this for every head,
-and `TransferDocumentUpdateReason` names the cases that fall back.
+echo gets the diagnostics only from the answer. `written.version` names the
+version the write's text took; an answer at a later version also holds a later
+edit. The first event for a version is `changed` and names its author; a later
+one is `rebuilt` and names `UNKNOWN_CLIENT_ID`, since a rebuild caused by a
+referenced document is news to every client.
+`AstDocumentManager.attributeUpdate` decides this for every head, and
+`TransferDocumentUpdateReason` names the cases that fall back.
 
 There is one shared text per document. A save writes the session's model and
 then persists the shared text, other participants' unsaved edits included; a

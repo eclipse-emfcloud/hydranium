@@ -13,7 +13,14 @@ import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
 import { type AstNode, DocumentState, type LangiumDocument, URI } from '@hydranium/langium';
 import { AstDocument, type ClientSession, DefaultModelLedger, type ServerSharedServices } from '@hydranium/core';
-import { type BaseVersion, asModelVersion, ConflictError, type ConflictResolver, type ReconcileOutcome } from '@hydranium/protocol';
+import {
+   type BaseVersion,
+   asModelVersion,
+   ConflictError,
+   type ConflictResolver,
+   type ModelVersion,
+   type ReconcileOutcome
+} from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { ReconcilingTransferHydraniumGlspState } from '../src/state/reconciling-transfer-hydranium-glsp-state.js';
@@ -73,6 +80,8 @@ interface Harness {
    /** Every update conflicts while set. */
    alwaysConflict: boolean;
    nextUpdatedRoot: TestRoot;
+   /** Whether an update answers with a root a later edit's build produced. */
+   overtakeWrite: boolean;
    validatedRoot: TestRoot;
    /** Text the store holds for every URI; the stub parser turns it into a root labelled with it. */
    storeText: string;
@@ -100,6 +109,7 @@ function makeHarness(): Harness {
       throwConflictOnNextUpdate: false,
       alwaysConflict: false,
       nextUpdatedRoot: makeRoot('updated'),
+      overtakeWrite: false,
       validatedRoot: makeRoot('validated'),
       storeText: 'stored',
       resolve: async (_base, ours) => ({ status: 'merged', merged: ours })
@@ -171,13 +181,14 @@ function createState(harness: Harness, stateClass: new () => TestReconcilingStat
             snapshot: (uri: string) => toSnapshot(uri, harness.documents.get(uri)),
             ensureDocumentState: () => Promise.resolve(),
             getDocument: (uri: string) => harness.documents.get(uri),
-            async update(args: UpdateCall): Promise<{ root: TestRoot }> {
+            async update(args: UpdateCall): Promise<{ root: TestRoot; version: ModelVersion; written: { version: number } }> {
                harness.updateCalls.push(args);
                if (harness.throwConflictOnNextUpdate || harness.alwaysConflict) {
                   harness.throwConflictOnNextUpdate = false;
                   throw new ConflictError(args.uri, asModelVersion(1), 2);
                }
-               return { root: harness.nextUpdatedRoot };
+               // Built from its own text, as a write no other edit overtook is.
+               return { root: harness.nextUpdatedRoot, version: asModelVersion(harness.overtakeWrite ? 2 : 1), written: { version: 1 } };
             },
             async validated(): Promise<{ root: TestRoot }> {
                return { root: harness.validatedRoot };
@@ -622,6 +633,40 @@ describe('ReconcilingTransferHydraniumGlspState under an operation', () => {
             ours: { $type: 'TestRoot', label: 'built', projectedBy: 'override' }
          }
       ]);
+   });
+
+   describe('the end a write leaves', () => {
+      /** The base an undo of an edit to ' edited ' reconciles from, with the write answering `answered`. */
+      async function undoneFrom(answered: TestRoot, overtakeWrite: boolean): Promise<string> {
+         const harness = makeHarness();
+         harness.nextUpdatedRoot = answered;
+         harness.overtakeWrite = overtakeWrite;
+         const bases: string[] = [];
+         harness.resolve = async (base, ours) => {
+            bases.push(base.label);
+            return { status: 'merged', merged: ours };
+         };
+         const state = createState(harness);
+         state.setSourceRoot('file:///a.a', makeRoot('built'));
+         const operation = new HydraniumGlspOperationCommand<TestSourceModel>(state);
+         await runOperation(
+            operation,
+            () =>
+               new HydraniumGlspRecordingCommand<TestSourceModel>(state, 'Edit', () => {
+                  (state.sourceRoot as { label: string }).label = ' edited ';
+               })
+         );
+         await state.runExclusive(() => operation.undo());
+         return bases.join();
+      }
+
+      it('is the root the write built from its own text', async () => {
+         expect(await undoneFrom(makeRoot('as built'), false)).toBe('as built');
+      });
+
+      it('is serialized again when a later edit overtook the write', async () => {
+         expect(await undoneFrom(makeRoot('with theirs'), true)).toBe('edited');
+      });
    });
 
    it('keeps the operation and its transition as recorded, with a warning, when normalizing fails after the write', async () => {

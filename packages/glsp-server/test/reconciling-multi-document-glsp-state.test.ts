@@ -18,6 +18,7 @@ import {
    asModelVersion,
    ConflictError,
    type ConflictResolver,
+   type ModelVersion,
    type ReconcileOutcome,
    ReconcilingConflictResolver,
    type TransferElement,
@@ -87,6 +88,8 @@ interface Harness {
    /** Whether another client writes a created document before its creator resumes. */
    writeAfterCreate: boolean;
    nextUpdatedRoot: TestRoot;
+   /** Whether a write set answers with roots a later edit's build produced. */
+   overtakeWrite: boolean;
    /** Roots `ModelService.validated` answers with, by URI. Absent → rejects. */
    readonly validated: Map<string, TestRoot>;
    /** The text store's documents; the stub parser turns a text into a root labelled with it. */
@@ -150,6 +153,15 @@ class ThrowingRuleState extends CreatingSecondaryState {
    }
 }
 
+/** Persists as the default does, answering with the root alone. */
+@injectable()
+class RootOnlyPersistState extends TestMultiState {
+   protected override async persist(model: TestComposite, baseVersion: BaseVersion): Promise<{ root: TestRoot }> {
+      const { root } = await super.persist(model, baseVersion);
+      return { root };
+   }
+}
+
 /** Forces secondary writes through the hook. */
 @injectable()
 class ForcedSecondaryState extends TestMultiState {
@@ -170,6 +182,7 @@ function makeHarness(): Harness {
       failNextWriteAfterApply: undefined,
       writeAfterCreate: false,
       nextUpdatedRoot: makeRoot('updated'),
+      overtakeWrite: false,
       validated: new Map(),
       store: new Map(),
       resolve: async (_base, ours) => ({ status: 'merged', merged: ours })
@@ -216,6 +229,8 @@ function createState(harness: Harness, stateClass: new () => TestMultiState = Te
             snapshot: (uri: string) => toSnapshot(uri, harness.documents.get(uri)),
             ensureDocumentState: () => Promise.resolve(),
             getDocument: (uri: string) => harness.documents.get(uri),
+            // Writes the label, which the stub parser turns back into a root labelled with it.
+            modelToText: async (_uri: string, model: TestPrimary): Promise<string> => model.label,
             async validated(uri: string): Promise<{ root: TestRoot }> {
                const root = harness.validated.get(uri);
                if (!root) {
@@ -268,7 +283,9 @@ function makeRecordingSession(harness: Harness): ClientSession<AstNode> {
          }
          return 5;
       },
-      async updateAll(args: { updates: UpdateEntry[] }): Promise<{ root: TestRoot }[]> {
+      async updateAll(args: {
+         updates: UpdateEntry[];
+      }): Promise<{ root: TestRoot; version: ModelVersion; written: { version: number } }[]> {
          harness.sessionCalls.push('updateAll');
          harness.updateAllCalls.push(args.updates);
          const failure = harness.failNextWrite;
@@ -289,7 +306,12 @@ function makeRecordingSession(harness: Harness): ClientSession<AstNode> {
             }
             throw afterApply;
          }
-         return args.updates.map(update => ({ root: update.uri === DIAGRAM_URI ? harness.nextUpdatedRoot : makeRoot(update.uri) }));
+         // Each built from its own text, as a write no other edit overtook is.
+         return args.updates.map(update => ({
+            root: update.uri === DIAGRAM_URI ? harness.nextUpdatedRoot : makeRoot(update.uri),
+            version: asModelVersion(harness.overtakeWrite ? 2 : 1),
+            written: { version: 1 }
+         }));
       }
    };
    return session as unknown as ClientSession<AstNode>;
@@ -806,6 +828,65 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          await expect(
             state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'x' }, secondaries: {} }, asModelVersion(1))
          ).rejects.toThrow(/No client session/);
+      });
+   });
+
+   describe('normalizeTransition after a write', () => {
+      const FROM: TestComposite = {
+         primary: { $type: 'TestRoot', label: 'diagram' },
+         secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 'semantic' } as TestPrimary }
+      };
+
+      /** A state that wrote the secondary as `edited`, and that model; the session answers with a root labelled with its URI. */
+      async function written(
+         harness: Harness,
+         stateClass?: new () => TestMultiState
+      ): Promise<{ state: TestMultiState; model: TestComposite }> {
+         seed(harness, DIAGRAM_URI, 'diagram', 1);
+         seed(harness, SEMANTIC_URI, 'semantic', 1);
+         const state = createState(harness, stateClass);
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+         const model: TestComposite = {
+            primary: FROM.primary,
+            secondaries: { [SEMANTIC_URI]: { $type: 'TestRoot', label: 'edited' } as TestPrimary }
+         };
+         await state.updateSourceModel(model, asModelVersion(1));
+         return { state, model };
+      }
+
+      /** The label of the secondary's after end once `to` is normalized. */
+      async function afterEnd(state: TestMultiState, to: TestComposite): Promise<string> {
+         const normalized = await state.normalizeTransition({ from: FROM, to });
+         return (normalized.to.secondaries[SEMANTIC_URI] as TestPrimary).label;
+      }
+
+      it('takes the root the write built from its own text', async () => {
+         const { state, model } = await written(makeHarness());
+         expect(await afterEnd(state, model)).toBe(SEMANTIC_URI);
+      });
+
+      it('serializes the end again when a later edit overtook the write', async () => {
+         const harness = makeHarness();
+         harness.overtakeWrite = true;
+         const { state, model } = await written(harness);
+         expect(await afterEnd(state, model)).toBe('edited');
+      });
+
+      it('serializes the end of a model the write was not of', async () => {
+         const { state, model } = await written(makeHarness());
+         expect(await afterEnd(state, { ...model })).toBe('edited');
+      });
+
+      it('takes the written roots once', async () => {
+         const { state, model } = await written(makeHarness());
+         const ends = [await afterEnd(state, model), await afterEnd(state, model)];
+         expect(ends).toEqual([SEMANTIC_URI, 'edited']);
+      });
+
+      it('serializes the end when persist returns no written roots', async () => {
+         const { state, model } = await written(makeHarness(), RootOnlyPersistState);
+         expect(await afterEnd(state, model)).toBe('edited');
       });
    });
 
