@@ -102,7 +102,11 @@ export const WORKER_BOOTSTRAP_PHASE = 'bootstrap';
 export interface WorkerErrorMessage {
    /** The page raises this type too, on its own error event, when the `Worker` fires `error`. */
    readonly type: typeof WORKER_ERROR_MESSAGE_TYPE;
-   /** What the worker was doing, {@link WORKER_BOOTSTRAP_PHASE} for a failed bootstrap. */
+   /**
+    * What the worker was doing, {@link WORKER_BOOTSTRAP_PHASE} for a failed
+    * bootstrap. The page's own report of a `Worker` `error` event carries
+    * `WORKER_ERROR_EVENT_PHASE`.
+    */
    readonly phase: string;
    /** The failure described for a log. Never branch on it. */
    readonly message: string;

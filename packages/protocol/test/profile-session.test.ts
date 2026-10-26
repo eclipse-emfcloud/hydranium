@@ -50,6 +50,45 @@ describe('DefaultProfileSession aggregation', () => {
       expect(byId.inner.selfMs).toBe(8);
    });
 
+   it('charges overlapping async scopes that end out of order to the scope enclosing them', async () => {
+      const clock = makeFakeClock();
+      const session = new DefaultProfileSession(new NoopLogger(), clock, 'svc');
+      await session.scope('outer', async () => {
+         let endFirst!: () => void;
+         const first = session.scope('first', () => new Promise<void>(resolve => (endFirst = resolve)));
+         clock.advance(1);
+         let endSecond!: () => void;
+         const second = session.scope('second', () => new Promise<void>(resolve => (endSecond = resolve)));
+         clock.advance(2);
+         endFirst();
+         await first;
+         clock.advance(2);
+         endSecond();
+         await second;
+         clock.advance(5);
+      });
+
+      const byId = Object.fromEntries(session.records().map(record => [record.id, record]));
+      expect(byId.first.selfMs).toBe(3);
+      expect(byId.second.selfMs).toBe(4);
+      expect(byId.outer.selfMs).toBe(3); // 10ms wall minus the 3ms and 4ms scopes
+   });
+
+   it('records no negative self-time when overlapping scopes outlast the one enclosing them', async () => {
+      const clock = makeFakeClock();
+      const session = new DefaultProfileSession(new NoopLogger(), clock, 'svc');
+      await session.scope('outer', async () => {
+         const ends: (() => void)[] = [];
+         const scopes = ['a', 'b'].map(id => session.scope(id, () => new Promise<void>(resolve => ends.push(resolve))));
+         clock.advance(10);
+         ends.forEach(end => end());
+         await Promise.all(scopes);
+      });
+
+      const byId = Object.fromEntries(session.records().map(record => [record.id, record]));
+      expect(byId.outer.selfMs).toBe(0); // 10ms wall, 20ms of children running side by side
+   });
+
    it('computes self-% against the session total wall-clock', () => {
       const clock = makeFakeClock();
       const session = new DefaultProfileSession(new NoopLogger(), clock, 'svc');
