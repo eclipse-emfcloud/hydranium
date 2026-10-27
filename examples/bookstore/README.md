@@ -163,8 +163,7 @@ the `turbo.json` files. The server's and the protocol's order the protocol
 package's build after the server's `generate` in this repo's task runner; the
 browser host's adds `../workspace`, which its bundle reads, to its build
 inputs, the VS Code host's adds the projects its build type-checks, and the
-Theia application's does the same. The Theia application's `esbuild.mjs` is
-the one `theia build` writes when there is none.
+Theia application's does the same.
 
 Anything else `init` does not emit belongs in
 [order-flow](../order-flow/README.md), or teach `init` to emit it. The package

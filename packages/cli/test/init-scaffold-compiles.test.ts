@@ -48,7 +48,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { generateTransferModel } from '../src/commands/generate-transfer-model.js';
 import { type InitGrammarSpec, type InitHead, runInit } from '../src/commands/init.js';
-import { type InitHost, isTheiaHost } from '../src/commands/init-hosts.js';
+import { INIT_HOSTS, type InitHost, isTheiaHost } from '../src/commands/init-hosts.js';
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -328,4 +328,83 @@ describe('the emitted scaffold compiles', () => {
       },
       COMPILE_TIMEOUT_MS
    );
+});
+
+/**
+ * A standalone scaffold as an adopter gets it, checked by its own `format:check`
+ * and `lint`. Names longer and shorter than the compile cases above, because a
+ * template line wraps or joins at a length its names decide.
+ */
+const STYLE_CASES: readonly CompileCase[] = [
+   { label: 'a long name', name: 'WorkflowDefinition' },
+   {
+      label: 'every head and host under a long name',
+      name: 'EnterpriseArchitectureModeling',
+      heads: ['lsp', 'data', 'glsp'],
+      hosts: INIT_HOSTS
+   },
+   { label: 'a short diagram grammar', name: 'Ab', heads: ['glsp'], grammars: [{ name: 'Xy', diagram: true }], hosts: ['browser'] },
+   {
+      label: 'three long grammars',
+      name: 'ProcessModeler',
+      grammars: [{ name: 'WorkflowDefinition' }, { name: 'OrganisationUnit' }, { name: 'Layout' }],
+      hosts: INIT_HOSTS
+   }
+];
+
+describe('the emitted standalone scaffold is formatted and lint-clean', () => {
+   it.each(STYLE_CASES.map(entry => [entry.label, entry] as const))(
+      'passes oxfmt and oxlint for %s',
+      (_label, { name, heads, hosts, grammars }) => {
+         const targetDir = path.join(PACKAGE_ROOT, `out/scaffold-style-${name.toLowerCase()}`);
+         try {
+            fs.rmSync(targetDir, { recursive: true, force: true });
+            // Its own repository, as an adopter's is: both tools otherwise apply
+            // this repo's ignore of `out/` and find no file to check.
+            fs.mkdirSync(targetDir, { recursive: true });
+            execFileSync('git', ['init', '--quiet'], { cwd: targetDir });
+            const lines: string[] = [];
+            runInit({ targetDir, name, heads, hosts, grammars, force: true, write: line => lines.push(line) });
+            expect(lines.join('')).not.toContain('Warning');
+            expect(() => runTool(targetDir, 'oxfmt', 'oxfmt', ['--check'])).not.toThrow();
+            expect(() =>
+               runTool(targetDir, 'oxlint', 'oxlint', ['--report-unused-disable-directives', '--max-warnings', '0'])
+            ).not.toThrow();
+         } finally {
+            fs.rmSync(targetDir, { recursive: true, force: true });
+         }
+      }
+   );
+
+   it('leaves a file it did not write as it was, under --force', () => {
+      const targetDir = path.join(PACKAGE_ROOT, 'out/scaffold-style-force');
+      try {
+         fs.rmSync(targetDir, { recursive: true, force: true });
+         fs.mkdirSync(targetDir, { recursive: true });
+         execFileSync('git', ['init', '--quiet'], { cwd: targetDir });
+         const existing = path.join(targetDir, 'existing.ts');
+         // Off the scaffold's style twice over: double quotes, no semicolon.
+         fs.writeFileSync(existing, 'const kept = "as written"\n', 'utf-8');
+         const lines: string[] = [];
+         runInit({ targetDir, name: 'Example', force: true, write: line => lines.push(line) });
+         expect(lines.join('')).not.toContain('Warning');
+         expect(lines.join('')).not.toContain('git init');
+         expect(fs.readFileSync(existing, 'utf-8')).toBe('const kept = "as written"\n');
+      } finally {
+         fs.rmSync(targetDir, { recursive: true, force: true });
+      }
+   });
+
+   // This repository ignores `out/`, which hides the scaffold from both tools.
+   it('prints git init first for a target an enclosing repository ignores', () => {
+      const targetDir = path.join(PACKAGE_ROOT, 'out/scaffold-style-ignored');
+      try {
+         fs.rmSync(targetDir, { recursive: true, force: true });
+         const lines: string[] = [];
+         runInit({ targetDir, name: 'Example', write: line => lines.push(line) });
+         expect(lines.join('')).toContain(`  cd ${targetDir}\n  git init `);
+      } finally {
+         fs.rmSync(targetDir, { recursive: true, force: true });
+      }
+   });
 });

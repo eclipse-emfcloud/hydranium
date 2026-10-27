@@ -7,7 +7,9 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import { createRequire } from 'node:module';
 import * as path from 'node:path';
 import { editingHeads, INIT_HOSTS, type InitHost, isInitHost, isTheiaHost } from './init-hosts.js';
 import { buildInitTemplates, readFrameworkVersion, SCAFFOLD_NODE_MAJOR, workspaceRootPins } from './init-templates.js';
@@ -569,12 +571,40 @@ export function resolveInitPackaging(targetDir: string, options: InitPackagingOp
 }
 
 /**
+ * Format a standalone scaffold as its own `format` script would, with the
+ * `oxfmt` its root pins and the config it emits. A template is written at one
+ * length of the names its tokens stand for, so only a formatter run lets every
+ * project name pass `format:check`. Only the written files, because `--force`
+ * scaffolds beside files that are not ours to restyle. A failure leaves the
+ * files as written, which build all the same, and says so.
+ */
+function formatScaffold(targetDir: string, files: readonly InitFile[], write: (line: string) => void): void {
+   let reason: string | undefined;
+   try {
+      // Not `findPackageJSON`: Node 22.13, which `engines` admits, lacks it.
+      const manifestPath = createRequire(import.meta.url).resolve('oxfmt/package.json');
+      const bin = (JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as { bin: Record<string, string> }).bin.oxfmt;
+      const args = [path.join(path.dirname(manifestPath), bin), ...files.map(file => file.path)];
+      const result = spawnSync(process.execPath, args, { cwd: targetDir, encoding: 'utf-8' });
+      if (result.status !== 0) {
+         reason = result.error?.message ?? `${result.stdout}${result.stderr}${result.signal === null ? '' : `killed by ${result.signal}`}`;
+      }
+   } catch (error: unknown) {
+      reason = error instanceof Error ? error.message : String(error);
+   }
+   if (reason !== undefined) {
+      write(`Warning: oxfmt did not format the scaffold, so run \`npm run format\` after \`npm install\`:\n${reason.trim()}\n`);
+   }
+}
+
+/**
  * Scaffold a new Hydranium language project end-to-end: one starter grammar per
  * `--grammar`, `create<Name>Services` DI wiring, a launcher for each head in
  * `--heads`, `langium-config.json`, `package.json`, and scripts. Does NOT run `npm install`
  * or `langium generate` — those are printed as next steps, so the command stays
- * offline and side-effect-free beyond the files it writes. Refuses a non-empty
- * target directory unless `force`.
+ * offline and changes nothing beyond the files it writes, which a standalone
+ * scaffold's oxfmt then formats. Refuses a non-empty target directory unless
+ * `force`.
  */
 export function runInit(options: InitCommandOptions): void {
    const write = options.write ?? ((line: string) => process.stdout.write(line));
@@ -600,6 +630,9 @@ export function runInit(options: InitCommandOptions): void {
          const absolute = path.join(targetDir, file.path);
          fs.mkdirSync(path.dirname(absolute), { recursive: true });
          fs.writeFileSync(absolute, file.content, 'utf-8');
+      }
+      if (composition.packaging.workspace === undefined) {
+         formatScaffold(targetDir, files, write);
       }
    }
 
@@ -665,6 +698,11 @@ export function runInit(options: InitCommandOptions): void {
    const server = detection === undefined ? 'server' : `${detection.targetPath}/server`;
    if (detection === undefined) {
       write(`  cd ${options.targetDir}\n`);
+      // oxfmt and oxlint skip whatever an enclosing repository ignores, this
+      // folder included: https://github.com/oxc-project/oxc/issues/25603
+      if (spawnSync('git', ['check-ignore', '-q', targetDir], { cwd: targetDir }).status === 0) {
+         write('  git init                 # an enclosing repository ignores this folder, so lint and format find no file until then\n');
+      }
       // A comment, so a pasted block runs without nvm. NVM for Windows ignores
       // `.nvmrc` and its `install` does not switch, hence both commands.
       write(

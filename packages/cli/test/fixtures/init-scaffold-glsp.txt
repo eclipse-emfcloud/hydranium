@@ -19,6 +19,9 @@ package.json
   "scripts": {
     "build": "npm run build --workspaces",
     "clean": "npm run clean --workspaces --if-present",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
+    "lint": "oxlint --report-unused-disable-directives --max-warnings 0",
     "start:browser": "npm --prefix host-browser start",
     "start:vscode": "npm --prefix host-vscode start",
     "start:theia-browser": "npm --prefix host-theia-browser start",
@@ -58,6 +61,8 @@ package.json
     "electron": "42.11.16",
     "langium": "4.3.1",
     "monaco-editor-core": "0.56.0",
+    "oxfmt": "0.71.0",
+    "oxlint": "1.82.0",
     "vscode-jsonrpc": "9.0.0",
     "vscode-languageserver": "10.0.1",
     "vscode-languageserver-protocol": "3.18.1",
@@ -72,6 +77,58 @@ package.json
 .gitignore
 ==============================================================================
 node_modules/
+
+==============================================================================
+.editorconfig
+==============================================================================
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 3
+
+[*.{json,yml,yaml}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+==============================================================================
+.oxfmtrc.json
+==============================================================================
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "arrowParens": "avoid",
+  "endOfLine": "lf",
+  "ignorePatterns": ["**/generated", "**/generated-hydranium", "**/syntaxes", "**/*.md"],
+  "jsxSingleQuote": true,
+  "printWidth": 140,
+  "singleQuote": true,
+  "sortPackageJson": true,
+  "tabWidth": 3,
+  "trailingComma": "none",
+  "overrides": [
+    {
+      "files": ["*.json", "*.yml", "*.yaml"],
+      "options": {
+        "printWidth": 100,
+        "tabWidth": 2
+      }
+    }
+  ]
+}
+
+==============================================================================
+.oxlintrc.json
+==============================================================================
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": ["**/generated", "**/generated-hydranium"]
+}
 
 ==============================================================================
 .nvmrc
@@ -4777,8 +4834,7 @@ host-theia-browser/package.json
 host-theia-browser/.gitignore
 ==============================================================================
 node_modules/
-# What `theia build` generates. Not esbuild.mjs, which it writes only when none
-# is there: kept, it is the place to adjust the bundle.
+# What `theia build` generates.
 lib/
 src-gen/
 gen-esbuild.*.mjs
@@ -4813,9 +4869,38 @@ extension’s connection modules read both.
 
 ## Layout
 
+- `esbuild.mjs` — the bundling `theia build` runs. It keeps this file, so it is the place to adjust the bundle
 - `start.mjs` — `npm start`: links `../vscode-servers` into `plugins/`, then starts the backend on `THEIA_PORT`, on a folder given as its argument or `../workspace`
 - `playwright.config.mts` — the smoke tier, on port 4938 or `THEIA_PORT`, on a copy of `../workspace` in `smoke-workspace/`
 - `test/smoke.spec.mts` — Theia opens the workspace and each head answers
+
+==============================================================================
+host-theia-browser/esbuild.mjs
+==============================================================================
+/**
+ * This file can be edited to adjust the ESBuild build process.
+ * To reset, delete this file and rerun theia build again.
+ */
+import { browserOptions, watch } from './gen-esbuild.browser.mjs';
+import { nodeOptions } from './gen-esbuild.node.mjs';
+
+import esbuild from 'esbuild';
+
+const browserContext = await esbuild.context(browserOptions);
+const nodeContext = await esbuild.context(nodeOptions);
+
+if (watch) {
+   await Promise.all([browserContext.watch(), nodeContext.watch()]);
+} else {
+   try {
+      await browserContext.rebuild();
+      await browserContext.dispose();
+      await nodeContext.rebuild();
+      await nodeContext.dispose();
+   } catch {
+      process.exit(1);
+   }
+}
 
 ==============================================================================
 host-theia-browser/start.mjs
@@ -5072,8 +5157,7 @@ host-theia-electron/package.json
 host-theia-electron/.gitignore
 ==============================================================================
 node_modules/
-# What `theia build` generates. Not esbuild.mjs, which it writes only when none
-# is there: kept, it is the place to adjust the bundle.
+# What `theia build` generates.
 lib/
 src-gen/
 gen-esbuild.*.mjs
@@ -5103,14 +5187,46 @@ There is no `theia rebuild:electron` step: Theia’s native modules are N-API
 builds, which load in Electron as `npm install` built them for Node.
 
 `npm run watch` reports a `theia-source-map-paths` JSON error as it starts:
-Theia’s generated `esbuild.mjs` starts the browser and electron builds together,
-and they share `lib/frontend`. Later rebuilds are clean.
+`esbuild.mjs` starts the browser and electron builds together, and they share
+`lib/frontend`. Later rebuilds are clean.
 
 ## Layout
 
+- `esbuild.mjs` — the bundling `theia build` runs. It keeps this file, so it is the place to adjust the bundle
 - `start.mjs` — `npm start`: links `../vscode-servers` into `plugins/`, then starts the application on a folder given as its argument or `../workspace`
 - `playwright.config.mts` — the smoke tier
 - `test/smoke.spec.mts` — Electron opens a copy of the workspace with a profile of its own, and each head answers
+
+==============================================================================
+host-theia-electron/esbuild.mjs
+==============================================================================
+/**
+ * This file can be edited to adjust the ESBuild build process.
+ * To reset, delete this file and rerun theia build again.
+ */
+import { browserOptions, watch } from './gen-esbuild.browser.mjs';
+import { nodeOptions } from './gen-esbuild.node.mjs';
+import { electronOptions } from './gen-esbuild.electron.mjs';
+import esbuild from 'esbuild';
+
+const browserContext = await esbuild.context(browserOptions);
+const nodeContext = await esbuild.context(nodeOptions);
+const electronContext = await esbuild.context(electronOptions);
+
+if (watch) {
+   await Promise.all([browserContext.watch(), nodeContext.watch(), electronContext.watch()]);
+} else {
+   try {
+      await browserContext.rebuild();
+      await browserContext.dispose();
+      await nodeContext.rebuild();
+      await nodeContext.dispose();
+      await electronContext.rebuild();
+      await electronContext.dispose();
+   } catch {
+      process.exit(1);
+   }
+}
 
 ==============================================================================
 host-theia-electron/start.mjs

@@ -21,6 +21,7 @@ extension’s connection modules read both.
 
 ## Layout
 
+- `esbuild.mjs` — the bundling `theia build` runs. It keeps this file, so it is the place to adjust the bundle
 - `start.mjs` — `npm start`: links `../vscode-servers` into `plugins/`, then starts the backend on `THEIA_PORT`, on a folder given as its argument or `../workspace`
 - `playwright.config.mts` — the smoke tier, on port 4938 or `THEIA_PORT`, on a copy of `../workspace` in `smoke-workspace/`
 - `test/smoke.spec.mts` — Theia opens the workspace and each head answers

@@ -273,6 +273,10 @@ function repointFramework(manifestPath: string, packages: Map<string, string>): 
       manifest[block][name] = dependencySpec;
       repointed.set(name, dependencySpec);
    }
+   // Sorted as npm writes them, so the scaffold's own format check passes.
+   for (const block of ['dependencies', 'devDependencies'] as const) {
+      manifest[block] = Object.fromEntries(Object.entries(manifest[block]).sort(([left], [right]) => left.localeCompare(right, 'en')));
+   }
    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
    return repointed;
 }
@@ -615,6 +619,12 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
       const host = join(project, 'host-theia-browser');
       run(`${shape.label}: Theia browser install`, 'npm', ['run', 'test:e2e:install'], host, installEnv);
       run(`${shape.label}: Theia smoke`, 'npm', ['run', 'test:e2e'], host, installEnv);
+   }
+   // Last, so every build and test output is in the tree, and an output no
+   // ignore file lists fails here.
+   if (!shape.monorepo) {
+      run(`${shape.label}: lint`, 'npm', ['run', 'lint'], project, installEnv);
+      run(`${shape.label}: format check`, 'npm', ['run', 'format:check'], project, installEnv);
    }
    if (shape.production) {
       rmSync(join(installRoot, 'node_modules'), { recursive: true, force: true });
