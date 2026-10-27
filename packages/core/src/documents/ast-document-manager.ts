@@ -279,7 +279,8 @@ export class DefaultAstDocumentManager<
     * a build started outside the workspace lock, such as a re-queue of an
     * orphaned document, reads the causes of whichever build started last.
     * An open document no build delivers, one a `shouldValidate` override
-    * skips, stays undelivered, so it is a cause of every build while open.
+    * skips, stays undelivered after its first write, so it is a cause of every
+    * build from then on while open.
     */
    protected readonly buildCauses = new Set<string>();
 
@@ -389,13 +390,15 @@ export class DefaultAstDocumentManager<
    /**
     * `'changed'` for the first delivery of the document's version, crediting
     * its author; `'rebuilt'` for a later one, crediting nobody, since it echoes
-    * no write, and naming the build's single cause if it has one.
+    * no write, and naming the build's single cause if it has one. A version an
+    * open made from the text a build already parsed counts as delivered, as it
+    * echoes no write either.
     *
     * A document the rule does not apply to (see {@link isTracked}) falls back
     * to the last update: it is `'changed'` when its URI was passed to
     * `DocumentBuilder.update`. An open document that a validating build skips,
-    * through a `shouldValidate` override, is never delivered, so each of its
-    * events is its author's change.
+    * through a `shouldValidate` override, is never delivered after its first
+    * write, so each of its events from then on is its author's change.
     */
    attributeUpdate(document: LangiumDocument): UpdateAttribution {
       const key = this.uriPolicy.canonicalUri(document.uri.toString());
@@ -445,6 +448,19 @@ export class DefaultAstDocumentManager<
       }
    }
 
+   /**
+    * Whether the store holds for `uri` the text a build parsed into `built`,
+    * compared as the store compares a first open's text. A placeholder was
+    * parsed from nothing.
+    */
+   protected holdsParsedText(uri: string, built: LangiumDocument): boolean {
+      const ledger = this.services.workspace.ModelLedger;
+      const root = built.parseResult.value;
+      return (
+         !ledger.isPlaceholder(root) && (ledger.textOf(root) ?? built.textDocument.getText()) === this.textDocuments.get(uri)?.getText()
+      );
+   }
+
    /** Whether `version` of `uri` was delivered. */
    protected isDelivered(uri: string, version: number): boolean {
       return this.deliveredVersions.get(this.uriPolicy.canonicalUri(uri)) === version;
@@ -491,6 +507,12 @@ export class DefaultAstDocumentManager<
          }
          const built = this.getDocument(args.uri);
          if (creates && built) {
+            if (args.text === undefined && this.holdsParsedText(args.uri, built)) {
+               // The open writes nothing, so its first delivery would
+               // otherwise credit the opener, whose client then drops a
+               // dependency's relink as its own echo.
+               this.markDelivered(built, this.textDocuments.version(args.uri));
+            }
             // Without an LSP head nothing else builds the opened text. Nothing
             // waits on the build either, so its failure ends here.
             this.services.workspace.VersionSyncService.syncTo(built.uri, this.textDocuments.version(args.uri))?.catch((error: unknown) =>
