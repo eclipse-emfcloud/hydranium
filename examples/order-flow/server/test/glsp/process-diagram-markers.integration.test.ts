@@ -45,7 +45,7 @@
  */
 
 import 'reflect-metadata';
-import { type Marker, MarkersReason, ModelValidator, ServerModule, SetMarkersAction } from '@eclipse-glsp/server';
+import { type Marker, MarkersReason, ModelValidator, RequestMarkersAction, ServerModule, SetMarkersAction } from '@eclipse-glsp/server';
 import { HydraniumGlspAppModule, HydraniumGlspModelValidator } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
@@ -134,7 +134,7 @@ async function validateDocument(diagram: OpenDiagram, relativePath: string): Pro
 /** The markers the bound validator reports for the whole diagram. */
 async function currentMarkers(diagram: OpenDiagram): Promise<Marker[]> {
    const validator = diagram.harness.sessionContainer.get<ModelValidator>(ModelValidator);
-   return await validator.validate([diagram.harness.state.root], MarkersReason.BATCH);
+   return await validator.validate([diagram.harness.state.root], MarkersReason.LIVE);
 }
 
 /**
@@ -241,14 +241,42 @@ describe('order-flow .process diagram markers', () => {
          breakReference(workspace, WORKSPACE_FILES.fulfillmentProcess, 'reads Order.id', 'reads Order.noSuchField')
       );
 
-      // The live-refresh half: the framework storage recomputes markers on every
-      // rebuild that reaches `Validated` and pushes them itself, so the canvas
-      // follows a text edit instead of waiting for the palette validate command.
+      // The live-refresh half: the framework storage recomputes markers once a
+      // build is validated and a drawn document's diagnostics changed, and
+      // pushes them itself, so the canvas follows a text edit without being
+      // asked.
       const before = diagram.harness.actions.length;
       await validateDocument(diagram, WORKSPACE_FILES.fulfillmentProcess);
       const pushed = await waitForPushedMarkers(diagram, before);
 
       expect(markersOn(pushed, effectLabelId(diagram, 'Pick'))).toHaveLength(1);
+   });
+
+   it("answers the palette's Validate with no batch markers and resends the live set", async () => {
+      const diagram = await openDiagram(workspace =>
+         breakReference(workspace, WORKSPACE_FILES.fulfillmentProcess, 'reads Order.id', 'reads Order.noSuchField')
+      );
+      await validateDocument(diagram, WORKSPACE_FILES.fulfillmentProcess);
+      await waitForPushedMarkers(diagram, 0);
+
+      const before = diagram.harness.actions.length;
+      diagram.harness.dispatch(RequestMarkersAction.create([diagram.harness.state.root.id], { reason: MarkersReason.BATCH }));
+      // From the batch answer on: the build's debounced resubmit sends a live
+      // set of its own, which may land on either side of it.
+      const sent = (): { reason?: string; onPick: number }[] => {
+         const sets = diagram.harness.actions
+            .slice(before)
+            .filter(SetMarkersAction.is)
+            .map(action => ({ reason: action.reason, onPick: markersOn(action.markers, effectLabelId(diagram, 'Pick')).length }));
+         const answer = sets.findIndex(set => set.reason === MarkersReason.BATCH);
+         return answer < 0 ? [] : sets.slice(answer, answer + 2);
+      };
+      await waitFor(() => sent().length === 2, { timeoutMs: 2000, message: () => `sent: ${JSON.stringify(sent())}` });
+
+      expect(sent()).toEqual([
+         { reason: MarkersReason.BATCH, onPick: 0 },
+         { reason: MarkersReason.LIVE, onPick: 1 }
+      ]);
    });
 
    it('marks a projected element of ANOTHER document, and drops one this diagram does not draw', async () => {

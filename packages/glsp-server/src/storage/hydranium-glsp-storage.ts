@@ -278,6 +278,14 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     */
    protected readonly departedSecondaries = new Set<string>();
 
+   /**
+    * The diagnostics array each drawn document held at the last marker check,
+    * and its length, by document uri. A validation assigns a new array, or
+    * appends to the old one for further categories, so a change in either
+    * means markers to refresh.
+    */
+   protected readonly checkedDiagnostics = new Map<string, { readonly diagnostics: unknown; readonly length: number }>();
+
    /** How long a load without a resume token waits for a held client id to free; see {@link loadModelSession}. */
    protected readonly sessionWaitMs: number = 2_000;
 
@@ -448,6 +456,9 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       // React to external rebuilds: settle-gated capture + debounced/deduped resubmit.
       this.toDispose.push(modelService.onModelUpdated(event => this.handleModelUpdated(rootUri, event), { uri: rootUri }));
 
+      // Refresh markers once a whole build is validated, other documents included.
+      this.toDispose.push(modelService.onModelsBuilt(() => this.handleModelsBuilt(rootUri)));
+
       // GLSP's own command stack counts commands; tell it of another client's save.
       this.toDispose.push(modelService.onModelSaved(event => this.handleModelSaved(event), { uri: rootUri }));
 
@@ -561,11 +572,9 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * this listener caused by the client's own write, and resubmitting on it
     * fights the optimistic client-side move the user is still holding.
     *
-    * No marker refresh, unlike the primary path: a secondary's diagnostics reach
-    * the client only if an adopter's index registers elements as rendering that
-    * document, and refreshing here unconditionally would add a dispatch to every
-    * drag this client authors — the guard above gates the resubmit, not the
-    * markers.
+    * No marker refresh here: {@link handleModelsBuilt} refreshes once the
+    * build is validated, and for a secondary only if the index registers
+    * elements as rendering it and its diagnostics changed.
     */
    protected handleSecondaryUpdated(uri: string, event: AstDocumentUpdatedEvent<AstNode>): void {
       if (this.disposeIfStale(uri)) {
@@ -596,25 +605,65 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * React to an external rebuild reaching `Validated`. Self-cleans if the
     * session has vanished but this listener leaked (neither `sessionDisposed`
     * nor `onClientClosed` fired on tab close). Resubmits for any update this
-    * client's own write did not cause alone, then refreshes diagnostic markers
-    * for every update — including own writes, which skip the resubmit but can
-    * still change diagnostics. An event without `causedBy` is resubmitted.
+    * client's own write did not cause alone. An event without `causedBy` is
+    * resubmitted.
     *
     * Own writes include a primary that the build of a write to a secondary
     * swept in, which arrives `rebuilt`. Skipping it loses nothing the canvas
     * shows: the operation behind the write submits once the write has
     * answered, and a build steps its whole batch through each phase, so that
     * submit already renders the relinked primary. What the later `Validated`
-    * adds are diagnostics, which the marker refresh carries.
+    * adds are diagnostics, which {@link handleModelsBuilt} carries.
     */
-   protected async handleModelUpdated(rootUri: string, event: AstDocumentUpdatedEvent<AstNode>): Promise<void> {
+   protected handleModelUpdated(rootUri: string, event: AstDocumentUpdatedEvent<AstNode>): void {
       if (this.disposeIfStale(rootUri)) {
          return;
       }
       if (event.causedBy !== this.state.clientId) {
          this.scheduleUpdateAndSubmit();
       }
-      await this.refreshDiagnosticMarkers();
+   }
+
+   /**
+    * Refresh the diagnostic markers once any build is validated, if a document
+    * drawn on this diagram holds other diagnostics than at the last check, own
+    * writes included.
+    *
+    * Not at the primary's own `Validated`: a build validates its documents one
+    * at a time, so another drawn document can still have no diagnostics then,
+    * and its markers would be dropped with nothing to restore them. Not only
+    * after a build of a drawn document either: a write that cancels a build
+    * after a drawn document is validated skips that build's event, and the
+    * build that takes over does not validate the document again.
+    */
+   protected handleModelsBuilt(rootUri: string): void {
+      if (this.disposeIfStale(rootUri) || !this.modelValidator) {
+         return;
+      }
+      if (this.drawnDiagnosticsChanged()) {
+         void this.refreshDiagnosticMarkers();
+      }
+   }
+
+   /** Whether a drawn document holds other diagnostics than at the last check, recording what each holds now. */
+   protected drawnDiagnosticsChanged(): boolean {
+      const documents = this.sharedServices.workspace.LangiumDocuments;
+      const current: typeof this.checkedDiagnostics = new Map();
+      for (const uri of this.state.index.renderedDocumentUris()) {
+         const diagnostics = documents.getDocument(URI.parse(uri))?.diagnostics;
+         current.set(uri, { diagnostics, length: diagnostics?.length ?? 0 });
+      }
+      const changed =
+         current.size !== this.checkedDiagnostics.size ||
+         [...current].some(([uri, now]) => {
+            const checked = this.checkedDiagnostics.get(uri);
+            return !checked || checked.diagnostics !== now.diagnostics || checked.length !== now.length;
+         });
+      this.checkedDiagnostics.clear();
+      for (const [uri, now] of current) {
+         this.checkedDiagnostics.set(uri, now);
+      }
+      return changed;
    }
 
    /**
@@ -1075,15 +1124,18 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    /**
     * Recompute the bound {@link ModelValidator}'s markers and push them to the
     * client as a `SetMarkersAction` — asynchronously and independently of model
-    * rendering. Called from {@link handleModelUpdated} (which fires at `Validated`),
-    * so diagram markers refresh without gating the diagram submit on validation.
+    * rendering. Called from {@link handleModelsBuilt} once a build is
+    * validated and a drawn document's diagnostics changed, so diagram
+    * markers refresh without gating the diagram submit on validation.
     * No-op when no validator is bound.
     *
-    * Always dispatched under {@link MarkersReason.BATCH}: the GLSP client's
+    * Always validated and dispatched under {@link MarkersReason.LIVE}, GLSP's
+    * reason for automatic validation. The GLSP client's
     * `ValidationFeedbackEmitter` keys feedback by reason and replaces the prior
     * set, so re-pushing the full set clears stale markers (an empty set clears
-    * all once the model is valid), and sharing the tool-palette validate
-    * command's `BATCH` reason means the two paths replace rather than duplicate.
+    * all once the model is valid). The submission handler's live validation
+    * shares the reason, so each set replaces the last. Under another reason the
+    * client shows both sets, listing every issue twice.
     *
     * Never rejects: the update listener that calls it is not awaited. A
     * validator that throws is logged as an error, markers that cannot be sent
@@ -1095,13 +1147,13 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       }
       let markers: Marker[];
       try {
-         markers = await this.modelValidator.validate([this.state.root], MarkersReason.BATCH);
+         markers = await this.modelValidator.validate([this.state.root], MarkersReason.LIVE);
       } catch (error: unknown) {
          this.logger.error(`Validation of ${this.state.sourceUri} failed: ${describeErrorWithStack(error)}`);
          return;
       }
       this.actionDispatcher
-         .dispatch(SetMarkersAction.create(markers, { reason: MarkersReason.BATCH }))
+         .dispatch(SetMarkersAction.create(markers, { reason: MarkersReason.LIVE }))
          .catch((error: unknown) =>
             this.logger.warn(`Could not send the markers of ${this.state.sourceUri}: ${describeErrorWithStack(error)}`)
          );

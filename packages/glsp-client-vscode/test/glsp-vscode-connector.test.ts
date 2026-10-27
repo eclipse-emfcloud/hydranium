@@ -9,15 +9,30 @@
 
 // `vscode` exists only inside the extension host. As in the editor provider's
 // test, the stub goes in at Node's loader too, with what the connector's
-// constructor reaches for.
-const { restoreLoad, vscodeStub } = vi.hoisted(() => {
+// constructor reaches for and a diagnostic collection that records its problems.
+const { problems, restoreLoad, vscodeStub } = vi.hoisted(() => {
    const nodeModule = globalThis.process.getBuiltinModule('node:module') as typeof Module & {
       _load(request: string, ...rest: unknown[]): unknown;
    };
    const { Emitter } = nodeModule.createRequire(__filename)('vscode-jsonrpc') as typeof Jsonrpc;
+   const problems = new Map<unknown, readonly { readonly message: string }[] | undefined>();
    const vscodeStub = {
       EventEmitter: Emitter,
-      languages: { createDiagnosticCollection: () => ({ set: () => undefined, dispose: () => undefined }) },
+      Range: class {},
+      Diagnostic: class {
+         constructor(
+            readonly range: unknown,
+            readonly message: string,
+            readonly severity: unknown
+         ) {}
+      },
+      DiagnosticSeverity: { Information: 2, Warning: 1, Error: 0 },
+      languages: {
+         createDiagnosticCollection: () => ({
+            set: (uri: unknown, diagnostics: readonly { readonly message: string }[] | undefined) => problems.set(uri, diagnostics),
+            dispose: () => undefined
+         })
+      },
       window: { showErrorMessage: vi.fn() }
    };
    const load = nodeModule._load;
@@ -25,6 +40,7 @@ const { restoreLoad, vscodeStub } = vi.hoisted(() => {
       return request === 'vscode' ? vscodeStub : load.call(this, request, ...rest);
    };
    return {
+      problems,
       vscodeStub,
       restoreLoad: (): void => {
          nodeModule._load = load;
@@ -36,10 +52,13 @@ vi.mock('vscode', () => vscodeStub);
 import {
    type GlspVscodeClient,
    type GlspVscodeServer,
+   type Marker,
+   MarkersReason,
    MessageAction,
    RejectAction,
    SaveModelAction,
-   SetDirtyStateAction
+   SetDirtyStateAction,
+   SetMarkersAction
 } from '@eclipse-glsp/vscode-integration';
 import { isSaveFailedError, ModelSavedAction, RequestSaveModelAction, SAVE_FAILED_ERROR_CODE, SaveFailedError } from '@hydranium/protocol';
 import type { Module } from 'node:module';
@@ -58,8 +77,13 @@ interface SentMessage {
 class InspectableConnector extends HydraniumGlspVscodeConnector {
    protected override abandonedSaveLimit = 2;
 
-   heldState(): { abandoned: number; shown: number; rejected: number } {
-      return { abandoned: this.abandonedSaves.size, shown: this.shownSaveFailures.size, rejected: this.rejectedSaveMessages.size };
+   heldState(): { abandoned: number; shown: number; rejected: number; markers: number } {
+      return {
+         abandoned: this.abandonedSaves.size,
+         shown: this.shownSaveFailures.size,
+         rejected: this.rejectedSaveMessages.size,
+         markers: this.markersByReason.size
+      };
    }
 }
 
@@ -109,6 +133,7 @@ afterAll(() => restoreLoad());
 afterEach(() => {
    vi.useRealTimers();
    vscodeStub.window.showErrorMessage.mockClear();
+   problems.clear();
 });
 
 describe('HydraniumGlspVscodeConnector', () => {
@@ -309,10 +334,11 @@ describe('HydraniumGlspVscodeConnector', () => {
       fromServer({ clientId: 'client-1', action: reject(toServer[1], [{ uri: 'file:///a.x', reason: 'EACCES' }]) });
       await failed;
       const pending = connector.saveDocument(document);
+      fromServer({ clientId: 'client-1', action: markers(MarkersReason.LIVE, 'live issue') });
 
       closePanel();
       await expect(pending).rejects.toThrow('the diagram was closed');
-      expect(connector.heldState()).toEqual({ abandoned: 0, shown: 0, rejected: 0 });
+      expect(connector.heldState()).toEqual({ abandoned: 0, shown: 0, rejected: 0, markers: 0 });
    });
 
    it('rejects the saves still pending when it is disposed', async () => {
@@ -320,6 +346,40 @@ describe('HydraniumGlspVscodeConnector', () => {
       const saving = connector.saveDocument(document);
       connector.dispose();
       await expect(saving).rejects.toThrow('the connector was disposed');
+   });
+
+   it("shows every reason's markers in the Problems view, so an empty batch set leaves the live ones", () => {
+      const { document, fromServer } = setUp(advertised);
+
+      fromServer({ clientId: 'client-1', action: markers(MarkersReason.LIVE, 'live issue') });
+      fromServer({ clientId: 'client-1', action: markers(MarkersReason.BATCH) });
+      const afterEmptyBatch = problemMessages(document);
+      fromServer({ clientId: 'client-1', action: markers(MarkersReason.BATCH, 'batch issue') });
+
+      expect({ afterEmptyBatch, afterBatchIssue: problemMessages(document) }).toEqual({
+         afterEmptyBatch: ['live issue'],
+         afterBatchIssue: ['live issue', 'batch issue']
+      });
+   });
+
+   it('replaces only the set of the reason sent, so a fixed live issue leaves the Problems view', () => {
+      const { document, fromServer } = setUp(advertised);
+
+      fromServer({ clientId: 'client-1', action: markers(MarkersReason.LIVE, 'live issue') });
+      fromServer({ clientId: 'client-1', action: markers(MarkersReason.LIVE) });
+
+      expect(problemMessages(document)).toEqual([]);
+   });
+
+   it('passes each markers action to the diagram unchanged, since its client keeps one set per reason itself', () => {
+      const { fromServer, toWebview } = setUp(advertised);
+      const live = { clientId: 'client-1', action: markers(MarkersReason.LIVE, 'live issue') };
+      const batch = { clientId: 'client-1', action: markers(MarkersReason.BATCH) };
+
+      fromServer(live);
+      fromServer(batch);
+
+      expect(toWebview).toEqual([live, batch]);
    });
 
    it("saves as GLSP's against a server that does not advertise the request", async () => {
@@ -330,6 +390,17 @@ describe('HydraniumGlspVscodeConnector', () => {
       await expect(saving).resolves.toBeUndefined();
    });
 });
+
+/** A `SetMarkersAction` under `reason` with one marker per description. */
+function markers(reason: string, ...descriptions: string[]): SetMarkersAction {
+   const set: Marker[] = descriptions.map(description => ({ elementId: description, kind: 'error', label: description, description }));
+   return SetMarkersAction.create(set, { reason });
+}
+
+/** The messages the Problems view shows for `document`. */
+function problemMessages(document: vscode.CustomDocument): string[] | undefined {
+   return problems.get(document.uri)?.map(problem => problem.message);
+}
 
 function shown(): unknown[] {
    return vscodeStub.window.showErrorMessage.mock.calls.map(call => call[0]);

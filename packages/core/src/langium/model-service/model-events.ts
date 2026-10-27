@@ -47,7 +47,9 @@ export interface ModelUpdatedEvent<TAst extends AstNode, TDiagnostic extends Ast
 
 /**
  * The documents one build carried to {@link phase}. Not fired for a cancelled
- * build, so a document it built shows up in the build that takes over.
+ * build. The build that takes over redoes only the documents the cancelled one
+ * left unfinished, so a document it had already completed is reported by no
+ * event until a later build touches it.
  */
 export interface ModelsBuiltEvent {
    readonly uris: readonly CanonicalUri[];

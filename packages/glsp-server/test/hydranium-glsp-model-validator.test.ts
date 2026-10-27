@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { MarkerKind, ModelState } from '@eclipse-glsp/server';
+import { MarkerKind, MarkersReason, ModelState } from '@eclipse-glsp/server';
 import 'reflect-metadata';
 import { Container } from 'inversify';
 import { describe, expect, it } from 'vitest';
@@ -148,7 +148,26 @@ describe('HydraniumGlspModelValidator', () => {
          idsByNode: new Map([[element, 'e1']]),
          rendered: new Set(['e1'])
       });
-      expect(validator.validate([], 'batch')).toEqual([{ elementId: 'e1', kind: MarkerKind.WARNING, label: 'dup', description: 'dup' }]);
+      expect(validator.validate([], 'live')).toEqual([{ elementId: 'e1', kind: MarkerKind.WARNING, label: 'dup', description: 'dup' }]);
+   });
+
+   it('reports nothing for a batch request, whose set the client shows beside the live one', () => {
+      const element = makeFakeAstNode<AstNode>({ $type: 'Element' });
+      const validator = createValidator({
+         documents: [
+            {
+               uri: 'file:///m/diagram.a',
+               diagnostics: [diagnostic('elements@0')],
+               nodesByPath: new Map([['elements@0', element]])
+            }
+         ],
+         idsByNode: new Map([[element, 'e1']]),
+         rendered: new Set(['e1'])
+      });
+      expect({ live: validator.validate([], MarkersReason.LIVE).length, batch: validator.validate([], MarkersReason.BATCH) }).toEqual({
+         live: 1,
+         batch: []
+      });
    });
 
    it("maps a diagnostic on the diagram's own document loaded under another spelling of its uri", () => {
@@ -166,7 +185,7 @@ describe('HydraniumGlspModelValidator', () => {
          idsByNode: new Map([[element, 'e1']]),
          rendered: new Set(['e1'])
       });
-      expect(validator.validate([], 'batch')).toEqual([{ elementId: 'e1', kind: MarkerKind.WARNING, label: 'dup', description: 'dup' }]);
+      expect(validator.validate([], 'live')).toEqual([{ elementId: 'e1', kind: MarkerKind.WARNING, label: 'dup', description: 'dup' }]);
    });
 
    it('does not mark a diagram node that shares its stable id with a node of another document', () => {
@@ -185,7 +204,7 @@ describe('HydraniumGlspModelValidator', () => {
          idsByNode: new Map([[foreign, 'Element1']]),
          rendered: new Set(['Element1'])
       });
-      expect(validator.validate([], 'batch')).toEqual([]);
+      expect(validator.validate([], 'live')).toEqual([]);
    });
 
    it("does not mark a node of another document drawn under the stable id of a node of the diagram's own document", () => {
@@ -206,7 +225,7 @@ describe('HydraniumGlspModelValidator', () => {
          aliases: new Map([['Element1', foreign]]),
          rendered: new Set(['Element1'])
       });
-      expect(validator.validate([], 'batch')).toEqual([]);
+      expect(validator.validate([], 'live')).toEqual([]);
    });
 
    it('marks the one element left of an id drawn twice with the diagnostics of every node drawn under it, whichever document they come from', () => {
@@ -231,7 +250,7 @@ describe('HydraniumGlspModelValidator', () => {
          elementIds: new Map([[foreign, ['Element1']]]),
          rendered: new Set(['Element1'])
       });
-      expect(validator.validate([], 'batch').map(marker => [marker.elementId, marker.label])).toEqual([
+      expect(validator.validate([], 'live').map(marker => [marker.elementId, marker.label])).toEqual([
          ['Element1', 'own'],
          ['Element1', 'foreign']
       ]);
@@ -259,7 +278,7 @@ describe('HydraniumGlspModelValidator', () => {
          ]),
          rendered: new Set(['e1', 'e2'])
       });
-      expect(validator.validate([], 'batch')).toHaveLength(2);
+      expect(validator.validate([], 'live')).toHaveLength(2);
       expect(canonicalised).toEqual(['file:///m/diagram.a']);
    });
 
@@ -284,7 +303,7 @@ describe('HydraniumGlspModelValidator', () => {
          elementIds: new Map([[elsewhere, ['elsewhere']]]),
          rendered: new Set(['shown'])
       });
-      expect(validator.validate([], 'batch')).toEqual([
+      expect(validator.validate([], 'live')).toEqual([
          { elementId: 'shown', kind: MarkerKind.ERROR, label: 'on diagram', description: 'on diagram' }
       ]);
    });
@@ -307,7 +326,7 @@ describe('HydraniumGlspModelValidator', () => {
          elementIds: new Map([[ghost, ['g1']]]),
          rendered: new Set(['g1'])
       });
-      expect(validator.validate([], 'batch')).toEqual([]);
+      expect(validator.validate([], 'live')).toEqual([]);
    });
 
    it('maps an element diagnostic to the node registered as representing it (reference projection)', () => {
@@ -326,7 +345,7 @@ describe('HydraniumGlspModelValidator', () => {
          elementIds: new Map([[element, ['DiagramNode1']]]),
          rendered: new Set(['DiagramNode1'])
       });
-      expect(validator.validate([], 'batch')).toEqual([
+      expect(validator.validate([], 'live')).toEqual([
          {
             elementId: 'DiagramNode1',
             kind: MarkerKind.ERROR,
@@ -349,7 +368,7 @@ describe('HydraniumGlspModelValidator', () => {
          elementIds: new Map([[element, ['NodeA', 'NodeB']]]),
          rendered: new Set(['NodeA', 'NodeB'])
       });
-      expect(validator.validate([], 'batch')).toEqual([
+      expect(validator.validate([], 'live')).toEqual([
          { elementId: 'NodeA', kind: MarkerKind.WARNING, label: 'dup', description: 'dup' },
          { elementId: 'NodeB', kind: MarkerKind.WARNING, label: 'dup', description: 'dup' }
       ]);
@@ -373,10 +392,10 @@ describe('HydraniumGlspModelValidator', () => {
          idsByNode: new Map([[element, 'e1']]),
          rendered: new Set(['e1'])
       });
-      expect(validator.validate([], 'batch')).toEqual([]);
+      expect(validator.validate([], 'live')).toEqual([]);
    });
 
    it('returns no markers when no document carries diagnostics', () => {
-      expect(createValidator({ documents: [{ uri: 'file:///m/diagram.a', diagnostics: [] }] }).validate([], 'batch')).toEqual([]);
+      expect(createValidator({ documents: [{ uri: 'file:///m/diagram.a', diagnostics: [] }] }).validate([], 'live')).toEqual([]);
    });
 });

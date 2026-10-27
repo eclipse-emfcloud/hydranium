@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type GModelElement, type Marker, ModelState, type ModelValidator } from '@eclipse-glsp/server';
+import { type GModelElement, type Marker, MarkersReason, ModelState, type ModelValidator } from '@eclipse-glsp/server';
 import { inject, injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
@@ -19,10 +19,9 @@ import { type DiagnosticMarkerLookups, diagnosticsToMarkers } from './diagnostic
 /**
  * Framework {@link ModelValidator} that surfaces the model server's LSP
  * diagnostics as GLSP diagram markers. Bound per diagram via
- * `DiagramModule.bindModelValidator()`; the framework submission handler also
- * pushes its output as a `SetMarkersAction` after every model submit so
- * markers refresh live (the GLSP client otherwise only re-requests markers on
- * the tool-palette validate command).
+ * `DiagramModule.bindModelValidator()`. The framework storage pushes its output
+ * once a build is validated, and the submission handler after every submit,
+ * both under {@link MarkersReason.LIVE}.
  *
  * The translation itself ({@link diagnosticsToMarkers}) is pure; this class
  * supplies its model-shaped lookups from the live services: the per-language
@@ -49,14 +48,22 @@ import { type DiagnosticMarkerLookups, diagnosticsToMarkers } from './diagnostic
  * The `elements` argument of {@link validate} is ignored — the diagnostic set
  * is the source of truth, and the default `RequestMarkersAction` requests the
  * whole diagram anyway.
+ *
+ * A {@link MarkersReason.BATCH} request, such as the palette's Validate
+ * command, gets no markers. The live set already carries every diagnostic, and
+ * the client shows each reason's set beside the other, so a batch copy would
+ * list every issue twice. `HydraniumGlspRequestMarkersHandler` sends the live
+ * set with the answer instead. An override of {@link validate} that adds
+ * batch-only rules gets GLSP's own behaviour: its batch set stays until the
+ * next request.
  */
 @injectable()
 export class HydraniumGlspModelValidator<TRoot extends AstNode = AstNode> implements ModelValidator {
    @inject(HydraniumTypes.SharedCoreServices) protected readonly sharedServices!: ServerSharedServices;
    @inject(ModelState) protected readonly modelState!: AbstractHydraniumGlspState<TRoot>;
 
-   validate(_elements: GModelElement[], _reason?: string): Marker[] {
-      return this.markers();
+   validate(_elements: GModelElement[], reason?: string): Marker[] {
+      return reason === MarkersReason.BATCH ? [] : this.markers();
    }
 
    /**

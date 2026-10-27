@@ -45,7 +45,8 @@ webview's messages over one `vscode-messenger` hop shared by every head.
    `findPort` that calls `findPort` on your language client and the head's
    port request, and give it to a `HydraniumGlspVscodeConnector` without a
    `messenger` option: the connector's own keeps messages flowing to a hidden
-   tab, and a save that fails rejects with the documents it could not write.
+   tab, a save that fails rejects with the documents it could not write, and
+   the Problems view keeps the live markers when the user runs Validate.
    Start the server without awaiting it, and report its failure off `onReady`,
    since `start()` resolves either way. Register a subclass of
    `HydraniumGlspEditorProvider` that names the diagram type, the webview
