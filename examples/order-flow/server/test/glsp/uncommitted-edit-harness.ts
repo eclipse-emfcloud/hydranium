@@ -219,12 +219,10 @@ export function flushResubmit(diagram: Diagram): void {
    storage.flushResubmit();
 }
 
-/** The diagram's submission handler, its external resubmits let through. */
-export function allowExternalSubmits(diagram: Diagram): HydraniumGlspSubmissionHandler<ProcessModel> {
-   // The harness never answers the initial bounds request, which holds every resubmit back.
-   const submissions = diagram.sessionContainer.get<HydraniumGlspSubmissionHandler<ProcessModel>>(ModelSubmissionHandler);
-   vi.spyOn(submissions, 'hasPendingInitialRequest').mockReturnValue(false);
-   return submissions;
+/** The diagram's submission handler, its open answered so external resubmits go through. */
+export async function allowExternalSubmits(diagram: Diagram): Promise<HydraniumGlspSubmissionHandler<ProcessModel>> {
+   await diagram.answerBoundsRequest();
+   return diagram.sessionContainer.get<HydraniumGlspSubmissionHandler<ProcessModel>>(ModelSubmissionHandler);
 }
 
 /** A move of the flow node `name` to `x`, `y`, at the size it is drawn at. */
@@ -348,7 +346,7 @@ export function describeOrdering(scope: 'Node' | 'browser', part: 'operation-arr
       async function open(): Promise<Setup> {
          const opened = await openDiagram(undefined, modules);
          events = [];
-         const submissions = allowExternalSubmits(opened.diagram);
+         const submissions = await allowExternalSubmits(opened.diagram);
          const submitModel = submissions.submitModel.bind(submissions);
          vi.spyOn(submissions, 'submitModel').mockImplementation(async (reason, layout) => {
             if (reason === 'external') {

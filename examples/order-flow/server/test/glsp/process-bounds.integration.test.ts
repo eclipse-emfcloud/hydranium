@@ -26,7 +26,7 @@
  */
 
 import 'reflect-metadata';
-import { type Action, ChangeBoundsOperation, ComputedBoundsAction, DeleteElementOperation, ServerModule } from '@eclipse-glsp/server';
+import { type Action, ChangeBoundsOperation, DeleteElementOperation, ServerModule } from '@eclipse-glsp/server';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
@@ -206,15 +206,9 @@ describe('order-flow .process change-bounds', () => {
       // computed-bounds handler applies to the server-side GModel, and it is
       // emphatically NOT persistence: measured bounds are transient, and only a
       // `ChangeBoundsOperation` writes a layout entry.
-      diagram.harness.dispatch(
-         ComputedBoundsAction.create([{ elementId: cancelId, newPosition: { x: 640, y: 300 }, newSize: { width: 150, height: 55 } }], {
-            // The handler compares against the GMODEL root's revision, not the
-            // document version — a mismatch is dropped with a warning rather
-            // than applied, so getting this wrong would look like a silent no-op.
-            revision: diagram.harness.state.root.revision
-         })
-      );
-      await diagram.harness.nextModelSubmission();
+      await diagram.harness.answerBoundsRequest({
+         bounds: [{ elementId: cancelId, newPosition: { x: 640, y: 300 }, newSize: { width: 150, height: 55 } }]
+      });
       // Control, and the whole point: measuring changed the GModel and left the
       // document alone.
       expect(layoutFor(diagram, 'Cancel')).toBeUndefined();
@@ -241,12 +235,9 @@ describe('order-flow .process change-bounds', () => {
       const diagram = await openDiagram(WORKSPACE_FILES.fulfillmentProcess);
       const cancelId = idOf(diagram, 'Cancel');
 
-      diagram.harness.dispatch(
-         ComputedBoundsAction.create([{ elementId: cancelId, newPosition: { x: 640, y: 300 }, newSize: { width: 150, height: 55 } }], {
-            revision: diagram.harness.state.root.revision
-         })
-      );
-      await diagram.harness.nextModelSubmission();
+      await diagram.harness.answerBoundsRequest({
+         bounds: [{ elementId: cancelId, newPosition: { x: 640, y: 300 }, newSize: { width: 150, height: 55 } }]
+      });
 
       // A move: a new position, carrying the size the client already renders.
       await diagram.apply(
