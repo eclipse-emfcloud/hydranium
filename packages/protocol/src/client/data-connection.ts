@@ -245,8 +245,8 @@ export class DataConnection<
     * its process, and every call of that session then rejects with an error
     * `isDuplicateClientIdError` recognises; an id the server reserves beyond
     * {@link FRAMEWORK_CLIENT_IDS}, such as the integrity author, with one
-    * `isReservedClientIdError` recognises. Only the code crosses the wire, so
-    * test with those guards rather than `instanceof`.
+    * `isReservedClientIdError` recognises. Test with those guards rather than
+    * `instanceof`, which misses an error from another copy of this package.
     *
     * Throws a {@link ReservedClientIdError} for an id in
     * {@link FRAMEWORK_CLIENT_IDS} — those are authors the SERVER emits rather

@@ -25,7 +25,6 @@ import {
    SAVE_FAILED_ERROR_CODE,
    SESSION_CLOSED,
    SESSION_CLOSED_ERROR_CODE,
-   STALE_BASE_VERSION_SAVE,
    STALE_BASE_VERSION_UPDATE,
    SaveFailedError,
    SessionClosedError,
@@ -222,9 +221,7 @@ describe('client session errors', () => {
          make: () => new SaveFailedError(FAILURES),
          code: SAVE_FAILED_ERROR_CODE,
          guard: isSaveFailedError,
-         data: { failures: FAILURES },
-         // It promises `failures`, which a bare ResponseError does not hold.
-         bareRecognised: false
+         data: { failures: FAILURES }
       }
    ] as const;
 
@@ -242,18 +239,41 @@ describe('client session errors', () => {
          }
       });
 
-      it(`${entry.name} is recognised in-process and after reconstruction, and nothing else is`, () => {
+      it(`${entry.name} is recognised in-process and once revived, and no other class is`, () => {
          expect(entry.guard(entry.make())).toBe(true);
-         // What a client holds after an RPC: a plain ResponseError with the code.
-         const bare = new ResponseError(entry.code, 'transport-wrapped', entry.data);
-         expect(entry.guard(bare)).toBe(!('bareRecognised' in entry));
-         expect(entry.guard(reviveProtocolError(bare))).toBe(true);
+         expect(entry.guard(reviveProtocolError(new ResponseError(entry.code, 'transport-wrapped', entry.data)))).toBe(true);
          expect(entry.guard(new ConflictError('file:///a.x', asModelVersion(1), 2))).toBe(false);
          for (const other of cases.filter(candidate => candidate !== entry)) {
             expect(entry.guard(other.make())).toBe(false);
          }
          expect(entry.guard(new Error('boom'))).toBe(false);
          expect(entry.guard(undefined)).toBe(false);
+      });
+
+      it(`${entry.name} is refused as a bare ResponseError, even named and holding its fields`, () => {
+         // What a connection that does not revive holds after an RPC.
+         const bare = new ResponseError(entry.code, 'transport-wrapped', entry.data);
+         expect(entry.guard(bare)).toBe(false);
+         Object.assign(bare, { name: entry.name }, entry.data);
+         expect(entry.guard(bare)).toBe(false);
+      });
+
+      it(`${entry.name} is refused without its data, rather than throwing`, () => {
+         for (const data of [null, undefined, {}]) {
+            const error = entry.make();
+            Object.assign(error, { data });
+            expect(entry.guard(error)).toBe(false);
+         }
+      });
+
+      it(`${entry.name} is recognised from another copy of this package, by its brand and getters`, () => {
+         const error = otherCopyOf(entry.name, entry.code, entry.data, true);
+         expect(entry.guard(error)).toBe(true);
+         for (const [field, value] of Object.entries(entry.data)) {
+            expect(Reflect.get(error, field)).toBe(value);
+         }
+         // The brand is public, so a class without the getters is refused.
+         expect(entry.guard(otherCopyOf(entry.name, entry.code, entry.data, false))).toBe(false);
       });
    }
 });
@@ -306,29 +326,54 @@ describe('isConflictError', () => {
       expect(isConflictError(new ConflictError('file:///A.fake', asModelVersion(3), 5))).toBe(true);
    });
 
-   it('returns true for any Error whose name is "ConflictError"', () => {
+   it('returns false for a plain Error named "ConflictError", which has none of its fields', () => {
       const cloned = new Error('boom');
       cloned.name = 'ConflictError';
-      expect(isConflictError(cloned)).toBe(true);
+      expect(isConflictError(cloned)).toBe(false);
    });
 
-   it('returns true for a generic ResponseError carrying the conflict code (post-RPC reconstruction)', () => {
+   it('returns false for a bare ResponseError carrying the conflict code, and true once it is revived', () => {
       const reconstructed = new ResponseError(CONFLICT_ERROR_CODE, 'some transport-wrapped message', {
          uri: 'file:///A.fake',
          baseVersion: 3,
          actualVersion: 5
       });
-      expect(isConflictError(reconstructed)).toBe(true);
+      expect(isConflictError(reconstructed)).toBe(false);
+      expect(isConflictError(reviveProtocolError(reconstructed))).toBe(true);
    });
 
-   it('returns true for a plain Error whose message contains the marker (message fallback)', () => {
+   it('returns false for a bare ResponseError named "ConflictError" and holding its fields', () => {
+      const fields = { uri: 'file:///A.fake', baseVersion: 3, actualVersion: 5 };
+      const bare = Object.assign(new ResponseError(CONFLICT_ERROR_CODE, 'renamed', fields), { name: 'ConflictError' }, fields);
+      expect(isConflictError(bare)).toBe(false);
+   });
+
+   it('returns false for a ConflictError without its data, rather than throwing', () => {
+      for (const data of [null, undefined, {}]) {
+         expect(isConflictError(Object.assign(new ConflictError('file:///A.fake', asModelVersion(3), 5), { data }))).toBe(false);
+      }
+   });
+
+   it('returns true for a subclass that names itself', () => {
+      class EditorConflict extends ConflictError {
+         constructor() {
+            super('file:///A.fake', asModelVersion(3), 5);
+            this.name = 'EditorConflict';
+         }
+      }
+      expect(isConflictError(new EditorConflict())).toBe(true);
+   });
+
+   it('returns true for one from another copy of this package with its getters, and false without them', () => {
+      const fields = { uri: 'file:///A.fake', baseVersion: 3, actualVersion: 5 };
+      const error = otherCopyOf('ConflictError', CONFLICT_ERROR_CODE, fields, true);
+      expect(isConflictError(error) && [error.uri, error.baseVersion, error.actualVersion]).toEqual([fields.uri, 3, 5]);
+      expect(isConflictError(otherCopyOf('ConflictError', CONFLICT_ERROR_CODE, fields, false))).toBe(false);
+   });
+
+   it('returns false for a plain Error that only words a conflict', () => {
       const wrapped = new Error(`Request ns/save failed: ${STALE_BASE_VERSION_UPDATE.format({ uri: 'file:///A' })}`);
-      expect(isConflictError(wrapped)).toBe(true);
-   });
-
-   it("returns true for a plain Error whose message contains a refused save's sentence (message fallback)", () => {
-      const wrapped = new Error(`Request ns/save failed: ${STALE_BASE_VERSION_SAVE.format({ uri: 'file:///A' })}`);
-      expect(isConflictError(wrapped)).toBe(true);
+      expect(isConflictError(wrapped)).toBe(false);
    });
 
    it('returns false for a plain Error', () => {
@@ -371,3 +416,21 @@ describe('SaveFailedError', () => {
       expect(reviveProtocolError(arrived)).toBe(arrived);
    });
 });
+
+/** A typed error as another copy of this package builds it: branded as `name`, with or without the getters reading `data`. */
+function otherCopyOf(name: string, code: number, data: Record<string, unknown>, withGetters: boolean): ResponseError<unknown> {
+   class OtherCopy extends ResponseError<unknown> {
+      constructor() {
+         super(code, 'from another copy', data);
+         // As each class here restores what `ResponseError` resets.
+         Object.setPrototypeOf(this, OtherCopy.prototype);
+      }
+   }
+   Object.defineProperty(OtherCopy.prototype, Symbol.for(`hydranium/protocol/${name}`), { value: true });
+   if (withGetters) {
+      for (const field of Object.keys(data)) {
+         Object.defineProperty(OtherCopy.prototype, field, { get: () => data[field] });
+      }
+   }
+   return new OtherCopy();
+}

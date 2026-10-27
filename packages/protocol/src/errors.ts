@@ -27,11 +27,6 @@ import { asModelVersion, type ModelVersion, type TextVersion } from './model-ser
  * The catalogue declaration behind {@link ConflictError}'s sentence. It words
  * the version mismatch rather than stating it: the two numbers mean nothing to
  * an end user, and they stay in {@link ConflictErrorData}.
- *
- * Its English must keep containing {@link CONFLICT_ERROR_MESSAGE_MARKER}: the
- * marker is tier 3 of {@link isConflictError}'s ladder, and it matches on text.
- * That tier only ever works untranslated, which is why it is the last resort
- * behind the numeric code rather than the primary check.
  */
 export const STALE_BASE_VERSION_UPDATE = defineMessage(
    'hydranium/protocol/stale-base-version-update',
@@ -40,8 +35,7 @@ export const STALE_BASE_VERSION_UPDATE = defineMessage(
 
 /**
  * {@link STALE_BASE_VERSION_UPDATE}'s counterpart for an editor's save the
- * server refused, since the editor's buffer is not the text it holds. Its
- * English keeps the same marker.
+ * server refused, since the editor's buffer is not the text it holds.
  */
 export const STALE_BASE_VERSION_SAVE = defineMessage(
    'hydranium/protocol/stale-base-version-save',
@@ -53,10 +47,11 @@ export const STALE_BASE_VERSION_SAVE = defineMessage(
  * the error it identifies.
  *
  * The framework reserves the block 42000 to 42999 for these, and an adopter's
- * own codes stay outside it: after an RPC a guard matches on the code alone, so
- * an adopter's error carrying one of these reads as the framework's. A new code
- * takes the next unused number in the block, whichever package raises it, and
- * is declared here, where tests hold every code distinct and inside the block.
+ * own codes stay outside it: after an RPC the proxy revives an error by its
+ * code, so an adopter's error carrying one of these can read as the
+ * framework's. A new code takes the next unused number in the block, whichever
+ * package raises it, and is declared here, where tests hold every code distinct
+ * and inside the block.
  * The block sits clear of the range JSON-RPC 2.0 reserves for itself, -32768
  * to -32000.
  */
@@ -105,7 +100,8 @@ export interface ConflictErrorData extends HydraniumMessageData {
  * error envelope (`code`, `message`, `data`) — all three fields are
  * preserved by RPC reconstruction. `createRpcProxy` revives it into
  * this class on the receiving side; a path that does not leaves a
- * plain `ResponseError`, readable through `err.data` only.
+ * plain `ResponseError`, readable through `err.data` only and refused
+ * by {@link isConflictError}.
  *
  * Detection is driven by the required `baseVersion` field of every write
  * request; a caller with no meaningful base version passes
@@ -131,8 +127,8 @@ export class ConflictError extends ResponseError<ConflictErrorData> {
       message: typeof STALE_BASE_VERSION_UPDATE | typeof STALE_BASE_VERSION_SAVE = STALE_BASE_VERSION_UPDATE
    ) {
       // The identity rides alongside the typed payload rather than replacing
-      // it: `isConflictError`'s name check is surface an adopter may bind, so
-      // adding the identity widens the payload rather than reshaping it.
+      // it. The getters, the guard and the reviver read the payload's fields,
+      // so adding the identity widens the payload rather than reshaping it.
       super(CONFLICT_ERROR_CODE, message.format({ uri }), {
          uri,
          baseVersion,
@@ -366,20 +362,38 @@ type ProtocolErrorReviver = (data: Readonly<Record<string, unknown>>) => Respons
 const PROTOCOL_ERROR_REVIVERS: ReadonlyMap<number, ProtocolErrorReviver> = new Map<number, ProtocolErrorReviver>([
    [
       CONFLICT_ERROR_CODE,
-      ({ uri, baseVersion, actualVersion }) =>
-         typeof uri === 'string' && typeof baseVersion === 'number' && typeof actualVersion === 'number'
-            ? new ConflictError(uri, asModelVersion(baseVersion), actualVersion)
-            : undefined
+      data => (hasConflictFields(data) ? new ConflictError(data.uri, asModelVersion(data.baseVersion), data.actualVersion) : undefined)
    ],
-   [SESSION_CLOSED_ERROR_CODE, ({ clientId }) => (typeof clientId === 'string' ? new SessionClosedError(clientId) : undefined)],
-   [
-      DOCUMENT_NOT_OPEN_ERROR_CODE,
-      ({ uri, clientId }) => (typeof uri === 'string' && typeof clientId === 'string' ? new DocumentNotOpenError(uri, clientId) : undefined)
-   ],
-   [DUPLICATE_CLIENT_ID_ERROR_CODE, ({ clientId }) => (typeof clientId === 'string' ? new DuplicateClientIdError(clientId) : undefined)],
-   [RESERVED_CLIENT_ID_ERROR_CODE, ({ clientId }) => (typeof clientId === 'string' ? new ReservedClientIdError(clientId) : undefined)],
-   [SAVE_FAILED_ERROR_CODE, ({ failures }) => (isSaveFailureList(failures) ? new SaveFailedError(failures) : undefined)]
+   [SESSION_CLOSED_ERROR_CODE, data => (hasClientId(data) ? new SessionClosedError(data.clientId) : undefined)],
+   [DOCUMENT_NOT_OPEN_ERROR_CODE, data => (hasDocumentNotOpenFields(data) ? new DocumentNotOpenError(data.uri, data.clientId) : undefined)],
+   [DUPLICATE_CLIENT_ID_ERROR_CODE, data => (hasClientId(data) ? new DuplicateClientIdError(data.clientId) : undefined)],
+   [RESERVED_CLIENT_ID_ERROR_CODE, data => (hasClientId(data) ? new ReservedClientIdError(data.clientId) : undefined)],
+   [SAVE_FAILED_ERROR_CODE, data => (hasSaveFailures(data) ? new SaveFailedError(data.failures) : undefined)]
 ]);
+
+// One check per class of the fields its getters read, run by its reviver on
+// `data` and by its guard on the error, through the getters.
+function hasConflictFields(value: unknown): value is { uri: string; baseVersion: number; actualVersion: TextVersion } {
+   return (
+      isRecord(value) && typeof value.uri === 'string' && typeof value.baseVersion === 'number' && typeof value.actualVersion === 'number'
+   );
+}
+
+function hasClientId(value: unknown): value is { clientId: string } {
+   return isRecord(value) && typeof value.clientId === 'string';
+}
+
+function hasDocumentNotOpenFields(value: unknown): value is { uri: string; clientId: string } {
+   return isRecord(value) && typeof value.uri === 'string' && typeof value.clientId === 'string';
+}
+
+function hasSaveFailures(value: unknown): value is { failures: SaveFailure[] } {
+   return isRecord(value) && isSaveFailureList(value.failures);
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+   return typeof value === 'object' && value !== null;
+}
 
 function isSaveFailureList(value: unknown): value is SaveFailure[] {
    return (
@@ -450,77 +464,66 @@ export function reviveProtocolErrorJson(json: string): ResponseError<unknown> | 
 }
 
 /**
- * Whether `error` is a {@link SessionClosedError}: by name in-process, by code
- * when it arrives as a plain `ResponseError`, through a path that does not
- * {@link reviveProtocolError revive} it.
+ * Mark `errorClass`'s prototype with a brand its guard checks, so every
+ * instance and every subclass carries it, and nothing else does. `Symbol.for`
+ * gives each copy of this package the same symbol, which `instanceof` does
+ * not, so the key must stay the same across releases.
+ */
+function brand(errorClass: { readonly prototype: object }, name: string): symbol {
+   const key = Symbol.for(`hydranium/protocol/${name}`);
+   Object.defineProperty(errorClass.prototype, key, { value: true });
+   return key;
+}
+
+const CONFLICT_BRAND = brand(ConflictError, 'ConflictError');
+const SESSION_CLOSED_BRAND = brand(SessionClosedError, 'SessionClosedError');
+const DOCUMENT_NOT_OPEN_BRAND = brand(DocumentNotOpenError, 'DocumentNotOpenError');
+const DUPLICATE_CLIENT_ID_BRAND = brand(DuplicateClientIdError, 'DuplicateClientIdError');
+const RESERVED_CLIENT_ID_BRAND = brand(ReservedClientIdError, 'ReservedClientIdError');
+const SAVE_FAILED_BRAND = brand(SaveFailedError, 'SaveFailedError');
+
+/**
+ * Whether `error` is a {@link SessionClosedError} whose getters read valid
+ * fields: one thrown, or one {@link reviveProtocolError revived}, from any
+ * copy of this package, or a subclass. A bare `ResponseError` is not one,
+ * whatever its name and fields, since it lacks the class's brand.
+ * `createRpcProxy` revives every rejection, so only a caller on a connection
+ * of its own needs to revive first. Each guard below works the same way.
  */
 export function isSessionClosedError(error: unknown): error is SessionClosedError {
-   return hasErrorIdentity(error, 'SessionClosedError', SESSION_CLOSED_ERROR_CODE);
+   return hasBrand(error, SESSION_CLOSED_BRAND) && hasClientId(error);
 }
 
-/** Whether `error` is a {@link DocumentNotOpenError}; see {@link isSessionClosedError}. */
+/** Whether `error` is a {@link DocumentNotOpenError}. See {@link isSessionClosedError}. */
 export function isDocumentNotOpenError(error: unknown): error is DocumentNotOpenError {
-   return hasErrorIdentity(error, 'DocumentNotOpenError', DOCUMENT_NOT_OPEN_ERROR_CODE);
+   return hasBrand(error, DOCUMENT_NOT_OPEN_BRAND) && hasDocumentNotOpenFields(error);
 }
 
-/** Whether `error` is a {@link DuplicateClientIdError}; see {@link isSessionClosedError}. */
+/** Whether `error` is a {@link DuplicateClientIdError}. See {@link isSessionClosedError}. */
 export function isDuplicateClientIdError(error: unknown): error is DuplicateClientIdError {
-   return hasErrorIdentity(error, 'DuplicateClientIdError', DUPLICATE_CLIENT_ID_ERROR_CODE);
+   return hasBrand(error, DUPLICATE_CLIENT_ID_BRAND) && hasClientId(error);
 }
 
-/** Whether `error` is a {@link ReservedClientIdError}; see {@link isSessionClosedError}. */
+/** Whether `error` is a {@link ReservedClientIdError}. See {@link isSessionClosedError}. */
 export function isReservedClientIdError(error: unknown): error is ReservedClientIdError {
-   return hasErrorIdentity(error, 'ReservedClientIdError', RESERVED_CLIENT_ID_ERROR_CODE);
+   return hasBrand(error, RESERVED_CLIENT_ID_BRAND) && hasClientId(error);
 }
 
-/**
- * Whether `error` is a {@link SaveFailedError} that holds its `failures`: one
- * thrown, or one {@link reviveProtocolError revived}. Unlike the other guards,
- * a bare `ResponseError` with its code is not one, since it has no `failures`
- * to read. Revive it first.
- */
+/** Whether `error` is a {@link SaveFailedError}. See {@link isSessionClosedError}. */
 export function isSaveFailedError(error: unknown): error is SaveFailedError {
-   return (
-      hasErrorIdentity(error, 'SaveFailedError', SAVE_FAILED_ERROR_CODE) && isSaveFailureList((error as Partial<SaveFailedError>).failures)
-   );
+   return hasBrand(error, SAVE_FAILED_BRAND) && hasSaveFailures(error);
 }
 
-function hasErrorIdentity(error: unknown, name: string, code: number): boolean {
-   return error instanceof Error && (error.name === name || (error as Partial<ResponseError<unknown>>).code === code);
+/** Whether `error` is a {@link ConflictError}. See {@link isSessionClosedError}. */
+export function isConflictError(error: unknown): error is ConflictError {
+   return hasBrand(error, CONFLICT_BRAND) && hasConflictFields(error);
 }
-
-/** Marker substring present in every {@link ConflictError} message, used by
- *  {@link isConflictError} as a fallback when a transport re-wraps the error
- *  and drops the JSON-RPC code. */
-const CONFLICT_ERROR_MESSAGE_MARKER = ': it was made to an older version of the document';
 
 /**
- * Type guard for {@link ConflictError}. Detection ladder:
- *
- *  1. `error.name === 'ConflictError'` — direct in-process throw, no
- *     RPC round-trip.
- *  2. `(error as ResponseError).code === CONFLICT_ERROR_CODE` — the
- *     canonical wire-side check; the JSON-RPC `code` field is preserved
- *     across reconstruction, so any adopter catching after an RPC call
- *     hits this branch.
- *  3. `error.message` contains the marker the English of
- *     {@link STALE_BASE_VERSION_UPDATE} and
- *     {@link STALE_BASE_VERSION_SAVE} carries — fallback for transports
- *     that re-wrap the message and drop the code (rare).
- *
- * `instanceof ConflictError` alone returns `false` on a rejection that was
- * not {@link reviveProtocolError revived}, so callers do not use it.
+ * Whether `error` carries the brand `key` and the `data` record its getters
+ * read, so a guard can check the fields through them. A copy whose class
+ * lacks a getter fails that check, since the brand alone is public.
  */
-export function isConflictError(error: unknown): error is ConflictError {
-   if (!(error instanceof Error)) {
-      return false;
-   }
-   if (error.name === 'ConflictError') {
-      return true;
-   }
-   const code = (error as Partial<ResponseError<unknown>>).code;
-   if (code === CONFLICT_ERROR_CODE) {
-      return true;
-   }
-   return typeof error.message === 'string' && error.message.includes(CONFLICT_ERROR_MESSAGE_MARKER);
+function hasBrand(error: unknown, key: symbol): error is ResponseError<unknown> {
+   return isResponseError(error) && Reflect.get(error, key) === true && isRecord(error.data);
 }

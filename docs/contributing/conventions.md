@@ -301,7 +301,7 @@ for host keys by `check:nls-extract`.
 translated leak. (a) For a user: a `defineMessage` code. (b) For a developer,
 where a caller must react: a typed error with a class, an `is*` guard and a
 code from `HYDRANIUM_ERROR_CODES`, whose reserved block adopters keep out of
-because a guard matches the code alone after an RPC. (c) For a developer, with
+because the RPC proxy revives an error by its code. (c) For a developer, with
 nothing reacting: a plain or named `Error`. A message naming a symbol, slot or
 wire method is (b) or (c), unless moving the identifier into `data` makes it
 (a). (a) and (b) combine where a context-free end-user sentence exists. When

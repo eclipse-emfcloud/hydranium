@@ -17,6 +17,7 @@
 import {
    CONFLICT_ERROR_CODE,
    createMessagePortTransport,
+   isConflictError,
    NoopLogger,
    type SaveTextDocumentParams,
    SaveTextDocumentRequest
@@ -1562,7 +1563,8 @@ describe('MonacoLspClient save over the LSP head', () => {
          server.requests.push({ save: `${uri}@${version}`, changesHeard: ends.changes.length });
          const answer = (): null => {
             if (server.refusing.has(uri)) {
-               throw new ResponseError(CONFLICT_ERROR_CODE, `refused ${uri}`);
+               // As the server's refusal crosses the wire: a bare error with the code and data.
+               throw new ResponseError(CONFLICT_ERROR_CODE, `refused ${uri}`, { uri, baseVersion: version, actualVersion: version + 1 });
             }
             return null;
          };
@@ -1684,6 +1686,7 @@ describe('MonacoLspClient save over the LSP head', () => {
       const refused = await client.save('file:///a.one').catch((error: unknown) => error);
 
       expect(refused).toMatchObject({ code: CONFLICT_ERROR_CODE, message: 'refused file:///a.one' });
+      expect(isConflictError(refused) && refused.actualVersion).toBe(3);
       expect(dirtyUris(client)).toEqual(['file:///a.one', 'file:///b.two']);
    });
 

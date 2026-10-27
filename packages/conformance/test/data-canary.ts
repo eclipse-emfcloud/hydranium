@@ -45,10 +45,12 @@ import {
    isModelVersion,
    isSyntheticSource,
    ReservedClientIdError,
+   reviveProtocolError,
    SessionClosedError,
    TransferDocument,
    UNKNOWN_CLIENT_ID
 } from '@hydranium/protocol';
+import { ResponseError } from 'vscode-jsonrpc';
 import type {
    CloseModelArgs,
    OpenModelArgs,
@@ -189,6 +191,8 @@ export interface CanaryDefects {
     * overwrites a concurrent text edit with nothing logged.
     */
    readonly ungatedWrites?: boolean;
+   /** Every refusal carries its code but not the data its guard reads, as a head that builds a bare `ResponseError` sends it. */
+   readonly refusalsWithoutData?: boolean;
    /**
     * A synthetic source whose URI names no file answers `[]` instead of the
     * project's candidates — the create-dialog defect: a head that routes only
@@ -395,10 +399,10 @@ export class CanaryDataServer {
 
    async createSession(args: CreateSessionArgs): Promise<void> {
       if (FRAMEWORK_CLIENT_IDS.includes(args.clientId) && !this.defects.reservedIdsAccepted) {
-         throw new ReservedClientIdError(args.clientId);
+         throw this.refusal(new ReservedClientIdError(args.clientId));
       }
       if ((this.sessions.has(args.clientId) && !this.defects.sessionIdsReused) || this.keptIds.has(args.clientId)) {
-         throw new DuplicateClientIdError(args.clientId);
+         throw this.refusal(new DuplicateClientIdError(args.clientId));
       }
       const inherited = this.orphanedOpens.get(args.clientId);
       this.orphanedOpens.delete(args.clientId);
@@ -489,12 +493,17 @@ export class CanaryDataServer {
          opens.add(uri);
          return;
       }
-      throw new DocumentNotOpenError(uri, clientId);
+      throw this.refusal(new DocumentNotOpenError(uri, clientId));
+   }
+
+   private refusal(error: ResponseError<unknown>): unknown {
+      // Revived as the driver's proxy does, which finds no data to revive by.
+      return this.defects.refusalsWithoutData ? reviveProtocolError(new ResponseError(error.code, error.message)) : error;
    }
 
    private assertPlainClientAllowed(clientId: string): void {
       if (!this.defects.plainClientWrites) {
-         throw new SessionClosedError(clientId);
+         throw this.refusal(new SessionClosedError(clientId));
       }
    }
 
@@ -504,7 +513,7 @@ export class CanaryDataServer {
       if (!this.defects.ungatedWrites && isModelVersion(baseVersion)) {
          const current = this.documents.get(uri)?.version ?? 0;
          if (current !== baseVersion) {
-            throw new ConflictError(uri, baseVersion, current);
+            throw this.refusal(new ConflictError(uri, baseVersion, current));
          }
       }
    }
