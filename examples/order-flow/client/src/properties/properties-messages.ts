@@ -23,10 +23,11 @@
  * either side would silently shadow the other's catalogue entry.
  *
  * **Declared here rather than per host, because the panel is one surface.** The
- * Theia widget and the VS Code webview mount the same `PropertiesForm` over the
- * same `OrderFlowPropertiesModel` and differ only in how they reach the data
- * head, so a failure has to read identically in both. A code per host would make
- * a translator maintain two entries for one sentence and let them drift.
+ * Theia widget, the VS Code webview and the browser page mount the same
+ * `PropertiesForm` over the same `PropertiesDocuments` and differ only in how
+ * they reach the data head, so a failure has to read identically in each. A
+ * code per host would make a translator maintain an entry per host for one
+ * sentence and let them drift.
  *
  * **Complete sentences with the detail interpolated**, matching what the
  * framework's own messages carry. A bare fragment has to be nested in a sentence
@@ -52,14 +53,9 @@ export const PROPERTIES_OPEN_FAILED = defineMessage(
    'Order Flow properties: could not open {uri}. {detail}'
 );
 
-export const PROPERTIES_CLOSE_FAILED = defineMessage(
-   'order-flow/properties/close-failed',
-   'Order Flow properties: could not close the previous document. {detail}'
-);
-
 export const PROPERTIES_WRITE_FAILED = defineMessage(
    'order-flow/properties/write-failed',
-   "Order Flow properties: could not save '{field}'. {detail}"
+   "Order Flow properties: could not save '{field}' of {uri}. {detail}"
 );
 
 export const PROPERTIES_NO_DOCUMENT = defineMessage('order-flow/properties/no-document', 'No Order Flow document selected');
@@ -96,5 +92,16 @@ export const PROPERTIES_WRITE_CONFLICT = defineMessage(
 
 export const PROPERTIES_WRITE_UNAVAILABLE = defineMessage(
    'order-flow/properties/write-unavailable',
-   'Not saved — the document could not be re-read to resolve a conflict.'
+   'Not saved — the document was no longer open when the change was to be written.'
+);
+
+/** An edit of the previous document that lost, reported through the error sink, since the panel shows the next one. */
+export const PROPERTIES_PREVIOUS_WRITE_CONFLICT = defineMessage(
+   'order-flow/properties/previous-write-conflict',
+   "Order Flow properties: '{field}' of {uri} was not saved. Someone else changed it first."
+);
+
+export const PROPERTIES_PREVIOUS_WRITE_UNAVAILABLE = defineMessage(
+   'order-flow/properties/previous-write-unavailable',
+   "Order Flow properties: '{field}' of {uri} was not saved. The document was no longer open when the change was to be written."
 );

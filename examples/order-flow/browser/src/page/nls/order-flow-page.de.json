@@ -50,9 +50,10 @@
   "order-flow/properties/disconnected": "Die Verbindung zum Datenserver wurde geschlossen. Öffnen Sie den Bereich erneut, um sich wieder zu verbinden.",
   "order-flow/properties/write-merged": "Gespeichert. Jemand anderes hatte ein anderes Feld bearbeitet; beide Änderungen wurden übernommen.",
   "order-flow/properties/write-conflict": "Nicht gespeichert — jemand anderes hat dieses Feld zuerst geändert. Angezeigt wird dessen Wert.",
-  "order-flow/properties/write-unavailable": "Nicht gespeichert — das Dokument konnte nicht erneut gelesen werden, um den Konflikt aufzulösen.",
+  "order-flow/properties/write-unavailable": "Nicht gespeichert — das Dokument war nicht mehr geöffnet, als die Änderung geschrieben werden sollte.",
+  "order-flow/properties/previous-write-conflict": "Order-Flow-Eigenschaften: '{field}' von {uri} wurde nicht gespeichert. Jemand anderes hat es zuerst geändert.",
+  "order-flow/properties/previous-write-unavailable": "Order-Flow-Eigenschaften: '{field}' von {uri} wurde nicht gespeichert. Das Dokument war nicht mehr geöffnet, als die Änderung geschrieben werden sollte.",
   "order-flow/properties/open-failed": "Order-Flow-Eigenschaften: {uri} konnte nicht geöffnet werden. {detail}",
-  "order-flow/properties/close-failed": "Order-Flow-Eigenschaften: Das vorherige Dokument konnte nicht geschlossen werden. {detail}",
-  "order-flow/properties/write-failed": "Order-Flow-Eigenschaften: '{field}' konnte nicht gespeichert werden. {detail}",
+  "order-flow/properties/write-failed": "Order-Flow-Eigenschaften: '{field}' von {uri} konnte nicht gespeichert werden. {detail}",
   "hydranium/protocol/session-closed": "Die Bearbeitungssitzung ist beendet."
 }

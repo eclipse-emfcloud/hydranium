@@ -7,11 +7,16 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { ResolvedMessage } from '@hydranium/protocol';
+import { Deferred, type ResolvedMessage } from '@hydranium/protocol';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { SetFieldOutcome } from '../src/data/order-flow-properties-model';
 import { PropertiesForm } from '../src/properties/properties-form';
-import { PROPERTIES_UNSAVED, PROPERTIES_WRITE_FAILED } from '../src/properties/properties-messages';
+import {
+   PROPERTIES_PREVIOUS_WRITE_CONFLICT,
+   PROPERTIES_PREVIOUS_WRITE_UNAVAILABLE,
+   PROPERTIES_UNSAVED,
+   PROPERTIES_WRITE_FAILED
+} from '../src/properties/properties-messages';
 
 /**
  * The form's failure path, driven without a DOM.
@@ -131,6 +136,15 @@ class TestableForm extends PropertiesForm {
       return this.heading as unknown as StubElement;
    }
 
+   problemsShown(): number {
+      return (this.diagnosticsHost as unknown as StubElement).children.length;
+   }
+
+   /** What the field host holds: an entry per field, or the line for none. */
+   fieldsShown(): number {
+      return (this.fieldsHost as unknown as StubElement).children.length;
+   }
+
    /** The wrapper drawn for `name`, so a test can read what was marked on it. */
    fieldOf(name: string): StubElement {
       const input = this.inputs.get(name) as unknown as StubElement | undefined;
@@ -197,6 +211,153 @@ describe('PropertiesForm unsaved note', () => {
    });
 });
 
+describe('PropertiesForm document switch', () => {
+   it('clears the unsaved mark when it begins the next document', () => {
+      const { form } = makeForm(() => Promise.resolve({ status: 'applied' } as SetFieldOutcome));
+      form.setDirty(true);
+
+      form.switchDocument();
+
+      expect(form.headingOf().attributes['data-dirty']).toBeUndefined();
+      expect(form.unsaved().textContent).toBe('');
+   });
+
+   it.each([
+      [
+         'conflicts',
+         () => Promise.resolve({ status: 'conflict' } as SetFieldOutcome),
+         PROPERTIES_PREVIOUS_WRITE_CONFLICT.code,
+         undefined,
+         { field: 'customerName', uri: 'file:///before.process' }
+      ],
+      [
+         'is unavailable',
+         () => Promise.resolve({ status: 'unavailable' } as SetFieldOutcome),
+         PROPERTIES_PREVIOUS_WRITE_UNAVAILABLE.code,
+         undefined,
+         { field: 'customerName', uri: 'file:///before.process' }
+      ],
+      [
+         'fails',
+         () => Promise.reject(new Error('refused')),
+         PROPERTIES_WRITE_FAILED.code,
+         expect.any(Error),
+         { field: 'customerName', uri: 'file:///before.process' }
+      ]
+   ])(
+      'reports through the error sink, not the status line, a write of the document before that %s after the switch',
+      async (_ending, settle, code, error, params) => {
+         const answered = new Deferred<void>();
+         const { form, reported } = makeForm(() => answered.promise.then(settle));
+         form.switchDocument('file:///before.process');
+         const writing = form.write('customerName', 'Ada');
+
+         form.switchDocument('file:///next.process');
+         form.report('loading');
+         answered.resolve();
+         await writing;
+
+         expect(form.statusLine()).toBe('loading');
+         expect(reported.map(entry => entry.reported.code)).toEqual([code]);
+         expect(reported[0].reported.params).toMatchObject(params);
+         expect(reported[0].error).toEqual(error);
+      }
+   );
+
+   it.each(['applied', 'merged', 'unchanged'] as const)(
+      'reports nothing of a write of the document before that is %s after the switch',
+      async status => {
+         const answered = new Deferred<void>();
+         const { form, reported } = makeForm(() => answered.promise.then(() => ({ status }) as SetFieldOutcome));
+         const writing = form.write('customerName', 'Ada');
+
+         form.switchDocument();
+         answered.resolve();
+         await writing;
+
+         expect(reported).toEqual([]);
+      }
+   );
+
+   it('clears the fields of the document before when it switches to none while the next one loads', () => {
+      const { form } = makeForm(() => Promise.resolve({ status: 'applied' } as SetFieldOutcome));
+      form.setFields([{ name: 'customerName', value: 'Ada' }]);
+      form.switchDocument();
+      form.setLoading(true);
+
+      form.switchDocument();
+      form.setFields([]);
+
+      expect(() => form.fieldOf('customerName')).toThrow();
+      // The line for no fields, which a load still under way would hold back.
+      expect(form.fieldsShown()).toBe(1);
+   });
+
+   it('clears the fields of the document before as soon as it switches', () => {
+      const { form } = makeForm(() => Promise.resolve({ status: 'applied' } as SetFieldOutcome));
+      form.setFields([{ name: 'customerName', value: 'Ada' }]);
+
+      form.switchDocument();
+
+      expect(() => form.fieldOf('customerName')).toThrow();
+      expect(form.fieldsShown()).toBe(0);
+   });
+
+   it('clears the problems of the document before as soon as it switches', () => {
+      const { form } = makeForm(() => Promise.resolve({ status: 'applied' } as SetFieldOutcome));
+      form.setDiagnostics([{ type: 'validation-error', element: '', message: 'broken', severity: 'error' }]);
+
+      form.switchDocument();
+
+      expect(form.problemsShown()).toBe(0);
+   });
+
+   it('clears the loading line of the document before when it switches to none', () => {
+      const { form } = makeForm(() => Promise.resolve({ status: 'applied' } as SetFieldOutcome));
+      form.switchDocument();
+      form.setLoading(true);
+      form.report('loading');
+
+      form.switchDocument();
+
+      expect(form.statusLine()).toBe('');
+   });
+
+   it('writes nothing to the next document of an edit typed in the one before', () => {
+      const written: string[] = [];
+      const { form } = makeForm((name, value) => {
+         written.push(`${name}=${value}`);
+         return Promise.resolve({ status: 'applied' } as SetFieldOutcome);
+      });
+      form.setFields([{ name: 'customerName', value: 'Ada' }]);
+      const input = form.inputOf('customerName');
+      documentStub.activeElement = input;
+      input.value = 'Grace';
+      input.emit('input');
+
+      form.switchDocument();
+      form.setFields([{ name: 'customerName', value: 'Linus' }]);
+      input.emit('change');
+      documentStub.activeElement = null;
+
+      expect(written).toEqual([]);
+      expect(form.inputOf('customerName').value).toBe('Linus');
+   });
+
+   it('reports the outcome of a write that answers while the same document loads again', async () => {
+      const answered = new Deferred<void>();
+      const { form } = makeForm(() => answered.promise.then(() => ({ status: 'conflict' }) as SetFieldOutcome));
+      const writing = form.write('customerName', 'Ada');
+
+      form.setLoading(true);
+      form.report('loading');
+      answered.resolve();
+      await writing;
+
+      expect(form.statusLine()).not.toBe('loading');
+   });
+});
+
 describe('PropertiesForm.write failures', () => {
    let failure: Error;
 
@@ -216,15 +377,17 @@ describe('PropertiesForm.write failures', () => {
       expect(reported[0].reported.code).toBe(PROPERTIES_WRITE_FAILED.code);
    });
 
-   it('carries the field name and the cause as params, which is what a translating host renders from', () => {
+   it('carries the field name, the document and the cause as params, which is what a translating host renders from', () => {
       // A host with a catalogue renders from `params`, not from `text`, so a
       // message that arrived with `detail` dropped would read fine in English and
       // lose the cause in every other language.
       const { form, reported } = makeForm(() => Promise.reject(failure));
+      form.switchDocument('file:///a.process');
 
       return form.write('customerName', 'Ada').then(() => {
          expect(reported[0].reported.params).toEqual({
             field: 'customerName',
+            uri: 'file:///a.process',
             detail: 'the data server went away'
          });
       });

@@ -146,7 +146,7 @@ describe('order-flow data head over a structured-clone hop', () => {
       connection = new DataConnection<OrderFlowTransferRoot>(port, events);
       const dataSession = connection.createSession('order-flow-transport-test');
       session = dataSession;
-      model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(dataSession, events);
+      model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(dataSession, events, uriOf(FULFILLMENT_PROCESS));
    });
 
    afterEach(() => {
@@ -177,8 +177,7 @@ describe('order-flow data head over a structured-clone hop', () => {
    });
 
    it('carries nothing that structured clone would reject', async () => {
-      const uri = uriOf(FULFILLMENT_PROCESS);
-      await model!.open(uri);
+      await model!.open();
       await model!.setField('name', 'Fulfilment');
 
       // `post` already clones every message, so arriving here at all means no
@@ -193,7 +192,7 @@ describe('order-flow data head over a structured-clone hop', () => {
 
    it('opens, follows and writes a document across the hop', async () => {
       const uri = uriOf(FULFILLMENT_PROCESS);
-      await model!.open(uri);
+      await model!.open();
 
       expect(model!.fields).toEqual([
          { name: 'name', value: 'Fulfillment' },
@@ -212,7 +211,7 @@ describe('order-flow data head over a structured-clone hop', () => {
       // the server pushes unprompted, so the reverse framing is exercised by
       // nothing else in this suite.
       const uri = uriOf(FULFILLMENT_PROCESS);
-      await model!.open(uri);
+      await model!.open();
 
       const foreign = (await currentRoot(uri)) as ProcessModel;
       const server = await session!.connected();
@@ -228,9 +227,9 @@ describe('order-flow data head over a structured-clone hop', () => {
       // refetched root in, a merged root out again — so if anything in the
       // reconcile path did not survive cloning, it surfaces here.
       const uri = uriOf(FULFILLMENT_PROCESS);
-      const pinned = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session!, new DataEvents<OrderFlowTransferRoot>());
+      const pinned = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session!, new DataEvents<OrderFlowTransferRoot>(), uri);
       try {
-         await pinned.open(uri);
+         await pinned.open();
 
          const foreign = (await currentRoot(uri)) as ProcessModel;
          const server = await session!.connected();

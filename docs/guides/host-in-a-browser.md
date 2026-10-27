@@ -180,9 +180,8 @@ const fileSystem = persistentFileSystem({
    `--hosts browser`. A page that writes through a data session guards on its
    `hasWritesInFlight` the same way. A field edit that writes more than once,
    as one rereading after a conflict does, counts itself from the first write
-   to the last, since the session counts each write alone; the order-flow
-   example's properties model does, in
-   `examples/order-flow/client/src/data/order-flow-properties-model.ts`.
+   to the last, since the session counts each write alone. A `WorkingCopy`
+   from `@hydranium/protocol` does, and has a `hasWritesInFlight` of its own.
 
 7. **Show the server's log.** The server logs every head over LSP
    `window/logMessage`, and a page with no handler loses all of it. Pass the

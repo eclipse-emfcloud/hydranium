@@ -18,11 +18,10 @@ order-flow-theia / order-flow-vscode / order-flow-browser   thin shells
 ```
 
 Three shells mount this package — `order-flow-theia`, `order-flow-vscode` and
-`order-flow-browser` — which is the claim the split exists to make. Theia and
-VS Code mount both halves, the diagram definition and the properties form,
-verbatim; the browser shell mounts the diagram half — the module and the
-stylesheet — which is what shows the definition surviving a host with no
-extension model and no widget framework under it.
+`order-flow-browser` — which is the claim the split exists to make. Each
+mounts both halves, the diagram definition and the properties form, verbatim.
+The browser shell is what shows them surviving a host with no extension model
+and no widget framework under it.
 
 The two heads reach their transport differently, and only one of them needs a
 port. The **diagram** binds nothing transport-related: a GLSP diagram's
@@ -56,14 +55,14 @@ look Theia-only.
   canvas.
 - [`src/data/order-flow-properties-model.ts`](src/data/order-flow-properties-model.ts)
   — `OrderFlowPropertiesModel`, a document-scoped properties panel minus the
-  drawing. It belongs here rather than in the framework because it carries a
-  **policy**: which fields are editable.
+  drawing. It is the framework's `WorkingCopy` plus a **policy**, which fields
+  are editable, and the policy is why it lives here.
 - [`src/properties/properties-form.ts`](src/properties/properties-form.ts) —
   `PropertiesForm`, the drawing half: plain DOM over the model's `fields`,
-  mounted unchanged by the Theia widget and the VS Code webview alike. It is
-  the only file here that touches the DOM. A write goes out on `change` —
-  Enter or leaving the field — rather than per keystroke, because each write
-  sends the whole document root (see
+  mounted unchanged by the Theia widget, the VS Code webview and the browser
+  panel alike. It is the only file here that touches the DOM. A write goes out
+  on `change` — Enter or leaving the field — rather than per keystroke,
+  because each write sends the whole document root (see
   [The properties model](#the-properties-model)). Until it goes, the field
   carries `data-pending` and reveals its `.field-hint`; each host styles those
   two, and a host that styles neither still gets a hidden hint rather than a
@@ -71,8 +70,13 @@ look Theia-only.
   last WROTE into it, not from the model** — `setFields` refuses to overwrite a
   focused input, so comparing against the model would mark a field that someone
   else changed and the reader never touched.
+- [`src/properties/properties-documents.ts`](src/properties/properties-documents.ts)
+  — `PropertiesDocuments`, which document the panel shows: one model per
+  document, the one before closed and disposed, and a document still closing
+  opened only once that close has settled. All three hosts switch documents
+  through it.
 - [`src/properties/properties-messages.ts`](src/properties/properties-messages.ts)
-  — the panel's own user-facing messages, declared once for both hosts with
+  — the panel's own user-facing messages, declared once for all three hosts with
   `defineMessage`. The codes are `order-flow/<area>/<name>`, because
   `hydranium/` is reserved for the framework. A failure is resolved where it is
   raised and handed to the host, which owns the surface it lands on. A label
@@ -100,7 +104,9 @@ across a webview hop.
 `OrderFlowPropertiesModel` is a properties panel with the drawing removed: it
 loads a document, presents its editable top-level fields, writes one back, and
 follows the document as it changes. A host renders `fields` and calls
-`setField`; it supplies no policy.
+`setField`, and supplies no policy. It is a `WorkingCopy` from
+`@hydranium/protocol`, so an edit goes out at once, and the edits made while a
+write is out go out after it as one write.
 
 <!-- snippet-preamble
 import { DataConnectionWithEvents, type DataPort } from '@hydranium/protocol';
@@ -118,9 +124,9 @@ type OrderFlowTransferRoot = DomainModel | LayoutModel | ProcessModel;
 
 const connection = new DataConnectionWithEvents<OrderFlowTransferRoot>(port);
 const session = connection.createSession('order-flow-properties');
-const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, connection.events);
+const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, connection.events, uri);
 
-await model.open(uri);
+await model.open();
 model.onDidChange(() => render(model.fields));
 const outcome = await model.setField('name', 'Fulfilment');
 ```
@@ -148,9 +154,13 @@ returns a status rather than `void`:
 | --- | --- |
 | `applied` | Landed against an unchanged document. |
 | `merged` | Raced foreign edits to *different* fields; both intents survive. |
-| `conflict` | Raced a foreign edit of the *same* field to a different value, or kept racing foreign edits; the write was dropped and the panel now shows the server's value. |
+| `conflict` | Raced a foreign edit of the *same* field to a different value, and was dropped while the other edits of its write still landed. Or kept racing foreign edits, and the whole write was dropped. Or set a field an earlier edit lost that way, a revert to the value before it included. A server that rewrites the panel's own write, as one that trims a name, also yields it for an edit of that field made while the write was out, with no other client involved. The panel then shows the server's value, unless reading it failed. |
 | `unchanged` | Nothing was written: the panel's value already matched, or the server turned out to hold it. |
-| `unavailable` | The document could not be refetched to reconcile against. |
+| `unavailable` | Nothing was written: the document was closed or deleted, a restore could not open it again, or its open's second read failed, before a write carried the edit. |
+
+The panel reports a `conflict` or an `unavailable` of a document it no longer
+shows through its error sink, naming the field and the document, since its
+status line belongs to the next one.
 
 ## The contract with the server
 
