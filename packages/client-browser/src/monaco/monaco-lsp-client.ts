@@ -73,6 +73,7 @@ import {
    type ServerCapabilities,
    SnippetTextEdit,
    type TextDocumentContentChangeEvent,
+   TextDocumentContentRefreshRequest,
    TextDocumentContentRequest,
    TextDocumentEdit,
    type TextEdit,
@@ -91,10 +92,24 @@ export interface MonacoLspClientOptions {
    readonly languages: readonly monaco.languages.ILanguageExtensionPoint[];
    /** The owner of the markers this client sets, which a host reads them back by; {@link DEFAULT_MARKER_OWNER} by default. */
    readonly markerOwner?: string;
+   /**
+    * The capabilities the host declared in `initialize`, none by default. The client opens a content document only
+    * when they declare `workspace.textDocumentContent`, since a server refreshes its text only for a client that does.
+    */
+   readonly clientCapabilities?: ClientCapabilities;
 }
 
 /** The marker owner a client sets diagnostics under when its options name none. */
 export const DEFAULT_MARKER_OWNER = 'lsp';
+
+// The read-only guard's state is shared by every client, so two clients
+// watching one editor agree.
+/** The content models of every client. */
+const contentModelsOfAnyClient = new WeakSet<monaco.editor.ITextModel>();
+/** Per editor showing a content model, its host's own `readOnly` setting. */
+const hostReadOnly = new WeakMap<monaco.editor.ICodeEditor, boolean>();
+/** The editors whose `updateOptions` records the host's `readOnly` setting. */
+const recordingEditors = new WeakSet<monaco.editor.ICodeEditor>();
 
 /**
  * The client capabilities for a host whose editor is a {@link MonacoLspClient},
@@ -104,7 +119,7 @@ export const DEFAULT_MARKER_OWNER = 'lsp';
  * server holds, which {@link MonacoLspClient.requestDocumentContent} asks
  * for. Multi-line semantic tokens stay undeclared, since Monaco cannot render
  * one, and Langium then splits them per line. Frozen: a host that declares
- * more spreads it.
+ * more spreads it. Pass the same value as the client's `clientCapabilities`.
  */
 export const MONACO_CLIENT_CAPABILITIES: ClientCapabilities = deepFreeze({
    workspace: { applyEdit: true, configuration: true, workspaceEdit: { documentChanges: true }, textDocumentContent: {} },
@@ -638,21 +653,50 @@ const LSP_EDITOR_OPTIONS: monaco.editor.IStandaloneEditorConstructionOptions = {
  * Registers the server's languages with Monaco and keeps its models in step
  * with the LSP head on the other end of `connection`.
  *
- * Construction registers the languages, the providers and the inbound
- * `workspace/applyEdit` handler; {@link openDocument} opens one document and
- * {@link closeDocument} closes it; {@link dispose} closes every document and
+ * Construction registers the languages, the providers, the inbound
+ * `workspace/applyEdit` handler and, for a server with content documents, the
+ * content refresh handler and a watch on every editor that keeps one showing a
+ * content model read-only. {@link openDocument} opens one document and
+ * {@link closeDocument} closes it. {@link dispose} closes every document and
  * releases every registration. Diagnostics are NOT subscribed here — see
  * {@link applyDiagnostics}.
  */
 export class MonacoLspClient {
    /**
     * The models this client opened, by URI in Monaco's form. Every inbound
-    * edit, diagnostic and dirty read goes through this map rather than
-    * Monaco's global lookup: a page may hold a second client, and a model
-    * that client holds is not this one's to write, mark or save, however
-    * its URI reads.
+    * edit, diagnostic and dirty read goes through this map, or for a content
+    * document through {@link contentModels} and {@link contentDiagnostics},
+    * rather than Monaco's global lookup: a page may hold a second client, and
+    * a model that client holds is not this one's to write, mark or save,
+    * however its URI reads.
     */
    protected readonly models = new Map<string, monaco.editor.ITextModel>();
+   /**
+    * The models {@link openContentDocument} created, by URI in Monaco's form,
+    * each with the text the server last sent for it. The server owns their text.
+    * `requested` numbers each refresh's request and `applied` is the newest
+    * one whose answer the model holds, so an older answer that arrives later
+    * is dropped. `refreshing` counts the requests not yet settled.
+    */
+   protected readonly contentModels = new Map<
+      string,
+      { readonly model: monaco.editor.ITextModel; text: string; requested: number; applied: number; refreshing: number }
+   >();
+   /**
+    * Per URI on a content scheme, the diagnostics it last published,
+    * for a model created later. A model's disposal records the server's text
+    * they were for, so a reopen on changed text drops them. A disposal while a
+    * refresh is under way records none, since they may be for the newer text.
+    * An empty publish drops the entry, so it holds at most the documents the
+    * server reports problems on.
+    */
+   protected readonly contentDiagnostics = new Map<string, { diagnostics: PublishDiagnosticsParams['diagnostics']; text?: string }>();
+   /** Per URI, the {@link openContentDocument} waiting for the server, which {@link closeDocument} drops. */
+   protected readonly pendingContentOpens = new Map<string, Promise<monaco.editor.ITextModel | undefined>>();
+   /** Per editor, the subscriptions {@link watchEditor} made, released by {@link dispose}. */
+   protected readonly watchedEditors = new Map<monaco.editor.ICodeEditor, monaco.IDisposable>();
+   /** Set by {@link dispose}, so an {@link openContentDocument} answered after it creates no model. */
+   protected disposed = false;
    /** Per URI, the buffer version last known to be persisted. */
    protected readonly savedVersions = new Map<string, number>();
    /** Everything construction and {@link registerEditorOpener} registered, released in reverse by {@link dispose}. */
@@ -666,7 +710,7 @@ export class MonacoLspClient {
    protected readonly connection: MessageConnection;
    /** Whether the server answers {@link SaveTextDocumentRequest}: only one whose host leaves it the files does. */
    protected readonly saveAdvertised: boolean;
-   /** The URI schemes whose text the server serves through {@link requestDocumentContent}. */
+   /** The URI schemes whose text the server holds and the host declared it reads, through {@link requestDocumentContent}. */
    protected readonly contentSchemes: ReadonlySet<string>;
    /** Counts the {@link save} calls that sent a request, so their answers can be ordered. */
    protected saveCount = 0;
@@ -681,10 +725,13 @@ export class MonacoLspClient {
       this.connection = sendByMethodName(connection);
       this.markerOwner = options.markerOwner ?? DEFAULT_MARKER_OWNER;
       this.saveAdvertised = capabilities.experimental?.[SaveTextDocumentRequest.method] === true;
-      this.contentSchemes = new Set(capabilities.workspace?.textDocumentContent?.schemes);
-      // First: it is the one registration on the connection, which throws once
-      // closed, and a constructor that throws leaves nothing to dispose.
+      const declared = options.clientCapabilities?.workspace?.textDocumentContent !== undefined;
+      this.contentSchemes = new Set(declared ? capabilities.workspace?.textDocumentContent?.schemes : []);
+      // First: a registration on the connection throws once it is closed, and
+      // the first one throws before anything is registered, so a constructor
+      // that throws leaves nothing to dispose.
       this.registerApplyEdit();
+      this.registerContentRefresh();
       for (const language of options.languages) {
          monaco.languages.register(language);
       }
@@ -693,6 +740,7 @@ export class MonacoLspClient {
       this.registerHover();
       this.registerDefinition();
       this.registerDocumentHighlight();
+      this.guardContentModels();
    }
 
    /**
@@ -729,9 +777,24 @@ export class MonacoLspClient {
     * A URI with no model of this client's is not an error: a workspace has more
     * documents than the host opens, so most publishes address a file Monaco
     * has never heard of, and a model another client holds is that client's.
+    * A publication for a content document is kept until
+    * {@link openContentDocument} creates its model.
     */
    applyDiagnostics(params: PublishDiagnosticsParams): void {
-      const model = this.modelOf(params.uri);
+      // A host's connection may outlive the client, which must keep nothing.
+      if (this.disposed) {
+         return;
+      }
+      const target = monaco.Uri.parse(params.uri);
+      const key = target.toString();
+      if (this.contentSchemes.has(target.scheme)) {
+         if (params.diagnostics.length > 0) {
+            this.contentDiagnostics.set(key, { diagnostics: params.diagnostics });
+         } else {
+            this.contentDiagnostics.delete(key);
+         }
+      }
+      const model = this.modelOf(key) ?? this.contentModels.get(key)?.model;
       if (model === undefined) {
          return;
       }
@@ -793,6 +856,61 @@ export class MonacoLspClient {
             this.applyWorkspaceEdit(params.edit)
          )
       );
+   }
+
+   /**
+    * Answer `workspace/textDocumentContent/refresh`, which the server sends
+    * once a content document's text has changed, with {@link refreshContentDocument}.
+    * Registered only for a server that holds content documents, since a second
+    * registration for the method replaces the host's.
+    */
+   protected registerContentRefresh(): void {
+      if (this.contentSchemes.size === 0) {
+         return;
+      }
+      this.registrations.push(
+         this.connection.onRequest(TextDocumentContentRefreshRequest.type, params => this.refreshContentDocument(params.uri))
+      );
+   }
+
+   /**
+    * Request the text of the content document at `uri` again and put it in
+    * its model, once an {@link openContentDocument} still waiting has settled.
+    * A document with no model, one closed meanwhile, or one whose text has
+    * not changed is left alone, since `setValue` resets an editor's cursor
+    * and undo. An answer older than one the model already took is dropped.
+    * A document the server no longer holds is closed, as {@link closeDocument}
+    * closes it.
+    */
+   protected async refreshContentDocument(uri: string): Promise<void> {
+      const key = monaco.Uri.parse(uri).toString();
+      await this.pendingContentOpens.get(key)?.catch(() => undefined);
+      const entry = this.contentModels.get(key);
+      if (entry === undefined) {
+         return;
+      }
+      const request = ++entry.requested;
+      entry.refreshing++;
+      let text: string | null | undefined;
+      try {
+         text = await this.requestDocumentContent(key);
+      } finally {
+         entry.refreshing--;
+      }
+      if (text === undefined || request < entry.applied || this.contentModels.get(key) !== entry) {
+         return;
+      }
+      entry.applied = request;
+      if (text === null) {
+         this.closeDocument(key);
+         return;
+      }
+      if (text !== entry.text) {
+         entry.text = text;
+         entry.model.setValue(text);
+         // Monaco drops a model's decorations on a whole-text set, squiggles included, and draws markers anew only when they change.
+         monaco.editor.setModelMarkers(entry.model, this.markerOwner, this.keptDiagnosticsFor(key, text).map(toMarker));
+      }
    }
 
    /**
@@ -959,9 +1077,15 @@ export class MonacoLspClient {
     * space or a drive-letter colon, and the providers name the document by the
     * model's URI, so a `didOpen` with the host's string would open a document
     * no provider request ever addresses.
+    *
+    * Throws once the client is disposed, since no later dispose would close
+    * the model on the server.
     */
    openDocument(uri: string, text: string): monaco.editor.ITextModel {
       const key = monaco.Uri.parse(uri).toString();
+      if (this.disposed) {
+         throw new Error(`Cannot open ${key}: the client is disposed`);
+      }
       // Idempotent, and that is what makes two panes able to swap content: a
       // model is Monaco's per-URI singleton, so a second `createModel` for the
       // same URI THROWS — and re-announcing `didOpen` would push the host's
@@ -970,7 +1094,11 @@ export class MonacoLspClient {
       if (held !== undefined) {
          return held;
       }
-      if (monaco.editor.getModel(monaco.Uri.parse(key)) !== null) {
+      const existing = monaco.editor.getModel(monaco.Uri.parse(key));
+      if (existing !== null && existing === this.contentModels.get(key)?.model) {
+         throw new Error(`${key} is open in this client as a content document`);
+      }
+      if (existing !== null) {
          throw new Error(`A model for ${key} exists that this client did not open`);
       }
       const languageId = this.languageIdFor(key);
@@ -1019,10 +1147,14 @@ export class MonacoLspClient {
     * this client never opened, or whose model the host disposed itself, is
     * left alone: the close is the model's disposal, as {@link openDocument}
     * wires it. An editor still showing the model is the host's to re-point
-    * first: Monaco detaches a disposed model from it.
+    * first: Monaco detaches a disposed model from it. An
+    * {@link openContentDocument} still waiting for the server opens nothing.
     */
    closeDocument(uri: string): void {
-      this.models.get(monaco.Uri.parse(uri).toString())?.dispose();
+      const key = monaco.Uri.parse(uri).toString();
+      this.pendingContentOpens.delete(key);
+      this.contentModels.get(key)?.model.dispose();
+      this.models.get(key)?.dispose();
    }
 
    /**
@@ -1032,10 +1164,12 @@ export class MonacoLspClient {
     * The languages stay registered, since Monaco cannot unregister one.
     */
    dispose(): void {
+      this.disposed = true;
       try {
-         for (const uri of [...this.models.keys()]) {
+         for (const uri of [...this.models.keys(), ...this.contentModels.keys()]) {
             this.closeDocument(uri);
          }
+         this.contentDiagnostics.clear();
       } finally {
          for (const registration of this.registrations.splice(0).reverse()) {
             registration.dispose();
@@ -1190,13 +1324,14 @@ export class MonacoLspClient {
    }
 
    /**
-    * Whether `model` is one this client opened. Monaco picks a provider by
-    * language id, so a second client of the same language is handed this
-    * client's models and this client the other's; a request for one of those
-    * would name a document this client's server never opened.
+    * Whether `model` is one this client opened or a content model it keeps. Monaco
+    * picks a provider by language id, so a second client of the same language
+    * is handed this client's models and this client the other's. A request for
+    * one of those would name a document this client's server never saw.
     */
    protected owns(model: monaco.editor.ITextModel): boolean {
-      return this.models.get(model.uri.toString()) === model;
+      const key = model.uri.toString();
+      return this.models.get(key) === model || this.contentModels.get(key)?.model === model;
    }
 
    /**
@@ -1354,8 +1489,10 @@ export class MonacoLspClient {
     *
     * `false` from `open` leaves the reader where they are, and that is the
     * honest answer for a target the host holds no text for rather than a
-    * failure. A `virtual:` in-code contribution has no file, and
-    * {@link requestDocumentContent} asks the server for its text.
+    * failure. A throw or rejection from `open` is logged and counts as
+    * `false`, since Monaco would skip the openers after it. A `virtual:`
+    * in-code contribution has no file, and {@link openContentDocument} opens
+    * it on the text the server holds.
     *
     * **A source editor on a model this client does not own is left to the next
     * opener.** Monaco calls every opener for every editor, so on a page with
@@ -1377,7 +1514,17 @@ export class MonacoLspClient {
             if (model === null || !this.owns(model) || model.uri.toString() === resource.toString()) {
                return false;
             }
-            return open(resource.toString(), toEditorPosition(selectionOrPosition));
+            const target = resource.toString();
+            const failed = (error: unknown): boolean => {
+               console.error(`Could not open ${target}`, error);
+               return false;
+            };
+            try {
+               const opened = open(target, toEditorPosition(selectionOrPosition));
+               return typeof opened === 'boolean' ? opened : opened.catch(failed);
+            } catch (error: unknown) {
+               return failed(error);
+            }
          }
       });
       this.registrations.push(registration);
@@ -1385,18 +1532,186 @@ export class MonacoLspClient {
    }
 
    /**
-    * The text the server holds for `uri`, or `undefined` when it serves none
-    * for the URI's scheme. Show it in a read-only model rather than through
-    * {@link openDocument}: the server owns the text, and `didOpen` would make
-    * the reader's buffer its copy. Rejects when the request fails.
+    * The text the server holds for `uri`, `null` when it holds no document
+    * there, or `undefined` when it has none for the URI's scheme, the client
+    * is disposed, or the request was given up, as when the connection closes.
+    * {@link openContentDocument} puts it in a model. Rejects when the request
+    * fails otherwise.
     */
-   async requestDocumentContent(uri: string): Promise<string | undefined> {
+   async requestDocumentContent(uri: string): Promise<string | null | undefined> {
       const target = monaco.Uri.parse(uri);
-      if (!this.contentSchemes.has(target.scheme)) {
+      if (this.disposed || !this.contentSchemes.has(target.scheme)) {
          return undefined;
       }
-      const content = await this.request(() => this.connection.sendRequest(TextDocumentContentRequest.type, { uri: target.toString() }));
-      return content?.text;
+      try {
+         const content = await this.connection.sendRequest(TextDocumentContentRequest.type, { uri: target.toString() });
+         return content === null ? null : content.text;
+      } catch (error: unknown) {
+         if (isAbandonedRequest(error)) {
+            return undefined;
+         }
+         throw error;
+      }
+   }
+
+   /**
+    * A model on the text the server holds for `uri`, a document on a scheme
+    * with no files behind it such as `virtual:`, or `undefined` when it has
+    * none. The providers answer for it, and a refresh from the server puts its
+    * new text in. A second call shares the first's request and returns its
+    * model. A close before the answer, a disposed client or a given-up request
+    * leaves `undefined`.
+    *
+    * An editor that shows it is read-only while it does: no `didOpen` or edit
+    * reaches the server, which owns the text. {@link closeDocument} disposes
+    * it. Rejects when the request fails, or when a model for `uri` exists that
+    * this client did not open this way.
+    */
+   openContentDocument(uri: string): Promise<monaco.editor.ITextModel | undefined> {
+      if (this.disposed) {
+         return Promise.resolve(undefined);
+      }
+      const key = monaco.Uri.parse(uri).toString();
+      const held = this.contentModels.get(key);
+      if (held !== undefined) {
+         return Promise.resolve(held.model);
+      }
+      const pending = this.pendingContentOpens.get(key);
+      if (pending !== undefined) {
+         return pending;
+      }
+      const opening: Promise<monaco.editor.ITextModel | undefined> = this.requestDocumentContent(key)
+         .then(text => (this.pendingContentOpens.get(key) === opening ? this.createContentModel(key, text ?? undefined) : undefined))
+         .finally(() => {
+            if (this.pendingContentOpens.get(key) === opening) {
+               this.pendingContentOpens.delete(key);
+            }
+         });
+      this.pendingContentOpens.set(key, opening);
+      return opening;
+   }
+
+   /**
+    * The model {@link openContentDocument} puts `text` in, showing the
+    * diagnostics kept for that text, or `undefined` when there is no text or
+    * the client is disposed. Throws when a model for `key` exists already.
+    */
+   protected createContentModel(key: string, text: string | undefined): monaco.editor.ITextModel | undefined {
+      if (text === undefined || this.disposed) {
+         return undefined;
+      }
+      const existing = monaco.editor.getModel(monaco.Uri.parse(key));
+      if (existing !== null && existing === this.models.get(key)) {
+         throw new Error(`${key} is open in this client as a document it syncs`);
+      }
+      if (existing !== null) {
+         throw new Error(`A model for ${key} exists that this client did not open`);
+      }
+      const model = monaco.editor.createModel(text, this.languageIdFor(key), monaco.Uri.parse(key));
+      const entry = { model, text, requested: 0, applied: 0, refreshing: 0 };
+      this.contentModels.set(key, entry);
+      contentModelsOfAnyClient.add(model);
+      // Closed on disposal, whoever disposes. The server never had it opened,
+      // so it hears nothing. Its diagnostics are kept for the server's text,
+      // which Monaco may hold without a BOM or with other line ends.
+      model.onWillDispose(() => {
+         this.contentModels.delete(key);
+         // Monaco keeps a disposed model's markers on a scheme not its own.
+         monaco.editor.setModelMarkers(model, this.markerOwner, []);
+         // A refresh under way may follow diagnostics for its text, not the model's.
+         const kept = this.contentDiagnostics.get(key);
+         if (kept !== undefined && entry.refreshing === 0) {
+            kept.text ??= entry.text;
+         }
+      });
+      monaco.editor.setModelMarkers(model, this.markerOwner, this.keptDiagnosticsFor(key, text).map(toMarker));
+      return model;
+   }
+
+   /** The diagnostics kept for content document `key`, unless they were recorded for a text other than `text`. */
+   protected keptDiagnosticsFor(key: string, text: string): PublishDiagnosticsParams['diagnostics'] {
+      const kept = this.contentDiagnostics.get(key);
+      return kept !== undefined && (kept.text === undefined || kept.text === text) ? kept.diagnostics : [];
+   }
+
+   /**
+    * Keep every editor that shows a content model read-only, whoever created
+    * it: a typed change would never reach the server and would drift from its
+    * text. Monaco fires `onDidCreateEditor` before an editor attaches its model.
+    */
+   protected guardContentModels(): void {
+      // A client that opens no content model leaves every editor to the clients that do.
+      if (this.contentSchemes.size === 0) {
+         return;
+      }
+      // Released after the creation listener, which is pushed later.
+      this.registrations.push({
+         dispose: () => {
+            for (const subscription of this.watchedEditors.values()) {
+               subscription.dispose();
+            }
+            this.watchedEditors.clear();
+         }
+      });
+      for (const editor of monaco.editor.getEditors()) {
+         this.watchEditor(editor);
+      }
+      this.registrations.push(monaco.editor.onDidCreateEditor(editor => this.watchEditor(editor)));
+   }
+
+   /** Guard `editor` now and on each model change, until it or this client is disposed. */
+   protected watchEditor(editor: monaco.editor.ICodeEditor): void {
+      this.recordHostReadOnly(editor);
+      const subscriptions = [
+         editor.onDidChangeModel(() => this.guardReadOnly(editor)),
+         editor.onDidDispose(() => this.watchedEditors.delete(editor))
+      ];
+      this.watchedEditors.set(editor, {
+         dispose: () => {
+            for (const subscription of subscriptions) {
+               subscription.dispose();
+            }
+         }
+      });
+      this.guardReadOnly(editor);
+   }
+
+   /** Make `editor` read-only while it shows a content model, and give back the host's setting after. */
+   protected guardReadOnly(editor: monaco.editor.ICodeEditor): void {
+      const model = editor.getModel();
+      const content = model !== null && contentModelsOfAnyClient.has(model);
+      const hostSetting = hostReadOnly.get(editor);
+      if (content && hostSetting === undefined) {
+         const own = editor.getOption(monaco.editor.EditorOption.readOnly);
+         // Before the record, so the recording below takes this as no host's.
+         editor.updateOptions({ readOnly: true });
+         hostReadOnly.set(editor, own);
+      } else if (!content && hostSetting !== undefined) {
+         hostReadOnly.delete(editor);
+         editor.updateOptions({ readOnly: hostSetting });
+      }
+   }
+
+   /**
+    * Take every `readOnly` the host sets while `editor` shows a content model
+    * as the setting to give back, and keep the editor locked. Monaco reports
+    * no change for a value the editor already has, so this wraps
+    * `updateOptions` rather than listening. Once per editor, for every client.
+    */
+   protected recordHostReadOnly(editor: monaco.editor.ICodeEditor): void {
+      if (recordingEditors.has(editor)) {
+         return;
+      }
+      recordingEditors.add(editor);
+      const update = editor.updateOptions.bind(editor);
+      editor.updateOptions = options => {
+         if (options.readOnly !== undefined && hostReadOnly.has(editor)) {
+            hostReadOnly.set(editor, options.readOnly);
+            update({ ...options, readOnly: true });
+         } else {
+            update(options);
+         }
+      };
    }
 
    /**

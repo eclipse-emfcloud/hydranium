@@ -237,10 +237,18 @@ const fileSystem = persistentFileSystem({
      settings a server-driven language needs under your theme and layout.
    - Go-to-definition needs an opener for a target in another document: pass
      yours to `registerEditorOpener`. For a target with no file behind it,
-     such as a built-in library, `requestDocumentContent` asks the server for
-     its text. Show that in a read-only model rather than through
-     `openDocument`, since the server owns it. Answer `false` when it serves
-     none.
+     such as a built-in library, `openContentDocument` returns a model on the
+     text the server holds, takes the server's new text when it changes, and
+     is closed once the server holds it no more. It needs
+     `workspace.textDocumentContent` among the capabilities you pass the
+     client as `clientCapabilities`, as `MONACO_CLIENT_CAPABILITIES` does.
+     The client declares none by default. Every editor that shows it is
+     read-only while it does, since the server owns the text, and gets your
+     own `readOnly` back after. Answer `false` when the server has none. It
+     rejects when the request fails, so report that from your opener. Close
+     the model with `closeDocument` once no editor shows it. A model closed
+     for a document the server dropped leaves its editors blank, so show
+     another document from its `onWillDispose`.
 
 ## When something stays silent
 

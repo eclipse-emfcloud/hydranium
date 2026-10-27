@@ -1057,26 +1057,123 @@ test.describe('order-flow in a web worker', () => {
       await expect(page.locator('#selected-editor .view-line').filter({ hasText: 'entity XOrder {' })).toHaveCount(1);
    });
 
-   test('Ctrl+click opens a declaration in the stdlib read-only, on the text the server serves', async ({ page }) => {
+   test('Ctrl+click opens a declaration in the stdlib read-only, on the text the server holds', async ({ page }) => {
       await page.goto('/');
-      const line = 'quantity: Number';
-      await expect
-         .poll(async () => (await tokenSpansOnLine(page, '#selected-editor', line)).map(span => span.text.trim()))
-         .toContain('Number');
-      await page
-         .locator('#selected-editor .view-line')
-         .filter({ hasText: line })
-         .locator('span[class^="mtk"]', { hasText: 'Number' })
-         .first()
-         .click({ modifiers: ['ControlOrMeta'] });
+      await followNumberToStdlib(page);
 
-      await expect(page.locator('#selected-editor-title')).toHaveText('virtual:order-flow-builtin/primitives.domain');
       const declaration = page.locator('#selected-editor .view-line').filter({ hasText: 'valuetype Number {}' });
       await expect(declaration).toHaveCount(1);
+      // The server colours it too: one span for the line until its tokens arrive.
+      await expect
+         .poll(async () => (await tokenSpansOnLine(page, '#selected-editor', 'valuetype Number {}')).map(span => span.text.trim()))
+         .toContain('Number');
 
-      // The server owns the text, so a keystroke changes nothing.
+      // The server owns the text, so a keystroke changes nothing. Monaco's
+      // refusal is the signal the keystroke arrived, so the line check after it
+      // cannot pass before the edit would have rendered.
       await page.keyboard.type('X');
+      await expect(page.locator('#selected-editor .monaco-editor-overlaymessage')).toContainText('Cannot edit in read-only editor');
       await expect(declaration).toHaveCount(1);
+   });
+
+   test('leaving the stdlib closes its model, so following the reference again asks the server anew', async ({ page }) => {
+      const probe = await probeContentRequests(page);
+      await page.goto('/');
+      await followNumberToStdlib(page);
+      expect(await probe.requests()).toBe(1);
+
+      await page.locator('#document-list .document-row').filter({ hasText: 'audit-leak' }).click();
+      await expect(page.locator('#selected-editor-title')).toHaveText('orders/audit-leak.domain');
+      await page.locator('#document-list .document-row').filter({ hasText: 'orders.domain' }).click();
+      await expect(page.locator('#selected-editor-title')).toHaveText('orders/orders.domain');
+      await followNumberToStdlib(page);
+
+      expect(await probe.requests()).toBe(2);
+   });
+
+   test('a stdlib the server deletes while it shows gives the selection editor back the file it showed before', async ({ page }) => {
+      const probe = await probeContentRequests(page);
+      await page.goto('/');
+      await followNumberToStdlib(page);
+
+      await probe.deleteDocument('virtual:order-flow-builtin/primitives.domain');
+
+      await expect(page.locator('#selected-editor-title')).toHaveText('orders/orders.domain');
+      await expect(page.locator('#selected-editor .view-lines')).toContainText('quantity: Number');
+   });
+
+   test('a stdlib answer that a newer navigation overtook shows nothing, and the page closes its model', async ({ page }) => {
+      const probe = await probeContentRequests(page);
+      await page.goto('/');
+      await probe.hold();
+      await ctrlClickNumber(page);
+      await expect.poll(probe.held).toBe(1);
+
+      await page.locator('#document-list .document-row').filter({ hasText: 'audit-leak' }).click();
+      await expect(page.locator('#selected-editor-title')).toHaveText('orders/audit-leak.domain');
+      await probe.release();
+
+      await expect(page.locator('#selected-editor-title')).toHaveText('orders/audit-leak.domain');
+      await page.locator('#document-list .document-row').filter({ hasText: 'orders.domain' }).click();
+      await followNumberToStdlib(page);
+      expect(await probe.requests()).toBe(2);
+   });
+
+   test('two Ctrl+clicks into the stdlib that wait for one answer show it once it arrives', async ({ page }) => {
+      const probe = await probeContentRequests(page);
+      await page.goto('/');
+      await probe.hold();
+      await ctrlClickNumber(page);
+      await expect.poll(probe.held).toBe(1);
+      const definitions = await probe.definitions();
+      // The second reveal shares the first's request and overtakes it.
+      await ctrlClickNumber(page);
+      // The page handled the click's definition answer, and a task later its opener has run.
+      await expect
+         .poll(async () => {
+            const sent = await probe.definitions();
+            return sent > definitions && (await probe.definitionAnswers()) === sent;
+         })
+         .toBe(true);
+      await page.evaluate(() => new Promise<void>(resolve => setTimeout(resolve, 0)));
+
+      await probe.release();
+
+      await expect(page.locator('#selected-editor-title')).toHaveText('virtual:order-flow-builtin/primitives.domain');
+      await expect(page.locator('#selected-editor .view-line').filter({ hasText: 'valuetype Number {}' })).toHaveCount(1);
+      expect(await probe.requests()).toBe(1);
+   });
+
+   test('a stdlib answer that arrives after the reader moved into another editor leaves them there', async ({ page }) => {
+      const probe = await probeContentRequests(page);
+      await page.goto('/');
+      await probe.hold();
+      await ctrlClickNumber(page);
+      await expect.poll(probe.held).toBe(1);
+
+      await page.locator(`${PROCESS_EDITOR} .view-line`).last().click();
+      await probe.release();
+
+      await expect(page.locator('#selected-editor-title')).toHaveText('orders/orders.domain');
+      await page.keyboard.type('X');
+      await expect(page.locator('#process-editor-title')).toHaveClass(/is-dirty/);
+   });
+
+   test('Ctrl+S in the stdlib saves nothing, so an edited document stays unsaved', async ({ page }) => {
+      await page.goto('/');
+      const report = page.locator('[data-report="workspace"]');
+      await page.locator(`${PROCESS_EDITOR} .view-line`).last().click();
+      await page.keyboard.press('Control+End');
+      await page.keyboard.type(' ');
+      await expect(page.locator('#process-editor-title')).toHaveClass(/is-dirty/);
+      await followNumberToStdlib(page);
+      const before = await report.getAttribute('title');
+
+      // A save sets its report from the key handler, so a press that started one has changed it by now.
+      await page.keyboard.press('ControlOrMeta+s');
+
+      expect(await report.getAttribute('title')).toBe(before);
+      await expect(page.locator('#process-editor-title')).toHaveClass(/is-dirty/);
    });
 
    test('occurrence highlighting comes from the server, so a comment is not an occurrence', async ({ page }) => {
@@ -2398,6 +2495,193 @@ async function rightClickInEditor(page: Page, editorSelector: string): Promise<v
    const box = await boundingBoxOf(page.locator(editorSelector));
    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { button: 'right' });
    await expect(page.locator('.context-view .action-label').first()).toBeVisible();
+}
+
+/** Ctrl+click `Number` in `quantity: Number` of the selection editor, and wait for the stdlib to show there. */
+async function followNumberToStdlib(page: Page): Promise<void> {
+   await ctrlClickNumber(page);
+   await expect(page.locator('#selected-editor-title')).toHaveText('virtual:order-flow-builtin/primitives.domain');
+}
+
+/** Ctrl+click `Number` in `quantity: Number` of the selection editor, once the server has coloured it. */
+async function ctrlClickNumber(page: Page): Promise<void> {
+   const line = 'quantity: Number';
+   await expect
+      .poll(async () => (await tokenSpansOnLine(page, '#selected-editor', line)).map(span => span.text.trim()))
+      .toContain('Number');
+   await page
+      .locator('#selected-editor .view-line')
+      .filter({ hasText: line })
+      .locator('span[class^="mtk"]', { hasText: 'Number' })
+      .first()
+      .click({ modifiers: ['ControlOrMeta'] });
+}
+
+/** What the init script of {@link probeContentRequests} puts on `window`. */
+interface ContentProbe {
+   readonly requests: number;
+   readonly definitions: number;
+   readonly definitionAnswers: number;
+   readonly held: number;
+   hold(): void;
+   release(): Promise<void>;
+   deleteDocument(uri: string): Promise<void>;
+}
+
+/**
+ * Count the page's `workspace/textDocumentContent` and `textDocument/definition`
+ * requests, and the definition answers it has handled, and hold the content
+ * answers back on `hold()` until `release()`. `deleteDocument(uri)` sends the
+ * page the server's refresh for `uri` and answers its request with none, as
+ * for a document the server deleted.
+ * The client talks to the worker over MessagePorts, its transport listens
+ * with `addEventListener`, and request ids are per port and per direction.
+ */
+async function probeContentRequests(page: Page): Promise<{
+   requests: () => Promise<number>;
+   definitions: () => Promise<number>;
+   definitionAnswers: () => Promise<number>;
+   held: () => Promise<number>;
+   hold: () => Promise<void>;
+   release: () => Promise<void>;
+   deleteDocument: (uri: string) => Promise<void>;
+}> {
+   await page.addInitScript(() => {
+      let heldIds = new WeakMap<MessagePort, Set<unknown>>();
+      const definitionIds = new WeakMap<MessagePort, Set<unknown>>();
+      const held: Array<() => void> = [];
+      const heldEvents = new Set<Event>();
+      let holding = false;
+      let answerNone = false;
+      const contentPorts = new Set<MessagePort>();
+      const portListeners = new WeakMap<MessagePort, Array<(event: Event) => void>>();
+      const deliver = (port: MessagePort, data: unknown): void => {
+         for (const listener of portListeners.get(port) ?? []) {
+            listener.call(port, new MessageEvent('message', { data }));
+         }
+      };
+      let requests = 0;
+      let definitions = 0;
+      let definitionAnswers = 0;
+      const probe: ContentProbe = {
+         get requests() {
+            return requests;
+         },
+         get definitions() {
+            return definitions;
+         },
+         get definitionAnswers() {
+            return definitionAnswers;
+         },
+         get held() {
+            return heldEvents.size;
+         },
+         hold: () => {
+            holding = true;
+         },
+         release: async () => {
+            holding = false;
+            heldIds = new WeakMap();
+            heldEvents.clear();
+            for (const deliver of held.splice(0)) {
+               deliver();
+            }
+            // The client handles an answer in microtasks, so the next task is past the page's reaction to it.
+            await new Promise(resolve => setTimeout(resolve, 0));
+         },
+         deleteDocument: async (uri: string) => {
+            answerNone = true;
+            for (const port of contentPorts) {
+               deliver(port, {
+                  jsonrpc: '2.0',
+                  id: 'probe-refresh',
+                  method: 'workspace/textDocumentContent/refresh',
+                  params: { uri }
+               });
+            }
+            await new Promise(resolve => setTimeout(resolve, 0));
+         }
+      };
+      Reflect.set(window, 'contentProbe', probe);
+      const post = MessagePort.prototype.postMessage;
+      MessagePort.prototype.postMessage = function (this: MessagePort, ...parameters: unknown[]) {
+         const [message] = parameters;
+         if (typeof message === 'object' && message !== null && Reflect.get(message, 'method') === 'textDocument/definition') {
+            definitions++;
+            const ids = definitionIds.get(this) ?? new Set<unknown>();
+            ids.add(Reflect.get(message, 'id'));
+            definitionIds.set(this, ids);
+         }
+         // The page's answer to the probe's refresh, which the worker never asked for.
+         if (typeof message === 'object' && message !== null && Reflect.get(message, 'id') === 'probe-refresh') {
+            return undefined;
+         }
+         if (typeof message === 'object' && message !== null && Reflect.get(message, 'method') === 'workspace/textDocumentContent') {
+            requests++;
+            contentPorts.add(this);
+            if (answerNone) {
+               answerNone = false;
+               const id: unknown = Reflect.get(message, 'id');
+               setTimeout(() => deliver(this, { jsonrpc: '2.0', id, result: null }), 0);
+               return undefined;
+            }
+            if (holding) {
+               const ids = heldIds.get(this) ?? new Set<unknown>();
+               ids.add(Reflect.get(message, 'id'));
+               heldIds.set(this, ids);
+            }
+         }
+         return Reflect.apply(post, this, parameters) as unknown;
+      } as typeof post;
+      const add = MessagePort.prototype.addEventListener;
+      const remove = MessagePort.prototype.removeEventListener;
+      const wrappers = new WeakMap<object, EventListener>();
+      MessagePort.prototype.addEventListener = function (
+         this: MessagePort,
+         type: string,
+         listener: EventListenerOrEventListenerObject,
+         options?: boolean | AddEventListenerOptions
+      ) {
+         if (type !== 'message' || typeof listener !== 'function') {
+            return add.call(this, type, listener, options);
+         }
+         portListeners.set(this, [...(portListeners.get(this) ?? []), listener]);
+         const wrapper = (event: Event): void => {
+            const data: unknown = (event as MessageEvent).data;
+            // A response's id only, since the worker numbers its own requests apart.
+            const id = typeof data === 'object' && data !== null && !Reflect.has(data, 'method') ? Reflect.get(data, 'id') : undefined;
+            if (id !== undefined && heldIds.get(this)?.has(id) === true) {
+               heldEvents.add(event);
+               held.push(() => listener.call(this, event));
+            } else {
+               listener.call(this, event);
+               if (id !== undefined && definitionIds.get(this)?.delete(id) === true) {
+                  definitionAnswers++;
+               }
+            }
+         };
+         wrappers.set(listener, wrapper);
+         return add.call(this, type, wrapper, options);
+      } as typeof add;
+      MessagePort.prototype.removeEventListener = function (
+         this: MessagePort,
+         type: string,
+         listener: EventListenerOrEventListenerObject,
+         options?: boolean | EventListenerOptions
+      ) {
+         return remove.call(this, type, wrappers.get(listener) ?? listener, options);
+      } as typeof remove;
+   });
+   return {
+      requests: () => page.evaluate(() => (Reflect.get(window, 'contentProbe') as ContentProbe).requests),
+      definitions: () => page.evaluate(() => (Reflect.get(window, 'contentProbe') as ContentProbe).definitions),
+      definitionAnswers: () => page.evaluate(() => (Reflect.get(window, 'contentProbe') as ContentProbe).definitionAnswers),
+      held: () => page.evaluate(() => (Reflect.get(window, 'contentProbe') as ContentProbe).held),
+      hold: () => page.evaluate(() => (Reflect.get(window, 'contentProbe') as ContentProbe).hold()),
+      release: () => page.evaluate(() => (Reflect.get(window, 'contentProbe') as ContentProbe).release()),
+      deleteDocument: (uri: string) =>
+         page.evaluate(target => (Reflect.get(window, 'contentProbe') as ContentProbe).deleteDocument(target), uri)
+   };
 }
 
 /**

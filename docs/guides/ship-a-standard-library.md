@@ -88,7 +88,8 @@ export const mySharedModule = {
   during development.
 - **Open it read-only in your editors.** A client can open the library, for
   example on go-to-definition, and an edit to it lives until the server
-  restarts. Keeping it read-only is up to the client.
+  restarts. Keeping it read-only is up to the client. VS Code and the Monaco
+  client in `@hydranium/client-browser` do.
 - **To recognise its content**, compare a document's URI with your exported
   constant, or check `isVirtualUri` for any document no file backs.
 

@@ -20,10 +20,11 @@
  * "the report names documents the page cannot show" is therefore this panel,
  * which makes every one of them openable.
  *
- * Its problems also name documents with no file behind them: in-code
- * contributions arrive on the `virtual:` scheme and are registered independently
- * of the workspace folder. A click opens them read-only on the text the server
- * serves, or says why the page cannot.
+ * A host that sets `validateVirtualDocuments` gets problems for documents with
+ * no file behind them too: in-code contributions arrive on the `virtual:`
+ * scheme and are registered independently of the workspace folder. This page
+ * sets none. A click opens one read-only on the text the server holds, or
+ * says why the page cannot.
  */
 
 import * as monaco from 'monaco-editor-core';

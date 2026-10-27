@@ -15,6 +15,7 @@ declare module 'monaco-editor-core/esm/vs/editor/common/standalone/standaloneEnu
    export const CompletionItemKind: typeof monaco.languages.CompletionItemKind;
    export const CompletionItemInsertTextRule: typeof monaco.languages.CompletionItemInsertTextRule;
    export const DocumentHighlightKind: typeof monaco.languages.DocumentHighlightKind;
+   export const EditorOption: typeof monaco.editor.EditorOption;
    export const MarkerSeverity: typeof monaco.MarkerSeverity;
    export const MarkerTag: typeof monaco.MarkerTag;
    export const CompletionItemTag: typeof monaco.languages.CompletionItemTag;
