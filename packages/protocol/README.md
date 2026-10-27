@@ -11,6 +11,8 @@ never depends on `@hydranium/core`, which carries the Langium runtime.
 - Type your client against `DataServerProtocol` and `DataClientProtocol`.
 - Connect, reconnect and open documents through one client tier, in a Theia
   frontend, a VS Code extension or webview, or a plain browser page.
+- Edit a document from a form with `WorkingCopy`, which sends your edits,
+  reconciles a write that raced another client's, and saves.
 - Declare your own RPC contract as a TypeScript interface and use it on both
   ends of a connection.
 - Test your client, and audit your translation catalogues (see *Translate your

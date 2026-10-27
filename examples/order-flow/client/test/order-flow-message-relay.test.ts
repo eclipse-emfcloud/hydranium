@@ -147,7 +147,7 @@ function mountClient(clientPort: RelayedWebviewPort): void {
    connection = new DataConnection<OrderFlowTransferRoot>(clientPort, events);
    const dataSession = connection.createSession('order-flow-relay-test');
    session = dataSession;
-   model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(dataSession, events);
+   model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(dataSession, events, uriOf(FULFILLMENT_PROCESS));
 }
 
 describe('order-flow data head over a socket relayed onto a clone hop', () => {
@@ -194,7 +194,7 @@ describe('order-flow data head over a socket relayed onto a clone hop', () => {
    it('opens, follows and writes a document through the relay', async () => {
       mountClient(new RelayedWebviewPort(dataServer!.port, crossed));
       const uri = uriOf(FULFILLMENT_PROCESS);
-      await model!.open(uri);
+      await model!.open();
 
       expect(model!.fields).toEqual([
          { name: 'name', value: 'Fulfillment' },
@@ -214,7 +214,7 @@ describe('order-flow data head over a socket relayed onto a clone hop', () => {
       // waiting for it.
       mountClient(new RelayedWebviewPort(dataServer!.port, crossed));
       const uri = uriOf(FULFILLMENT_PROCESS);
-      await model!.open(uri);
+      await model!.open();
 
       const server = await session!.connected();
       const foreign = (await server.getModelDocument({ uri })).model?.root as ProcessModel;

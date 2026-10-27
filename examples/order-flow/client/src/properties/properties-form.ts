@@ -33,6 +33,8 @@ import {
    PROPERTIES_DISCONNECTED,
    PROPERTIES_NO_DOCUMENT,
    PROPERTIES_NO_FIELDS,
+   PROPERTIES_PREVIOUS_WRITE_CONFLICT,
+   PROPERTIES_PREVIOUS_WRITE_UNAVAILABLE,
    PROPERTIES_UNSAVED,
    PROPERTIES_WRITE_CONFLICT,
    PROPERTIES_WRITE_FAILED,
@@ -104,10 +106,16 @@ const OUTCOME_MESSAGES: Partial<Record<SetFieldOutcome['status'], MessageDefinit
    unavailable: PROPERTIES_WRITE_UNAVAILABLE
 };
 
+/** How a lost edit of the document shown before a switch reads, the field and the document named. */
+const PREVIOUS_OUTCOME_MESSAGES: Partial<Record<SetFieldOutcome['status'], (field: string, uri: string) => ResolvedMessage>> = {
+   conflict: (field, uri) => resolve(PROPERTIES_PREVIOUS_WRITE_CONFLICT, { field, uri }),
+   unavailable: (field, uri) => resolve(PROPERTIES_PREVIOUS_WRITE_UNAVAILABLE, { field, uri })
+};
+
 /**
  * Outcomes after which the server holds the value that was written.
  *
- * `conflict` and `unavailable` are absent deliberately: the write was dropped,
+ * `conflict` and `unavailable` are absent deliberately: the edit was dropped,
  * so the box still shows something the server does not have and the field stays
  * marked. `merged` belongs here — a merge keeps both intents, so this field's
  * value did land.
@@ -145,6 +153,10 @@ export class PropertiesForm {
    protected built = false;
    /** Whether a document load is in flight — see {@link setLoading}. */
    protected loading = false;
+   /** Counts the documents shown, so a write answering after a switch does not mark the next one. */
+   protected shown = 0;
+   /** The document shown, which a lost edit of it names once another is. */
+   protected documentUri = '';
    /** How this panel's own messages reach a reader — see {@link PropertiesFormOptions.renderMessage}. */
    protected readonly renderMessage: (message: ResolvedMessage) => string;
 
@@ -225,9 +237,9 @@ export class PropertiesForm {
     * drawn as a result.
     *
     * **Switching documents legitimately passes through an empty field set.**
-    * `OrderFlowPropertiesModel.open` closes the previous document before opening
-    * the next, and the close fires a change with no snapshot — so a form that
-    * renders every change verbatim flashes "this document root has no editable
+    * A host shows the next document's model as soon as it creates it, and the
+    * model has no snapshot until its open answers. A form that renders
+    * every change verbatim then flashes "this document root has no editable
     * text properties" on every switch. That message is *true* of the instant it
     * describes and *wrong* about the document the user just selected, which is
     * the worst combination: it reads as a finding rather than as a transition.
@@ -238,6 +250,28 @@ export class PropertiesForm {
     */
    setLoading(loading: boolean): void {
       this.loading = loading;
+   }
+
+   /**
+    * Start showing another document, or none. The next one is clean until its
+    * model says otherwise. A write of the one before that answers later says
+    * nothing here, and goes to the error sink when its edit was lost.
+    */
+   switchDocument(uri?: string): void {
+      this.shown++;
+      this.documentUri = uri ?? '';
+      // Its inputs are drawn afresh, so an edit typed in the one before is not
+      // written to it. Cleared at once with the problems of the one before,
+      // since an open that fails draws neither.
+      this.built = false;
+      this.inputs = new Map();
+      this.rendered = new Map();
+      this.fieldsHost.replaceChildren();
+      this.diagnosticsHost.replaceChildren();
+      // The load of the one before, if any, is abandoned. The next sets its own.
+      this.loading = false;
+      this.report('');
+      this.setDirty(false);
    }
 
    /**
@@ -261,7 +295,7 @@ export class PropertiesForm {
     */
    setFields(fields: readonly PropertyField[]): void {
       if (this.loading && fields.length === 0) {
-         // The close half of a document switch. See setLoading.
+         // A model still opening. See setLoading.
          return;
       }
       const names = fields.map(field => field.name);
@@ -374,6 +408,7 @@ export class PropertiesForm {
       this.built = true;
       this.inputs = new Map();
       this.rendered = new Map();
+      const shown = this.shown;
       this.fieldsHost.replaceChildren(
          ...fields.map(field => {
             const wrapper = this.createElement('div');
@@ -400,7 +435,11 @@ export class PropertiesForm {
             // full-document update per character and reparse the file each time.
             // `change` fires on blur and on Enter, which is the granularity the
             // wire shape actually wants.
-            input.addEventListener('change', () => void this.write(field.name, input.value));
+            input.addEventListener('change', () => {
+               if (shown === this.shown) {
+                  void this.write(field.name, input.value);
+               }
+            });
             // `input` DOES fire per keystroke, and may: it moves no data, only
             // the marker that says this field is holding something the server
             // has not been told about.
@@ -419,8 +458,18 @@ export class PropertiesForm {
    }
 
    protected async write(name: string, value: string): Promise<void> {
+      const shown = this.shown;
+      const uri = this.documentUri;
       try {
          const outcome = await this.handlers.setField(name, value);
+         if (shown !== this.shown) {
+            // The status line is the next document's, so a lost edit goes to the sink.
+            const lost = PREVIOUS_OUTCOME_MESSAGES[outcome.status];
+            if (lost) {
+               this.handlers.reportError(undefined, lost(name, uri));
+            }
+            return;
+         }
          this.report(OUTCOME_MESSAGES[outcome.status] ?? '', OUTCOME_KINDS[outcome.status]);
          if (SETTLED_ON_THE_WRITTEN_VALUE.has(outcome.status)) {
             // The server now holds what was typed, so it is no longer pending —
@@ -433,8 +482,10 @@ export class PropertiesForm {
          }
       } catch (error: unknown) {
          const detail = describeFailure(error, this.renderMessage);
-         this.handlers.reportError(error, resolve(PROPERTIES_WRITE_FAILED, { field: name, detail }));
-         this.report(detail, 'error');
+         this.handlers.reportError(error, resolve(PROPERTIES_WRITE_FAILED, { field: name, uri, detail }));
+         if (shown === this.shown) {
+            this.report(detail, 'error');
+         }
       }
    }
 }

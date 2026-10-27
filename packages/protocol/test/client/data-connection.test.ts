@@ -1111,6 +1111,176 @@ describe('DataConnection.sessions', () => {
 });
 
 describe('DataSession after a dropped connection', () => {
+   it.each([
+      ['an update', 'update'],
+      ['an update of several documents', 'updates'],
+      ['a save', 'save'],
+      ['a persist', 'persist'],
+      ['a deletion', 'delete']
+   ] as const)('refuses %s gated on a version from before a restore, and sends nothing', async (_name, method) => {
+      const { connection, calls, dropTransport, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         const baseVersion = asModelVersion(1);
+
+         dropTransport();
+         const sent =
+            method === 'update'
+               ? panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion })
+               : method === 'updates'
+                 ? panel.updateDocuments({ updates: [{ uri: URI_A, model: MODEL, baseVersion }] })
+                 : method === 'save'
+                   ? panel.saveDocument({ uri: URI_A, model: MODEL, baseVersion })
+                   : method === 'persist'
+                     ? panel.persistDocument({ uri: URI_A, baseVersion })
+                     : panel.deleteDocument({ uri: URI_A, baseVersion });
+
+         await expect(sent).rejects.toThrow(ConflictError);
+         expect(of(calls, method)).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('sends an update gated on a version from before a restore that found the text it last saw at that version', async () => {
+      const { connection, calls, dropTransport, dispose } = harness({ texts: new Map([[URI_A, 'clean']]) });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         const before = calls.length;
+
+         dropTransport();
+         const sent = panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: asModelVersion(1) });
+
+         await expect(sent).resolves.toBeDefined();
+         expect(of(calls.slice(before), 'update').map(call => call.uri)).toEqual([URI_A]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('refuses an update pending across a restore that could not open its document again, and sends nothing', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         behaviour.failOpens = new Set([URI_A]);
+
+         dropTransport();
+         const sent = panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: asModelVersion(1) });
+
+         await expect(sent).rejects.toThrow(ConflictError);
+         expect(of(calls, 'update')).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it("sends an update gated on 'any' from before a restore", async () => {
+      const { connection, calls, dropTransport, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         const before = calls.length;
+
+         dropTransport();
+         const sent = panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: 'any' });
+
+         await expect(sent).resolves.toBeDefined();
+         expect(of(calls.slice(before), 'update').map(call => call.uri)).toEqual([URI_A]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('refuses a set of updates one of whose versions is from before its restore, and sends none of it', async () => {
+      const { connection, calls, dropTransport, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         await panel.openDocument({ uri: URI_B });
+         const kept = asModelVersion(1);
+         let sent: Promise<unknown> | undefined;
+         panel.onDidRestoreDocument(event => {
+            const baseVersion = event.document?.model?.version;
+            if (event.uri === URI_A && baseVersion !== undefined) {
+               sent = panel.updateDocuments({
+                  updates: [
+                     { uri: URI_A, model: MODEL, baseVersion },
+                     { uri: URI_B, model: MODEL, baseVersion: kept }
+                  ]
+               });
+            }
+         });
+         const before = calls.length;
+
+         dropTransport();
+         await waitFor(() => sent !== undefined, { message: 'A never restored' });
+
+         await expect(sent).rejects.toThrow(ConflictError);
+         expect(of(calls.slice(before), 'updates')).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('takes a write gated on the version a restore event hands out while it restores another document', async () => {
+      const { connection, calls, dropTransport, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         await panel.openDocument({ uri: URI_B });
+         let sent: Promise<unknown> | undefined;
+         panel.onDidRestoreDocument(event => {
+            const baseVersion = event.document?.model?.version;
+            if (event.uri === URI_A && baseVersion !== undefined) {
+               sent = panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion });
+            }
+         });
+
+         const before = calls.length;
+         dropTransport();
+         await waitFor(() => sent !== undefined, { message: 'A never restored' });
+
+         await expect(sent).resolves.toBeDefined();
+         expect(of(calls.slice(before), 'update').map(call => call.uri)).toEqual([URI_A]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('forgets the restores of a document once it is closed', async () => {
+      class CountingSession extends DataSession<ProbeElement> {
+         get restoredUris(): number {
+            return this.restores.size;
+         }
+      }
+      let session: CountingSession | undefined;
+      const { connection, dropTransport, dispose } = harness({}, undefined, undefined, undefined, undefined, (clientId, host, label) => {
+         session = new CountingSession(clientId, host, label);
+         return session;
+      });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         let restored = false;
+         panel.onDidRestoreDocument(() => {
+            restored = true;
+         });
+         dropTransport();
+         await waitFor(() => restored, { message: 'A never restored' });
+         expect(session?.restoredUris).toBe(1);
+
+         await panel.closeDocument({ uri: URI_A });
+
+         expect(session?.restoredUris).toBe(0);
+      } finally {
+         dispose();
+      }
+   });
+
    it('restores a session with documents open at once, without a call of its own', async () => {
       const { connection, calls, dropTransport, dispose } = harness();
       try {
@@ -1563,9 +1733,12 @@ describe('DataSession after a dropped connection', () => {
          await panel.openDocument({ uri: URI_A });
          const reconnect = calls.length;
          behaviour.failWatch = true;
+         const restored: unknown[] = [];
+         panel.onDidRestoreDocument(event => restored.push(event));
 
          dropTransport();
          await panel.connected();
+         await waitFor(() => restored.length > 0, { message: 'no restore event' });
 
          expect(of(calls.slice(reconnect), 'open', 'watch', 'close').map(call => `${call.method} ${call.uri}`)).toEqual([
             `open ${URI_A}`,
@@ -1573,6 +1746,7 @@ describe('DataSession after a dropped connection', () => {
             `close ${URI_A}`
          ]);
          expect(port.reported.map(entry => entry.message.code)).toEqual([DATA_SESSION_RESTORE_FAILED.code]);
+         expect(restored).toEqual([{ uri: URI_A, reopened: false }]);
       } finally {
          dispose();
       }

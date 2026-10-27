@@ -7,21 +7,9 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { OrderFlowPropertiesModel } from '@hydranium/example-order-flow-client/lib/data/order-flow-properties-model';
-import { describeFailure, PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
-import {
-   PROPERTIES_CLOSE_FAILED,
-   PROPERTIES_LOADING,
-   PROPERTIES_OPEN_FAILED
-} from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
-import {
-   type DataEvents,
-   type DataSession,
-   renderFrameworkMessage,
-   resolve,
-   type ResolvedMessage,
-   type TransferElement
-} from '@hydranium/protocol';
+import { PropertiesDocuments } from '@hydranium/example-order-flow-client/lib/properties/properties-documents';
+import { PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
+import { type DataEvents, type DataSession, renderFrameworkMessage, type ResolvedMessage, type TransferElement } from '@hydranium/protocol';
 import { requireElement } from './dom.js';
 import { pageTranslations } from './page-nls.js';
 
@@ -47,8 +35,9 @@ type OrderFlowTransferRoot = TransferElement;
  * The page's second data-head participant: a properties form over whichever
  * document has the editor focus.
  *
- * **A wiring job, not a form.** The DOM is `PropertiesForm`'s and the
- * open/watch/write/reconcile policy is `OrderFlowPropertiesModel`'s, both shared
+ * **A wiring job, not a form.** The DOM is `PropertiesForm`'s, the document
+ * switch `PropertiesDocuments`' and the open/watch/write/reconcile policy
+ * `WorkingCopy`'s, which `OrderFlowPropertiesModel` extends, all shared
  * verbatim with the Theia widget and the VS Code webview. What a host adds is
  * how it reaches the data head and what decides the document — here, a session
  * off the page's existing connection, and editor focus.
@@ -63,16 +52,13 @@ type OrderFlowTransferRoot = TransferElement;
  */
 export class PropertiesPanel {
    protected readonly form: PropertiesForm;
-   protected readonly model: OrderFlowPropertiesModel<OrderFlowTransferRoot>;
-   /** The document currently open, so a repeated focus is not reloaded. */
-   protected openUri?: string;
+   protected readonly documents: PropertiesDocuments<OrderFlowTransferRoot>;
 
    constructor(session: DataSession<OrderFlowTransferRoot>, events: DataEvents<OrderFlowTransferRoot>) {
-      this.model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, events);
       this.form = new PropertiesForm(
          requireElement('properties-body'),
          {
-            setField: (name, value) => this.model.setField(name, value),
+            setField: (name, value) => this.documents.setField(name, value),
             reportError: (error, reported) => this.reportError(error, reported)
          },
          {
@@ -82,23 +68,25 @@ export class PropertiesPanel {
             renderMessage: this.renderMessage
          }
       );
-      this.model.onDidChange(() => this.render());
-      this.model.onDidChangeDirty(() => this.form.setDirty(this.model.dirty));
+      this.documents = new PropertiesDocuments<OrderFlowTransferRoot>(session, events, this.form, {
+         reportError: (error, reported) => this.reportError(error, reported),
+         renderMessage: this.renderMessage
+      });
    }
 
    /** The document this panel is showing, for a host that saves what is in front of the reader. */
    get documentUri(): string | undefined {
-      return this.openUri;
+      return this.documents.current?.uri;
    }
 
-   /** Whether a field edit has not answered yet, for the unload guard. */
-   get hasWritesInFlight(): boolean {
-      return this.model.hasWritesInFlight;
+   /** The documents with a field edit not answered yet, one shown before included, for the unload guard. */
+   get documentsWithWritesInFlight(): readonly string[] {
+      return this.documents.documentsWithWritesInFlight;
    }
 
-   /** Resolves to whether the field edits in flight now answered within the model's bound. */
+   /** Resolves to whether the field edits of the documents shown at the call, those made during the wait included, answered within each model's bound. */
    whenWritesSettled(): Promise<boolean> {
-      return this.model.whenWritesSettled();
+      return this.documents.whenWritesSettled();
    }
 
    /**
@@ -107,50 +95,18 @@ export class PropertiesPanel {
     * Re-opening the document already shown is a no-op rather than a reload,
     * because every focus change republishes — clicking between the two pinned
     * editors and back would otherwise close and reopen the document, dropping
-    * the server-side watch each time.
+    * the server-side watch each time. A document whose copy follows none, as
+    * after a deletion, loads again, but not after a failed open.
     */
    showDocument(uri: string | undefined): void {
-      if (uri === this.openUri) {
-         return;
+      if (uri !== this.documents.current?.uri) {
+         this.form.setTitle(uri && uri.substring(uri.lastIndexOf('/') + 1));
       }
-      this.openUri = uri;
-      if (!uri) {
-         this.form.setTitle(undefined);
-         void this.model.close().catch((error: unknown) => {
-            this.reportError(error, resolve(PROPERTIES_CLOSE_FAILED, { detail: describeFailure(error, this.renderMessage) }));
-         });
-         return;
-      }
-      this.form.setTitle(uri.substring(uri.lastIndexOf('/') + 1));
-      this.form.setLoading(true);
-      this.form.report(PROPERTIES_LOADING);
-      this.model
-         .open(uri)
-         .then(() => {
-            this.form.setLoading(false);
-            // Rendered explicitly: the model fires its change synchronously
-            // inside `open`, while `loading` is still true, so a root that
-            // genuinely has NO fields would have its suppressed empty render be
-            // the only one and the panel would keep the previous document's
-            // inputs.
-            this.render();
-            this.form.report('');
-         })
-         .catch((error: unknown) => {
-            this.form.setLoading(false);
-            const detail = describeFailure(error, this.renderMessage);
-            this.reportError(error, resolve(PROPERTIES_OPEN_FAILED, { uri, detail }));
-            this.form.report(detail, 'error');
-         });
+      this.documents.show(uri);
    }
 
    /** Renders the form's sentences and a failure's own through the page's catalogue. */
    protected readonly renderMessage = (message: ResolvedMessage): string => renderFrameworkMessage(message, pageTranslations());
-
-   protected render(): void {
-      this.form.setFields(this.model.fields);
-      this.form.setDiagnostics(this.model.diagnostics);
-   }
 
    /**
     * The page has one status line and no notification surface, so failures go to
@@ -162,6 +118,7 @@ export class PropertiesPanel {
     * English.
     */
    protected reportError(error: unknown, reported: ResolvedMessage): void {
-      console.error(`[properties] ${renderFrameworkMessage(reported)}`, error);
+      // A lost edit of the document before comes with no error to log.
+      console.error(`[properties] ${renderFrameworkMessage(reported)}`, ...(error === undefined ? [] : [error]));
    }
 }

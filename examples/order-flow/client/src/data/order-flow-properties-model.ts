@@ -7,47 +7,18 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import {
-   type Clock,
-   type ConflictResolver,
-   type DataEvents,
-   type DataSession,
-   type LoadedTransferDocument,
-   type TransferDiagnostic,
-   type TransferElement,
-   PendingWorkTracker,
-   ReconcilingConflictResolver,
-   SystemClock,
-   TIMED_OUT,
-   TransferDocument,
-   reconcileWrite
-} from '@hydranium/protocol';
-import { Emitter, type Event } from 'vscode-jsonrpc';
+import { type WorkingCopyEditOutcome, type TransferElement, WorkingCopy } from '@hydranium/protocol';
 
 /** One editable top-level property of the open document's root. */
 export interface PropertyField {
    /** Transfer-model property name, which is also the wire name. */
    readonly name: string;
-   /** Current value as the server last reported it. */
+   /** Current value, with the edits the server has not confirmed applied. */
    readonly value: string;
 }
 
-/**
- * What {@link OrderFlowPropertiesModel.setField} did. A host renders each of
- * these differently, which is why the write returns a status rather than
- * `void` or a bare boolean.
- */
-export type SetFieldOutcome =
-   /** The write landed against an unchanged document. */
-   | { readonly status: 'applied' }
-   /** The write raced a foreign edit to a DIFFERENT field; both intents survive. */
-   | { readonly status: 'merged' }
-   /** The write raced a foreign edit of the SAME field to a different value, or kept racing foreign edits; it was dropped and the panel now shows the server's value. */
-   | { readonly status: 'conflict' }
-   /** Nothing was written: the panel's value already matched, or the server turned out to hold it. */
-   | { readonly status: 'unchanged' }
-   /** The conflict could not be reconciled because the document could not be refetched. */
-   | { readonly status: 'unavailable' };
+/** What {@link OrderFlowPropertiesModel.setField} did. A host renders each status differently. */
+export type SetFieldOutcome = WorkingCopyEditOutcome;
 
 /**
  * Copy `root` with one string property replaced.
@@ -90,75 +61,21 @@ function withField<TTransfer extends TransferElement>(root: TTransfer, name: str
  * name produces a diagnostic rather than a rejection. That is the honest
  * behaviour of the wire shape and not something to paper over here.
  */
-export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
-   protected readonly changeEmitter = new Emitter<void>();
-   /** Fires whenever {@link fields} or {@link diagnostics} may have changed. */
-   readonly onDidChange: Event<void> = this.changeEmitter.event;
-   protected readonly dirtyEmitter = new Emitter<void>();
+export class OrderFlowPropertiesModel<TTransfer extends TransferElement> extends WorkingCopy<TTransfer> {
    /**
-    * Fires whenever {@link dirty} changes. Apart from {@link onDidChange}
-    * because a save changes no field, and a host redrawing its fields on it
-    * would redraw for nothing.
-    */
-   readonly onDidChangeDirty: Event<void> = this.dirtyEmitter.event;
-   /** See {@link dirty}. */
-   protected dirtyState = false;
-
-   protected readonly conflictResolver: ConflictResolver = new ReconcilingConflictResolver();
-   /** Writes of one field edit, the first included, before a still-conflicting one is dropped. */
-   protected readonly maxWrites: number = 3;
-   /**
-    * Each field edit until its last write answers, the reread after a conflict
-    * included, which the session's own count of its writes leaves out.
-    */
-   protected readonly edits = new PendingWorkTracker();
-   /** How long {@link whenWritesSettled} waits before going on anyway, as the session's own wait does. */
-   protected readonly settleWritesMs: number = 30_000;
-   protected readonly clock: Clock = new SystemClock();
-
-   /** The current server snapshot — the base every write is authored against. */
-   protected snapshot?: TransferDocument<TTransfer>;
-   protected readonly subscriptions: { dispose(): void }[];
-   protected disposed = false;
-
-   constructor(
-      protected readonly session: DataSession<TTransfer>,
-      events: DataEvents<TTransfer>
-   ) {
-      // Two channels, because a deletion is not an update: it carries no
-      // document, so there is no snapshot to adopt — only one to drop.
-      this.subscriptions = [
-         events.onDidUpdateDocument(event => this.handleDocumentUpdated(event)),
-         events.onDidDeleteDocument(event => this.handleDocumentDeleted(event)),
-         events.onDidChangeDocumentDirty(event => {
-            if (!this.disposed && event.uri === this.snapshot?.uri) {
-               this.setDirty(event.text?.dirty ?? false);
-            }
-         })
-      ];
-   }
-
-   /** URI of the open document, or `undefined` before {@link open}. */
-   get uri(): string | undefined {
-      return this.snapshot?.uri;
-   }
-
-   /** The open document's version — what a write is gated against. */
-   get version(): number | undefined {
-      return this.snapshot?.model?.version;
-   }
-
-   /**
-    * The editable top-level fields, in the root's own property order.
+    * The editable top-level fields, in the root's own property order, with the
+    * edits not yet confirmed applied.
     *
     * Empty before {@link open}, and empty for a root that has no string-valued
     * top-level property, which is a legitimate state rather than an error.
     */
    get fields(): readonly PropertyField[] {
-      const root = this.snapshot?.model?.root;
-      if (!root) {
-         return [];
-      }
+      const root = this.root;
+      return root ? this.fieldsOf(root) : [];
+   }
+
+   /** The editable top-level fields of `root`, in its own property order. */
+   protected fieldsOf(root: TTransfer): PropertyField[] {
       const fields: PropertyField[] = [];
       for (const [name, value] of Object.entries(root)) {
          if (name.startsWith('$') || name.startsWith('_')) {
@@ -169,72 +86,6 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
          }
       }
       return fields;
-   }
-
-   /**
-    * Whether the server holds text for the open document that its file does
-    * not: an edit from this panel or anyone else not yet saved by anyone.
-    * `false` with nothing open.
-    *
-    * Read from the last document the server sent and from its dirty
-    * notifications, whichever came last. The watch starts after the open, so
-    * a change in between reaches only the second read of {@link open}.
-    */
-   get dirty(): boolean {
-      return this.dirtyState;
-   }
-
-   /**
-    * Diagnostics as of the last snapshot.
-    *
-    * Trustworthy straight after {@link open}, which reads twice for exactly
-    * that reason, and straight after a write: a session's `update` answers once
-    * the document is validated, in whichever build carried the write, even when
-    * a later write cancelled the write's own build. The bound is the build's
-    * default validation categories, so a check an adopter registered as `slow`
-    * is still owed afterwards.
-    *
-    * So a write needs no `onDidUpdateDocument` to fill its own diagnostics in.
-    * This model follows the document for every update it did not write, a
-    * dependency's rebuild included.
-    */
-   get diagnostics(): readonly TransferDiagnostic[] {
-      return this.snapshot?.model?.diagnostics ?? [];
-   }
-
-   /**
-    * Load `uri` and start following it. Replaces whatever was open, closing it
-    * first so the server's watch and client registration do not leak.
-    *
-    * **Two reads, because one cannot answer both questions.**
-    * `openDocument` registers the client and the watch, but settles at the
-    * integrity landmark, where the diagnostics are absent *by phase
-    * contract* rather than because the document is valid. Following the open
-    * with `includeDiagnostics` settles at validation and is what makes a
-    * document that is merely SELECTED report its problems. Without it the panel
-    * shows diagnostics only for documents the user has edited — an edit takes
-    * the update path, which is answered post-validation — so a file whose
-    * references were broken from elsewhere reads as clean, which is worse than
-    * showing nothing at all.
-    *
-    * The cost, stated rather than hidden: one extra round trip per selection,
-    * and the open now waits for validation instead of the earlier landmark.
-    * That is the price of the panel being trustworthy about validity, and it is
-    * paid per selection rather than per keystroke.
-    *
-    * The change fires once, after both reads, so a selection renders one state
-    * rather than flashing the undiagnosed one first.
-    */
-   async open(uri: string): Promise<void> {
-      this.assertLive();
-      if (this.snapshot && this.snapshot.uri !== uri) {
-         await this.close();
-      }
-      this.snapshot = await this.session.openDocument({ uri });
-      const server = await this.session.connected();
-      this.snapshot = await server.getModelDocument({ uri, includeDiagnostics: true });
-      this.setDirty(this.snapshot.text?.dirty);
-      this.changeEmitter.fire(undefined);
    }
 
    /**
@@ -256,177 +107,17 @@ export class OrderFlowPropertiesModel<TTransfer extends TransferElement> {
     */
    async setField(name: string, value: string): Promise<SetFieldOutcome> {
       this.assertLive();
-      const open = this.snapshot;
-      if (!open) {
+      const root = this.root;
+      if (!root) {
          throw new Error('No document is open');
       }
-      // An open snapshot is not enough: `model` is absent when the server has no
-      // such document, and there is nothing to edit against then.
-      const base = TransferDocument.assertLoaded(open);
-      const current = this.fields.find(field => field.name === name);
+      const current = this.fieldsOf(root).find(field => field.name === name);
       if (!current) {
-         throw new Error(`'${name}' is not an editable field of ${base.model.root.$type}`);
+         throw new Error(`'${name}' is not an editable field of ${root.$type}`);
       }
       if (current.value === value) {
          return { status: 'unchanged' };
       }
-
-      return this.edits.track(this.reconcile(base, withField(base.model.root, name, value)));
-   }
-
-   /** Whether a field edit has not answered yet. Synchronous, for an unload guard. */
-   get hasWritesInFlight(): boolean {
-      return !this.edits.isIdle;
-   }
-
-   /**
-    * Resolves to `true` once the field edits in flight now have answered, or
-    * to `false` once {@link settleWritesMs} has passed first. Never rejects.
-    */
-   async whenWritesSettled(): Promise<boolean> {
-      if (this.edits.isIdle) {
-         return true;
-      }
-      return (await this.clock.raceTimer(this.edits.whenSettled(), this.settleWritesMs)) !== TIMED_OUT;
-   }
-
-   /** Close the open document. The server unwatches implicitly. Safe when nothing is open. */
-   async close(): Promise<void> {
-      const open = this.snapshot;
-      if (!open) {
-         return;
-      }
-      this.snapshot = undefined;
-      this.setDirty(false);
-      await this.session.closeDocument({ uri: open.uri });
-      this.changeEmitter.fire(undefined);
-   }
-
-   dispose(): void {
-      if (this.disposed) {
-         return;
-      }
-      this.disposed = true;
-      this.subscriptions.forEach(subscription => subscription.dispose());
-      this.changeEmitter.dispose();
-      this.dirtyEmitter.dispose();
-      this.snapshot = undefined;
-   }
-
-   /**
-    * Write `ours`, and on a `ConflictError` replay the user's intent on top of
-    * the server's current root and write that, gated on the refetched version.
-    */
-   protected async reconcile(base: LoadedTransferDocument<TTransfer>, ours: TTransfer): Promise<SetFieldOutcome> {
-      let theirs: TransferDocument<TTransfer> | undefined;
-      // The version the READ returned, not one re-read here: that is what makes
-      // the gate able to fire at all.
-      const outcome = await reconcileWrite(ours, base.model.version, {
-         persist: async (model, baseVersion) => {
-            this.adopt(await this.session.updateDocument({ uri: base.uri, model, baseVersion }));
-         },
-         refetch: async () => {
-            // A syncing read: its root and version come from the same text.
-            theirs = await (await this.session.connected()).getModelDocument({ uri: base.uri });
-            // Deleted while the conflict was being resolved. Replaying onto an
-            // invented empty root would write the file back.
-            const loaded = TransferDocument.assertLoaded(theirs);
-            return { model: loaded.model.root, baseVersion: loaded.model.version };
-         },
-         base: base.model.root,
-         conflictResolver: this.conflictResolver,
-         maxWrites: this.maxWrites
-      });
-
-      switch (outcome.status) {
-         case 'persisted':
-            return { status: 'applied' };
-         case 'merged':
-            return { status: 'merged' };
-         case 'conflict':
-            // Showing the server's value is what makes the dropped edit visible
-            // instead of leaving a stale field on screen.
-            if (theirs) {
-               this.adopt(theirs);
-            }
-            return { status: 'conflict' };
-         case 'dropped':
-            // The last refetch is older than the write that conflicted after it.
-            this.adopt(await (await this.session.connected()).getModelDocument({ uri: base.uri }));
-            return { status: 'conflict' };
-         case 'already-applied':
-            // The server holds the value at a later version than the snapshot's.
-            if (theirs) {
-               this.adopt(theirs);
-            }
-            return { status: 'unchanged' };
-         case 'unchanged':
-            return { status: 'unchanged' };
-         case 'unavailable':
-            return { status: 'unavailable' };
-      }
-   }
-
-   /**
-    * Drop the snapshot when the open document's file is removed. Nothing is
-    * adopted in its place: a later write would be authored against a base
-    * the server no longer has, and the host renders the empty state instead.
-    */
-   protected handleDocumentDeleted(event: { uri: string }): void {
-      if (this.disposed || event.uri !== this.snapshot?.uri) {
-         return;
-      }
-      this.snapshot = undefined;
-      this.setDirty(false);
-      this.changeEmitter.fire(undefined);
-   }
-
-   /** Follow a server push for the open document. */
-   protected handleDocumentUpdated(event: { document: TransferDocument<TTransfer>; sourceClientId: string; reason: string }): void {
-      if (this.disposed || !this.snapshot || event.document.uri !== this.snapshot.uri) {
-         return;
-      }
-      // Own echo: the write path already adopted the authoritative response, so
-      // re-adopting would fire a second change for a state the host has already
-      // rendered. That redundant render is the classic "the field resets while
-      // I am typing" bug in a properties view, which is what makes the filter
-      // worth having even though the CONTENT would be equivalent — a single
-      // ordered connection delivers echoes in send order, so a stale one cannot
-      // overtake a newer snapshot.
-      if (this.session.isOwnEcho(event.sourceClientId)) {
-         return;
-      }
-      // An equal hash means the held model is this one, whatever updates this
-      // model missed in between, such as one sent while it was disconnected.
-      const held = this.snapshot.model?.hash;
-      if (held !== undefined && held === event.document.model?.hash) {
-         // The whole document, root included, so the new version is never
-         // paired with a root it does not belong to; only the render is skipped.
-         this.snapshot = event.document;
-         this.setDirty(event.document.text?.dirty);
-         return;
-      }
-      this.adopt(event.document);
-   }
-
-   /** Take `document` as the new base and tell listeners. */
-   protected adopt(document: TransferDocument<TTransfer>): void {
-      this.snapshot = document;
-      this.setDirty(document.text?.dirty);
-      this.changeEmitter.fire(undefined);
-   }
-
-   /** Take `dirty` unless the server left it out, and tell listeners of a change. */
-   protected setDirty(dirty: boolean | undefined): void {
-      if (dirty !== undefined && dirty !== this.dirtyState) {
-         this.dirtyState = dirty;
-         this.dirtyEmitter.fire(undefined);
-      }
-   }
-
-   protected assertLive(): void {
-      if (this.disposed) {
-         throw new Error('OrderFlowPropertiesModel is disposed');
-      }
+      return this.edit(edited => withField(edited, name, value));
    }
 }

@@ -135,7 +135,7 @@ function mountHop(): void {
    connection = new DataConnection<OrderFlowTransferRoot>(port, events);
    const dataSession = connection.createSession('order-flow-hop-test');
    session = dataSession;
-   model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(dataSession, events);
+   model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(dataSession, events, uriOf(FULFILLMENT_PROCESS));
 }
 
 /** Write `root` as a third party, ungated, so it always lands. */
@@ -178,7 +178,7 @@ describe('order-flow properties panel data path through a socket, a relay and a 
       const toExtension = vi.spyOn(webview!.messenger, 'sendNotification');
       const uri = uriOf(FULFILLMENT_PROCESS);
 
-      await model!.open(uri);
+      await model!.open();
       expect(model!.fields).toEqual([
          { name: 'name', value: 'Fulfillment' },
          { name: 'subject', value: 'Order' }
@@ -205,7 +205,7 @@ describe('order-flow properties panel data path through a socket, a relay and a 
    it('follows a third-party write pushed back through the hop', async () => {
       mountHop();
       const uri = uriOf(FULFILLMENT_PROCESS);
-      await model!.open(uri);
+      await model!.open();
 
       const server = await session!.connected();
       const foreign = (await server.getModelDocument({ uri })).model?.root as ProcessModel;
@@ -226,8 +226,7 @@ describe('order-flow properties panel data path through a socket, a relay and a 
       // Controlled by making `connectionLost` a no-op, which leaves one
       // generation and reddens the length assertion.
       mountHop();
-      const uri = uriOf(FULFILLMENT_PROCESS);
-      await model!.open(uri);
+      await model!.open();
 
       // What the panel does on `connectionLost`: the session drops its
       // generation and disposes the connection.
@@ -239,7 +238,10 @@ describe('order-flow properties panel data path through a socket, a relay and a 
       relay = relayHop();
 
       // A fresh request builds generation two and must be answered.
-      await model!.open(uri);
+      await model!.close();
+      model!.dispose();
+      model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session!, events!, uriOf(FULFILLMENT_PROCESS));
+      await model.open();
       expect(model!.fields.find(field => field.name === 'name')?.value).toBe('Fulfillment');
       expect(port!.generations.size).toBe(2);
       expect(await model!.setField('name', 'AfterReconnect')).toEqual({ status: 'applied' });
@@ -252,7 +254,7 @@ describe('order-flow properties panel data path through a socket, a relay and a 
       // different: not "the handler fired" but "a foreign message reached the
       // REAL server and it answered".
       mountHop();
-      await model!.open(uriOf(FULFILLMENT_PROCESS));
+      await model!.open();
       const toWebview = vi.spyOn(harness!.extension, 'sendNotification');
 
       const intruder = createWebviewSideChannel(harness!.openWebview().messenger, HOST_EXTENSION);

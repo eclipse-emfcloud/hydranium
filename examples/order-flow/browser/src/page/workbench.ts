@@ -215,24 +215,17 @@ let processDiagram: GlspDiagramMount | undefined;
 /** The properties panel, whose unanswered field edits the unload guard and a save account for. */
 let propertiesPanel: PropertiesPanel | undefined;
 
-/** The document the properties panel shows, once it is up. */
-let propertiesDocument: () => string | undefined = () => undefined;
-
 /**
  * What a reload would drop: the unsaved documents, the diagram's document
- * while an edit to it is in flight, and the panel's while a write of it is,
- * which no dirty set shows until the server answers.
+ * while an edit to it is in flight, and each the panel has a write of out, one
+ * shown before included, which no dirty set shows until the server answers.
  */
 function unsavedWork(): readonly string[] {
    const unsaved = new Set(unsavedDocuments());
    if ((processDiagram?.editsInFlight ?? 0) > 0) {
       unsaved.add(GLSP_HEAD_DOCUMENT);
    }
-   // The document shown now, which a focus change during the write misnames.
-   const written = propertiesDocument();
-   if (propertiesPanel?.hasWritesInFlight && written !== undefined) {
-      unsaved.add(written);
-   }
+   propertiesPanel?.documentsWithWritesInFlight.forEach(uri => unsaved.add(uri));
    return [...unsaved];
 }
 
@@ -963,7 +956,6 @@ export async function main(locale: Locale | undefined): Promise<void> {
    // back as echoes rather than as foreign edits.
    properties.panel = new PropertiesPanel(dataHead.connection.createSession(PROPERTIES_SESSION_LABEL), dataHead.connection.events);
    propertiesPanel = properties.panel;
-   propertiesDocument = () => properties.panel?.documentUri;
 
    // The panel's first document is established by FOCUSING one, not by opening
    // it directly: an initial document chosen here would be a second answer to
