@@ -13,6 +13,9 @@ framework's client classes.
 - A custom editor whose webview document carries a Content-Security-Policy
   that grants sprotty what it needs and no `eval`, and the element the diagram
   mounts into.
+- GLSP's connector, with each save settled by the server's answer to it: a
+  save that fails rejects with the documents it could not write and why, and
+  shows them, rather than settling as saved on a later save that succeeds.
 - A webview starter that adds `@hydranium/glsp-client`'s classes to the
   diagram container, after GLSP's VS Code modules and before your diagram's.
 
@@ -34,10 +37,10 @@ npm install @hydranium/glsp-client-vscode
 
 ## Wiring
 
-In the extension host, give GLSP's connector the server, start it without
-awaiting it, report a failure off `onReady`, and register your editor, a
-subclass naming the diagram type, the webview bundle and a title. `findPort`
-is your lookup of the head's port, such as `findPort` from
+In the extension host, give a `HydraniumGlspVscodeConnector` the server,
+start it without awaiting it, report a failure off `onReady`, and register
+your editor, a subclass naming the diagram type, the webview bundle and a
+title. `findPort` is your lookup of the head's port, such as `findPort` from
 `@hydranium/client-vscode/node` on your language client:
 
 <!-- snippet-preamble
@@ -45,8 +48,7 @@ declare function findGlspPort(): Promise<number>;
 -->
 
 ```ts
-import { GlspVscodeConnector } from '@eclipse-glsp/vscode-integration';
-import { HydraniumGlspEditorProvider, HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';
+import { HydraniumGlspEditorProvider, HydraniumGlspVscodeConnector, HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';
 import { ConsoleLogger } from '@hydranium/protocol';
 import { window, type ExtensionContext } from 'vscode';
 
@@ -64,7 +66,7 @@ export function activate(context: ExtensionContext): void {
       findPort: findGlspPort,
       logger: new ConsoleLogger()
    });
-   const connector = new GlspVscodeConnector({ server });
+   const connector = new HydraniumGlspVscodeConnector({ server });
    context.subscriptions.push(server, connector);
    void server.start();
    server.onReady.catch((error: unknown) => window.showErrorMessage(`Diagram unavailable: ${String(error)}`));
@@ -110,11 +112,11 @@ For the whole setup, see *Host in VS Code* in
 
 ## Entry points
 
-| Subpath     | Use it for                                      | Runs in                    |
-| ----------- | ----------------------------------------------- | -------------------------- |
-| `.`         | The class name both tiers share                 | anywhere                   |
-| `./node`    | The GLSP server and the diagram's custom editor | the VS Code extension host |
-| `./browser` | The diagram webview's starter                   | a webview                  |
+| Subpath     | Use it for                                                     | Runs in                    |
+| ----------- | -------------------------------------------------------------- | -------------------------- |
+| `.`         | The class name both tiers share                                | anywhere                   |
+| `./node`    | The GLSP server, the connector and the diagram's custom editor | the VS Code extension host |
+| `./browser` | The diagram webview's starter                                  | a webview                  |
 
 The subpaths need a TypeScript `moduleResolution` that reads `exports`
 (`NodeNext` or `Bundler`); see *Requirements* in

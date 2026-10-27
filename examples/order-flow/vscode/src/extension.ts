@@ -20,10 +20,9 @@
 
 import { OrderFlowPropertiesPanel } from './properties-panel';
 import { ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE, OrderFlowProcessDiagramEditorProvider } from './process-diagram-editor';
-import { GlspVscodeConnector } from '@eclipse-glsp/vscode-integration';
 import { findPort } from '@hydranium/client-vscode/node';
 import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_SERVER_PORT_COMMAND } from '@hydranium/example-order-flow-protocol';
-import { HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';
+import { HydraniumGlspVscodeConnector, HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';
 import { ConsoleLogger, describeError } from '@hydranium/protocol';
 // The MODULE, not a barrel: this package is a VS Code extension with no public
 // API surface of its own, so the servers extension is consumed by path.
@@ -61,7 +60,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
       findPort: () => findPort(running, ORDER_FLOW_GLSP_SERVER_PORT_COMMAND),
       logger: new ConsoleLogger().with('GLSP head')
    });
-   const glspConnector = new GlspVscodeConnector({ server: glspServer, logging: false });
+   const glspConnector = new HydraniumGlspVscodeConnector({ server: glspServer, logging: false });
    context.subscriptions.push(glspServer, glspConnector);
    // `start()` opens the socket, so it runs the port poll. Not awaited: a user who
    // never opens a diagram should not pay for it, and a failure here must not take

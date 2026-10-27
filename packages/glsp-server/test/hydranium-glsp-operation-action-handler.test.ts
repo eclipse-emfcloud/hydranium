@@ -10,7 +10,7 @@
 import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
 import { type ActionMessage, type Operation } from '@eclipse-glsp/server';
-import { asModelVersion, ConflictError } from '@hydranium/protocol';
+import { asModelVersion, ConflictError, SaveFailedError } from '@hydranium/protocol';
 import { HydraniumGlspOperationActionHandler } from '../src/command/hydranium-glsp-operation-action-handler.js';
 import { makeNoopGlspLogger } from '../src/testing/make-noop-glsp-logger.js';
 
@@ -32,6 +32,7 @@ class RecordingHandler extends HydraniumGlspOperationActionHandler {
       Object.assign(this, {
          logger,
          modelState: this.state,
+         sharedServices: { MessageRenderer: { renderError: (error: Error) => `rendered: ${error.message}` } },
          clientProxy: { process: (message: ActionMessage): void => void this.sent.push(message) }
       });
    }
@@ -53,6 +54,13 @@ describe('HydraniumGlspOperationActionHandler.reportFailure', () => {
       expect(handler.errors).toHaveLength(1);
       expect(handler.errors[0]).toMatch(/someOperation[\s\S]*boom[\s\S]*\n\s+at /);
       expect(handler.sent.map(message => message.action.kind)).toEqual(['message']);
+   });
+
+   it("heads the notification with a typed error's rendered message", () => {
+      const handler = new RecordingHandler();
+      const error = new SaveFailedError([{ uri: 'file:///a.x', reason: 'disk full' }]);
+      handler.fail(error);
+      expect(handler.sent[0].action).toMatchObject({ message: `rendered: ${error.message}`, details: String(error) });
    });
 
    it('warns for a conflict, which is declined rather than failed, naming both versions', () => {

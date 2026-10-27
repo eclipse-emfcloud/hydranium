@@ -3328,10 +3328,11 @@ function hostVscodeExtensionFile(composition: InitComposition): string {
       ...(data ? [`type ${composition.name}Element`] : [])
    ];
    const imports = [
-      ...(diagrams.length > 0 ? ["import { GlspVscodeConnector } from '@eclipse-glsp/vscode-integration';"] : []),
       ...(sockets ? ["import { findPort } from '@hydranium/client-vscode/node';"] : []),
       ...(data ? ["import { SocketDataPort } from '@hydranium/data-client-vscode/node';"] : []),
-      ...(diagrams.length > 0 ? ["import { HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';"] : []),
+      ...(diagrams.length > 0
+         ? ["import { HydraniumGlspVscodeConnector, HydraniumGlspVscodeServer } from '@hydranium/glsp-client-vscode/node';"]
+         : []),
       ...(sockets
          ? [
               importList(
@@ -3380,7 +3381,7 @@ function hostVscodeExtensionFile(composition: InitComposition): string {
       findPort: () => findPort(running, ${upper}_GLSP_SERVER_PORT_COMMAND),
       logger: new ConsoleLogger().with('GLSP head')
    });
-   const glspConnector = new GlspVscodeConnector({ server: glspServer, logging: false });
+   const glspConnector = new HydraniumGlspVscodeConnector({ server: glspServer, logging: false });
    context.subscriptions.push(glspServer, glspConnector);
    // Not awaited, so a session that opens no diagram does not wait on the port.
    // \`start()\` resolves either way; a failure is reported off \`onReady\`.

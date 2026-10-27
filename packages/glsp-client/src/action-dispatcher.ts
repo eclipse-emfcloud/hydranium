@@ -41,6 +41,7 @@ import {
    type Logger,
    PendingWorkTracker,
    RequestEditsSettledAction,
+   reviveProtocolErrorJson,
    type Stopwatch,
    SystemClock,
    TIMED_OUT,
@@ -211,6 +212,33 @@ export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
       const dispatched = super.dispatch(action);
       this.trackEdit(action);
       return dispatched;
+   }
+
+   /**
+    * As GLSP's, except that a reject whose `detail` is a JSON-RPC error
+    * envelope, as the server sends for a typed error such as `SaveFailedError`,
+    * rejects the request with that error revived. GLSP's rejects with the
+    * reject's message alone, so a caller could not read what failed. The
+    * accompanying test pins GLSP's body, whose timeout and request handling
+    * this repeats.
+    */
+   protected override async handleResponseAction(action: ResponseAction): Promise<void> {
+      const request = this.requests.get(action.responseId);
+      if (!request || !RejectAction.is(action) || action.detail === undefined) {
+         return super.handleResponseAction(action);
+      }
+      const error = reviveProtocolErrorJson(action.detail);
+      if (!error) {
+         return super.handleResponseAction(action);
+      }
+      const timeout = this.timeouts.get(action.responseId);
+      if (timeout !== undefined) {
+         clearTimeout(timeout);
+         this.timeouts.delete(action.responseId);
+      }
+      this.requests.delete(action.responseId);
+      request.reject(error);
+      this.logger.warn(this, `Request with id ${action.responseId} failed.`, action.message, action.detail);
    }
 
    protected override handleBlocked(action: Action, predicate: (action: Action) => boolean): Promise<void> {

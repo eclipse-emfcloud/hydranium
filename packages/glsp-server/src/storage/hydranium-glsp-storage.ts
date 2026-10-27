@@ -40,6 +40,7 @@ import {
    isDuplicateClientIdError,
    isSessionClosedError,
    RESUME_TOKEN_ARG,
+   SaveFailedError,
    SessionClosedError,
    describeError,
    describeErrorWithStack
@@ -965,8 +966,11 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       const failures = results.flatMap((result, i) => (result.status === 'rejected' ? [{ uri: targets[i], reason: result.reason }] : []));
       if (failures.length > 0) {
          // A persist's error need not name its document, so the save's names each one.
-         const named = failures.map(({ uri, reason }) => `${uri} (${describeError(reason)})`).join(', ');
-         throw new Error(`Save failed for ${named}`, { cause: failures[0].reason });
+         const error = new SaveFailedError(failures.map(({ uri, reason }) => ({ uri, reason: describeError(reason) })));
+         // Rendered here, as every message this head raises: GLSP's client shows the message as sent.
+         error.message = this.sharedServices.MessageRenderer.renderError(error);
+         error.cause = failures[0].reason;
+         throw error;
       }
       for (const uri of departed) {
          if (this.departedSecondaries.delete(uri) && uri !== this.state.sourceUri) {
@@ -1022,9 +1026,9 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * the two readers are addressed separately, as on the save path: `message`
     * names what failed in the user's terms and is rendered, `cause` names the
     * action and the option key that was missing and stays English. On THIS path
-    * the cause reaches only logs — `RejectAction.detail` is read by nothing but
-    * the client action-dispatcher's `logger.warn` — which is not what makes it
-    * English; its content is.
+    * the cause reaches only logs — a `RejectAction.detail` that is not a typed
+    * error's envelope reaches nothing but the client action-dispatcher's
+    * `logger.warn` — which is not what makes it English. Its content is.
     */
    protected getSourceUri(action: RequestModelAction): string {
       const sourceUri = action.options?.[SOURCE_URI_ARG];

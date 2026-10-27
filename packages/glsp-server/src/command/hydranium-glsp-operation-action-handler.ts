@@ -19,8 +19,10 @@ import {
    OperationActionHandler,
    type OperationHandler
 } from '@eclipse-glsp/server';
-import { describeErrorWithStack } from '@hydranium/protocol';
+import { type ServerSharedServices } from '@hydranium/core';
+import { describeErrorWithStack, isResponseError } from '@hydranium/protocol';
 import { inject, injectable } from 'inversify';
+import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { logActionFailure } from './diagram-edit-dropped-error.js';
 import { HydraniumGlspOperationCommand, openOperationOf, runOperation } from './hydranium-glsp-operation-command.js';
 import { type HydraniumGlspRecordingState } from './hydranium-glsp-recording-command.js';
@@ -52,6 +54,7 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
    @inject(ActionDispatcher) protected readonly actionDispatcher!: ActionDispatcher;
    @inject(Logger) protected readonly logger!: Logger;
    @inject(GLSPClientProxy) protected readonly clientProxy!: GLSPClientProxy;
+   @inject(HydraniumTypes.SharedCoreServices) protected readonly sharedServices!: ServerSharedServices;
 
    /**
     * Runs `operation`, or queues it behind the open one and tracks its delivery,
@@ -114,7 +117,8 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
 
    /**
     * Log `error` with {@link logActionFailure}, as the server logs a failed
-    * action, and send the client the error message GLSP sends for one. A
+    * action, and send the client the error message GLSP sends for one, headed
+    * by a typed error's rendered message as the server's notification is. A
     * queued operation that fails once its diagram has closed, which the
     * storage's dispose marks by clearing the state's session, is logged at
     * `debug` and told to no client, as the server treats an ended session.
@@ -131,6 +135,8 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
       if (error instanceof GLSPServerError) {
          details = String(error.cause);
          message = error.message;
+      } else if (isResponseError(error)) {
+         message = this.sharedServices.MessageRenderer.renderError(error);
       }
       this.sendToClient(MessageAction.create(message, { severity: 'ERROR', details }));
    }

@@ -31,7 +31,13 @@ import {
 import { ContainerModule, inject, injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import type { ServerSharedServices } from '@hydranium/core';
-import { ModelSavedAction, ReconcilingConflictResolver, RequestSaveModelAction } from '@hydranium/protocol';
+import {
+   ModelSavedAction,
+   ReconcilingConflictResolver,
+   RequestSaveModelAction,
+   reviveProtocolErrorJson,
+   SaveFailedError
+} from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
@@ -135,6 +141,7 @@ function stubSharedServices(): ServerSharedServices {
    };
    return {
       Tracer: { for: () => ({ withUri: () => childLogger }) },
+      MessageRenderer: { renderError: (error: Error) => error.message },
       workspace: { LangiumDocuments: { getDocument: () => undefined } },
       model: { ModelService: { ensureDocumentState: () => Promise.resolve(), snapshot: () => undefined, getDocument: () => undefined } }
    } as unknown as ServerSharedServices;
@@ -195,17 +202,21 @@ describe('HydraniumGlspRequestSaveModelActionHandler', () => {
 
    it('rejects a request whose save fails, shows the failure, and saves the next one', async () => {
       const server = await startServer();
-      saveFailure = new Error('disk full');
+      saveFailure = new SaveFailedError([{ uri: 'file:///x.a', reason: 'disk full' }]);
 
       server.dispatch(RequestSaveModelAction.create({ requestId: 'save-1' }));
       const rejected = await server.nextAction<RejectAction>(RejectAction.KIND);
 
       expect(rejected.responseId).toBe('save-1');
       expect(rejected.detail).toContain('disk full');
-      // The same notification a failed SaveModelAction raises, since a rejected
-      // request reaches only the client's log.
+      // The same notification a failed SaveModelAction raises, since a Theia
+      // host only logs a rejected save.
       const shown = await server.nextAction<MessageAction>(MessageAction.KIND);
       expect(shown.severity).toBe('ERROR');
+      // Headed by what failed, for a Theia host. HydraniumGlspVscodeConnector tells the notification for this save by its details.
+      const typed = rejected.detail === undefined ? undefined : reviveProtocolErrorJson(rejected.detail);
+      expect(shown.message).toBe(typed?.message ?? 'no typed error');
+      expect(shown.details).toContain(typed?.message ?? 'no typed error');
       expect(server.actions.some(action => action.kind === ModelSavedAction.KIND)).toBe(false);
 
       server.dispatch(RequestSaveModelAction.create({ requestId: 'save-2' }));

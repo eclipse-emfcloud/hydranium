@@ -20,9 +20,11 @@ import {
    type ResponseAction,
    SourceModelStorage
 } from '@eclipse-glsp/server';
-import { describeErrorWithStack, RequestSaveModelAction } from '@hydranium/protocol';
-import { injectable } from 'inversify';
+import { type ServerSharedServices } from '@hydranium/core';
+import { describeErrorWithStack, isResponseError, RequestSaveModelAction } from '@hydranium/protocol';
+import { inject, injectable, optional } from 'inversify';
 import { logActionFailure } from '../command/diagram-edit-dropped-error.js';
+import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { HydraniumGlspStorage } from '../storage/hydranium-glsp-storage.js';
 import { takeSettleFailureLogged } from '../storage/logged-settle-failures.js';
 
@@ -56,6 +58,9 @@ import { takeSettleFailureLogged } from '../storage/logged-settle-failures.js';
  */
 @injectable()
 export class HydraniumGlspServer extends DefaultGLSPServer {
+   /** Optional: a server built without `HydraniumGlspAppModule` heads a typed error's notification with its raw message. */
+   @inject(HydraniumTypes.SharedCoreServices) @optional() protected readonly sharedServices?: ServerSharedServices;
+
    /**
     * End each diagram's client session as lost rather than closed, before
     * upstream disposes the sessions, so its unsaved text waits out the release
@@ -133,12 +138,35 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
     * nullish `cause` counts as absent, matching the optional chaining upstream
     * applies. Anything else stringifies as upstream does, so a plain `Error`
     * keeps its `"Error: …"` prefix and callers that match on it still match.
+    *
+    * A typed error, a `ResponseError` thrown or carried as the `cause`, goes out
+    * as its JSON-RPC envelope in JSON text instead, so the client can revive it
+    * with `reviveProtocolErrorJson` and react to its fields.
     */
    protected requestFailureDetail(error: unknown): string | undefined {
+      const typed = error instanceof GLSPServerError ? error.cause : error;
+      if (isResponseError(typed)) {
+         try {
+            return JSON.stringify(typed.toJson());
+         } catch {
+            // Data JSON cannot hold, such as a cycle, goes out as text.
+            return String(typed);
+         }
+      }
       if (error instanceof GLSPServerError) {
          return error.cause === undefined || error.cause === null ? error.message : String(error.cause);
       }
       return error === undefined || error === null ? undefined : String(error);
+   }
+
+   /**
+    * The message of the client's {@link RejectAction} when a request fails,
+    * which a host shows as the request's failure. A {@link GLSPServerError}'s
+    * message is written for the user, as the error notification shows it, so it
+    * is the message. Anything else gets upstream's, naming the request.
+    */
+   protected requestFailureMessage(action: RequestAction<ResponseAction>, error: unknown): string {
+      return error instanceof GLSPServerError ? error.message : `Failed to handle request '${action.kind}' (${action.requestId})`;
    }
 
    /**
@@ -147,7 +175,10 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
     * with {@link logActionFailure} where upstream logs the action and the
     * reason as two lines.
     *
-    * The notification is upstream's, text and all, and this body does not
+    * The notification is upstream's, except that a typed error, a
+    * `ResponseError` such as `SaveFailedError`, heads it with its own message,
+    * as a {@link GLSPServerError} does, rendered by the `MessageRenderer` when
+    * shared services are bound. Its details are upstream's. This body does not
     * track upstream: the accompanying test pins upstream's source as it does
     * for {@link handleClientRequest}.
     */
@@ -159,24 +190,27 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
       if (reason instanceof GLSPServerError) {
          details = stringifyAsUpstream(reason.cause);
          errorMsg = reason.message;
+      } else if (isResponseError(reason)) {
+         errorMsg = this.sharedServices?.MessageRenderer.renderError(reason) ?? reason.message;
       }
       this.sendToClient({ clientId: message.clientId, action: MessageAction.create(errorMsg, { severity: 'ERROR', details }) });
    }
 
    /**
     * Lifted from `@eclipse-glsp/server` 2.7.0's
-    * {@link DefaultGLSPServer.handleClientRequest}, with the detail computation
-    * delegated to {@link requestFailureDetail}. A failure is logged once, with
+    * {@link DefaultGLSPServer.handleClientRequest}, with the reject's message
+    * and detail delegated to {@link requestFailureMessage} and
+    * {@link requestFailureDetail}. A failure is logged once, with
     * its stack; a settle request's failure its handler has logged already is
     * not logged again. A request that fails once its session has ended is
     * logged at `debug` and answered to no client, as {@link process} treats an
     * action. One addition: a failed {@link RequestSaveModelAction} also raises
     * the error notification a failed `SaveModelAction` raises, through
-    * {@link handleProcessError}, which then logs it instead. A rejection
-    * reaches only the client's log, and a Theia host only logs a rejected save,
-    * so without it a save that failed would tell the user nothing. Nothing else
-    * here — the timeout branch, the response dispatch, the nested send-failure
-    * handling — relates to either.
+    * {@link handleProcessError}, which then logs it instead. A Theia host only
+    * logs a rejected save, so without it a save that failed would tell the user
+    * nothing. `HydraniumGlspVscodeConnector` shows the rejection in its place.
+    * Nothing else here — the timeout branch, the response dispatch, the nested
+    * send-failure handling — relates to either.
     *
     * **This body does not track upstream.** A release that changes request
     * handling would silently not apply, on the path every request takes. There
@@ -203,7 +237,6 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
             this.logger.debug(`Request '${action.kind}' (${action.requestId}) ended with its session: ${describeErrorWithStack(error)}`);
             return;
          }
-         const detail = this.requestFailureDetail(error);
          const isSave = action.kind === RequestSaveModelAction.KIND;
          // A settle failure the handler logged, with the stack its rejection does not carry.
          if (!isSave && !takeSettleFailureLogged(clientId, action.requestId)) {
@@ -213,9 +246,9 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
          // here would be an unhandled rejection.
          try {
             try {
-               const reject = RejectAction.create(`Failed to handle request '${action.kind}' (${action.requestId})`, {
+               const reject = RejectAction.create(this.requestFailureMessage(action, error), {
                   responseId: action.requestId,
-                  detail
+                  detail: this.requestFailureDetail(error)
                });
                this.sendResponseToClient(clientId, reject);
             } finally {

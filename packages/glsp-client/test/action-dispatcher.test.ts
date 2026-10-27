@@ -8,13 +8,16 @@
  ********************************************************************************/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
 import {
    type Action,
    type RequestAction,
    type ResponseAction,
    CheckEdgeResultAction,
    ComputedBoundsAction,
+   Deferred as GlspDeferred,
    GLSPActionDispatcher,
+   LogLevel,
    MessageAction,
    RedoAction,
    RejectAction,
@@ -31,7 +34,7 @@ import {
    StatusAction,
    UndoAction
 } from '@eclipse-glsp/client';
-import { Deferred, EditsSettledAction, RequestEditsSettledAction } from '@hydranium/protocol';
+import { Deferred, EditsSettledAction, RequestEditsSettledAction, SaveFailedError, isSaveFailedError } from '@hydranium/protocol';
 import { makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
 import { HYDRANIUM_DEFAULT_KIND_PAIRS, HYDRANIUM_DEFAULT_LOGGED_KINDS, HydraniumGlspActionDispatcher } from '../src/action-dispatcher';
 
@@ -546,5 +549,79 @@ describe('HydraniumGlspActionDispatcher logging an edge check', () => {
       expect(lines[1]).toMatch(
          /^Process action 'checkEdgeTargetResult' \[client → client] \[edgeType=edge:one source=a target=b isValid=false] \[response #1, \d+ms]$/
       );
+   });
+});
+
+/** Answers a request it registered itself, past GLSP's dispatch pipeline. */
+class AnsweringDispatcher extends TestableDispatcher {
+   constructor() {
+      super();
+      this.logger = { logLevel: LogLevel.warn, error: vi.fn(), warn: vi.fn(), info: vi.fn(), log: vi.fn() };
+   }
+
+   awaitResponse(requestId: string): Promise<ResponseAction> {
+      const pending = new GlspDeferred<ResponseAction>();
+      this.requests.set(requestId, pending);
+      return pending.promise;
+   }
+
+   respond(action: ResponseAction): Promise<void> {
+      return this.handleResponseAction(action);
+   }
+
+   /** A request timeout as `requestUntil` arms it, `true` while it is still armed. */
+   armTimeout(requestId: string): () => boolean {
+      const timer = setTimeout(() => undefined, 60_000);
+      this.timeouts.set(requestId, timer);
+      return () => this.timeouts.has(requestId);
+   }
+}
+
+describe('HydraniumGlspActionDispatcher rejected requests', () => {
+   function dispatcherWithRequest(): { dispatcher: AnsweringDispatcher; response: Promise<ResponseAction> } {
+      const dispatcher = new AnsweringDispatcher();
+      return { dispatcher, response: dispatcher.awaitResponse('save-1') };
+   }
+
+   it('rejects with the typed error a reject carries in its detail', async () => {
+      const { dispatcher, response } = dispatcherWithRequest();
+      const error = new SaveFailedError([{ uri: 'file:///x.a', reason: 'disk full' }]);
+      await dispatcher.respond(
+         RejectAction.create('Failed to handle request', { responseId: 'save-1', detail: JSON.stringify(error.toJson()) })
+      );
+
+      const rejection = await response.then(
+         () => undefined,
+         (reason: unknown) => reason
+      );
+      expect(isSaveFailedError(rejection)).toBe(true);
+      expect(rejection).toMatchObject({ failures: [{ uri: 'file:///x.a', reason: 'disk full' }] });
+   });
+
+   it('clears the request timeout when it rejects with a typed error', async () => {
+      const { dispatcher, response } = dispatcherWithRequest();
+      const armed = dispatcher.armTimeout('save-1');
+      const detail = JSON.stringify(new SaveFailedError([{ uri: 'file:///x.a', reason: 'disk full' }]).toJson());
+      await dispatcher.respond(RejectAction.create('Failed to handle request', { responseId: 'save-1', detail }));
+      await response.catch(() => undefined);
+      expect(armed()).toBe(false);
+   });
+
+   it("rejects with GLSP's message when the detail is plain text", async () => {
+      const { dispatcher, response } = dispatcherWithRequest();
+      await dispatcher.respond(RejectAction.create('Failed to handle request', { responseId: 'save-1', detail: 'Error: plain failure' }));
+      await expect(response).rejects.toThrow('Failed to handle request');
+   });
+});
+
+// The handleResponseAction override repeats GLSP's timeout and request
+// handling, so a GLSP release that changes it would silently not apply.
+describe('GLSPActionDispatcher.handleResponseAction', () => {
+   it('still matches the body HydraniumGlspActionDispatcher repeats', () => {
+      const body = GLSPActionDispatcher.prototype['handleResponseAction'].toString().replace(/\s+/g, ' ').trim();
+      expect(
+         createHash('sha256').update(body).digest('hex'),
+         "@eclipse-glsp/client changed GLSPActionDispatcher.handleResponseAction: re-align HydraniumGlspActionDispatcher's override and update this digest"
+      ).toBe('7442551c620d679cdb62db18799ac0e9d9e0d194873ae8f8f638b9e4fa1df043');
    });
 });

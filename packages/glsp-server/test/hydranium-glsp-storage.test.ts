@@ -56,6 +56,8 @@ import {
    DuplicateClientIdError,
    RESUME_TOKEN_ARG,
    ReconcilingConflictResolver,
+   SAVE_FAILED,
+   SaveFailedError,
    SessionClosedError,
    asCanonicalUri
 } from '@hydranium/protocol';
@@ -382,6 +384,8 @@ function createPolicyStorage(options: {
    openElsewhere?: readonly string[];
    refuseSession?: boolean;
    settleLanguageClient?: (uri: string) => Promise<void>;
+   /** Renders the save's failure in this locale, from this catalogue. */
+   translation?: { locale: string; catalogue: Record<string, string> };
 }): {
    storage: PolicyStorage;
    persistMock: ReturnType<typeof vi.fn>;
@@ -397,25 +401,34 @@ function createPolicyStorage(options: {
    const { logger, lines } = makeCapturingGlspLogger();
    const container = new Container();
    container.bind(GlspLogger).toConstantValue(logger);
-   container.bind(HydraniumTypes.SharedCoreServices).toConstantValue(
-      makeNoopSharedServices<ServerSharedServices>({
-         workspace: {
-            ModelLedger: new DefaultModelLedger(),
-            DocumentUriPolicy: { canonicalUri: (uri: string) => uri },
-            AstDocumentManager: { isOpen: (uri: string) => open.has(uri) || openElsewhere.has(uri) },
-            TextDocuments: {
-               isOpenInClient: (uri: string, clientId: string) => (clientId === 'client-1' ? open : openElsewhere).has(uri)
-            }
-         },
-         model: {
-            ModelService: makeSessionModelService({
-               refuse: options.refuseSession,
-               persist: persistMock,
-               settleLanguageClient: options.settleLanguageClient
-            })
+   const { translation } = options;
+   class CatalogueRenderer extends DefaultMessageRenderer {
+      protected override translationsFor(locale: string | undefined): Record<string, string> | undefined {
+         return locale === translation?.locale ? translation?.catalogue : undefined;
+      }
+   }
+   const shared = makeNoopSharedServices<ServerSharedServices>({
+      ...(translation ? { MessageRenderer: services => new CatalogueRenderer(services) } : {}),
+      workspace: {
+         ModelLedger: new DefaultModelLedger(),
+         DocumentUriPolicy: { canonicalUri: (uri: string) => uri },
+         AstDocumentManager: { isOpen: (uri: string) => open.has(uri) || openElsewhere.has(uri) },
+         TextDocuments: {
+            isOpenInClient: (uri: string, clientId: string) => (clientId === 'client-1' ? open : openElsewhere).has(uri)
          }
-      })
-   );
+      },
+      model: {
+         ModelService: makeSessionModelService({
+            refuse: options.refuseSession,
+            persist: persistMock,
+            settleLanguageClient: options.settleLanguageClient
+         })
+      }
+   });
+   if (translation) {
+      shared.ServerLocale.accept(translation.locale);
+   }
+   container.bind(HydraniumTypes.SharedCoreServices).toConstantValue(shared);
    container.bind(HydraniumTypes.Tracer).toConstantValue(makeNoopTracer());
    container.bind(ClientSessionManager).toConstantValue({
       addListener() {},
@@ -954,8 +967,9 @@ describe('HydraniumGlspStorage', () => {
 
       it('leaves the cause untranslated, its content being developer-addressed', () => {
          // An AUDIENCE call, not a reachability one. On this path the cause does
-         // reach only logs (`RejectAction.detail` is read by nothing but the
-         // upstream client's action-dispatcher `logger.warn`), but the save path
+         // reach only logs (a `RejectAction.detail` that is not a typed error's
+         // envelope reaches nothing but the client action-dispatcher's
+         // `logger.warn`), but the save path
          // routes it into `MessageAction.details`, which a Theia host shows to a
          // user behind a "Show details" button. What keeps it English is that it
          // names the action kind and the missing option: a translated developer
@@ -1158,12 +1172,28 @@ describe('HydraniumGlspStorage', () => {
             () => undefined,
             (error: unknown) => error
          );
-         expect(failure).toBeInstanceOf(Error);
+         expect(failure).toBeInstanceOf(SaveFailedError);
+         expect((failure as SaveFailedError).failures).toEqual([
+            { uri: 'file:///x.a', reason: 'refused file:///x.a' },
+            { uri: 'file:///x.layout', reason: 'refused file:///x.layout' }
+         ]);
          expect((failure as Error).message).toBe(
-            'Save failed for file:///x.a (refused file:///x.a), file:///x.layout (refused file:///x.layout)'
+            'Could not save file:///x.a (refused file:///x.a), file:///x.layout (refused file:///x.layout).'
          );
          expect(((failure as Error).cause as Error).message).toBe('refused file:///x.a');
          expect(lines.filter(line => line.level === 'error')).toEqual([]);
+      });
+
+      it('renders the failure in the installed locale, each reason as written', async () => {
+         const { storage } = createPolicyStorage({
+            persist: () => Promise.reject(new Error('disk full')),
+            translation: { locale: 'xx-AA', catalogue: { [SAVE_FAILED.code]: 'AA: {failures}' } }
+         });
+         const error: unknown = await Promise.resolve(storage.saveSourceModel(saveAction)).catch((reason: unknown) => reason);
+         expect(error).toBeInstanceOf(Error);
+         expect((error as Error).message).toMatch(/^AA: file:\/\/\/x\.a \(disk full\)$/);
+         // V8 writes the stack's first line on first read, so a log that prints it shows the same text.
+         expect((error as Error).stack?.split('\n')[0]).toBe(`SaveFailedError: ${(error as Error).message}`);
       });
 
       it('settles a failed save only once every other document of the set has been written', async () => {
@@ -1257,7 +1287,9 @@ describe('HydraniumGlspStorage', () => {
          await waitFor(() => lines.some(line => line.message.startsWith('Diagram save failed')));
          const errors = lines.filter(line => line.level === 'error').map(line => line.message);
          expect(errors).toHaveLength(1);
-         expect(errors[0]).toMatch(/^Diagram save failed for file:\/\/\/x\.a: Error: Save failed for file:\/\/\/x\.layout \(disk full\)/);
+         expect(errors[0]).toMatch(
+            /^Diagram save failed for file:\/\/\/x\.a: SaveFailedError: Could not save file:\/\/\/x\.layout \(disk full\)/
+         );
       });
    });
 
