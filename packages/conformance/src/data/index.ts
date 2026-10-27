@@ -23,6 +23,7 @@ import {
    isDocumentNotOpenError,
    isDuplicateClientIdError,
    isReservedClientIdError,
+   isResponseError,
    isSessionClosedError,
    randomUuid,
    ReferenceSource,
@@ -63,6 +64,7 @@ export interface DataConformanceDriver<
    TTransfer extends TransferElement,
    TDiagnostic extends TransferDiagnostic = TransferDiagnostic
 > extends Harness {
+   /** Rejects with the typed errors revived, as `createRpcProxy` does, since the checks guard them. */
    readonly proxy: DataServerProtocol<TTransfer, TDiagnostic>;
    /** Captured `onDocumentUpdated` events, in append order. */
    readonly events: ReadonlyArray<TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>>;
@@ -189,7 +191,8 @@ async function openAs<TTransfer extends TransferElement, TDiagnostic extends Tra
 
 /**
  * Register `clientId` on `driver`, retrying while the server still refuses it
- * as a duplicate, for up to `boundMs`; the last refusal is thrown.
+ * as a duplicate, for up to `boundMs`. Fails with the refusal described past
+ * the bound, or at once on any other refusal.
  */
 async function registerWithin<TTransfer extends TransferElement, TDiagnostic extends TransferDiagnostic>(
    driver: DataConformanceDriver<TTransfer, TDiagnostic>,
@@ -202,8 +205,11 @@ async function registerWithin<TTransfer extends TransferElement, TDiagnostic ext
       if (refusal === undefined) {
          return;
       }
-      if (!isDuplicateClientIdError(refusal) || waited.elapsedMs >= boundMs) {
-         throw refusal;
+      if (!isDuplicateClientIdError(refusal)) {
+         assert.fail(`createSession under ${clientId} was refused other than as a duplicate: ${describeRefusal(refusal)}`);
+      }
+      if (waited.elapsedMs >= boundMs) {
+         assert.fail(`the ended connection's session kept ${clientId} for ${boundMs} ms: ${describeRefusal(refusal)}`);
       }
       await new Promise(resolveDelay => setTimeout(resolveDelay, 20));
    }
@@ -232,6 +238,21 @@ async function readUntil<TTransfer extends TransferElement, TDiagnostic extends 
       assert.ok(waited.elapsedMs < 2_000, message);
       await new Promise(resolveDelay => setTimeout(resolveDelay, 20));
    }
+}
+
+/** `error` with the code and data a guard reads, so a refusal of the wrong shape shows what it lacked. */
+function describeRefusal(error: unknown): string {
+   if (!isResponseError(error)) {
+      return String(error);
+   }
+   let shown: string | undefined;
+   try {
+      shown = JSON.stringify(error.data);
+   } catch {
+      // A cycle or a BigInt, from a driver that throws in-process.
+      shown = String(error.data);
+   }
+   return `${String(error)} (code ${error.code}, data ${shown})`;
 }
 
 /** Settle `promise` into its rejection, or `undefined` when it resolved. */
@@ -327,7 +348,10 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
          try {
             const clientId = await startSession(driver, 'conformance-session');
             const duplicate = await rejectionOf(driver.proxy.createSession({ clientId }));
-            assert.ok(isDuplicateClientIdError(duplicate), `a second createSession under a live id was not refused: ${String(duplicate)}`);
+            assert.ok(
+               isDuplicateClientIdError(duplicate),
+               `a second createSession under a live id was not refused: ${describeRefusal(duplicate)}`
+            );
             await driver.proxy.closeSession({ clientId });
             // The other half: a head that refused every id would pass the
             // assertion above on its own.
@@ -351,7 +375,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const refusal = await rejectionOf(driver.proxy.createSession({ clientId }));
                assert.ok(
                   isReservedClientIdError(refusal),
-                  `createSession under the reserved id ${clientId} was not refused as reserved: ${String(refusal)}`
+                  `createSession under the reserved id ${clientId} was not refused as reserved: ${describeRefusal(refusal)}`
                );
             }
          } finally {
@@ -479,12 +503,12 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const write = { uri: model.uri, clientId, model: model.text, baseVersion: 'any' } as const;
 
                const unopened = await rejectionOf(driver.proxy.updateModelDocument(write));
-               assert.ok(isDocumentNotOpenError(unopened), `a session wrote a document it never opened: ${String(unopened)}`);
+               assert.ok(isDocumentNotOpenError(unopened), `a session wrote a document it never opened: ${describeRefusal(unopened)}`);
                await driver.proxy.openModelDocument({ uri: model.uri, clientId });
                await driver.proxy.updateModelDocument(write);
                await driver.proxy.closeModelDocument({ uri: model.uri, clientId });
                const closed = await rejectionOf(driver.proxy.updateModelDocument(write));
-               assert.ok(isDocumentNotOpenError(closed), `a session wrote a document after closing it: ${String(closed)}`);
+               assert.ok(isDocumentNotOpenError(closed), `a session wrote a document after closing it: ${describeRefusal(closed)}`);
                await driver.proxy.closeSession({ clientId });
             } finally {
                driver.dispose();
@@ -503,7 +527,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const save = { uri: model.uri, clientId, model: model.text, baseVersion: 'any' } as const;
 
                const unopened = await rejectionOf(driver.proxy.saveModelDocument(save));
-               assert.ok(isDocumentNotOpenError(unopened), `a session saved a document it never opened: ${String(unopened)}`);
+               assert.ok(isDocumentNotOpenError(unopened), `a session saved a document it never opened: ${describeRefusal(unopened)}`);
                // The other half: a head refusing every session save would pass
                // the assertion above on its own.
                await driver.proxy.openModelDocument({ uri: model.uri, clientId });
@@ -527,11 +551,11 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                // Opened or written under an id that is no session, a document
                // would stay open for a client whose end nothing ever reports.
                const open = await rejectionOf(driver.proxy.openModelDocument({ uri: model.uri, clientId }));
-               assert.ok(isSessionClosedError(open), `a document opened under an unregistered id: ${String(open)}`);
+               assert.ok(isSessionClosedError(open), `a document opened under an unregistered id: ${describeRefusal(open)}`);
                const write = await rejectionOf(
                   driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, baseVersion: 'any' })
                );
-               assert.ok(isSessionClosedError(write), `a document was written under an unregistered id: ${String(write)}`);
+               assert.ok(isSessionClosedError(write), `a document was written under an unregistered id: ${describeRefusal(write)}`);
             } finally {
                driver.dispose();
             }
@@ -561,7 +585,10 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        const write = await rejectionOf(
                           sibling.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, baseVersion: 'any' })
                        );
-                       assert.ok(isDocumentNotOpenError(write), `a document stayed open after its connection ended: ${String(write)}`);
+                       assert.ok(
+                          isDocumentNotOpenError(write),
+                          `a document stayed open after its connection ended: ${describeRefusal(write)}`
+                       );
                        await sibling.proxy.closeSession({ clientId });
                     } finally {
                        sibling.dispose();
@@ -593,7 +620,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const write = await rejectionOf(
                   driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: model.text, baseVersion: 'any' })
                );
-               assert.ok(isDocumentNotOpenError(write), `a document stayed open after its session ended: ${String(write)}`);
+               assert.ok(isDocumentNotOpenError(write), `a document stayed open after its session ended: ${describeRefusal(write)}`);
                await driver.proxy.closeSession({ clientId });
             } finally {
                driver.dispose();
@@ -746,7 +773,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
 
                const stale = await rejectionOf(driver.proxy.deleteModelDocument({ uri, clientId, baseVersion: created.created.version }));
 
-               assert.ok(isConflictError(stale), `deleting ${uri} on a stale base version did not conflict: ${String(stale)}`);
+               assert.ok(isConflictError(stale), `deleting ${uri} on a stale base version did not conflict: ${describeRefusal(stale)}`);
                TransferDocument.assertLoaded(await driver.proxy.getModelDocument({ uri }));
                await driver.proxy.closeSession({ clientId });
             } finally {
@@ -768,7 +795,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                   driver.proxy.deleteModelDocument({ uri: model.uri, clientId: stranger, baseVersion: 'any' })
                );
 
-               assert.ok(isDocumentNotOpenError(refusal), `a delete without an open did not fail as not open: ${String(refusal)}`);
+               assert.ok(isDocumentNotOpenError(refusal), `a delete without an open did not fail as not open: ${describeRefusal(refusal)}`);
                TransferDocument.assertLoaded(await driver.proxy.getModelDocument({ uri: model.uri }));
                await driver.proxy.closeSession({ clientId: stranger });
                await driver.proxy.closeSession({ clientId: seeder });
@@ -795,7 +822,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const write = await rejectionOf(
                   driver.proxy.updateModelDocument({ uri, clientId: other, model: model.text, baseVersion: 'any' })
                );
-               assert.ok(isDocumentNotOpenError(write), `another session's open of ${uri} survived its delete: ${String(write)}`);
+               assert.ok(isDocumentNotOpenError(write), `another session's open of ${uri} survived its delete: ${describeRefusal(write)}`);
                await waitFor(() => driver.deletions.some(event => event.uri === uri), {
                   message: `no onDocumentDeleted event for ${uri} after its delete`
                });
@@ -889,7 +916,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const stale = await rejectionOf(
                   driver.proxy.persistModelDocument({ uri, clientId: persister, baseVersion: created.created.version })
                );
-               assert.ok(isConflictError(stale), `persisting ${uri} on a stale base version did not conflict: ${String(stale)}`);
+               assert.ok(isConflictError(stale), `persisting ${uri} on a stale base version did not conflict: ${describeRefusal(stale)}`);
                const base = TransferDocument.assertLoaded(written).model.version;
                const persisted = await driver.proxy.persistModelDocument({ uri, clientId: persister, baseVersion: base });
                assert.strictEqual(
@@ -1116,7 +1143,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        });
                     assert.ok(
                        isConflictError(rejection),
-                       `a write based on the superseded v${String(stale.model?.version)} was not refused: ${String(rejection)}`
+                       `a write based on the superseded v${String(stale.model?.version)} was not refused: ${describeRefusal(rejection)}`
                     );
 
                     // The other half, and it is not optional: a head that refused
@@ -1221,7 +1248,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                              ]
                           })
                        );
-                       assert.ok(isConflictError(stale), `a set with a stale member was not refused: ${String(stale)}`);
+                       assert.ok(isConflictError(stale), `a set with a stale member was not refused: ${describeRefusal(stale)}`);
                        const untouched = await driver.proxy.getModelDocument({ uri: model.uri });
                        assert.strictEqual(untouched.model?.version, first.version, 'a refused set applied its first document');
 

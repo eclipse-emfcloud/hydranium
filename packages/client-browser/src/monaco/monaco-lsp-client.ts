@@ -30,7 +30,7 @@
  *   directly rather than counted here in parallel.
  */
 
-import { isResponseError, SaveTextDocumentRequest, sendByMethodName } from '@hydranium/protocol';
+import { isResponseError, reviveProtocolError, SaveTextDocumentRequest, sendByMethodName } from '@hydranium/protocol';
 import * as monaco from 'monaco-editor-core';
 import { ConnectionErrors, type MessageConnection } from 'vscode-jsonrpc/browser';
 import {
@@ -1092,7 +1092,9 @@ export class MonacoLspClient {
     * The request carries the buffer's version and no text: every keystroke
     * already reached the server as a `didChange` sent before it on the same
     * connection, so the server persists its own text once it finds the buffer
-    * holds it, and refuses otherwise. A refusal leaves the document dirty.
+    * holds it, and refuses otherwise. A refusal leaves the document dirty, and
+    * rejects with its typed error revived, so `isConflictError` and the other
+    * guards recognise it.
     *
     * An answer marks nothing once a later save of the document has marked it:
     * a server that coalesces saves answers the earlier one after the later
@@ -1105,9 +1107,13 @@ export class MonacoLspClient {
          return undefined;
       }
       const ticket = ++this.saveCount;
-      await this.connection.sendRequest(SaveTextDocumentRequest.type, {
-         textDocument: { uri: document.uri, version: document.model.getVersionId() }
-      });
+      await this.connection
+         .sendRequest(SaveTextDocumentRequest.type, {
+            textDocument: { uri: document.uri, version: document.model.getVersionId() }
+         })
+         .catch((error: unknown) => {
+            throw reviveProtocolError(error);
+         });
       if (ticket > (this.markedSaves.get(document.uri) ?? 0)) {
          this.markedSaves.set(document.uri, ticket);
          this.markSaved(document);

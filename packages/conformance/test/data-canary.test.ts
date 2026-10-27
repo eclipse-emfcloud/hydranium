@@ -226,6 +226,26 @@ describe('the /data battery discriminates', () => {
          expected: [CONFLICT_GATE, SET, PERSIST, DELETE_GATE]
       },
       {
+         // Every check that asserts a refusal, each through its guard.
+         label: 'a refusal with its code but not its data',
+         defects: { refusalsWithoutData: true },
+         expected: [
+            SESSION_IDS,
+            RESERVED_IDS,
+            SESSION_WRITE,
+            SESSION_SAVE,
+            UNREGISTERED,
+            CONNECTION_END,
+            CLOSE_SESSION,
+            DELETE_GATE,
+            DELETE_OPEN,
+            DELETE_OTHERS,
+            PERSIST,
+            CONFLICT_GATE,
+            SET
+         ]
+      },
+      {
          // Also the dependent's credit, which the check reads off the update
          // channel.
          label: 'a subscription that registers nothing',

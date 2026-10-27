@@ -19,9 +19,9 @@ convention.
 
 A method that fails with a `ResponseError` of its own takes a code outside 42000
 to 42999. The framework reserves that block for its errors
-(`HYDRANIUM_ERROR_CODES`), and once an error has crossed the wire its guards,
-such as `isSessionClosedError`, match on the code alone, so your error carrying
-one of those codes reads as the framework's.
+(`HYDRANIUM_ERROR_CODES`), and once an error has crossed the wire the RPC proxy
+revives it by its code, so your error carrying one of those codes can read as
+the framework's.
 
 ## Steps
 
