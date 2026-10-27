@@ -7,19 +7,23 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import {
+   DefaultWorkspaceLock,
    type DocumentBuilder,
+   DocumentState,
    type DocumentUpdateListener,
+   OperationCancelled,
    type FileSystemProvider,
    type LangiumDocument,
    type LangiumDocuments,
    URI,
-   UriUtils
+   UriUtils,
+   type WorkspaceLock
 } from '@hydranium/langium';
-import { Disposable } from 'vscode-languageserver';
-import { type Logger, type Project, UNQUALIFIED_PROJECT_REFERENCE } from '@hydranium/protocol';
-import { AbstractProjectManager } from '../../../src/langium/project/abstract-project-manager.js';
+import { CancellationToken, Disposable } from 'vscode-languageserver';
+import { Deferred, type Logger, type Project, UNQUALIFIED_PROJECT_REFERENCE } from '@hydranium/protocol';
+import { AbstractProjectManager, type ProjectManagerOptions } from '../../../src/langium/project/abstract-project-manager.js';
 import type { ProjectChangeEvent } from '../../../src/langium/project/project-change-event.js';
 import { makeCapturingLogger, makeFakeAstNode, makeFakeDocument, makeNoopSharedServices } from '../../../src/testing/index.js';
 
@@ -46,8 +50,8 @@ interface FakeDescriptor {
    referenceName?: string;
 }
 
-function fakeDocument(uri: URI): LangiumDocument {
-   return makeFakeDocument(uri, makeFakeAstNode({ $type: 'Test' }));
+function fakeDocument(uri: URI, state?: DocumentState): LangiumDocument {
+   return makeFakeDocument(uri, makeFakeAstNode({ $type: 'Test' }), { state });
 }
 
 interface Stubs {
@@ -62,10 +66,35 @@ interface Stubs {
    triggerBuildUpdate: (changed: URI[], deleted: URI[]) => Promise<void>;
    logs: { level: string; message: string }[];
    knownDocuments: URI[];
+   /** What the stub builder reports as `isInsideBuildUpdate()`. */
+   insideBuildUpdate: boolean;
+   /** Every `resetToState` call, as `<state>:<uri>`. */
+   resets: string[];
+   /** How many `update` calls the builder took. */
+   updates: number;
+   /** What the stub builder reports as `activeBuild`. */
+   activeBuild?: Promise<void>;
+   /** What each `update` call rejects with, in turn. One past the end resolves. */
+   updateErrors: unknown[];
+   /** Each document's state where it is not `Validated`, by URI string. */
+   states: Map<string, DocumentState>;
+   /** Deliver `uri`'s `Validated` phase without linking it, as a build that only validates does. */
+   validateOnly: (uri: URI) => void;
+   /** What the stub builder reports as `shouldValidateDocument`. Without validation, `update` ends at `IndexedReferences`. */
+   validates: boolean;
+   /** Without it, `update` runs no `Linked` listener, as under Langium's `eagerLinking: false`. */
+   eagerLinking: boolean;
+   /** Called by `update` once it has delivered `document`, before it checks its token for the next. */
+   onBuilt?: (document: LangiumDocument) => void;
+   /** How many `Linked`, `IndexedReferences` and `Validated` listeners are registered. */
+   phaseListeners: () => number;
 }
 
 function makeStubs(knownDocuments: URI[] = []): Stubs {
    const updateListeners: DocumentUpdateListener[] = [];
+   const linkedListeners: Array<(document: LangiumDocument) => void> = [];
+   const indexedListeners: Array<(document: LangiumDocument) => void> = [];
+   const deliveredListeners: Array<(document: LangiumDocument) => void> = [];
    const { logger, lines: logs } = makeCapturingLogger();
 
    const docs: URI[] = [...knownDocuments];
@@ -77,13 +106,76 @@ function makeStubs(knownDocuments: URI[] = []): Stubs {
          return fakeDocument(uri);
       },
       hasDocument: (uri: URI) => docs.some(d => d.toString() === uri.toString()),
-      getDocument: (uri: URI) => (docs.find(d => d.toString() === uri.toString()) ? fakeDocument(uri) : undefined),
+      getDocument: (uri: URI) =>
+         docs.find(known => known.toString() === uri.toString()) ? fakeDocument(uri, stubs.states.get(uri.toString())) : undefined,
       get all() {
          return docs.map(fakeDocument);
       }
    } as unknown as LangiumDocuments;
 
    const documentBuilder = {
+      isInsideBuildUpdate: () => stubs.insideBuildUpdate,
+      get activeBuild() {
+         return stubs.activeBuild;
+      },
+      resetToState: (document: LangiumDocument, state: DocumentState) => {
+         stubs.resets.push(`${state}:${document.uri.toString()}`);
+         stubs.states.set(document.uri.toString(), state);
+      },
+      markNextReason: () => undefined,
+      shouldValidateDocument: () => stubs.validates,
+      // Like Langium's, it rejects once its token is cancelled, checked before
+      // each document, and it links and delivers what it was given and every
+      // document left below Validated.
+      update: async (changed: URI[], _deleted: URI[], token = CancellationToken.None) => {
+         const error = stubs.updateErrors[stubs.updates++];
+         await Promise.resolve();
+         if (token.isCancellationRequested) {
+            throw OperationCancelled;
+         }
+         if (error !== undefined) {
+            throw error;
+         }
+         const built = new Set([...changed.map(uri => uri.toString()), ...stubs.states.keys()]);
+         for (const key of built) {
+            if (token.isCancellationRequested) {
+               throw OperationCancelled;
+            }
+            const from = stubs.states.get(key) ?? DocumentState.Changed;
+            stubs.states.delete(key);
+            const document = fakeDocument(URI.parse(key));
+            // As the real builder, a phase the document has reached is not run
+            // again, and a cancel skips the listeners after it and withholds
+            // the deliveries.
+            for (const listener of from < DocumentState.Linked && stubs.eagerLinking ? linkedListeners : []) {
+               if (token.isCancellationRequested) {
+                  break;
+               }
+               listener(document);
+            }
+            if (!token.isCancellationRequested) {
+               indexedListeners.forEach(listener => listener(document));
+               if (stubs.validates) {
+                  deliveredListeners.forEach(listener => listener(document));
+               }
+            }
+            stubs.onBuilt?.(document);
+         }
+      },
+      onDocumentPhase: (state: DocumentState, listener: (document: LangiumDocument) => void) => {
+         if (state === DocumentState.Linked) {
+            linkedListeners.push(listener);
+         }
+         return Disposable.create(() => undefined);
+      },
+      onDocumentPhaseDelivered: (state: DocumentState, listener: (document: LangiumDocument) => void) => {
+         if (state === DocumentState.Validated) {
+            deliveredListeners.push(listener);
+         } else if (state === DocumentState.IndexedReferences) {
+            indexedListeners.push(listener);
+         }
+         return Disposable.create(() => undefined);
+      },
       onUpdate: (listener: DocumentUpdateListener) => {
          updateListeners.push(listener);
          return Disposable.create(() => {
@@ -110,7 +202,7 @@ function makeStubs(knownDocuments: URI[] = []): Stubs {
       await Promise.all(updateListeners.map(listener => Promise.resolve(listener(changed, deleted))));
    };
 
-   return {
+   const stubs: Stubs = {
       fileSystemProvider,
       langiumDocuments,
       documentBuilder,
@@ -118,8 +210,18 @@ function makeStubs(knownDocuments: URI[] = []): Stubs {
       workspaceManager,
       triggerBuildUpdate,
       logs,
-      knownDocuments: docs
+      knownDocuments: docs,
+      insideBuildUpdate: false,
+      resets: [],
+      updates: 0,
+      updateErrors: [],
+      states: new Map(),
+      validateOnly: uri => deliveredListeners.forEach(listener => listener(fakeDocument(uri))),
+      validates: true,
+      eagerLinking: true,
+      phaseListeners: () => linkedListeners.length + indexedListeners.length + deliveredListeners.length
    };
+   return stubs;
 }
 
 /**
@@ -131,7 +233,7 @@ class TestProjectManager extends AbstractProjectManager {
    descriptors = new Map<string, FakeDescriptor>();
    discoveryUris: URI[] = [];
 
-   constructor(stubs: Stubs) {
+   constructor(stubs: Stubs, options: ProjectManagerOptions = {}) {
       // The default Tracer wraps the Logger slot, so the manager's log lines
       // flow into stubs.logger (a capturing logger, asserted via stubs.logs).
       const services = makeNoopSharedServices({
@@ -140,11 +242,30 @@ class TestProjectManager extends AbstractProjectManager {
             FileSystemProvider: stubs.fileSystemProvider,
             LangiumDocuments: stubs.langiumDocuments,
             DocumentBuilder: stubs.documentBuilder,
-            WorkspaceManager: stubs.workspaceManager
+            WorkspaceManager: stubs.workspaceManager,
+            WorkspaceLock: new DefaultWorkspaceLock()
          }
       });
-      super(services);
+      super(services, options);
       this.onProjectsChanged(event => this.events.push(event));
+   }
+
+   get lock(): WorkspaceLock {
+      return this.workspaceLock;
+   }
+
+   /** Every member key the deferred relink still tracks, by set. */
+   get trackedMembers(): Record<string, string[]> {
+      return {
+         pending: [...this.pendingMemberRelink.keys()],
+         resets: [...this.pendingMemberResets],
+         unrelinked: [...this.unrelinkedMembers],
+         linked: [...this.linkedMembers]
+      };
+   }
+
+   affectedProjects(directlyChanged: readonly string[]): readonly string[] {
+      return this.getAffectedProjects(directlyChanged);
    }
 
    override isProjectDescriptor(uri: URI | string): boolean {
@@ -1086,5 +1207,410 @@ describe('AbstractProjectManager change logging', () => {
       mgr.discoveryUris = [URI_DESCRIPTOR_A];
       await mgr.discoverProjects([]);
       expect(stubs.logs).toContainEqual({ level: 'info', message: 'Add/Update model set "A@1" from projA/project.a' });
+   });
+});
+
+// ============================================================
+// Deferred member relink
+// ============================================================
+
+describe('AbstractProjectManager with deferMemberRelink', () => {
+   async function setup(): Promise<{ stubs: Stubs; mgr: TestProjectManager; log: string[] }> {
+      const stubs = makeStubs([URI_DESCRIPTOR_A, URI_DESCRIPTOR_B, URI_MEMBER_A1, URI_MEMBER_A2, URI_MEMBER_B1]);
+      const mgr = new TestProjectManager(stubs, { deferMemberRelink: true });
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1' });
+      mgr.descriptors.set(URI_DESCRIPTOR_B.toString(), { id: 'B@1' });
+      mgr.discoveryUris = [URI_DESCRIPTOR_A, URI_DESCRIPTOR_B];
+      await mgr.discoverProjects([]);
+      mgr.events.length = 0;
+      // The workspace manager's cascade, which also resets the members a
+      // follow-up build emits.
+      mgr.onProjectsChanged(event =>
+         event.affectedDocuments.forEach(uri => stubs.documentBuilder.resetToState(fakeDocument(uri), DocumentState.Changed))
+      );
+      const log: string[] = [];
+      mgr.onMemberRelinkStarted(documents => log.push(`started ${documents.map(uri => UriUtils.basename(uri)).join(',')}`));
+      mgr.onMemberRelinkFinished(({ completed }) => log.push(`finished completed=${completed}`));
+      onTestFinished(() =>
+         expect(mgr.trackedMembers, 'the settled relink left members tracked').toEqual({
+            pending: [],
+            resets: [],
+            unrelinked: [],
+            linked: []
+         })
+      );
+      return { stubs, mgr, log };
+   }
+
+   /** Change `descriptor` to `referenceName` inside a lock write, as a build of an update runs. */
+   async function changeInWrite(stubs: Stubs, mgr: TestProjectManager, descriptor: URI, id: string, referenceName: string): Promise<void> {
+      mgr.descriptors.set(descriptor.toString(), { id, referenceName });
+      await mgr.lock.write(async token => {
+         await stubs.triggerBuildUpdate([descriptor], []);
+         expect(token.isCancellationRequested, 'the build of the change was cancelled').toBe(false);
+         expect(stubs.updates, 'the members were built inside the build of the change').toBe(0);
+      });
+   }
+
+   it('relinks members in a build queued after the build of an update, which it does not cancel', async () => {
+      const { stubs, mgr, log } = await setup();
+
+      await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
+      expect(mgr.events.map(event => event.affectedDocuments)).toEqual([[]]);
+      await mgr.memberRelinkSettled();
+
+      expect(stubs.resets).toEqual([`${DocumentState.Changed}:${URI_MEMBER_A1}`, `${DocumentState.Changed}:${URI_MEMBER_A2}`]);
+      expect(mgr.events.slice(1), 'the follow-up build did not reset its members through the change event').toEqual([
+         { added: [], updated: [], removed: [], affectedDocuments: [URI_MEMBER_A1, URI_MEMBER_A2] }
+      ]);
+      expect(stubs.updates).toBe(1);
+      expect(log).toEqual(['started Element1.a,Element2.a', 'finished completed=true']);
+   });
+
+   it('leaves out of the follow-up build a member the build of the change was given', async () => {
+      const { stubs, mgr, log } = await setup();
+
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', referenceName: 'A-renamed' });
+      await mgr.lock.write(() => stubs.triggerBuildUpdate([URI_DESCRIPTOR_A, URI_MEMBER_A1], []));
+      await mgr.memberRelinkSettled();
+
+      expect(stubs.resets).toEqual([`${DocumentState.Changed}:${URI_MEMBER_A2}`]);
+      expect(log).toEqual(['started Element2.a', 'finished completed=true']);
+   });
+
+   it('keeps in the build of the change a member already below its last phase, which that build builds anyway', async () => {
+      const { stubs, mgr, log } = await setup();
+      stubs.states.set(URI_MEMBER_A1.toString(), DocumentState.ComputedScopes);
+
+      await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
+      expect(mgr.events.map(event => event.affectedDocuments)).toEqual([[URI_MEMBER_A1]]);
+      await mgr.memberRelinkSettled();
+
+      expect(log).toEqual(['started Element2.a', 'finished completed=true']);
+   });
+
+   it.each([
+      ['validating', true],
+      ['not validating', false]
+   ])('leaves out of the follow-up build a member a later write relinked first, %s', async (_label, validates) => {
+      const { stubs, mgr, log } = await setup();
+      stubs.validates = validates;
+
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', referenceName: 'A-renamed' });
+      const change = mgr.lock.write(() => stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []));
+      // Writes run before reads, so this edit builds before the follow-up
+      // takes its members.
+      const edit = mgr.lock.write(() => stubs.documentBuilder.update([URI_MEMBER_A1], []));
+      await Promise.all([change, edit]);
+      await mgr.memberRelinkSettled();
+
+      expect(stubs.resets).toEqual([`${DocumentState.Changed}:${URI_MEMBER_A2}`]);
+      expect(log).toEqual(['started Element2.a', 'finished completed=true']);
+   });
+
+   it('keeps in the follow-up build a member a later build only validated', async () => {
+      const { stubs, mgr, log } = await setup();
+
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', referenceName: 'A-renamed' });
+      const change = mgr.lock.write(() => stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []));
+      const validation = mgr.lock.write(() => stubs.validateOnly(URI_MEMBER_A1));
+      await Promise.all([change, validation]);
+      await mgr.memberRelinkSettled();
+
+      expect(log).toEqual(['started Element1.a,Element2.a', 'finished completed=true']);
+   });
+
+   it('queues no follow-up write once a later write relinked every member, so it cancels no other write', async () => {
+      const { stubs, mgr, log } = await setup();
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', referenceName: 'A-renamed' });
+      let otherCancelled: boolean | undefined;
+
+      const change = mgr.lock.write(async () => {
+         // Shares the batch of the read that takes the members, before it.
+         void mgr.lock.read(() => {
+            void mgr.lock.write(token => {
+               otherCancelled = token.isCancellationRequested;
+            });
+         });
+         await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []);
+      });
+      const edit = mgr.lock.write(() => stubs.documentBuilder.update([URI_MEMBER_A1, URI_MEMBER_A2], []));
+      await Promise.all([change, edit]);
+      await mgr.memberRelinkSettled();
+      await mgr.lock.write(() => undefined);
+
+      expect(otherCancelled).toBe(false);
+      expect(log).toEqual([]);
+   });
+
+   it('registers no phase listener while nothing defers', async () => {
+      const { stubs, mgr } = await setup();
+      expect(stubs.phaseListeners()).toBe(0);
+
+      await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
+      await mgr.memberRelinkSettled();
+      expect(stubs.phaseListeners()).toBe(3);
+   });
+
+   it('relinks members in the build of the change when that build is an explicit build', async () => {
+      const { stubs, mgr, log } = await setup();
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', referenceName: 'A-renamed' });
+
+      // As the real builder, it answers only until the listeners' first await.
+      stubs.insideBuildUpdate = true;
+      const build = stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []);
+      stubs.insideBuildUpdate = false;
+      await build;
+      await mgr.memberRelinkSettled();
+
+      expect(mgr.events[0].affectedDocuments.map(uri => uri.toString()).sort()).toEqual([
+         URI_MEMBER_A1.toString(),
+         URI_MEMBER_A2.toString()
+      ]);
+      expect(stubs.updates).toBe(0);
+      expect(log).toEqual([]);
+   });
+
+   it('takes every change made before the follow-up build starts into that one build', async () => {
+      const { stubs, mgr, log } = await setup();
+
+      // The second change lands while the lock read that takes the first is queued.
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', referenceName: 'A-renamed' });
+      mgr.descriptors.set(URI_DESCRIPTOR_B.toString(), { id: 'B@1', referenceName: 'B-renamed' });
+      await mgr.lock.write(async () => {
+         await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []);
+         await stubs.triggerBuildUpdate([URI_DESCRIPTOR_B], []);
+      });
+      await mgr.memberRelinkSettled();
+
+      expect(stubs.updates).toBe(1);
+      expect(log).toEqual(['started Element1.a,Element2.a,Element1.a', 'finished completed=true']);
+   });
+
+   it('stops tracking the members a completed follow-up build took, although no Linked listener saw them', async () => {
+      const { stubs, mgr, log } = await setup();
+      stubs.eagerLinking = false;
+
+      await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
+      await mgr.memberRelinkSettled();
+
+      expect(log).toEqual(['started Element1.a,Element2.a', 'finished completed=true']);
+   });
+
+   it('reports a follow-up build that fails as not completed, and still settles', async () => {
+      const { stubs, mgr, log } = await setup();
+      stubs.updateErrors = [new Error('link failed')];
+
+      await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
+      await mgr.memberRelinkSettled();
+
+      expect(log).toEqual(['started Element1.a,Element2.a', 'finished completed=false']);
+      expect(stubs.logs.some(line => line.level === 'error' && line.message.includes('link failed'))).toBe(true);
+   });
+
+   /** Cancel the first follow-up build as it starts, with a write running `action`. */
+   function cancelFirstFollowUp(mgr: TestProjectManager, log: string[], action: () => Promise<void> | void): void {
+      mgr.onMemberRelinkStarted(() => {
+         if (log.length === 1) {
+            void mgr.lock.write(action);
+         }
+      });
+   }
+
+   it('queues a follow-up build a write cancelled again, without resetting its members again', async () => {
+      const { stubs, mgr, log } = await setup();
+      cancelFirstFollowUp(mgr, log, () => undefined);
+
+      await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
+      await mgr.memberRelinkSettled();
+
+      expect(log).toEqual([
+         'started Element1.a,Element2.a',
+         'finished completed=false',
+         'started Element1.a,Element2.a',
+         'finished completed=true'
+      ]);
+      expect(stubs.resets).toEqual([`${DocumentState.Changed}:${URI_MEMBER_A1}`, `${DocumentState.Changed}:${URI_MEMBER_A2}`]);
+      expect(stubs.updates).toBe(2);
+      expect(
+         stubs.logs.some(line => line.level === 'error'),
+         'a cancellation was logged as a failure'
+      ).toBe(false);
+   });
+
+   it('queues a follow-up build a write cancelled partway again with only the members it did not relink', async () => {
+      const { stubs, mgr, log } = await setup();
+      stubs.onBuilt = document => {
+         if (log.length === 1 && UriUtils.basename(document.uri) === 'Element1.a') {
+            void mgr.lock.write(() => undefined);
+         }
+      };
+
+      await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
+      await mgr.memberRelinkSettled();
+
+      expect(log).toEqual(['started Element1.a,Element2.a', 'finished completed=false', 'started Element2.a', 'finished completed=true']);
+      expect(stubs.resets).toEqual([`${DocumentState.Changed}:${URI_MEMBER_A1}`, `${DocumentState.Changed}:${URI_MEMBER_A2}`]);
+   });
+
+   it('queues a follow-up build again when a write cancelled it in the last listeners of its last member', async () => {
+      const { stubs, mgr, log } = await setup();
+      stubs.documentBuilder.onDocumentPhase(DocumentState.Linked, document => {
+         if (log.length === 1 && UriUtils.basename(document.uri) === 'Element2.a') {
+            void mgr.lock.write(() => undefined);
+         }
+      });
+
+      await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
+      await mgr.memberRelinkSettled();
+
+      expect(log).toEqual(['started Element1.a,Element2.a', 'finished completed=false', 'started Element2.a', 'finished completed=true']);
+   });
+
+   it('queues a follow-up build a write cancelled before it started again as it was, unannounced', async () => {
+      const { stubs, mgr, log } = await setup();
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', referenceName: 'A-renamed' });
+      let later: Promise<void> | undefined;
+
+      await mgr.lock.write(async () => {
+         await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []);
+         // Shares the batch of the read that queues the follow-up build, after
+         // it, so its write cancels that one.
+         void mgr.lock.read(() => {
+            later = mgr.lock.write(() => undefined);
+         });
+      });
+      await mgr.memberRelinkSettled();
+      await later;
+
+      expect(log).toEqual(['started Element1.a,Element2.a', 'finished completed=true']);
+      expect(stubs.resets).toEqual([`${DocumentState.Changed}:${URI_MEMBER_A1}`, `${DocumentState.Changed}:${URI_MEMBER_A2}`]);
+      expect(stubs.updates).toBe(1);
+   });
+
+   it('counts a member a cancelled follow-up build linked as linked, although the cancel skipped its Linked listener', async () => {
+      const { stubs, mgr, log } = await setup();
+      // Registered before the manager's, which it registers on its first relink.
+      stubs.documentBuilder.onDocumentPhase(DocumentState.Linked, document => {
+         if (log.length === 1 && UriUtils.basename(document.uri) === 'Element1.a') {
+            stubs.states.set(document.uri.toString(), DocumentState.Linked);
+            void mgr.lock.write(() => undefined);
+         }
+      });
+
+      await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
+      await mgr.memberRelinkSettled();
+
+      expect(log).toEqual([
+         'started Element1.a,Element2.a',
+         'finished completed=false',
+         'started Element1.a,Element2.a',
+         'finished completed=true'
+      ]);
+      expect(stubs.resets).toEqual([`${DocumentState.Changed}:${URI_MEMBER_A1}`, `${DocumentState.Changed}:${URI_MEMBER_A2}`]);
+   });
+
+   it('announces no second follow-up build when the write that cancelled the first built the members', async () => {
+      const { stubs, mgr, log } = await setup();
+      cancelFirstFollowUp(mgr, log, () => stubs.documentBuilder.update([], []));
+
+      await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
+      await mgr.memberRelinkSettled();
+
+      expect(log).toEqual(['started Element1.a,Element2.a', 'finished completed=false']);
+      expect(stubs.states.size, 'a member was left unbuilt').toBe(0);
+   });
+
+   it('starts the follow-up build only once a build running outside the lock has ended', async () => {
+      const { stubs, mgr, log } = await setup();
+      const unlocked = new Deferred<void>();
+      stubs.activeBuild = unlocked.promise;
+
+      await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
+      // The first read can share a batch with the manager's. The second waits
+      // for any write it queued.
+      await mgr.lock.read(() => undefined);
+      await mgr.lock.read(() => undefined);
+      expect(log, 'the follow-up build started while another build ran').toEqual([]);
+
+      stubs.activeBuild = undefined;
+      unlocked.resolve();
+      await mgr.memberRelinkSettled();
+      expect(log).toEqual(['started Element1.a,Element2.a', 'finished completed=true']);
+   });
+
+   it('settles only after a follow-up build queued while it waits', async () => {
+      const { stubs, mgr, log } = await setup();
+      // The first follow-up build queues a change of B while it runs.
+      mgr.onMemberRelinkStarted(() => {
+         if (log.length === 1) {
+            mgr.descriptors.set(URI_DESCRIPTOR_B.toString(), { id: 'B@1', referenceName: 'B-renamed' });
+            void stubs.triggerBuildUpdate([URI_DESCRIPTOR_B], []);
+         }
+      });
+
+      await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
+      await mgr.memberRelinkSettled();
+
+      expect(log).toEqual(['started Element1.a,Element2.a', 'finished completed=true', 'started Element1.a', 'finished completed=true']);
+   });
+
+   it('calls every listener and finishes the follow-up build when a listener throws', async () => {
+      const { stubs, mgr, log } = await setup();
+      const throwing = (): void => {
+         throw new Error('listener failed');
+      };
+      mgr.onMemberRelinkStarted(throwing);
+      mgr.onMemberRelinkFinished(throwing);
+      mgr.onMemberRelinkStarted(() => log.push('later started listener'));
+      mgr.onMemberRelinkFinished(() => log.push('later finished listener'));
+
+      await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
+      await mgr.memberRelinkSettled();
+
+      expect(stubs.updates).toBe(1);
+      expect(log).toEqual([
+         'started Element1.a,Element2.a',
+         'later started listener',
+         'finished completed=true',
+         'later finished listener'
+      ]);
+      expect(stubs.logs.filter(line => line.level === 'error' && line.message.includes('listener failed'))).toHaveLength(2);
+   });
+});
+
+// ============================================================
+// Direct-only visibility
+// ============================================================
+
+describe('AbstractProjectManager with direct visibility', () => {
+   const URI_DESCRIPTOR_C = URI.parse('file:///workspace/projC/project.a');
+
+   // C requires B, B requires A.
+   async function setup(options: ProjectManagerOptions): Promise<TestProjectManager> {
+      const mgr = new TestProjectManager(makeStubs([URI_DESCRIPTOR_A, URI_DESCRIPTOR_B, URI_DESCRIPTOR_C]), options);
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1' });
+      mgr.descriptors.set(URI_DESCRIPTOR_B.toString(), { id: 'B@1', dependencies: ['A@1'] });
+      mgr.descriptors.set(URI_DESCRIPTOR_C.toString(), { id: 'C@1', dependencies: ['B@1', 'B@1', 'missing'] });
+      mgr.discoveryUris = [URI_DESCRIPTOR_A, URI_DESCRIPTOR_B, URI_DESCRIPTOR_C];
+      await mgr.discoverProjects([]);
+      return mgr;
+   }
+
+   it('shows a project only the registered projects it names', async () => {
+      const mgr = await setup({ visibility: 'direct' });
+      expect(mgr.getVisibleProjects('C@1')).toEqual(['C@1', 'B@1']);
+      expect(mgr.isVisible('C@1', 'A@1')).toBe(false);
+   });
+
+   it('still rebuilds every transitive dependent of a changed project', async () => {
+      const mgr = await setup({ visibility: 'direct' });
+      expect([...mgr.affectedProjects(['A@1'])].sort()).toEqual(['A@1', 'B@1', 'C@1']);
+   });
+
+   it('keeps the transitive closure by default', async () => {
+      const mgr = await setup({});
+      expect(mgr.getVisibleProjects('C@1')).toEqual(['C@1', 'B@1', 'A@1']);
+      expect([...mgr.affectedProjects(['A@1'])].sort()).toEqual(['A@1', 'B@1', 'C@1']);
    });
 });

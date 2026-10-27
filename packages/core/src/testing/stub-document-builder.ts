@@ -82,7 +82,17 @@ export interface StubWaitUntilGate {
 export interface StubDocumentBuilder
    extends
       Pick<DocumentBuilder, 'update' | 'onDocumentPhase' | 'onUpdate' | 'build' | 'onBuildPhase' | 'resetToState' | 'updateBuildOptions'>,
-      Pick<HydraniumDocumentBuilder, 'onDocumentPhaseDelivered' | 'scheduleUpdate' | 'finalBuildState' | 'onBuildEnded'> {
+      Pick<
+         HydraniumDocumentBuilder,
+         | 'onDocumentPhaseDelivered'
+         | 'scheduleUpdate'
+         | 'finalBuildState'
+         | 'onBuildEnded'
+         | 'isInsideBuildUpdate'
+         | 'activeBuild'
+         | 'markNextReason'
+         | 'shouldValidateDocument'
+      > {
    /**
     * Single-overload stub of {@link DocumentBuilder.waitUntil}. Real has
     * two overloads (`(state, cancelToken?): Promise<void>` and
@@ -178,6 +188,13 @@ export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocu
       updateBuildOptions: { validation: { categories: ['built-in', 'fast'] } },
       // The real rule, read off this stub's options, so the two cannot drift.
       finalBuildState: () => HydraniumDocumentBuilder.prototype.finalBuildState.call(stub),
+      // Langium's default for an update, read off this stub's options rather
+      // than each document's own build options, as the real builder does.
+      shouldValidateDocument: () => Boolean(stub.updateBuildOptions.validation),
+      // The stub never runs a build of its own.
+      isInsideBuildUpdate: () => false,
+      activeBuild: undefined,
+      markNextReason: () => undefined,
       get updateCalls() {
          return updateCalls;
       },

@@ -143,6 +143,16 @@ export function makeStubProjectManager<TProject extends Project = Project>(
             }
          });
       },
+      // The stub never defers a member relink, so these never fire.
+      onMemberRelinkStarted() {
+         return Disposable.create(() => undefined);
+      },
+      onMemberRelinkFinished() {
+         return Disposable.create(() => undefined);
+      },
+      memberRelinkSettled() {
+         return Promise.resolve();
+      },
       ownUri(uri, projectId) {
          const key = typeof uri === 'string' ? uri : uri.toString();
          ownership.set(key, projectId);

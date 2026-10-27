@@ -9,6 +9,7 @@
 
 import {
    type Clock,
+   Deferred,
    type Stopwatch,
    type LogThreshold,
    type MaybeObservableValue,
@@ -61,16 +62,18 @@ export const DEFAULT_LOGGED_PHASES: DocumentState[] = [
 /**
  * The build reasons the framework stages through
  * {@link HydraniumDocumentBuilder.markNextReason}: the LSP events the update
- * handler dispatches on, and `didRelease` for the builds the
- * `DocumentReleaseHandler` runs once the text store has released a document.
- * Exposed so a subclass layering reasons of its own keeps the names the
- * framework emits.
+ * handler dispatches on, `didRelease` for the builds the
+ * `DocumentReleaseHandler` runs once the text store has released a document,
+ * and `memberRelink` for the follow-up builds a project manager queues to
+ * relink a changed project's members. Exposed so a subclass layering reasons
+ * of its own keeps the names the framework emits.
  */
 export const HYDRANIUM_BUILD_REASONS = Object.freeze({
    didOpen: 'didOpen',
    didChangeContent: 'didChangeContent',
    didChangeWatchedFiles: 'didChangeWatchedFiles',
-   didRelease: 'didRelease'
+   didRelease: 'didRelease',
+   memberRelink: 'memberRelink'
 } as const);
 
 /**
@@ -286,6 +289,12 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * construction.
     */
    protected activeSession?: BuildSession;
+   /** Set while an explicit {@link build} calls the `onUpdate` listeners, see {@link isInsideBuildUpdate}. */
+   protected insideBuildUpdate = false;
+   /** How many builds have started and not ended. */
+   protected runningBuilds = 0;
+   /** Resolved once {@link runningBuilds} drops back to zero. Set while it is above. */
+   protected runningBuildsEnded?: Deferred<void>;
    /**
     * `traceId` of the last build that ended in cancellation, for the successor's
     * "cancels #N" tag. Held here rather than on a session because the session
@@ -388,6 +397,28 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    }
 
    /**
+    * Whether an explicit {@link build}, rather than {@link update}, is calling
+    * the `onUpdate` listeners. Langium calls them from both. A listener reads
+    * this before its first await, since it is set only while `build` runs
+    * synchronously, which reaches the listeners. That makes it exact while
+    * builds overlap, where no record of the running builds could tell which
+    * one is calling.
+    */
+   isInsideBuildUpdate(): boolean {
+      return this.insideBuildUpdate;
+   }
+
+   /**
+    * Resolves once no build is in progress, however each ended, and never
+    * rejects. It is `undefined` between builds. During a lock read no locked
+    * build runs, so a build seen there runs outside the lock. Builds that
+    * overlap count until the last of them ends.
+    */
+   get activeBuild(): Promise<void> | undefined {
+      return this.runningBuildsEnded?.promise;
+   }
+
+   /**
     * Diagnostic snapshot for use in timeout/error messages around document
     * state.
     *
@@ -418,6 +449,17 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     */
    finalBuildState(): DocumentState {
       return this.updateBuildOptions.validation ? DocumentState.Validated : IntegrityService.SettledState;
+   }
+
+   /**
+    * Whether the build that carries `document` validates it, as Langium's
+    * protected `shouldValidate` decides. One it does not validate ends that
+    * build at `IndexedReferences`. Answers for the running build once its
+    * first phase has started, and before that for the build that last
+    * carried `document`.
+    */
+   shouldValidateDocument(document: LangiumDocument): boolean {
+      return this.shouldValidate(document);
    }
 
    /** Render a session for a status line. `undefined` — no build in progress — reads as `none`. */
@@ -1010,11 +1052,17 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       cancelToken?: CancellationToken
    ): Promise<void> {
       const uris = documents.map(document => document.uri);
-      return this.runInSession(
-         { kind: 'build', trigger: `${documents.length} docs`, triggerCountsDocs: true, changed: uris, deleted: [] },
-         `Build documents (${documents.length} docs)`,
-         () => super.build(documents, options, cancelToken)
-      );
+      const outer = this.insideBuildUpdate;
+      this.insideBuildUpdate = true;
+      try {
+         return this.runInSession(
+            { kind: 'build', trigger: `${documents.length} docs`, triggerCountsDocs: true, changed: uris, deleted: [] },
+            `Build documents (${documents.length} docs)`,
+            () => super.build(documents, options, cancelToken)
+         );
+      } finally {
+         this.insideBuildUpdate = outer;
+      }
    }
 
    /**
@@ -1284,6 +1332,11 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       return this.tracer.time(
          label,
          async () => {
+            // Counted in the body, which the tracer calls synchronously, so a
+            // tracer that throws first leaves no build counted forever.
+            if (this.runningBuilds++ === 0) {
+               this.runningBuildsEnded = new Deferred<void>();
+            }
             try {
                await body();
             } catch (err: unknown) {
@@ -1293,7 +1346,14 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
                this.checkWaitsOnceDrained();
                throw err;
             } finally {
-               this.endSession(session);
+               try {
+                  this.endSession(session);
+               } finally {
+                  if (--this.runningBuilds === 0) {
+                     this.runningBuildsEnded?.resolve();
+                     this.runningBuildsEnded = undefined;
+                  }
+               }
             }
          },
          this.logLevel,

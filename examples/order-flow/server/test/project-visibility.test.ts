@@ -23,10 +23,13 @@
  * holds a single file.
  */
 
-import { AstUtils, DocumentState, type ReferenceInfo, URI } from '@hydranium/langium';
+import { Deferred } from '@hydranium/protocol';
+import { AstUtils, DocumentState, type ReferenceInfo, URI, UriUtils } from '@hydranium/langium';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { type DomainModel, type Entity, type Field, isEntity } from '../src/language-server/ast.js';
+import type { OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
+import { OrderFlowProjectManager } from '../src/language-server/order-flow-project-manager.js';
 import { ORDER_FLOW_STDLIB_URI } from '../src/language-server/order-flow-stdlib.js';
 import {
    documentFor,
@@ -258,5 +261,296 @@ describe('order-flow projects after a descriptor change', () => {
       expect(projects.getProjectById('refunds')?.dependencies).toEqual(['commerce-core']);
       const model = harness.shared.workspace.LangiumDocuments.getDocument(refundsUri)!.parseResult.value as DomainModel;
       expect(fieldNamed(entityNamed(model, 'Refund'), 'amount').type.declared?.ref?.name).toBe('Money');
+   });
+});
+
+describe('order-flow projects with a deferred member relink', () => {
+   // A headerless member of `orders` that resolves a `commerce-core` type.
+   const REFUND = 'orders/refund.domain';
+
+   /** Holds the next descriptor load on {@link descriptorGate} once it is set. */
+   class GatedProjectManager extends OrderFlowProjectManager {
+      descriptorGate?: Promise<void>;
+      readonly descriptorHeld = new Deferred<void>();
+
+      protected override async loadDescriptor(uri: URI) {
+         const gate = this.descriptorGate;
+         this.descriptorGate = undefined;
+         if (gate) {
+            this.descriptorHeld.resolve();
+            await gate;
+         }
+         return super.loadDescriptor(uri);
+      }
+
+      /** Register the member phase listeners, as an earlier deferral does. */
+      registerMemberListeners(): void {
+         this.registerMemberPhaseListeners();
+      }
+   }
+
+   interface DropOptions {
+      readonly deferMemberRelink: boolean;
+      /** Build the change with an unlocked `update` rather than a scheduled one. */
+      readonly unlocked?: boolean;
+      /** Cancel the first follow-up build as it starts, with a write that builds nothing. */
+      readonly cancelFollowUp?: boolean;
+      /** Cancel the first follow-up build from a listener of the layout's last phase, ahead of one the cancel skips. */
+      readonly cancelInLastPhaseListeners?: boolean;
+      /** Build without validation, so the last phase is `IndexedReferences`. */
+      readonly withoutValidation?: boolean;
+      /**
+       * Link the refund in an unlocked build while the change awaits its
+       * descriptor, so under the old dependencies, and run that build's
+       * `Linked` listeners only once the build of the change has ended.
+       */
+      readonly staleLinkDuringChange?: boolean;
+   }
+
+   interface DropResult {
+      readonly buildsEnded: string[];
+      readonly relinked: string[];
+      /** Per follow-up build start, whether another build was running. */
+      readonly startedDuringBuild: boolean[];
+      readonly finished: boolean[];
+      /**
+       * How often every listener of its last phase ran for the layout once a
+       * follow-up build started. Unlike the refund, its references still resolve, so no
+       * update relinks it unasked.
+       */
+      readonly layoutDelivered: number;
+   }
+
+   /** Drop `orders`' dependency, as a save does, and record each build's end. */
+   async function dropDependency(options: DropOptions): Promise<DropResult> {
+      const { deferMemberRelink } = options;
+      const { harness, workspace } = await makeScratchWorkspaceHarness(
+         scratch => scratch.write(REFUND, 'entity Refund {\n   amount: Money\n}\n'),
+         {
+            extraSharedModules: [
+               {
+                  workspace: {
+                     ProjectManager: (services: OrderFlowSharedServices) => new GatedProjectManager(services, { deferMemberRelink })
+                  }
+               }
+            ]
+         }
+      );
+      const projects = harness.shared.workspace.ProjectManager;
+      if (!(projects instanceof GatedProjectManager)) {
+         throw new Error('The module override did not bind the project manager');
+      }
+      onTestFinished(async () => {
+         await projects.memberRelinkSettled();
+         workspace.dispose();
+      });
+      const builder = harness.shared.workspace.DocumentBuilder;
+      if (options.withoutValidation) {
+         builder.updateBuildOptions.validation = false;
+      }
+      const lastPhase = builder.finalBuildState();
+      const refundUri = URI.file(workspace.resolve(REFUND));
+      const refundAmount = (): string | undefined => {
+         const model = harness.shared.workspace.LangiumDocuments.getDocument(refundUri)!.parseResult.value as DomainModel;
+         return fieldNamed(entityNamed(model, 'Refund'), 'amount').type.declared?.ref?.name;
+      };
+      expect(refundAmount()).toBe('Money');
+
+      const result = {
+         buildsEnded: [] as string[],
+         relinked: [] as string[],
+         startedDuringBuild: [] as boolean[],
+         finished: [] as boolean[],
+         layoutDelivered: 0
+      };
+      builder.onBuildEnded(({ completed }) => result.buildsEnded.push(`completed=${completed} amount=${refundAmount()}`));
+      projects.onMemberRelinkStarted(documents => {
+         result.relinked.push(...documents.map(uri => UriUtils.basename(uri)));
+         result.startedDuringBuild.push(builder.activeBuild !== undefined);
+         if (options.cancelFollowUp && result.finished.length === 0) {
+            void harness.shared.workspace.WorkspaceLock.write(() => undefined);
+         }
+      });
+      projects.onMemberRelinkFinished(({ completed }) => result.finished.push(completed));
+      const isLayout = (uri: URI): boolean => UriUtils.basename(uri) === 'fulfillment.layout';
+      builder.onDocumentPhaseDelivered(lastPhase, document => {
+         if (result.relinked.length > 0 && isLayout(document.uri)) {
+            result.layoutDelivered++;
+         }
+      });
+      if (options.cancelInLastPhaseListeners) {
+         builder.onDocumentPhase(lastPhase, document => {
+            if (result.relinked.length > 0 && result.finished.length === 0 && isLayout(document.uri)) {
+               void harness.shared.workspace.WorkspaceLock.write(() => undefined);
+            }
+         });
+         builder.onDocumentPhase(lastPhase, () => undefined);
+      }
+      const ordersPath = workspace.resolve(WORKSPACE_FILES.ordersDomain);
+      workspace.write(
+         WORKSPACE_FILES.ordersDomain,
+         readFileSync(ordersPath, 'utf8').replace('project orders requires commerce-core', 'project orders')
+      );
+      if (options.staleLinkDuringChange) {
+         const linkHeld = new Deferred<void>();
+         const linkGate = new Deferred<void>();
+         const linkedHeld = new Deferred<void>();
+         const linkedGate = new Deferred<void>();
+         const descriptorGate = new Deferred<void>();
+         let holdLink = true;
+         let holdLinked = false;
+         const linker = harness.domain.references.Linker;
+         const link = linker.link.bind(linker);
+         linker.link = async (document, token) => {
+            if (holdLink && document.uri.toString() === refundUri.toString()) {
+               holdLink = false;
+               linkHeld.resolve();
+               await linkGate.promise;
+            }
+            return link(document, token);
+         };
+         // Ahead of the project manager's, so it holds the link back from them.
+         builder.onDocumentPhase(DocumentState.Linked, async document => {
+            if (holdLinked && document.uri.toString() === refundUri.toString()) {
+               holdLinked = false;
+               linkedHeld.resolve();
+               await linkedGate.promise;
+            }
+         });
+         projects.registerMemberListeners();
+
+         const unlocked = builder.update([refundUri], []);
+         await linkHeld.promise;
+         projects.descriptorGate = descriptorGate.promise;
+         const change = builder.scheduleUpdate([URI.file(ordersPath)], []);
+         await projects.descriptorHeld.promise;
+         holdLinked = true;
+         linkGate.resolve();
+         await linkedHeld.promise;
+         expect(refundAmount(), 'the refund was not linked under the old dependencies').toBe('Money');
+         descriptorGate.resolve();
+         await change;
+         linkedGate.resolve();
+         await unlocked;
+      } else if (options.unlocked) {
+         await builder.update([URI.file(ordersPath)], []);
+      } else {
+         await builder.scheduleUpdate([URI.file(ordersPath)], []);
+      }
+      await projects.memberRelinkSettled();
+
+      expect(projects.getProjectById('orders')?.dependencies).toBeUndefined();
+      expect(refundAmount()).toBeUndefined();
+      expect(harness.shared.workspace.LangiumDocuments.getDocument(refundUri)!.state).toBe(lastPhase);
+      return result;
+   }
+
+   it('relinks the members of a changed project in the build of the change by default', async () => {
+      const { buildsEnded, relinked } = await dropDependency({ deferMemberRelink: false });
+
+      expect(buildsEnded).toEqual(['completed=true amount=undefined']);
+      expect(relinked).toEqual([]);
+   });
+
+   it('relinks the members of a changed project in a follow-up build once the build of the change has completed', async () => {
+      const { buildsEnded, relinked } = await dropDependency({ deferMemberRelink: true });
+
+      expect(buildsEnded).toEqual(['completed=true amount=Money', 'completed=true amount=undefined']);
+      expect(relinked).toContain('refund.domain');
+      expect(relinked).not.toContain('orders.domain');
+   });
+
+   it('starts the follow-up build only once an unlocked build of the change has ended', async () => {
+      const { startedDuringBuild, finished } = await dropDependency({ deferMemberRelink: true, unlocked: true });
+
+      expect(startedDuringBuild).toEqual([false]);
+      expect(finished).toEqual([true]);
+   });
+
+   it.each([
+      ['validating', false],
+      ['not validating', true]
+   ])(
+      'delivers the members in a follow-up build queued again after a write cancelled the first during their listeners, %s',
+      async (_label, withoutValidation) => {
+         const { relinked, finished, layoutDelivered } = await dropDependency({
+            deferMemberRelink: true,
+            cancelInLastPhaseListeners: true,
+            withoutValidation
+         });
+
+         expect(relinked.filter(name => name === 'fulfillment.layout')).toHaveLength(2);
+         expect(finished).toEqual([false, true]);
+         expect(layoutDelivered).toBe(1);
+      }
+   );
+
+   it('relinks in the build of the change a member an unlocked build linked under the old dependencies meanwhile', async () => {
+      const { relinked } = await dropDependency({ deferMemberRelink: true, staleLinkDuringChange: true });
+
+      // The unlocked build was part way through every member, so none is left to a follow-up.
+      expect(relinked).toEqual([]);
+   });
+
+   it('relinks in the build of the change, once, a member that resolves only once the change adds the dependency', async () => {
+      const { harness, workspace } = await makeScratchWorkspaceHarness(
+         scratch => {
+            scratch.write(REFUND, 'entity Refund {\n   amount: Money\n}\n');
+            const ordersPath = scratch.resolve(WORKSPACE_FILES.ordersDomain);
+            scratch.write(
+               WORKSPACE_FILES.ordersDomain,
+               readFileSync(ordersPath, 'utf8').replace('project orders requires commerce-core', 'project orders')
+            );
+         },
+         {
+            extraSharedModules: [
+               {
+                  workspace: {
+                     ProjectManager: (services: OrderFlowSharedServices) =>
+                        new OrderFlowProjectManager(services, { deferMemberRelink: true })
+                  }
+               }
+            ]
+         }
+      );
+      const projects = harness.shared.workspace.ProjectManager;
+      onTestFinished(async () => {
+         await projects.memberRelinkSettled();
+         workspace.dispose();
+      });
+      const builder = harness.shared.workspace.DocumentBuilder;
+      const refundUri = URI.file(workspace.resolve(REFUND));
+      const refundAmount = (): string | undefined => {
+         const model = harness.shared.workspace.LangiumDocuments.getDocument(refundUri)!.parseResult.value as DomainModel;
+         return fieldNamed(entityNamed(model, 'Refund'), 'amount').type.declared?.ref?.name;
+      };
+      expect(refundAmount()).toBeUndefined();
+      let refundLinks = 0;
+      builder.onDocumentPhase(DocumentState.Linked, document => {
+         if (document.uri.toString() === refundUri.toString()) {
+            refundLinks++;
+         }
+      });
+      const relinked: string[] = [];
+      projects.onMemberRelinkStarted(documents => relinked.push(...documents.map(uri => UriUtils.basename(uri))));
+
+      const ordersPath = workspace.resolve(WORKSPACE_FILES.ordersDomain);
+      workspace.write(
+         WORKSPACE_FILES.ordersDomain,
+         readFileSync(ordersPath, 'utf8').replace('project orders', 'project orders requires commerce-core')
+      );
+      await builder.scheduleUpdate([URI.file(ordersPath)], []);
+      expect(refundAmount(), 'the build of the change did not relink the refund').toBe('Money');
+      await projects.memberRelinkSettled();
+
+      expect(relinked).not.toContain('refund.domain');
+      expect(refundLinks).toBe(1);
+   });
+
+   it('builds the members in a follow-up build queued again after a write cancelled the first', async () => {
+      const { buildsEnded, finished } = await dropDependency({ deferMemberRelink: true, cancelFollowUp: true });
+
+      expect(finished).toEqual([false, true]);
+      expect(buildsEnded.at(-1)).toBe('completed=true amount=undefined');
    });
 });

@@ -29,6 +29,10 @@ import type { URI } from '@hydranium/langium';
  *   default cascade plumbing in `HydraniumWorkspaceManager` subscribes to
  *   this event and re-runs `DocumentBuilder.resetToState` for each entry,
  *   which the build of the update that changed the descriptor picks up.
+ *   Empty when the project manager relinks them in a follow-up build of its
+ *   own instead (`ProjectManagerOptions.deferMemberRelink`). That build
+ *   emits an event of its own, with no project in it, carrying the members
+ *   it resets.
  *   Consumers can subscribe independently for other reactions.
  */
 export interface ProjectChangeEvent<TProject extends Project = Project> {
@@ -54,7 +58,8 @@ export interface ProjectChangeEvent<TProject extends Project = Project> {
     * rebuild. Includes the changed projects' own member documents plus
     * any transitive dependents according to the concrete
     * `ProjectManager`'s visibility model (see
-    * `AbstractProjectManager.getAffectedProjects`).
+    * `AbstractProjectManager.getAffectedProjects`). In the event a deferred
+    * relink emits, the members it resets.
     *
     * Descriptor URIs themselves are intentionally excluded: they triggered
     * this cycle and re-adding them would loop.
@@ -64,3 +69,20 @@ export interface ProjectChangeEvent<TProject extends Project = Project> {
 
 /** Callback shape for `ProjectManager.onProjectsChanged`. */
 export type ProjectChangeListener<TProject extends Project = Project> = (event: ProjectChangeEvent<TProject>) => void;
+
+/** Callback shape for `ProjectManager.onMemberRelinkStarted`: the documents the follow-up build relinks. */
+export type MemberRelinkStartedListener = (documents: readonly URI[]) => void;
+
+/** What `ProjectManager.onMemberRelinkFinished` tells a listener. */
+export interface MemberRelinkFinishedEvent {
+   /**
+    * `false` when the follow-up build was cancelled or failed. A cancelled
+    * one is queued again, and another started and finished pair follows only
+    * if members are left, since the cancelling write may build them all.
+    * Await `ProjectManager.memberRelinkSettled` to learn the relink is done.
+    */
+   readonly completed: boolean;
+}
+
+/** Callback shape for `ProjectManager.onMemberRelinkFinished`. */
+export type MemberRelinkFinishedListener = (event: MemberRelinkFinishedEvent) => void;
