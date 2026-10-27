@@ -9,7 +9,7 @@
 
 import { type GModelElement, GModelIndex } from '@eclipse-glsp/server';
 import { inject, injectable } from 'inversify';
-import { type AstNode, AstUtils, type URI } from '@hydranium/langium';
+import { type AstNode, AstUtils } from '@hydranium/langium';
 import { type ElementKeyProvider, type ServerLanguageServices, type ServerSharedServices } from '@hydranium/core';
 import { randomUuid } from '@hydranium/protocol';
 import { workingUriOfCopy } from '../command/hydranium-glsp-operation-command.js';
@@ -56,14 +56,6 @@ export class HydraniumGlspIndex extends GModelIndex {
 
    /** Whether {@link reindexSemanticElements} is walking, so an entry it adds is not an alias. */
    protected walking = false;
-
-   /**
-    * The language services of the diagram's OWN document, captured from the
-    * source root in {@link indexSourceRoot}. Used only as the fallback for a
-    * node that routes nowhere — a synthetic or freshly-built node with no
-    * `$document` yet, which a GModel factory legitimately hands us mid-edit.
-    */
-   protected diagramLanguage?: ServerLanguageServices;
 
    /**
     * Reverse map: the document and *stable id* of the AST element a GModel
@@ -132,8 +124,7 @@ export class HydraniumGlspIndex extends GModelIndex {
 
    /**
     * The {@link ElementKeyProvider} of the language owning `node`'s document,
-    * falling back to the language the diagram document routes to for a node
-    * that routes nowhere.
+    * or `undefined` for a node that routes nowhere.
     *
     * **Resolved per node on the cross-document entry points.** This index is
     * deliberately cross-document — {@link registerElementId} and
@@ -151,15 +142,22 @@ export class HydraniumGlspIndex extends GModelIndex {
    }
 
    /**
-    * The language services owning `node`, falling back to the diagram's
-    * language for a node that routes nowhere. A per-language lookup an index
-    * subclass adds goes through this, so an operation's copy of a node from
-    * another document reaches that document's language, as its built node does.
+    * The language services owning `node`'s document, or a copy's working
+    * document. A per-language lookup an index subclass adds goes through this,
+    * so an operation's copy of a node from another document reaches that
+    * document's language, as its built node does.
+    *
+    * `undefined` for a node in neither: guessing the diagram's language would
+    * key a node of another grammar under the wrong one. Attach a node before
+    * routing it.
     */
    languageServicesFor(node?: AstNode): ServerLanguageServices | undefined {
+      if (node === undefined) {
+         return undefined;
+      }
       // A copy node has no `$document`; it routes by its working root's URI.
-      const route = node === undefined ? undefined : workingUriOfCopy(node);
-      return this.sharedServices.ServiceRegistry.getServicesFor(route ?? node) ?? this.diagramLanguage;
+      const route = workingUriOfCopy(node);
+      return this.sharedServices.ServiceRegistry.getServicesFor(route ?? node);
    }
 
    /** Return the GModel id assigned to `node`, falling back to a fresh `fallback_<uuid>`. */
@@ -193,12 +191,12 @@ export class HydraniumGlspIndex extends GModelIndex {
     * and {@link indexSemanticElement} recorded, seed the diagram document as
     * rendered, and index the nodes through {@link reindexSemanticElements}.
     */
-   indexSourceRoot(root: AstNode, uri?: URI | string): void {
+   indexSourceRoot(root: AstNode): void {
       this.semanticAliases.clear();
       this.elementToIds.clear();
       this.renderedDocUris.clear();
       this.addRenderedDocUri(root);
-      this.reindexSemanticElements(root, uri);
+      this.reindexSemanticElements(root);
    }
 
    /**
@@ -210,10 +208,7 @@ export class HydraniumGlspIndex extends GModelIndex {
     * next build. An alias still names its node; move it with
     * {@link remapSemanticAliases}.
     *
-    * `uri` is the diagram document's URI and is used only to resolve the
-    * diagram's language when `root` carries no `$document` — always the case
-    * for a synthesised root or a working copy, and the more authoritative
-    * signal either way since it is what the caller declared it was loading.
+    * A root that routes nowhere keys nothing, as any such node.
     *
     * The walk resolves the key provider ONCE and threads it: `streamAllContents`
     * is containment-only, so every node it yields has `root` as its root node
@@ -222,10 +217,8 @@ export class HydraniumGlspIndex extends GModelIndex {
     * languageId, file name, extension — for an answer already in hand, on every
     * diagram open and every source-root refresh.
     */
-   reindexSemanticElements(root: AstNode, uri?: URI | string): void {
+   reindexSemanticElements(root: AstNode): void {
       this.idToSemanticNode.clear();
-      const registry = this.sharedServices.ServiceRegistry;
-      this.diagramLanguage = registry.getServicesFor(root) ?? registry.getServicesFor(uri);
       const keyProvider = this.elementKeyProviderFor(root);
       this.walking = true;
       try {

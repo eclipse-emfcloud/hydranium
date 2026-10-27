@@ -135,34 +135,10 @@ describe('HydraniumGlspIndex', () => {
          expect(index.findId(makeAstNodeInDoc('file:///m/other-diagram.dgm'))).toBe('dgm:TestNode');
       });
 
-      it('falls back to the diagram language for a node with no routable document', () => {
+      it('keys no node in no document, whatever root was indexed', () => {
          const index = createMultiLanguageIndex();
          index.indexSourceRoot(makeAstNodeInDoc('file:///m/diagram.dgm'));
-         // No `$document`, so nothing routes it — the diagram's own language answers.
-         expect(index.findId(makeFakeAstNode<AstNode>({ $type: 'TestNode' }))).toBe('dgm:TestNode');
-      });
-
-      it('returns undefined for an unroutable node before any source root is indexed', () => {
-         const index = createMultiLanguageIndex();
-         expect(index.findId(makeFakeAstNode<AstNode>({ $type: 'TestNode' }))).toBeUndefined();
-      });
-
-      it('takes the diagram language from the indexSourceRoot uri when the root carries no document', () => {
-         const index = createMultiLanguageIndex();
-         // A synthesised root has no `$document`; the uri the caller declared
-         // is then the only signal for the diagram's own language.
-         index.indexSourceRoot(makeFakeAstNode<AstNode>({ $type: 'Root' }), 'file:///m/diagram.other');
-         expect(index.findId(makeFakeAstNode<AstNode>({ $type: 'TestNode' }))).toBe('other:TestNode');
-      });
-
-      it('prefers the root own document over the supplied uri', () => {
-         const index = createMultiLanguageIndex();
-         index.indexSourceRoot(makeAstNodeInDoc('file:///m/diagram.dgm'), 'file:///m/wrong.other');
-         expect(index.findId(makeFakeAstNode<AstNode>({ $type: 'TestNode' }))).toBe('dgm:TestNode');
-      });
-
-      it('keys no document-less node before a source root is indexed', () => {
-         const index = createMultiLanguageIndex();
+         // The diagram's language would be a guess, wrong for a node of another grammar.
          expect(index.findId(makeFakeAstNode<AstNode>({ $type: 'TestNode' }))).toBeUndefined();
       });
    });
@@ -298,7 +274,7 @@ describe('HydraniumGlspIndex', () => {
          const moved = makeAstNode();
          const { index } = createIndex(new Map());
          index.indexSemanticElement('alias', node);
-         index.reindexSemanticElements({ $type: 'Root' } as AstNode, 'file:///m/diagram.a');
+         index.reindexSemanticElements({ $type: 'Root' } as AstNode);
          const kept = index.findSemanticElement('alias') === node;
          index.remapSemanticAliases(() => moved);
          const remapped = index.findSemanticElement('alias') === moved;
@@ -379,7 +355,7 @@ describe('HydraniumGlspIndex', () => {
          const { index } = createIndex(new Map([[node, 'elementStableId']]));
          index.indexSourceRoot(makeAstNodeInDoc('file:///m/diagram.a'));
          index.registerElementId(node, 'gmodel-1');
-         index.reindexSemanticElements({ $type: 'Root' } as AstNode, 'file:///m/diagram.a');
+         index.reindexSemanticElements({ $type: 'Root' } as AstNode);
          expect({ ids: index.findElementIds(node), documents: [...index.renderedDocumentUris()].sort() }).toEqual({
             ids: ['gmodel-1'],
             documents: ['file:///m/diagram.a', 'file:///m/test.a']

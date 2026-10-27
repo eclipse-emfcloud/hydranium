@@ -791,7 +791,12 @@ describe('ReconcilingTransferHydraniumGlspState under an operation', () => {
       const services = (state as unknown as { sharedServices: { ServiceRegistry: unknown } }).sharedServices;
       services.ServiceRegistry = { getServicesFor: () => ({ references: { ReferenceBuilder: builder } }) };
       const item = makeFakeAstNode<AstNode>({ $type: 'Item', name: 'a' });
-      const built = makeFakeAstNode<TestRoot>({ $type: 'TestRoot', label: 'r', members: [item] });
+      const built = makeFakeAstNode<TestRoot>({
+         $type: 'TestRoot',
+         label: 'r',
+         $document: { uri: URI.parse('file:///a.a') } as unknown as LangiumDocument,
+         members: [item]
+      });
       state.setSourceRoot('file:///a.a', built);
       let observed: { visible: unknown[]; own: string | undefined } | undefined;
 
@@ -822,7 +827,12 @@ describe('ReconcilingTransferHydraniumGlspState under an operation', () => {
       const services = (state as unknown as { sharedServices: { ServiceRegistry: unknown } }).sharedServices;
       services.ServiceRegistry = { getServicesFor: () => ({ references: { ReferenceBuilder: builder } }) };
       const item = makeFakeAstNode<AstNode>({ $type: 'Item', name: 'a' });
-      const built = makeFakeAstNode<TestRoot>({ $type: 'TestRoot', label: 'r', members: [item] });
+      const built = makeFakeAstNode<TestRoot>({
+         $type: 'TestRoot',
+         label: 'r',
+         $document: { uri: URI.parse('file:///a.a') } as unknown as LangiumDocument,
+         members: [item]
+      });
       state.setSourceRoot('file:///a.a', built);
 
       await runOperation(new HydraniumGlspOperationCommand<TestSourceModel>(state), () => {
@@ -1012,10 +1022,7 @@ describe('the copy nodes of an operation', () => {
       expect(copied).toEqual({ copies: true, primary: built.primary, foreign: built.foreign, resolvesToCopy: true });
    });
 
-   it.each([
-      ['a document root under a canonical uri of another spelling', true],
-      ['a detached root', false]
-   ])('keep an id registered on a copy node for its built node, for %s', async (_case, inDocument) => {
+   it('keep an id registered on a copy node for its built node, under a canonical uri of another spelling', async () => {
       const harness = makeHarness();
       const state = createState(harness);
       const services = (state as unknown as { sharedServices: { ServiceRegistry: unknown; workspace: { DocumentUriPolicy: unknown } } })
@@ -1031,7 +1038,7 @@ describe('the copy nodes of an operation', () => {
       const root = makeFakeAstNode<TestRoot>({
          $type: 'TestRoot',
          label: 'r',
-         ...(inDocument ? { $document: { uri: URI.parse('file:///A.a') } as unknown as LangiumDocument } : {}),
+         $document: { uri: URI.parse('file:///A.a') } as unknown as LangiumDocument,
          members: []
       });
       const item = memberOf(root, 'Item');
