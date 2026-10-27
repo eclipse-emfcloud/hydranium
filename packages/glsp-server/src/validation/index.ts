@@ -9,3 +9,4 @@
 
 export * from './diagnostic-markers.js';
 export * from './hydranium-glsp-model-validator.js';
+export * from './hydranium-glsp-request-markers-handler.js';

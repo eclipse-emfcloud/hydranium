@@ -114,11 +114,12 @@ export class OrderFlowProcessDiagramModule extends AbstractHydraniumGlspDiagramM
     * `@optional()`, so leaving it out is not an error — it is a diagram that
     * silently never shows a marker, with no log line to say so.
     *
-    * Binding it turns on two paths at once. The tool-palette validate command
-    * gets a `ModelValidator` to ask, and the framework storage's
-    * `refreshDiagnosticMarkers` starts pushing a `SetMarkersAction` after every
-    * rebuild that reaches `Validated`, so markers follow a text edit live
-    * instead of waiting for the user to re-validate.
+    * Binding it turns the markers on. The framework storage's
+    * `refreshDiagnosticMarkers` pushes a `SetMarkersAction` once a build is
+    * validated and a drawn document's diagnostics changed, so markers follow
+    * a text edit live instead of waiting for the user to re-validate. The
+    * palette's Validate command resends that live set and adds no batch
+    * markers beside it.
     *
     * No subclass, unlike {@link OrderFlowGlspState} / {@link OrderFlowGlspIndex} /
     * {@link OrderFlowGlspStorage}: the framework validator resolves a

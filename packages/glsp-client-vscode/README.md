@@ -16,6 +16,8 @@ framework's client classes.
 - GLSP's connector, with each save settled by the server's answer to it: a
   save that fails rejects with the documents it could not write and why, and
   shows them, rather than settling as saved on a later save that succeeds.
+  Its Problems view shows the markers of every reason, as the diagram does,
+  so Validate keeps the live ones.
 - A webview starter that adds `@hydranium/glsp-client`'s classes to the
   diagram container, after GLSP's VS Code modules and before your diagram's.
 

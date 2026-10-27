@@ -23,7 +23,6 @@ import {
    type Action,
    ChangeBoundsOperation,
    EditMode,
-   MarkersReason,
    MessageAction,
    RejectAction,
    RequestBoundsAction,
@@ -35,7 +34,7 @@ import {
    StatusAction,
    UpdateModelAction
 } from '@eclipse-glsp/server';
-import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
+import { DiagramStatus, HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { DIAGRAM_READONLY_PARSE_ERROR } from '@hydranium/glsp-server/messages';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
@@ -56,6 +55,8 @@ interface OpenDiagram {
    readonly services: OrderFlowHarness;
    readonly harness: GlspHarness<OrderFlowGlspState>;
    readonly workspace: ScratchWorkspace;
+   /** The number of actions sent when each live validation withdrew its status. */
+   readonly liveValidationEnds: readonly number[];
 }
 
 let open: OpenDiagram | undefined;
@@ -93,27 +94,33 @@ async function openDiagram(prepare?: (workspace: ScratchWorkspace) => void): Pro
       appModules: [new HydraniumGlspAppModule({ shared: services.shared })],
       additionalClientActionKinds: [SetMarkersAction.KIND, SetEditModeAction.KIND, MessageAction.KIND]
    });
-   open = { services, harness, workspace };
+   const liveValidationEnds: number[] = [];
+   open = { services, harness, workspace, liveValidationEnds };
    await harness.start();
+   const setStatus = harness.state.setStatus.bind(harness.state);
+   harness.state.setStatus = (status, entry) => {
+      if (status === DiagramStatus.VALIDATION && !entry) {
+         liveValidationEnds.push(harness.actions.length);
+      }
+      setStatus(status, entry);
+   };
    await harness.openDocument(workspace.resolve(WORKSPACE_FILES.fulfillmentProcess));
    await harness.answerBoundsRequest();
    return open;
 }
 
 /**
- * Wait for a live validation sent from action `from` on to finish, and for the
+ * Wait for a live validation to finish once action `from` is sent, and for the
  * status it withdraws on finishing to reach the client.
  *
- * Its markers are the last thing validation sends, and the status change that
- * follows them is queued behind them on the action dispatcher, so it can land
- * after the markers are seen.
+ * A live run's markers carry the same reason as the storage refresh's, so
+ * they cannot tell the two apart. A run counts only if it ended after action
+ * `from`, since one that ended just before it records `from` itself. The
+ * withdrawn status is queued on the action dispatcher, so it can land after
+ * the withdrawal is seen.
  */
 async function afterLiveValidation(diagram: OpenDiagram, from: number): Promise<void> {
-   await vi.waitFor(() =>
-      expect(diagram.harness.actions.slice(from).some(action => SetMarkersAction.is(action) && action.reason === MarkersReason.LIVE)).toBe(
-         true
-      )
-   );
+   await vi.waitFor(() => expect(diagram.liveValidationEnds.some(sent => sent > from)).toBe(true));
    await nextMacrotask(0);
 }
 
@@ -180,7 +187,7 @@ describe('order-flow .process read-only status', () => {
          diagramType: 'order-flow-process',
          appModules: [new HydraniumGlspAppModule({ shared: services.shared })]
       });
-      open = { services, harness, workspace };
+      open = { services, harness, workspace, liveValidationEnds: [] };
       await harness.start();
 
       // No source URI, so the load throws before it reads anything.

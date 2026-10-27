@@ -11,12 +11,14 @@ import {
    ActionMessage,
    GlspVscodeConnector,
    type GlspVscodeClient,
+   type Marker,
    MessageAction,
    MessageOrigin,
    type MessageProcessingResult,
    RejectAction,
    RequestAction,
-   ResponseAction
+   ResponseAction,
+   type SetMarkersAction
 } from '@eclipse-glsp/vscode-integration';
 import { isSaveFailedError, reviveProtocolErrorJson, RequestSaveModelAction } from '@hydranium/protocol';
 import * as vscode from 'vscode';
@@ -49,6 +51,12 @@ const STAGING_FILE_SUFFIX = /\.\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
  * an untyped rejection still appears.
  *
  * Against a server that does not advertise the request, the save is GLSP's.
+ *
+ * Its Problems view shows every marker reason at once, as the diagram does.
+ * GLSP's replaces a document's problems with each `SetMarkersAction` whatever
+ * its reason, so the last reason sent wins, and a Validate answered under
+ * batch erases the live markers. This one keeps each client's latest set per
+ * reason and shows their union. The diagram still gets every action unchanged.
  */
 export class HydraniumGlspVscodeConnector<D extends vscode.CustomDocument = vscode.CustomDocument> extends GlspVscodeConnector<D> {
    /** How long a save waits for the server's response before it rejects, as the Theia saveable does. */
@@ -82,6 +90,8 @@ export class HydraniumGlspVscodeConnector<D extends vscode.CustomDocument = vsco
    protected readonly rejectedSaveMessages = new Map<string, string>();
    /** The failure last shown for each client, by {@link saveFailureKey}, until a later save succeeds or fails otherwise. */
    protected readonly shownSaveFailures = new Map<string, string>();
+   /** Each client's latest markers, keyed by client id, then by reason. */
+   protected readonly markersByReason = new Map<string, Map<string, Marker[]>>();
 
    override saveDocument(document: D, destination?: vscode.Uri): Promise<void> {
       const clientId = this.documentMap.get(document);
@@ -162,6 +172,26 @@ export class HydraniumGlspVscodeConnector<D extends vscode.CustomDocument = vsco
       return { processedMessage: undefined, messageChanged: true };
    }
 
+   /** Show the union of the client's latest set for each reason in the Problems view. */
+   protected override handleSetMarkersAction(
+      message: ActionMessage<SetMarkersAction>,
+      client: GlspVscodeClient<D> | undefined,
+      origin: MessageOrigin
+   ): MessageProcessingResult {
+      if (!client) {
+         return super.handleSetMarkersAction(message, client, origin);
+      }
+      let byReason = this.markersByReason.get(client.clientId);
+      if (!byReason) {
+         byReason = new Map();
+         this.markersByReason.set(client.clientId, byReason);
+      }
+      byReason.set(message.action.reason ?? '', message.action.markers);
+      const union = { ...message, action: { ...message.action, markers: [...byReason.values()].flat() } };
+      super.handleSetMarkersAction(union, client, origin);
+      return { processedMessage: message, messageChanged: false };
+   }
+
    override async registerClient(client: GlspVscodeClient<D>): Promise<void> {
       const listener = client.webviewEndpoint.webviewPanel.onDidDispose(() => {
          listener.dispose();
@@ -185,6 +215,7 @@ export class HydraniumGlspVscodeConnector<D extends vscode.CustomDocument = vsco
       this.latestSaveOutcomes.delete(clientId);
       this.rejectedSaveMessages.delete(clientId);
       this.shownSaveFailures.delete(clientId);
+      this.markersByReason.delete(clientId);
    }
 
    /** Whether `save`'s outcome is the latest of its client's taken so far, taking it if so. */
@@ -235,6 +266,7 @@ export class HydraniumGlspVscodeConnector<D extends vscode.CustomDocument = vsco
       this.latestSaveOutcomes.clear();
       this.rejectedSaveMessages.clear();
       this.shownSaveFailures.clear();
+      this.markersByReason.clear();
       super.dispose();
    }
 }

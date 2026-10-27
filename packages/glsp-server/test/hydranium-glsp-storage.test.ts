@@ -24,6 +24,7 @@ import {
    MarkersReason,
    ModelState,
    ModelSubmissionHandler,
+   type ModelValidator,
    RequestModelAction,
    SOURCE_URI_ARG,
    SaveModelAction,
@@ -76,6 +77,8 @@ class TestState extends AbstractHydraniumGlspState<TestRoot> {
 }
 
 class TestStorage extends HydraniumGlspStorage<TestRoot> {
+   /** Writable here, so a case can bind a validator after construction. */
+   declare modelValidator: ModelValidator | undefined;
    public loadCalls: RequestModelAction[] = [];
    public saveCalls: SaveModelAction[] = [];
 
@@ -135,8 +138,12 @@ class UpdateRecordingStorage extends TestStorage {
    resubmits = 0;
    markerRefreshes = 0;
 
-   callHandleModelUpdated(event: AstDocumentUpdatedEvent<AstNode>): Promise<void> {
-      return this.handleModelUpdated('file:///x.a', event);
+   callHandleModelUpdated(event: AstDocumentUpdatedEvent<AstNode>): void {
+      this.handleModelUpdated('file:///x.a', event);
+   }
+
+   callHandleModelsBuilt(): void {
+      this.handleModelsBuilt('file:///x.a');
    }
 
    callHandleSecondaryUpdated(event: AstDocumentUpdatedEvent<AstNode>): void {
@@ -1046,11 +1053,11 @@ describe('HydraniumGlspStorage', () => {
    });
 
    describe('refreshDiagnosticMarkers', () => {
-      it('dispatches the bound validator markers as a SetMarkersAction (reason batch)', async () => {
+      it('dispatches the bound validator markers as a SetMarkersAction (reason live)', async () => {
          const { storage } = createStorage('client-1');
          const marker: Marker = { elementId: 'e1', kind: 'error', label: 'dup', description: 'dup' };
          const dispatch = vi.fn((_action: SetMarkersAction) => Promise.resolve());
-         (storage as unknown as { modelValidator: unknown }).modelValidator = { validate: () => [marker] };
+         storage.modelValidator = { validate: () => [marker] };
          (storage as unknown as { actionDispatcher: unknown }).actionDispatcher = { dispatch };
 
          await storage.refreshDiagnosticMarkers();
@@ -1059,13 +1066,13 @@ describe('HydraniumGlspStorage', () => {
          const action = dispatch.mock.calls[0][0] as SetMarkersAction;
          expect(SetMarkersAction.is(action)).toBe(true);
          expect(action.markers).toEqual([marker]);
-         expect(action.reason).toBe(MarkersReason.BATCH);
+         expect(action.reason).toBe(MarkersReason.LIVE);
       });
 
       it('dispatches an empty marker set to clear when the model is valid', async () => {
          const { storage } = createStorage('client-1');
          const dispatch = vi.fn((_action: SetMarkersAction) => Promise.resolve());
-         (storage as unknown as { modelValidator: unknown }).modelValidator = { validate: () => [] };
+         storage.modelValidator = { validate: () => [] };
          (storage as unknown as { actionDispatcher: unknown }).actionDispatcher = { dispatch };
 
          await storage.refreshDiagnosticMarkers();
@@ -1076,7 +1083,7 @@ describe('HydraniumGlspStorage', () => {
       it('logs a validator that throws as an error, and markers it cannot send as a warning, never rejecting', async () => {
          const throwingLog = makeCapturingGlspLogger();
          const throwing = createStorage('client-1', undefined, throwingLog.logger).storage;
-         (throwing as unknown as { modelValidator: unknown }).modelValidator = {
+         throwing.modelValidator = {
             validate: () => Promise.reject(new Error('validator bug'))
          };
          (throwing as unknown as { actionDispatcher: unknown }).actionDispatcher = { dispatch: vi.fn() };
@@ -1085,7 +1092,7 @@ describe('HydraniumGlspStorage', () => {
 
          const unsendableLog = makeCapturingGlspLogger();
          const unsendable = createStorage('client-1', undefined, unsendableLog.logger).storage;
-         (unsendable as unknown as { modelValidator: unknown }).modelValidator = { validate: () => [] };
+         unsendable.modelValidator = { validate: () => [] };
          (unsendable as unknown as { actionDispatcher: unknown }).actionDispatcher = {
             dispatch: () => Promise.reject(new Error('Connection is disposed.'))
          };
@@ -1450,41 +1457,109 @@ describe('HydraniumGlspStorage', () => {
       // primary arrives rebuilt. Its causedBy is what tells the diagram that
       // its own write caused it; the resubmit would land on the move the user
       // still holds.
-      it('does not resubmit for a primary rebuilt by a build its own write caused, and still refreshes markers', async () => {
+      it('does not resubmit for a primary rebuilt by a build its own write caused', () => {
          const storage = updateRecordingStorage();
 
-         await storage.callHandleModelUpdated(
+         storage.callHandleModelUpdated(
             updated('file:///x.a', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: 'client-1' })
          );
 
          expect(storage.resubmits).toBe(0);
+      });
+
+      it('resubmits for a primary rebuilt by another client’s write, or by no single client', () => {
+         const storage = updateRecordingStorage();
+
+         storage.callHandleModelUpdated(
+            updated('file:///x.a', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: 'client-2' })
+         );
+         storage.callHandleModelUpdated(
+            updated('file:///x.a', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: UNKNOWN_CLIENT_ID })
+         );
+         storage.callHandleModelUpdated(updated('file:///x.a', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID }));
+
+         expect(storage.resubmits).toBe(3);
+      });
+
+      /**
+       * A storage drawing `file:///x.a` and `file:///y.b`, whose diagnostics a
+       * test replaces as a validation does, or appends to as a validation of
+       * further categories does.
+       */
+      function markerStorage(validator = true): {
+         storage: UpdateRecordingStorage;
+         validate: (uri: string) => void;
+         validateMore: (uri: string) => void;
+      } {
+         const documents = new Map([
+            ['file:///x.a', { diagnostics: [] as unknown[] }],
+            ['file:///y.b', { diagnostics: [] as unknown[] }]
+         ]);
+         const sharedServices = makeNoopSharedServices<ServerSharedServices>({
+            model: { ModelService: makeSessionModelService() },
+            workspace: { LangiumDocuments: { getDocument: (uri: { toString(): string }) => documents.get(uri.toString()) } }
+         });
+         const { storage, state } = createStorage('client-1', sharedServices, undefined, UpdateRecordingStorage);
+         if (!(storage instanceof UpdateRecordingStorage)) {
+            throw new Error('the container built the wrong storage');
+         }
+         vi.spyOn(state.index, 'renderedDocumentUris').mockReturnValue([...documents.keys()]);
+         if (validator) {
+            storage.modelValidator = { validate: () => [] };
+         }
+         return {
+            storage,
+            validate: uri => documents.set(uri, { diagnostics: [] }),
+            validateMore: uri => documents.get(uri)?.diagnostics.push({ message: 'more' })
+         };
+      }
+
+      // A write that cancels a build after a drawn document is validated skips
+      // that build's event, and the build that takes over may build only
+      // other documents.
+      it("refreshes markers once any build is validated after a drawn document's diagnostics changed", () => {
+         const { storage, validate } = markerStorage();
+         storage.callHandleModelsBuilt();
+         const afterFirst = storage.markerRefreshes;
+
+         validate('file:///y.b');
+         storage.callHandleModelsBuilt();
+
+         expect({ afterFirst, afterChange: storage.markerRefreshes }).toEqual({ afterFirst: 1, afterChange: 2 });
+      });
+
+      it("refreshes markers once a build appends to a drawn document's diagnostics", () => {
+         const { storage, validateMore } = markerStorage();
+         storage.callHandleModelsBuilt();
+
+         validateMore('file:///y.b');
+         storage.callHandleModelsBuilt();
+
+         expect(storage.markerRefreshes).toBe(2);
+      });
+
+      it("refreshes no markers for a build after which no drawn document's diagnostics changed", () => {
+         const { storage } = markerStorage();
+         storage.callHandleModelsBuilt();
+
+         storage.callHandleModelsBuilt();
+
          expect(storage.markerRefreshes).toBe(1);
       });
 
-      it('resubmits for a primary rebuilt by another client’s write, or by no single client', async () => {
-         const storage = updateRecordingStorage();
+      it('refreshes no markers without a validator', () => {
+         const { storage } = markerStorage(false);
 
-         await storage.callHandleModelUpdated(
-            updated('file:///x.a', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: 'client-2' })
-         );
-         await storage.callHandleModelUpdated(
-            updated('file:///x.a', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID, causedBy: UNKNOWN_CLIENT_ID })
-         );
-         await storage.callHandleModelUpdated(updated('file:///x.a', { reason: 'rebuilt', sourceClientId: UNKNOWN_CLIENT_ID }));
+         storage.callHandleModelsBuilt();
 
-         expect(storage.resubmits).toBe(3);
-         expect(storage.markerRefreshes).toBe(3);
+         expect(storage.markerRefreshes).toBe(0);
       });
 
-      it('does not resubmit for its own change, and does for another client’s', async () => {
+      it('does not resubmit for its own change, and does for another client’s', () => {
          const storage = updateRecordingStorage();
 
-         await storage.callHandleModelUpdated(
-            updated('file:///x.a', { reason: 'changed', sourceClientId: 'client-1', causedBy: 'client-1' })
-         );
-         await storage.callHandleModelUpdated(
-            updated('file:///x.a', { reason: 'changed', sourceClientId: 'client-2', causedBy: 'client-2' })
-         );
+         storage.callHandleModelUpdated(updated('file:///x.a', { reason: 'changed', sourceClientId: 'client-1', causedBy: 'client-1' }));
+         storage.callHandleModelUpdated(updated('file:///x.a', { reason: 'changed', sourceClientId: 'client-2', causedBy: 'client-2' }));
 
          expect(storage.resubmits).toBe(1);
       });

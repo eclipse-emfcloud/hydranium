@@ -18,6 +18,7 @@ import {
    type InstanceMultiBinding,
    type MultiBinding,
    OperationActionHandler,
+   RequestMarkersHandler,
    RequestModelActionHandler,
    SetEditModeActionHandler,
    UndoRedoActionHandler
@@ -32,6 +33,7 @@ import { HydraniumGlspUndoRedoActionHandler } from '../command/hydranium-glsp-un
 import { DefaultDiagramStatusReporter, DiagramStatusReporter } from '../status/diagram-status-reporter.js';
 import { HydraniumGlspRequestModelActionHandler } from '../status/hydranium-glsp-request-model-action-handler.js';
 import { HydraniumGlspSetEditModeActionHandler } from '../status/hydranium-glsp-set-edit-mode-action-handler.js';
+import { HydraniumGlspRequestMarkersHandler } from '../validation/hydranium-glsp-request-markers-handler.js';
 
 /**
  * GLSP {@link DiagramModule} base that wires the framework's diagram status,
@@ -90,9 +92,10 @@ export abstract class AbstractHydraniumGlspDiagramModule extends DiagramModule {
     * Adds {@link HydraniumGlspRequestSaveModelActionHandler}, the save the
     * Theia client sends, beside GLSP's own save handler, and
     * {@link HydraniumGlspRequestEditsSettledActionHandler}, which tells a
-    * client its edits are answered; replaces the GLSP handlers that write the
-    * client's status or edit mode with ones that set a diagram status instead;
-    * and runs operations, undo and redo through
+    * client its edits are answered. Replaces the GLSP handlers that write the
+    * client's status or edit mode with ones that set a diagram status instead.
+    * Answers Validate through {@link HydraniumGlspRequestMarkersHandler}, which
+    * sends the live markers with it. Runs operations, undo and redo through
     * {@link HydraniumGlspOperationActionHandler} and
     * {@link HydraniumGlspUndoRedoActionHandler}, without which handlers edit
     * the built root every reader shares.
@@ -103,6 +106,7 @@ export abstract class AbstractHydraniumGlspDiagramModule extends DiagramModule {
       binding.add(HydraniumGlspRequestEditsSettledActionHandler);
       binding.rebind(RequestModelActionHandler, HydraniumGlspRequestModelActionHandler);
       binding.rebind(SetEditModeActionHandler, HydraniumGlspSetEditModeActionHandler);
+      binding.rebind(RequestMarkersHandler, HydraniumGlspRequestMarkersHandler);
       binding.rebind(OperationActionHandler, HydraniumGlspOperationActionHandler);
       binding.rebind(UndoRedoActionHandler, HydraniumGlspUndoRedoActionHandler);
    }
