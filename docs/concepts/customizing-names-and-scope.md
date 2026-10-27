@@ -134,8 +134,8 @@ Check which tier it was exported at, in Seam 1.
 
 `HydraniumScopeProvider` filters the global index for each reference by the
 tiers in the table above. You control which projects a project can see through
-the `dependencies` your `ProjectManager` declares; dependencies of dependencies
-count too.
+the `dependencies` your `ProjectManager` declares. Dependencies of dependencies
+count too, unless you pass `visibility: 'direct'` to `AbstractProjectManager`.
 
 The filter runs only once your `ProjectManager` reports more than one
 project. The default, `SingleProjectManager`, puts the whole workspace in one

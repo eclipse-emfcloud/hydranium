@@ -11,7 +11,7 @@ import type { Project } from '@hydranium/protocol';
 import type { AstNode, URI } from '@hydranium/langium';
 import type { Disposable } from 'vscode-languageserver';
 import type { WorkspaceFolder } from 'vscode-languageserver-types';
-import type { ProjectChangeListener } from './project-change-event.js';
+import type { MemberRelinkFinishedListener, MemberRelinkStartedListener, ProjectChangeListener } from './project-change-event.js';
 
 /**
  * Manages the **project tier** sitting between the LSP `WorkspaceFolder`
@@ -91,6 +91,32 @@ export interface ProjectManager<TProject extends Project = Project> {
     */
    onProjectsChanged(listener: ProjectChangeListener<TProject>): Disposable;
 
+   /**
+    * Subscribe to the start of a follow-up build that relinks a changed
+    * project's members, with the documents it relinks. Fires only for a
+    * manager that defers that relink (`AbstractProjectManager` under its
+    * `deferMemberRelink` option), so an adopter forwards it to show progress.
+    */
+   onMemberRelinkStarted(listener: MemberRelinkStartedListener): Disposable;
+
+   /** Subscribe to the end of each build {@link onMemberRelinkStarted} announced. */
+   onMemberRelinkFinished(listener: MemberRelinkFinishedListener): Disposable;
+
+   /**
+    * Resolves once no deferred member relink is pending, queued or building,
+    * including one queued while this waits. It covers only relinks already
+    * queued, so a test awaits the build of the change first. A test that
+    * drives a descriptor change awaits it, and so does a teardown, or the
+    * relink runs against a workspace already removed. Resolved at once by a
+    * manager that never defers.
+    *
+    * Never await it inside a workspace lock write or read, which includes a
+    * request handler that answers under a read: the relink needs a write,
+    * which waits for both. Nor in a listener of a build running outside the
+    * lock, since the relink waits for that build to end.
+    */
+   memberRelinkSettled(): Promise<void>;
+
    // ============================================================
    // Queries
    // ============================================================
@@ -136,7 +162,10 @@ export interface ProjectManager<TProject extends Project = Project> {
     *
     * Default behaviour in `AbstractProjectManager` is the **transitive
     * closure** of {@link Project.dependencies}, including the project
-    * itself. An adopter can override to use a different visibility model.
+    * itself, or only the dependencies it names under its `visibility: 'direct'`
+    * option, which narrows visibility only: a change still rebuilds every
+    * transitive dependent. An adopter can override to use a different
+    * visibility model.
     *
     * `SingleProjectManager` returns `[id]` for its synthetic workspace
     * project, which combined with "synthetic project owns every URI"

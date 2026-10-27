@@ -65,6 +65,18 @@ class FakeProjectManager implements ProjectManager {
       });
    }
 
+   onMemberRelinkStarted(): Disposable {
+      return Disposable.create(() => undefined);
+   }
+
+   onMemberRelinkFinished(): Disposable {
+      return Disposable.create(() => undefined);
+   }
+
+   memberRelinkSettled(): Promise<void> {
+      return Promise.resolve();
+   }
+
    fire(event: ProjectChangeEvent): void {
       for (const listener of this.listeners.slice()) {
          listener(event);

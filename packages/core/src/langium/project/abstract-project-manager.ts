@@ -11,21 +11,74 @@ import { Deferred, type Project, type Tracer, UNQUALIFIED_PROJECT_REFERENCE, des
 import {
    type AstNode,
    AstUtils,
-   type DocumentBuilder,
    DocumentState,
    type FileSystemProvider,
+   isOperationCancelled,
    type LangiumDocument,
    type LangiumDocuments,
+   OperationCancelled,
    type URI,
-   UriUtils
+   UriUtils,
+   type WorkspaceLock
 } from '@hydranium/langium';
 import { CancellationToken, Disposable } from 'vscode-languageserver';
 import type { WorkspaceFolder } from 'vscode-languageserver-types';
 import type { LogNameOptions } from '../diagnostics/logger.js';
+import { HYDRANIUM_BUILD_REASONS, type HydraniumDocumentBuilder } from '../document-builder/document-builder.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { isVirtualUri } from '../workspace/virtual-document.js';
-import type { ProjectChangeEvent, ProjectChangeListener } from './project-change-event.js';
+import type {
+   MemberRelinkFinishedEvent,
+   MemberRelinkFinishedListener,
+   MemberRelinkStartedListener,
+   ProjectChangeEvent,
+   ProjectChangeListener
+} from './project-change-event.js';
 import type { ProjectManager } from './project-manager.js';
+
+/** Constructor options for {@link AbstractProjectManager}. */
+export interface ProjectManagerOptions extends LogNameOptions {
+   /**
+    * Relink the member documents a descriptor change affects in a build of
+    * their own, queued once the build of the change has ended. The write that
+    * changed the descriptor then answers without waiting for them, and they
+    * keep the links they had until that build starts. An explicit
+    * `DocumentBuilder.build`, such as workspace initialization, keeps them in
+    * the build of the change, as without the option. Default `false`.
+    *
+    * A member already below its last phase stays in the build of the change,
+    * which builds it anyway. That includes every member with a linking error,
+    * which Langium relinks in every update. So a save that adds a dependency
+    * still waits for the members it makes resolve.
+    *
+    * A write that lands while that build runs cancels it. The write's own
+    * build then relinks the members still below `Validated`, since an update
+    * builds every such document, and the next follow-up takes the rest. A
+    * save made once that build has started therefore waits for part of the
+    * relink. The follow-up is queued behind every write, so while writes keep
+    * arriving, the members keep the links they had until the writes pause.
+    *
+    * A test or a teardown awaits {@link ProjectManager.memberRelinkSettled}
+    * after a descriptor change, or the relink runs against a workspace already
+    * removed.
+    *
+    * A member counts as relinked only once a build links it, so under
+    * Langium's `eagerLinking: false`, which skips that phase, the follow-up
+    * builds even a member a later write has built.
+    */
+   readonly deferMemberRelink?: boolean;
+   /**
+    * Which projects a project's references resolve against:
+    * `'transitive'`, the default, is the closure of its
+    * {@link Project.dependencies}, and `'direct'` only the projects it names.
+    *
+    * It decides visibility only. A change still rebuilds every project that
+    * reaches the changed one through its dependencies, at any depth, since a
+    * rebuild replaces the nodes their references point to, and a project two
+    * steps away that is not relinked keeps references to the replaced nodes.
+    */
+   readonly visibility?: 'transitive' | 'direct';
+}
 
 /**
  * Abstract base for project-aware {@link ProjectManager} implementations.
@@ -57,7 +110,13 @@ import type { ProjectManager } from './project-manager.js';
  *   transitively in reverse (projects whose dep closure touches a changed
  *   project also rebuild). Override for a different rebuild policy.
  * - {@link getVisibleProjects} — default walks {@link Project.dependencies}
- *   transitively. Override for a different visibility model.
+ *   as far as {@link ProjectManagerOptions.visibility} reaches. Override for
+ *   a different visibility model.
+ * - {@link shouldDeferMemberRelink} — default follows
+ *   {@link ProjectManagerOptions.deferMemberRelink}. Override for a different
+ *   choice of which builds leave the members to a follow-up build.
+ * - {@link collectAffectedDocuments} — default collects the affected
+ *   projects' members. Override to add documents a change affects otherwise.
  * - {@link computeProject} — default uses closest-ancestor-descriptor-folder
  *   membership. Override for a different membership model; overriding
  *   {@link getProject} instead loses the memoization it wraps.
@@ -87,18 +146,65 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
 
    protected readonly fileSystemProvider: FileSystemProvider;
    protected readonly langiumDocuments: LangiumDocuments;
-   protected readonly documentBuilder: DocumentBuilder;
+   protected readonly documentBuilder: HydraniumDocumentBuilder;
+   protected readonly workspaceLock: WorkspaceLock;
    protected readonly tracer: Tracer;
+   /** Resolved from {@link ProjectManagerOptions.deferMemberRelink}. */
+   protected readonly deferMemberRelink: boolean;
+   /** Resolved from {@link ProjectManagerOptions.visibility}. */
+   protected readonly visibility: 'transitive' | 'direct';
+
+   /** Member documents a deferred relink has yet to take, by URI string. */
+   protected readonly pendingMemberRelink = new Map<string, URI>();
+   /** The keys of {@link pendingMemberRelink} to reset before they are built, whatever their state. */
+   protected readonly pendingMemberResets = new Set<string>();
+   /**
+    * The keys of every queued or taken member that no build has relinked yet.
+    * A member leaves once a build links it and then delivers its last phase
+    * to every listener, whichever build that is: `Validated`, or
+    * `IndexedReferences` when that build does not validate it.
+    */
+   protected readonly unrelinkedMembers = new Set<string>();
+   /** The keys of {@link unrelinkedMembers} a build has linked since they were queued. */
+   protected readonly linkedMembers = new Set<string>();
+   /** Set from {@link queueMemberRelink} until {@link runMemberRelink} takes {@link pendingMemberRelink}. */
+   protected memberRelinkQueued = false;
+   /** Set once {@link registerMemberPhaseListeners} has run. */
+   protected memberPhaseListenersRegistered = false;
+   /** One per {@link runMemberRelink}, until it ends. */
+   protected readonly memberRelinks = new Set<Promise<void>>();
+   protected readonly memberRelinkStartedListeners = new Set<MemberRelinkStartedListener>();
+   protected readonly memberRelinkFinishedListeners = new Set<MemberRelinkFinishedListener>();
 
    constructor(
       protected readonly services: ServerSharedServicesMinimal,
-      options: LogNameOptions = {}
+      options: ProjectManagerOptions = {}
    ) {
       this.fileSystemProvider = services.workspace.FileSystemProvider;
       this.langiumDocuments = services.workspace.LangiumDocuments;
       this.documentBuilder = services.workspace.DocumentBuilder;
+      this.workspaceLock = services.workspace.WorkspaceLock;
+      this.deferMemberRelink = options.deferMemberRelink ?? false;
+      this.visibility = options.visibility ?? 'transitive';
       this.tracer = services.Tracer.for(options.logName ?? this.constructor.name).trace('instantiated');
       this.documentBuilder.onUpdate((changed, deleted) => this.onBuildUpdate(changed, deleted));
+   }
+
+   /**
+    * Track members through every build from the first deferred relink on.
+    * Registered then rather than here, so a manager that never defers adds no
+    * listener to each document's phases.
+    */
+   protected registerMemberPhaseListeners(): void {
+      this.memberPhaseListenersRegistered = true;
+      this.documentBuilder.onDocumentPhase(DocumentState.Linked, document => this.onMemberLinked(document.uri));
+      for (const phase of [DocumentState.IndexedReferences, DocumentState.Validated]) {
+         this.documentBuilder.onDocumentPhaseDelivered(phase, document => {
+            if (this.lastPhaseOf(document) === phase) {
+               this.onMemberDelivered(document.uri);
+            }
+         });
+      }
    }
 
    get ready(): Promise<void> {
@@ -259,10 +365,10 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     * Compute the set of projects whose member documents need to rebuild
     * given the directly changed projects. Default walks the dependency
     * graph in reverse — any project whose declared {@link Project.dependencies}
-    * include a changed id transitively also rebuilds (cycle-safe).
+    * include a changed id transitively also rebuilds (cycle-safe), whatever
+    * {@link visibility} is (see {@link ProjectManagerOptions.visibility}).
     *
-    * Override for a different rebuild policy (no transitivity, custom
-    * reachability, etc.).
+    * Override for a different rebuild policy (custom reachability, etc.).
     */
    protected getAffectedProjects(directlyChanged: readonly string[]): readonly string[] {
       const result = new Set(directlyChanged);
@@ -305,12 +411,18 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
    }
 
    /**
-    * Default: transitive closure of {@link Project.dependencies} including
-    * the source project itself. Override for a different visibility model.
+    * Default: the source project itself, then the closure of its
+    * {@link Project.dependencies}, or only the dependencies it names when
+    * {@link visibility} is `'direct'`. A dependency that is not registered is
+    * skipped. Override for a different visibility model.
     */
    getVisibleProjects(projectId: string): readonly string[] {
-      if (!this.projects.has(projectId)) {
+      const project = this.projects.get(projectId);
+      if (!project) {
          return [];
+      }
+      if (this.visibility === 'direct') {
+         return [...new Set([projectId, ...(project.dependencies ?? []).filter(dep => this.projects.has(dep))])];
       }
       const visited = new Set<string>();
       const ordered: string[] = [];
@@ -411,9 +523,22 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     *
     * Descriptor URIs that triggered the cycle are excluded from
     * {@link ProjectChangeEvent.affectedDocuments} — re-adding them would
-    * loop.
+    * loop. When {@link shouldDeferMemberRelink} holds, the event carries only
+    * the members already below their last phase, which this build builds
+    * anyway, and the rest are queued for a follow-up build. The last phase
+    * is the one of the build that last carried each member, since this
+    * build's phases have not started yet. If validation was turned on since,
+    * a member that build left at `IndexedReferences` is deferred, and this
+    * build validates it before the follow-up relinks it.
+    *
+    * An override calls `super` before its first await, since
+    * {@link shouldDeferMemberRelink} only answers for the calling build until
+    * then.
     */
    protected async onBuildUpdate(changed: readonly URI[], deleted: readonly URI[]): Promise<void> {
+      // Asked before the first await, while the builder still answers for
+      // this call.
+      const deferRelink = this.shouldDeferMemberRelink();
       const changedDescriptors = changed.filter(uri => this.isDescriptorUri(uri));
       const deletedDescriptors = deleted.filter(uri => this.isDescriptorUri(uri));
       if (changedDescriptors.length === 0 && deletedDescriptors.length === 0) {
@@ -506,10 +631,44 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
       }
       const affectedDocuments = this.collectAffectedDocuments(affectedProjectIds, excluded);
 
-      this.emit({ added, updated, removed, affectedDocuments });
+      if (deferRelink) {
+         // The build of the change already builds what it was given.
+         const building = new Set(changed.map(uri => uri.toString()));
+         const carried: URI[] = [];
+         const deferred: URI[] = [];
+         for (const uri of affectedDocuments) {
+            if (building.has(uri.toString())) {
+               continue;
+            }
+            const document = this.langiumDocuments.getDocument(uri);
+            // Below its last phase, the build of the change builds it anyway.
+            (document && document.state < this.lastPhaseOf(document) ? carried : deferred).push(uri);
+         }
+         this.queueMemberRelink(deferred);
+         this.emit({ added, updated, removed, affectedDocuments: carried });
+      } else {
+         this.emit({ added, updated, removed, affectedDocuments });
+      }
    }
 
-   /** Iterate the document set once, collecting URIs whose owning project is in the affected set. */
+   /**
+    * Whether the build calling {@link onBuildUpdate} leaves the documents a
+    * change affects to a follow-up build. Default: under
+    * {@link deferMemberRelink}, unless an explicit `build` calls it. Called
+    * before the first await of {@link onBuildUpdate}, where
+    * `isInsideBuildUpdate` still answers for that call.
+    */
+   protected shouldDeferMemberRelink(): boolean {
+      return this.deferMemberRelink && !this.documentBuilder.isInsideBuildUpdate();
+   }
+
+   /**
+    * Iterate the document set once, collecting URIs whose owning project is in
+    * the affected set. Override to add documents a change affects otherwise,
+    * such as those reached through a project's type, calling `super` to keep
+    * the members. What it returns is relinked as the members are, in the
+    * build of the change or in the follow-up build.
+    */
    protected collectAffectedDocuments(affectedProjectIds: ReadonlySet<string>, excludedUris: ReadonlySet<string>): URI[] {
       const result: URI[] = [];
       for (const document of this.langiumDocuments.all) {
@@ -523,6 +682,228 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
          }
       }
       return result;
+   }
+
+   // ============================================================
+   // Deferred member relink
+   // ============================================================
+
+   /** One that throws is logged and skipped. */
+   onMemberRelinkStarted(listener: MemberRelinkStartedListener): Disposable {
+      this.memberRelinkStartedListeners.add(listener);
+      return Disposable.create(() => this.memberRelinkStartedListeners.delete(listener));
+   }
+
+   /** One that throws is logged and skipped. */
+   onMemberRelinkFinished(listener: MemberRelinkFinishedListener): Disposable {
+      this.memberRelinkFinishedListeners.add(listener);
+      return Disposable.create(() => this.memberRelinkFinishedListeners.delete(listener));
+   }
+
+   async memberRelinkSettled(): Promise<void> {
+      while (this.memberRelinks.size > 0) {
+         await Promise.all(this.memberRelinks);
+      }
+   }
+
+   /**
+    * Add `documents` to {@link pendingMemberRelink}, to be reset before they
+    * are built when `reset` holds, and start a {@link runMemberRelink} unless
+    * one is already waiting to take them.
+    */
+   protected queueMemberRelink(documents: readonly URI[], reset = true): void {
+      if (!this.memberPhaseListenersRegistered && documents.length > 0) {
+         this.registerMemberPhaseListeners();
+      }
+      for (const uri of documents) {
+         const key = uri.toString();
+         this.pendingMemberRelink.set(key, uri);
+         this.unrelinkedMembers.add(key);
+         if (reset) {
+            this.pendingMemberResets.add(key);
+            this.linkedMembers.delete(key);
+         }
+      }
+      if (this.memberRelinkQueued || this.pendingMemberRelink.size === 0) {
+         return;
+      }
+      this.memberRelinkQueued = true;
+      const settled = this.runMemberRelink();
+      this.memberRelinks.add(settled);
+      void settled.finally(() => this.memberRelinks.delete(settled));
+   }
+
+   /**
+    * Take {@link pendingMemberRelink} in a lock read and build it in a write
+    * queued from there. The read runs once no write runs or is queued, so the
+    * write does not cancel the build of the change, as one queued from inside
+    * that build would. It still cancels a write another read of the same batch
+    * queued before it. If that write is a build that has started, the
+    * follow-up builds the documents it reset, since an update builds every
+    * document below `Validated`. The read does not await its write, which
+    * waits for the read to end.
+    *
+    * The follow-up waits for any build already running outside the lock to
+    * end, so it does not start alongside one. A build started outside the lock
+    * after that can still overlap it, as any two such builds can. The wait
+    * runs after the read rather than in it, since a wait under the lock would
+    * hold back every write, and a write queued outside a read could cancel one
+    * already queued, so the read runs again.
+    */
+   protected async runMemberRelink(): Promise<void> {
+      const next = await this.workspaceLock.read(() => {
+         const running = this.documentBuilder.activeBuild;
+         if (running) {
+            return { running };
+         }
+         this.memberRelinkQueued = false;
+         const uris = [...this.pendingMemberRelink.values()];
+         const resets = new Set(this.pendingMemberResets);
+         this.pendingMemberRelink.clear();
+         this.pendingMemberResets.clear();
+         // A write cancels the one queued before it, so none is queued for nothing.
+         if (uris.length === 0) {
+            return { relink: Promise.resolve() };
+         }
+         return { relink: this.workspaceLock.write(token => this.relinkMembers(uris, resets, token)) };
+      });
+      if (next.running) {
+         await next.running;
+         return this.runMemberRelink();
+      }
+      return next.relink;
+   }
+
+   /**
+    * The write action of a deferred relink: take the documents still loaded
+    * that no build has relinked since they were queued, and build them. Those
+    * in `resets`, and those already at their last phase, are reset first by a
+    * {@link ProjectChangeEvent} that carries only them, so the workspace
+    * manager's `onProjectsChanged` resets them as it does without the option.
+    * An `update` with no URIs builds what is left below `Validated`, and
+    * Langium relinks every document with a linking error too, without
+    * reporting the members to `onUpdate` listeners as changed.
+    *
+    * A write cancelled before it starts is queued again as it was, unannounced.
+    * A cancelled build is queued again, without resets, with only the members
+    * it did not relink. One a cancel left at its last phase before its
+    * listeners all ran is reset then, since Langium does not run them again.
+    * If none is left, nothing is built or announced. A build that ends,
+    * completed or failed, stops tracking the members it took, except those a
+    * change queued again meanwhile. A failed build is not queued again, since
+    * it would fail again. Never throws, so {@link memberRelinkSettled} never
+    * rejects.
+    */
+   protected async relinkMembers(uris: readonly URI[], resets: ReadonlySet<string>, token: CancellationToken): Promise<void> {
+      const loaded: URI[] = [];
+      for (const uri of uris) {
+         const key = uri.toString();
+         if (!this.unrelinkedMembers.has(key)) {
+            continue;
+         }
+         if (this.langiumDocuments.getDocument(uri)) {
+            loaded.push(uri);
+         } else {
+            this.forgetMember(key);
+         }
+      }
+      if (loaded.length === 0) {
+         return;
+      }
+      const forgetTaken = (): void =>
+         loaded.filter(uri => !this.pendingMemberRelink.has(uri.toString())).forEach(uri => this.forgetMember(uri.toString()));
+      if (token.isCancellationRequested) {
+         this.queueMemberRelink(loaded.filter(uri => resets.has(uri.toString())));
+         this.queueMemberRelink(
+            loaded.filter(uri => !resets.has(uri.toString())),
+            false
+         );
+         return;
+      }
+      this.notifyMemberRelink(this.memberRelinkStartedListeners, loaded);
+      let completed = false;
+      try {
+         const reset = loaded.filter(uri => {
+            const document = this.langiumDocuments.getDocument(uri);
+            return document !== undefined && (resets.has(uri.toString()) || document.state >= this.lastPhaseOf(document));
+         });
+         if (reset.length > 0) {
+            reset.forEach(uri => this.linkedMembers.delete(uri.toString()));
+            this.emit({ added: [], updated: [], removed: [], affectedDocuments: reset });
+         }
+         this.documentBuilder.markNextReason(HYDRANIUM_BUILD_REASONS.memberRelink);
+         await this.documentBuilder.update([], [], token);
+         // A cancel a last-phase listener swallowed can leave `update` resolved.
+         if (token.isCancellationRequested) {
+            throw OperationCancelled;
+         }
+         completed = true;
+         // Built all the same if no listener saw it linked or delivered.
+         forgetTaken();
+      } catch (error: unknown) {
+         if (isOperationCancelled(error)) {
+            // A cancel can skip the Linked listeners, and Langium does not
+            // notify that phase again.
+            for (const uri of loaded) {
+               const document = this.langiumDocuments.getDocument(uri);
+               if (document && document.state >= DocumentState.Linked) {
+                  this.onMemberLinked(uri);
+               }
+            }
+            this.queueMemberRelink(
+               loaded.filter(uri => this.unrelinkedMembers.has(uri.toString())),
+               false
+            );
+         } else {
+            forgetTaken();
+            this.tracer.error(`Relinking ${this.conceptName()} members failed: ${describeErrorWithStack(error)}`);
+         }
+      } finally {
+         this.notifyMemberRelink<MemberRelinkFinishedEvent>(this.memberRelinkFinishedListeners, { completed });
+      }
+   }
+
+   /** Record that a build linked `uri`, if it is a member not relinked yet. */
+   protected onMemberLinked(uri: URI): void {
+      const key = uri.toString();
+      if (this.unrelinkedMembers.has(key)) {
+         this.linkedMembers.add(key);
+      }
+   }
+
+   /** The last phase the build that carries `document` takes it to. */
+   protected lastPhaseOf(document: LangiumDocument): DocumentState {
+      return this.documentBuilder.shouldValidateDocument(document) ? DocumentState.Validated : DocumentState.IndexedReferences;
+   }
+
+   /**
+    * A member linked since it was queued and now delivered at its last phase
+    * is relinked, whichever build did it, so no follow-up builds it again.
+    */
+   protected onMemberDelivered(uri: URI): void {
+      const key = uri.toString();
+      if (this.linkedMembers.has(key)) {
+         this.forgetMember(key);
+         this.pendingMemberRelink.delete(key);
+         this.pendingMemberResets.delete(key);
+      }
+   }
+
+   /** Drop `key` from the relink bookkeeping. */
+   protected forgetMember(key: string): void {
+      this.unrelinkedMembers.delete(key);
+      this.linkedMembers.delete(key);
+   }
+
+   /** Call each of `listeners` with `value`, each in isolation. */
+   protected notifyMemberRelink<T>(listeners: ReadonlySet<(value: T) => void>, value: T): void {
+      for (const listener of [...listeners]) {
+         try {
+            listener(value);
+         } catch (error: unknown) {
+            this.tracer.error(`A member relink listener failed: ${describeErrorWithStack(error)}`);
+         }
+      }
    }
 
    // ============================================================

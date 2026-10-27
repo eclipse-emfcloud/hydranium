@@ -98,7 +98,8 @@ export interface Project {
     * `ProjectManager` implementations decide what "depends on" means
     * and combine these into the visibility closure via
     * `ProjectManager.getVisibleProjects` — the framework default in
-    * `AbstractProjectManager` walks them transitively; adopters can
+    * `AbstractProjectManager` walks them transitively, or takes only the
+    * named ones under its `visibility: 'direct'` option. Adopters can
     * override.
     */
    readonly dependencies?: readonly string[];

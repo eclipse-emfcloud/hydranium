@@ -12,7 +12,7 @@ import { type AstNode, type LangiumDocuments, type URI } from '@hydranium/langiu
 import { Disposable } from 'vscode-languageserver';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
-import type { ProjectChangeListener } from './project-change-event.js';
+import type { MemberRelinkFinishedListener, MemberRelinkStartedListener, ProjectChangeListener } from './project-change-event.js';
 import type { ProjectManager } from './project-manager.js';
 
 /**
@@ -62,6 +62,21 @@ export class SingleProjectManager implements ProjectManager {
    /** Never fires — `SingleProjectManager` exposes a fixed registry. The returned disposable is a safe no-op. */
    onProjectsChanged(_listener: ProjectChangeListener): Disposable {
       return Disposable.create(() => undefined);
+   }
+
+   /** Never fires: a fixed registry has no member relink to defer. */
+   onMemberRelinkStarted(_listener: MemberRelinkStartedListener): Disposable {
+      return Disposable.create(() => undefined);
+   }
+
+   /** Never fires, as {@link onMemberRelinkStarted} does not. */
+   onMemberRelinkFinished(_listener: MemberRelinkFinishedListener): Disposable {
+      return Disposable.create(() => undefined);
+   }
+
+   /** Resolved at once: nothing is ever deferred. */
+   memberRelinkSettled(): Promise<void> {
+      return Promise.resolve();
    }
 
    isProjectDescriptor(_uri: URI | string): boolean {

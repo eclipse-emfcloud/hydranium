@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { waitFor } from '@hydranium/protocol/testing';
-import { type CanonicalUri, Disposable, Logger, type LogThreshold, SystemClock } from '@hydranium/protocol';
+import { type CanonicalUri, Deferred, Disposable, Logger, type LogThreshold, SystemClock } from '@hydranium/protocol';
 import {
    type BuildOptions,
    DocumentState,
@@ -18,6 +18,7 @@ import {
    type FileSystemProvider,
    type LangiumDocument,
    OperationCancelled,
+   stream,
    URI
 } from '@hydranium/langium';
 import { CancellationToken, CancellationTokenSource, Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-protocol';
@@ -154,14 +155,15 @@ function makeStubServices(
    // changes the text.
    messageRenderer?: (services: ServerSharedServicesMinimal) => MessageRenderer
 ): ServerSharedServicesMinimal {
-   // The builder defaults Tracer (a DefaultTracer over `logger`) and an empty
-   // ServiceRegistry; only the LangiumDocuments stub is test-specific. Every
-   // other slot resolves to undefined, which the builder tests never read.
+   // The builder defaults Tracer (a DefaultTracer over `logger`). The empty
+   // registry and document set let an update run. Every other slot resolves to
+   // undefined, which the builder tests never read.
    return makeNoopSharedServices({
       Logger: logger,
       MessageRenderer: messageRenderer,
+      ServiceRegistry: makeStubServiceRegistry([]),
       workspace: {
-         LangiumDocuments: { getDocument: () => undefined, all: { filter: () => ({ map: () => ({ toArray: () => [] }) }) } },
+         LangiumDocuments: { getDocument: () => undefined, all: stream([]) },
          // Identity policy so `formatBuildStatus` resolves; the canonicalization
          // test below replaces it with a link-aware one.
          DocumentUriPolicy: {
@@ -1454,6 +1456,91 @@ describe('HydraniumDocumentBuilder', () => {
          await builder.notifyDocumentPhase(document, DocumentState.Validated, CancellationToken.None);
 
          expect(deliveries).toEqual([document]);
+      });
+   });
+
+   describe('isInsideBuildUpdate and activeBuild', () => {
+      it.each([
+         ['build', true, (builder: HydraniumDocumentBuilder) => builder.build([])],
+         ['update', false, (builder: HydraniumDocumentBuilder) => builder.update([], [])]
+      ] as const)('report a %s while it runs and nothing once it has ended', async (_kind, insideBuild, run) => {
+         const builder = new HydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
+         let seenInside: boolean | undefined;
+         builder.onUpdate(() => void (seenInside = builder.isInsideBuildUpdate()));
+         expect(builder.activeBuild).toBeUndefined();
+
+         const build = run(builder);
+         const active = builder.activeBuild;
+         expect(active).toBeInstanceOf(Promise);
+         await build;
+
+         expect(seenInside).toBe(insideBuild);
+         expect(builder.isInsideBuildUpdate()).toBe(false);
+         expect(builder.activeBuild).toBeUndefined();
+         await expect(active).resolves.toBeUndefined();
+      });
+
+      it('report no build once one has failed', async () => {
+         const builder = new HydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
+         builder.onUpdate(() => {
+            throw new Error('listener failed');
+         });
+
+         const update = builder.update([], []);
+         const active = builder.activeBuild;
+         await expect(update).rejects.toThrow('listener failed');
+
+         expect(builder.activeBuild).toBeUndefined();
+         await expect(active).resolves.toBeUndefined();
+      });
+
+      it('tell an update listener a build calls it only before its first await, also while an update overlaps', async () => {
+         const builder = new HydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
+         const seen: string[] = [];
+         const gate = new Deferred<void>();
+         const bothCalled = new Deferred<void>();
+         builder.onUpdate(async () => {
+            seen.push(`before await ${builder.isInsideBuildUpdate()}`);
+            if (seen.length === 2) {
+               bothCalled.resolve();
+            }
+            await gate.promise;
+            seen.push(`after await ${builder.isInsideBuildUpdate()}`);
+         });
+
+         const build = builder.build([]);
+         const update = builder.update([], []);
+         await bothCalled.promise;
+         gate.resolve();
+         await Promise.all([build, update]);
+
+         expect(seen).toEqual(['before await true', 'before await false', 'after await false', 'after await false']);
+      });
+
+      it('report a build in progress until the last of two overlapping builds has ended', async () => {
+         const { builder } = makeTestBuilder(makeNoopLogger());
+         const context = (kind: BuildSessionContext['kind']): BuildSessionContext => ({
+            kind,
+            trigger: 'a.x',
+            triggerCountsDocs: false,
+            changed: [],
+            deleted: []
+         });
+         const first = new Deferred<void>();
+         const firstBuild = builder.callRunInSession(context('build'), 'first', () => first.promise);
+         const active = builder.activeBuild;
+         let ended = false;
+         void active?.then(() => (ended = true));
+
+         await builder.callRunInSession(context('update'), 'second', async () => undefined);
+         expect(builder.activeBuild).toBe(active);
+         await Promise.resolve();
+         expect(ended, 'the end resolved while the first build ran').toBe(false);
+
+         first.resolve();
+         await firstBuild;
+         await active;
+         expect(builder.activeBuild).toBeUndefined();
       });
    });
 });
