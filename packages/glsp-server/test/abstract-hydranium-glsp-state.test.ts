@@ -242,10 +242,10 @@ describe('AbstractHydraniumGlspState', () => {
          expect(state.diagramLanguage).toBeUndefined();
       });
 
-      it('falls back to the loaded document language for an unroutable target', () => {
+      it('answers no language for a node in no document', () => {
          const { state } = createState(makeHarness());
          state.setSourceRoot('file:///a.other', makeRoot());
-         expect(state.languageServicesFor(makeFakeAstNode<AstNode>({ $type: 'Thing' }))?.LanguageMetaData.languageId).toBe('other');
+         expect(state.languageServicesFor(makeFakeAstNode<AstNode>({ $type: 'Thing' }))).toBeUndefined();
       });
 
       it('resolves a foreign node own language, not the diagram one', () => {
@@ -260,11 +260,10 @@ describe('AbstractHydraniumGlspState', () => {
          expect(state.languageServicesFor('file:///b.other')?.LanguageMetaData.languageId).toBe('other');
       });
 
-      it('falls back to the diagram language for an unroutable target', () => {
+      it('falls back to the diagram language for a uri that routes nowhere', () => {
          const { state } = createState(makeHarness());
          state.setSourceRoot('file:///a.a', makeRoot());
          expect(state.languageServicesFor('file:///b.unknown')?.LanguageMetaData.languageId).toBe('main');
-         expect(state.languageServicesFor(makeFakeAstNode<AstNode>({ $type: 'Thing' }))?.LanguageMetaData.languageId).toBe('main');
       });
    });
 

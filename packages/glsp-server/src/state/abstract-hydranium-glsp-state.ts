@@ -203,10 +203,10 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
       const recapture = uri === this._sourceUri;
       this.captureSourceRoot(uri, root);
       if (recapture) {
-         this.index.reindexSemanticElements(root, uri);
+         this.index.reindexSemanticElements(root);
          this.index.remapSemanticAliases(node => (this.isCurrentBuiltNode(node) ? node : undefined));
       } else {
-         this.index.indexSourceRoot(root, uri);
+         this.index.indexSourceRoot(root);
       }
    }
 
@@ -320,8 +320,10 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    /**
     * A reference to `target` whose `ref` is `target` itself, a copy node
     * included, so an identity comparison later in the operation finds it.
-    * `undefined` when no reference can be formed. Outside an operation the
-    * nodes are built ones and this is the `ReferenceBuilder`'s answer as is.
+    * `undefined` when no reference can be formed, such as when the node whose
+    * language writes it is in no document and no copy. Outside an operation
+    * the nodes are built ones and this is the `ReferenceBuilder`'s answer as
+    * is.
     *
     * With `tier: 'own'` the `$refText` is the target's own name as
     * `toOwnReference` gives it, read off `target` itself, so a name the
@@ -516,26 +518,25 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    }
 
    /**
-    * The language services owning `target` — an AST node (routed by its
-    * document), a URI, or a URI string — falling back, for a node, to the
-    * language the index read from the diagram's root, and otherwise to
-    * {@link diagramLanguage}, when `target` routes nowhere.
+    * The language services owning `target`. An AST node routes by its
+    * document or a copy's working document. A URI or URI string that routes
+    * nowhere falls back to {@link diagramLanguage}.
     *
     * Use this wherever the thing being named, keyed or completed may live in
     * another document than the diagram. Two registered languages are free to
     * differ in `nameProperties` / `nameSeparator` and in their element-key
     * strategy, so applying the diagram's provider to a foreign node yields a
     * plausible-looking string that matches nothing — silently, with no
-    * diagnostic. The fallback covers the genuinely unroutable case, a synthetic
-    * node not yet attached to a document, where the diagram's own language is
-    * the only defensible answer.
+    * diagnostic. For the same reason a node in no document and no copy gets
+    * `undefined`: attach it first, or read {@link diagramLanguage} when the
+    * diagram's grammar is what you mean.
     *
     * A node routes through {@link HydraniumGlspIndex.languageServicesFor}, so
     * an override of the index's routing applies here too.
     */
    languageServicesFor(target: LanguageTarget | undefined): ServerLanguageServices | undefined {
       if (isAstNode(target)) {
-         return this.index.languageServicesFor(target) ?? this.diagramLanguage;
+         return this.index.languageServicesFor(target);
       }
       return this.sharedServices.ServiceRegistry.getServicesFor(target) ?? this.diagramLanguage;
    }

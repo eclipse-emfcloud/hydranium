@@ -359,7 +359,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
       this.baseVersionAtOpen = this.modelState.baseVersion;
       openOperations.set(this.modelState, membersOf(this));
       if (this.sourceRootAtOpen !== undefined) {
-         this.modelState.index.reindexSemanticElements(this.modelState.sourceRoot, this.modelState.sourceUri);
+         this.modelState.index.reindexSemanticElements(this.modelState.sourceRoot);
       }
    }
 

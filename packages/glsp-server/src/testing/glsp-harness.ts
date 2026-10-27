@@ -236,8 +236,10 @@ export interface GlspHarness<TState extends AbstractHydraniumGlspState<AstNode, 
     * {@link start}.
     *
     * A test of a provider that reads `builtNodeOf` or `referenceTo` outside
-    * an operation seeds the real state here rather than stub them. They answer as in production
-    * for a root with a `$document` in a project; without one, `referenceTo`
+    * an operation seeds the real state here rather than stub them. Seed a root
+    * whose `$document` routes to a language: the index keys no node of a root
+    * that routes nowhere, and `referenceTo` forms no reference to one. In a
+    * project the answers are as in production; outside one, `referenceTo`
     * names a target as in no project, unchecked for visibility.
     */
    seedSourceRoot(uri: string, root: Parameters<TState['setSourceRoot']>[1]): void;
