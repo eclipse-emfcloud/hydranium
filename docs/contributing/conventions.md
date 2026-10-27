@@ -227,6 +227,11 @@ last doc block above a declaration, so a second block silently documents the
 wrong thing. Test fixtures take neutral-abstract names (`TypeOne`, `Element`,
 `file:///a.x`), never one domain's vocabulary.
 
+**Code that exists only for the oldest version a peer range admits opens its
+comment with the peer and that version**, as in `// <Peer> <major>.<minor>: …`.
+Raising the floor then starts from a `git grep` for that prefix, and code the
+newer versions still need keeps no such marker.
+
 A page describes the framework as it is. One home per fact, linked from the
 rest. Versions appear only in
 [`docs/adopting/requirements.md`](../adopting/requirements.md); elsewhere name

@@ -90,17 +90,16 @@ export class HydraniumGlspComputedBoundsActionHandler extends ComputedBoundsActi
    }
 
    /**
-    * Defensively filter routes that lack the source+target endpoints upstream
+    * GLSP 2.7: filter routes that lack the source+target endpoints upstream
     * `applyRoute` requires (`newRoutingPoints.length >= 2`). Without this,
     * the upstream handler throws `GLSPServerError: Invalid Route!` and the
     * entire `computedBounds` action is rejected — the diagram never settles.
+    * 2.8's handler skips such a route itself.
     *
-    * The race that produces these routes is benign and common on the
-    * initial layout pass: the GModel factory emits an edge with no explicit
-    * `routingPoints`, the client schedules the edge for routing but submits
-    * `computedBounds` before the routing pass finishes, so the route shows
-    * up with 0 or 1 point. Subsequent `computedBounds` actions carry the
-    * fully-routed edges; dropping the incomplete ones here is lossless.
+    * Such a route comes from a client router that could not route the edge,
+    * for example because its source or target is missing from the client's
+    * model. A later `computedBounds` action carries the edge's route once it
+    * can be routed, so dropping it here is lossless.
     *
     * Adopters with bounds-specific cleanup — clearing ALL routes so the client
     * re-routes on the next layout, say — override and replace this filter.
@@ -112,7 +111,7 @@ export class HydraniumGlspComputedBoundsActionHandler extends ComputedBoundsActi
          const dropped = original - action.routes.length;
          if (dropped > 0) {
             this.modelState.logger.debug(
-               `ComputedBounds dropped ${dropped}/${original} route(s) with <2 routing points — client hasn't finished routing yet`
+               `ComputedBounds dropped ${dropped}/${original} route(s) with <2 routing points — the client could not route those edges`
             );
          }
       }

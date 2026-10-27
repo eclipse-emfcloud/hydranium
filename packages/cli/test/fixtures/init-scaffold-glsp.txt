@@ -34,13 +34,13 @@ package.json
     "watch:theia-electron": "concurrently --kill-others --names watch,host-theia-electron \"npm run watch\" \"npm --prefix host-theia-electron run watch\""
   },
   "devDependencies": {
-    "@eclipse-glsp/client": "2.7.0",
-    "@eclipse-glsp/graph": "2.7.0",
-    "@eclipse-glsp/protocol": "2.7.0",
-    "@eclipse-glsp/server": "2.7.0",
-    "@eclipse-glsp/theia-integration": "2.7.0",
-    "@eclipse-glsp/vscode-integration": "2.7.0",
-    "@eclipse-glsp/vscode-integration-webview": "2.7.0",
+    "@eclipse-glsp/client": "2.8.0",
+    "@eclipse-glsp/graph": "2.8.0",
+    "@eclipse-glsp/protocol": "2.8.0",
+    "@eclipse-glsp/server": "2.8.0",
+    "@eclipse-glsp/theia-integration": "2.8.0",
+    "@eclipse-glsp/vscode-integration": "2.8.0",
+    "@eclipse-glsp/vscode-integration-webview": "2.8.0",
     "@theia/cli": "1.74.3",
     "@theia/core": "1.74.3",
     "@theia/editor": "1.74.3",
@@ -56,7 +56,6 @@ package.json
     "@theia/preferences": "1.74.3",
     "@theia/process": "1.74.3",
     "@theia/workspace": "1.74.3",
-    "@vscode/codicons": "0.0.45",
     "concurrently": "^9.0.0",
     "electron": "42.11.16",
     "langium": "4.3.1",
@@ -158,7 +157,7 @@ protocol/package.json
     "watch": "tsc -b --watch"
   },
   "dependencies": {
-    "@eclipse-glsp/protocol": "2.7.0"
+    "@eclipse-glsp/protocol": "2.8.0"
   },
   "devDependencies": {
     "rimraf": "^5.0.0",
@@ -365,8 +364,8 @@ server/package.json
     "watch": "concurrently --kill-others --names langium,transfer-model,tsc \"npm run langium:watch\" \"npm run generate:transfer-model -- --watch\" \"tsc -b --watch\""
   },
   "dependencies": {
-    "@eclipse-glsp/graph": "2.7.0",
-    "@eclipse-glsp/server": "2.7.0",
+    "@eclipse-glsp/graph": "2.8.0",
+    "@eclipse-glsp/server": "2.8.0",
     "@hydranium/core": "^__FRAMEWORK_VERSION__",
     "@hydranium/data-server": "^__FRAMEWORK_VERSION__",
     "@hydranium/glsp-server": "^__FRAMEWORK_VERSION__",
@@ -2201,9 +2200,8 @@ client/package.json
     "watch": "tsc --watch"
   },
   "dependencies": {
-    "@eclipse-glsp/client": "2.7.0",
+    "@eclipse-glsp/client": "2.8.0",
     "@hydranium/glsp-client": "^__FRAMEWORK_VERSION__",
-    "@vscode/codicons": "0.0.45",
     "bookstore-protocol": "0.0.0",
     "inversify": "^6.1.3"
   },
@@ -2560,8 +2558,8 @@ theia/package.json
     "watch": "tsc --watch"
   },
   "dependencies": {
-    "@eclipse-glsp/client": "2.7.0",
-    "@eclipse-glsp/theia-integration": "2.7.0",
+    "@eclipse-glsp/client": "2.8.0",
+    "@eclipse-glsp/theia-integration": "2.8.0",
     "@hydranium/client-theia": "^__FRAMEWORK_VERSION__",
     "@hydranium/data-client-theia": "^__FRAMEWORK_VERSION__",
     "@hydranium/glsp-client": "^__FRAMEWORK_VERSION__",
@@ -3003,7 +3001,7 @@ host-browser/package.json
     "typecheck": "tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.page.json && tsc --noEmit -p tsconfig.e2e.json"
   },
   "dependencies": {
-    "@eclipse-glsp/server": "2.7.0",
+    "@eclipse-glsp/server": "2.8.0",
     "@hydranium/client-browser": "^__FRAMEWORK_VERSION__",
     "@hydranium/core": "^__FRAMEWORK_VERSION__",
     "@hydranium/data-server": "^__FRAMEWORK_VERSION__",
@@ -4176,9 +4174,9 @@ host-vscode/package.json
     "watch:syntaxes": "node -e \"const copy = () => require('node:fs').cpSync('../server/syntaxes', 'syntaxes', { recursive: true }); copy(); require('node:fs').watch('../server/syntaxes', copy)\""
   },
   "dependencies": {
-    "@eclipse-glsp/client": "2.7.0",
-    "@eclipse-glsp/vscode-integration": "2.7.0",
-    "@eclipse-glsp/vscode-integration-webview": "2.7.0",
+    "@eclipse-glsp/client": "2.8.0",
+    "@eclipse-glsp/vscode-integration": "2.8.0",
+    "@eclipse-glsp/vscode-integration-webview": "2.8.0",
     "@hydranium/client-vscode": "^__FRAMEWORK_VERSION__",
     "@hydranium/data-client-vscode": "^__FRAMEWORK_VERSION__",
     "@hydranium/glsp-client": "^__FRAMEWORK_VERSION__",

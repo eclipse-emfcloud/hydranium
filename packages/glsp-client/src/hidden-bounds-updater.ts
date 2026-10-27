@@ -11,10 +11,8 @@ import {
    type Action,
    type ElementAndRoutingPoints,
    type GModelElement,
-   type GRoutableElement,
    GLSPHiddenBoundsUpdater,
    type LocalRequestBoundsAction,
-   Point,
    RequestBoundsAction,
    ServerAction,
    isRoutable
@@ -30,8 +28,10 @@ import { HydraniumClientTypes } from './types';
 const SCOPE_ID_CAP = 3;
 
 /**
- * Instruments sprotty's hidden-bounds pass and repairs degenerate routes before
- * they go on the wire.
+ * Instruments sprotty's hidden-bounds pass.
+ *
+ * GLSP 2.7: it also drops short routes before they go on the wire, see
+ * {@link dropShortRoute}.
  *
  * **Why the framework owns this.** Every GLSP head runs the hidden-bounds pass on
  * every model update, and it is the one client-side phase that scales with the
@@ -81,51 +81,35 @@ export class HydraniumHiddenBoundsUpdater extends GLSPHiddenBoundsUpdater {
     */
    protected currentScope?: string;
 
+   // GLSP 2.7: overridden only to drop a short route.
    override decorate(vnode: VNode, element: GModelElement): VNode {
       super.decorate(vnode, element);
       if (isRoutable(element)) {
-         this.repairLastRoute(element);
+         this.dropShortRoute();
       }
       return vnode;
    }
 
    /**
-    * Replace the routing entry the base class just pushed when it carries fewer
-    * than two points, which is not a valid route for any edge.
+    * GLSP 2.7: drop the routing entry the base class just pushed when it
+    * carries fewer than two points, as 2.8 does itself. A 2.7 server rejects
+    * the whole action over such a route, and the diagram stays blank.
     *
-    * `calcElementAndRoute` already guards the case where the registered router
-    * returns *nothing* — it falls back to source + own routing points + target.
-    * The hole is one step further in: `calcRoute` filters duplicate points at
-    * `Number.EPSILON`, so while obstacles still carry sprotty's unmeasured-bounds
-    * sentinel `(100, 100, -1, -1)` the source and target coincide and a valid
-    * two-point route collapses to a single point. That result is defined, so the
-    * upstream truthiness guard never fires and the single point ships.
-    *
-    * The substitute is deliberately upstream's own fallback shape rather than a
-    * new invention, so a repaired route is indistinguishable from a route the
-    * base class would have produced had it noticed. Only already-invalid payloads
-    * are touched, so a head with a working router is unaffected.
+    * A router returns fewer than two points for an edge it cannot route, as
+    * sprotty's polyline router does when the edge's source or target is not in
+    * the model. The server keeps the edge's last route until a later pass
+    * routes it.
     */
-   protected repairLastRoute(element: GRoutableElement): void {
-      const addedRoute = this.element2route.pop();
-      if (addedRoute === undefined) {
-         return;
+   protected dropShortRoute(): void {
+      const lastRoute = this.element2route.at(-1);
+      if (lastRoute !== undefined && !this.hasValidRoute(lastRoute)) {
+         this.element2route.pop();
       }
-      this.element2route.push(this.hasValidRoute(addedRoute) ? addedRoute : this.toSourceTargetRoute(element));
    }
 
-   /** A route needs at least a start and an end point to describe an edge. */
+   /** GLSP 2.7: a route needs at least a start and an end point to describe an edge. */
    protected hasValidRoute(route: ElementAndRoutingPoints): boolean {
       return route.newRoutingPoints !== undefined && route.newRoutingPoints.length >= 2;
-   }
-
-   /** Upstream's `calcElementAndRoute` no-router fallback: the element's own
-    *  bendpoints framed by its source and target anchor positions. */
-   protected toSourceTargetRoute(element: GRoutableElement): ElementAndRoutingPoints {
-      return {
-         elementId: element.id,
-         newRoutingPoints: [element.source?.position ?? Point.ORIGIN, ...element.routingPoints, element.target?.position ?? Point.ORIGIN]
-      };
    }
 
    protected override getBoundsFromDOM(): void {

@@ -15,7 +15,7 @@ import {
    GGraph,
    GNode,
    LocalRequestBoundsAction,
-   Point,
+   type Point,
    RequestBoundsAction,
    ServerAction,
    createFeatureSet
@@ -114,8 +114,8 @@ function makeGNode(id: string, position: Point): GNode {
 
 /** Build a `GGraph` with two positioned nodes and an edge between them. The graph
  *  supplies the model index the inherited `source` / `target` getters resolve
- *  through, so the repair sees real anchor positions. */
-function makeGraph(options: { sourcePosition?: Point; targetPosition?: Point; routingPoints?: Point[] } = {}): {
+ *  through, so the base class's fallback sees real anchor positions. */
+function makeGraph(options: { sourcePosition?: Point; targetPosition?: Point } = {}): {
    graph: GGraph;
    edge: GEdge;
    nodes: GNode[];
@@ -133,7 +133,6 @@ function makeGraph(options: { sourcePosition?: Point; targetPosition?: Point; ro
    edge.type = 'edge';
    edge.sourceId = source.id;
    edge.targetId = target.id;
-   edge.routingPoints = options.routingPoints ?? [];
    edge.features = createFeatureSet(GEdge.DEFAULT_FEATURES);
 
    graph.add(source);
@@ -261,7 +260,9 @@ describe('HydraniumHiddenBoundsUpdater', () => {
       });
    });
 
-   describe('routing-point repair', () => {
+   // GLSP 2.7: the base class pushes a short route, which the updater drops.
+   // 2.8's base class leaves it out, so both give the same result.
+   describe('short routes', () => {
       it('keeps a route the router computed with two or more points', () => {
          const { edge } = makeGraph();
          updater.useRouterReturning([
@@ -280,63 +281,54 @@ describe('HydraniumHiddenBoundsUpdater', () => {
          ]);
       });
 
-      it('repairs the route when duplicate filtering collapses it to one point', () => {
-         // The real trigger: while obstacles carry sprotty's unmeasured-bounds
-         // sentinel, source and target coincide, so `calcRoute` dedupes a valid
-         // two-point route down to one. That result is defined, so upstream's own
-         // truthiness guard never fires and the single point would ship.
-         const { edge } = makeGraph({ sourcePosition: { x: 5, y: 6 }, targetPosition: { x: 50, y: 60 } });
+      it('drops a route of one point', () => {
+         // Synthetic: `calcRoute` drops the second linear point as a duplicate
+         // of the first. A real router marks its ends as source and target.
+         const { edge } = makeGraph();
          updater.useRouterReturning([
             { x: 100, y: 100 },
             { x: 100, y: 100 }
          ]);
          updater.decorate(DETACHED_VNODE, edge);
-         expect(updater.exposeRoutes()).toEqual([
-            {
-               elementId: 'edge1',
-               newRoutingPoints: [
-                  { x: 5, y: 6 },
-                  { x: 50, y: 60 }
-               ]
-            }
-         ]);
+         expect(updater.exposeRoutes()).toEqual([]);
       });
 
-      it('repairs an empty route the same way', () => {
-         const { edge } = makeGraph({ sourcePosition: { x: 1, y: 2 }, targetPosition: { x: 3, y: 4 } });
-         updater.useRouterReturning([]);
-         updater.decorate(DETACHED_VNODE, edge);
-         expect(updater.exposeRoutes()[0].newRoutingPoints).toEqual([
-            { x: 1, y: 2 },
-            { x: 3, y: 4 }
-         ]);
-      });
-
-      it('keeps the element own bendpoints between the anchors', () => {
-         const { edge } = makeGraph({
-            sourcePosition: { x: 0, y: 0 },
-            targetPosition: { x: 40, y: 40 },
-            routingPoints: [{ x: 20, y: 20 }]
-         });
-         updater.useRouterReturning([{ x: 100, y: 100 }]);
-         updater.decorate(DETACHED_VNODE, edge);
-         expect(updater.exposeRoutes()[0].newRoutingPoints).toEqual([
-            { x: 0, y: 0 },
-            { x: 20, y: 20 },
-            { x: 40, y: 40 }
-         ]);
-      });
-
-      it('falls back to the origin for a dangling source or target reference', () => {
-         // A mid-update tree can hold an edge whose endpoints are not (yet) in the
-         // index; `index.getById` then answers undefined and the anchors are unknown.
-         // Same exposure as upstream's own fallback, which reads them the same way.
+      it('drops the empty route of an edge whose source or target is missing', () => {
          const { edge } = makeGraph();
          edge.sourceId = 'missing-source';
          edge.targetId = 'missing-target';
          updater.useRouterReturning([]);
          updater.decorate(DETACHED_VNODE, edge);
-         expect(updater.exposeRoutes()[0].newRoutingPoints).toEqual([Point.ORIGIN, Point.ORIGIN]);
+         expect(updater.exposeRoutes()).toEqual([]);
+      });
+
+      it("keeps an earlier edge's route when a later edge's route is short", () => {
+         const { graph, edge, nodes } = makeGraph();
+         const shortEdge = new GEdge();
+         shortEdge.id = 'edge2';
+         shortEdge.type = 'edge';
+         shortEdge.sourceId = nodes[1].id;
+         shortEdge.targetId = nodes[0].id;
+         shortEdge.features = createFeatureSet(GEdge.DEFAULT_FEATURES);
+         graph.add(shortEdge);
+
+         updater.useRouterReturning([
+            { x: 0, y: 0 },
+            { x: 10, y: 10 }
+         ]);
+         updater.decorate(DETACHED_VNODE, edge);
+         updater.useRouterReturning([{ x: 100, y: 100 }]);
+         updater.decorate(DETACHED_VNODE, shortEdge);
+
+         expect(updater.exposeRoutes()).toEqual([
+            {
+               elementId: 'edge1',
+               newRoutingPoints: [
+                  { kind: 'linear', x: 0, y: 0 },
+                  { kind: 'linear', x: 10, y: 10 }
+               ]
+            }
+         ]);
       });
 
       it('leaves a non-routable element alone', () => {
@@ -345,9 +337,7 @@ describe('HydraniumHiddenBoundsUpdater', () => {
          expect(updater.exposeRoutes()).toEqual([]);
       });
 
-      it('does not repair when no router is configured', () => {
-         // Without a registry the base takes its own source/target fallback, which is
-         // already valid — the repair must be a no-op rather than a second rewrite.
+      it('keeps the base class fallback when no router is configured', () => {
          const { edge } = makeGraph({ sourcePosition: { x: 7, y: 8 }, targetPosition: { x: 9, y: 10 } });
          updater.decorate(DETACHED_VNODE, edge);
          expect(updater.exposeRoutes()[0].newRoutingPoints).toEqual([

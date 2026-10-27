@@ -9,12 +9,9 @@ VS Code webview, or a plain browser page. It builds on `@eclipse-glsp/client`.
 ## What it gives you
 
 - Load failures reported through your logger and, unless the action
-  dispatcher itself failed, on the diagram's status overlay, instead of
-  vanishing as an uncaught rejection.
+  dispatcher itself failed, on the diagram's status overlay.
 - Action traffic and bounds measurements in your log, so a slow diagram names
   its cost.
-- Edge routes repaired before they go to the server while sprotty has not
-  measured the obstacles yet.
 - sprotty's own errors, such as an element type with no view, in your log
   rather than dropped.
 - An edge whose labels keep finite bounds without bendpoints, so fit to
@@ -36,9 +33,9 @@ npm install @hydranium/glsp-client
 
 | Peer                   | Range         |
 | ---------------------- | ------------- |
-| `@eclipse-glsp/client` | `^2.6.0`      |
+| `@eclipse-glsp/client` | `^2.7.0`      |
 | `@hydranium/protocol`  | `^1.0.0-next` |
-| `inversify`            | `^6.0.0`      |
+| `inversify`            | `^6.1.3`      |
 | `snabbdom`             | `~3.5.1`      |
 
 ## Wiring

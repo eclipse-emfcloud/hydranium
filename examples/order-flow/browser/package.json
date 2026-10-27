@@ -28,9 +28,9 @@
     "watch": "node esbuild.mjs --watch"
   },
   "dependencies": {
-    "@eclipse-glsp/client": "2.7.0",
-    "@eclipse-glsp/protocol": "2.7.0",
-    "@eclipse-glsp/server": "2.7.0",
+    "@eclipse-glsp/client": "2.8.0",
+    "@eclipse-glsp/protocol": "2.8.0",
+    "@eclipse-glsp/server": "2.8.0",
     "@hydranium/client-browser": "^1.0.0-next",
     "@hydranium/core": "^1.0.0-next",
     "@hydranium/data-server": "^1.0.0-next",

@@ -16,7 +16,7 @@ import {
    ServerModule,
    SocketServerLauncher
 } from '@eclipse-glsp/server/node.js';
-import { Deferred, DUPLICATE_CLIENT_ID_ERROR_CODE, DuplicateClientIdError } from '@hydranium/protocol';
+import { Deferred, DUPLICATE_CLIENT_ID_ERROR_CODE, DuplicateClientIdError, type LogLevel, NoopLogger } from '@hydranium/protocol';
 import type { ServerSharedServices } from '@hydranium/core';
 import { makeNoopSharedServices } from '@hydranium/core/testing';
 import { ContainerModule, injectable } from 'inversify';
@@ -272,6 +272,35 @@ describe('startGlspServer', () => {
       const { launcher } = await startHead([adopter]);
 
       expect(launcher).toBeInstanceOf(AdopterLauncher);
+   });
+
+   it('reports a busy port to the lifecycle logger once and crashes nothing', async () => {
+      const blocker = net.createServer();
+      await new Promise<void>(resolve => blocker.listen(0, '127.0.0.1', resolve));
+      disposables.push(() => blocker.close());
+      const { port } = blocker.address() as net.AddressInfo;
+      const lifecycleErrors: string[] = [];
+      class RecordingLogger extends NoopLogger {
+         protected override emit(level: LogLevel, _label: string, message: string): void {
+            if (level === 'error') {
+               lifecycleErrors.push(message);
+            }
+         }
+      }
+      const resolved: SocketServerLauncher[] = [];
+      const server = startGlspServer({
+         createLogger: makeNoopGlspLogger,
+         logger: new RecordingLogger(),
+         port,
+         serverModule: new RejectingServerModule(),
+         appModules: [bindShared(lspShared), observeLaunchers(resolved)]
+      });
+      disposables.push(() => resolved[0]?.shutdown());
+
+      // `stopped` is left unobserved on purpose: vitest fails the run on an
+      // unhandled rejection, which is what a caller that ignores it would get.
+      await expect(server.started).rejects.toMatchObject({ code: 'EADDRINUSE' });
+      expect(lifecycleErrors.filter(message => message.includes('EADDRINUSE'))).toHaveLength(1);
    });
 
    it("refuses a launcher an adopter's appModules bind a second time", () => {

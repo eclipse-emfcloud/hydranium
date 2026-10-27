@@ -24,11 +24,11 @@ npm install @hydranium/glsp-server
 
 | Peer                          | Range         |
 | ----------------------------- | ------------- |
-| `@eclipse-glsp/server`        | `^2.6.0`      |
+| `@eclipse-glsp/server`        | `^2.7.0`      |
 | `@hydranium/core`             | `^1.0.0-next` |
 | `@hydranium/langium`          | `^1.0.0-next` |
 | `@hydranium/protocol`         | `^1.0.0-next` |
-| `inversify`                   | `^6.0.0`      |
+| `inversify`                   | `^6.1.3`      |
 | `reflect-metadata`            | `^0.2.2`      |
 | `vscode-jsonrpc`              | `^9.0.0`      |
 | `vscode-languageserver-types` | `^3.18.0`     |

@@ -64,10 +64,9 @@ unless you pin `3.18.0`.
 
 The framework's peer ranges follow the same chain. `@hydranium/core` declares
 `vscode-languageserver` at `~10.0.1` and `vscode-languageserver-protocol` at
-`~3.18.1`, and every head declares `vscode-jsonrpc` at `^9.0.0`. If you supply
-a version outside a range, npm still installs, with an `ERESOLVE` warning that
-names the required and the found version. Under `--strict-peer-deps` it is an
-error.
+`~3.18.1`, and every head declares `vscode-jsonrpc` at `^9.0.0`. If you declare
+a version outside a range, npm refuses the install with `ERESOLVE` and names
+the required and the found version.
 
 Pins take effect only on a from-scratch install. Deleting the lockfile alone
 leaves stale nested copies behind:
@@ -103,6 +102,16 @@ The `client/` package `init` emits with a diagram, the two VS Code extensions
 `--hosts theia-electron` emits, need TypeScript 5.8. They are CommonJS, the
 client because GLSP's client is, and require the ES protocol package, which
 TypeScript allows from 5.8 under `nodenext`.
+
+## GLSP 2.7 or newer
+
+The GLSP heads accept `@eclipse-glsp/*` from 2.7 within major version 2. npm
+refuses an older version with `ERESOLVE`, and the heads' code references GLSP
+API that 2.6 does not export.
+
+GLSP 2.7: its client imports the `@vscode/codicons` stylesheet without
+declaring the package, so a page that bundles a diagram declares it. GLSP 2.8
+declares it itself.
 
 ## A resolver that reads `exports`
 

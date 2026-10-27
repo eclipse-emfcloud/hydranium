@@ -16,7 +16,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.worker.json && tsc --noEmit -p tsconfig.page.json && tsc --noEmit -p tsconfig.e2e.json"
   },
   "dependencies": {
-    "@eclipse-glsp/server": "2.7.0",
+    "@eclipse-glsp/server": "2.8.0",
     "@hydranium/bookstore-client": "0.0.0",
     "@hydranium/bookstore-protocol": "0.0.0",
     "@hydranium/bookstore-server": "0.0.0",

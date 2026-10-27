@@ -27,15 +27,15 @@ npm install @hydranium/glsp-client-theia
 
 | Peer                              | Range         |
 | --------------------------------- | ------------- |
-| `@eclipse-glsp/client`            | `^2.6.0`      |
-| `@eclipse-glsp/theia-integration` | `^2.6.0`      |
+| `@eclipse-glsp/client`            | `^2.7.0`      |
+| `@eclipse-glsp/theia-integration` | `^2.7.0`      |
 | `@hydranium/client-theia`         | `^1.0.0-next` |
 | `@hydranium/glsp-client`          | `^1.0.0-next` |
 | `@hydranium/protocol`             | `^1.0.0-next` |
 | `@theia/core`                     | `^1.70.0`     |
 | `@theia/process`                  | `^1.70.0`     |
 | `@theia/workspace`                | `^1.70.0`     |
-| `inversify`                       | `^6.0.0`      |
+| `inversify`                       | `^6.1.3`      |
 | `snabbdom`                        | `~3.5.1`      |
 | `vscode-jsonrpc`                  | `^9.0.0`      |
 

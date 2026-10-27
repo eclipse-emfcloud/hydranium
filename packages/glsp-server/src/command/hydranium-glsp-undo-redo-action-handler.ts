@@ -109,7 +109,7 @@ export class HydraniumGlspUndoRedoActionHandler extends UndoRedoActionHandler {
    }
 
    /**
-    * Lifted from `@eclipse-glsp/server` 2.7.0's `UndoRedoActionHandler.undo`
+    * Lifted from `@eclipse-glsp/server`'s `UndoRedoActionHandler.undo`
     * and `redo`, telling the client of a skip and ending a failure of the
     * command stack's undo or redo, which flushes the history on any failure.
     * A failed submit after it leaves the history whole and fails as upstream.

@@ -100,7 +100,7 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
    }
 
    /**
-    * Lifted from `@eclipse-glsp/server` 2.7.0's {@link DefaultGLSPServer.process}:
+    * Lifted from `@eclipse-glsp/server`'s {@link DefaultGLSPServer.process}:
     * each action is logged at `debug` rather than `info`, and an action that
     * fails once its session has ended, which disposing the session's dispatcher
     * does to every action it holds, is logged at `debug` and told to no client,
@@ -170,7 +170,7 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
    }
 
    /**
-    * Lifted from `@eclipse-glsp/server` 2.7.0's
+    * Lifted from `@eclipse-glsp/server`'s
     * {@link DefaultGLSPServer.handleProcessError}, logging the failure once
     * with {@link logActionFailure} where upstream logs the action and the
     * reason as two lines.
@@ -197,7 +197,7 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
    }
 
    /**
-    * Lifted from `@eclipse-glsp/server` 2.7.0's
+    * Lifted from `@eclipse-glsp/server`'s
     * {@link DefaultGLSPServer.handleClientRequest}, with the reject's message
     * and detail delegated to {@link requestFailureMessage} and
     * {@link requestFailureDetail}. A failure is logged once, with
