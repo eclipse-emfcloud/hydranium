@@ -18,7 +18,11 @@ export interface ProfileRecord {
    count: number;
    /** Summed self-time across those runs (wall-clock minus nested scopes). */
    selfMs: number;
-   /** Self-time as a percentage of the session's total wall-clock. */
+   /**
+    * Self-time as a percentage of the session's total wall-clock. Overlapping
+    * scopes each count their own wall time, so the percentages can add up to
+    * more than 100.
+    */
    selfPct: number;
 }
 
@@ -53,8 +57,9 @@ export interface ProfileSession {
    /**
     * Emit the aggregate through the bound {@link Logger}: one line per id,
     * sorted by self-time descending, plus an "unaccounted" remainder (the
-    * session wall-clock not attributed to any top-level scope). No-op when
-    * `logLevel` is suppressed by the global threshold (incl. `'off'`).
+    * session wall-clock not attributed to any top-level scope). The remainder
+    * is left out when overlapping scopes account for more than the wall-clock.
+    * No-op when `logLevel` is suppressed by the global threshold (incl. `'off'`).
     */
    report(logLevel?: LogThreshold): void;
 
@@ -84,11 +89,7 @@ export interface ProfileScopeFrame {
 export class DefaultProfileSession implements ProfileSession {
    /** Single monotonic timeline for the whole session; per-scope readings are deltas off it. */
    protected readonly sessionStopwatch: Stopwatch;
-   /**
-    * The scopes in flight, innermost last. They must end innermost first:
-    * {@link closeFrame} pops the top frame whichever scope ends, so
-    * overlapping async scopes misattribute their time.
-    */
+   /** The scopes in flight, in the order they started. */
    protected readonly stack: ProfileScopeFrame[] = [];
    /** Self-time in milliseconds per id, one sample per closed scope, which {@link records} sums. */
    protected readonly entries = new Map<string, number[]>();
@@ -130,17 +131,21 @@ export class DefaultProfileSession implements ProfileSession {
    }
 
    /**
-    * Pop the top frame, which is `frame` when scopes end innermost first,
-    * charge its full duration to the new top, and record its self-time.
+    * Remove `frame`, charge its full duration to the frame below it, and record
+    * its self-time. Overlapping scopes can together outlast the one below
+    * them, whose self-time is then zero rather than negative.
     */
    protected closeFrame(frame: ProfileScopeFrame): void {
-      this.stack.pop();
+      const index = this.stack.lastIndexOf(frame);
+      if (index >= 0) {
+         this.stack.splice(index, 1);
+      }
       const duration = this.sessionStopwatch.elapsedMs - frame.start;
-      const parent = this.stack[this.stack.length - 1];
+      const parent = index > 0 ? this.stack[index - 1] : undefined;
       if (parent) {
          parent.childMs += duration;
       }
-      const selfMs = duration - frame.childMs;
+      const selfMs = Math.max(0, duration - frame.childMs);
       const samples = this.entries.get(frame.id);
       if (samples) {
          samples.push(selfMs);
