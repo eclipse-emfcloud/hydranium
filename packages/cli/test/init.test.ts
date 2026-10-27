@@ -1058,7 +1058,9 @@ describe('planInitFiles with hosts', () => {
       expect(host.contributes).not.toHaveProperty('customEditors');
       expect(contentOf(files, 'host-vscode/src/extension.ts')).not.toMatch(/Glsp|findPort/);
       const servers = JSON.parse(contentOf(files, 'vscode-servers/package.json') ?? '{}') as Record<string, Record<string, unknown>>;
-      expect(servers.dependencies).not.toHaveProperty('@hydranium/client-vscode');
+      // Still for the content middleware every language client takes.
+      expect(servers.dependencies).toHaveProperty('@hydranium/client-vscode');
+      expect(contentOf(files, 'vscode-servers/src/language-client.ts')).toContain('textDocumentContentMiddleware(() => client)');
       expect(contentOf(files, 'vscode-servers/src/extension.ts')).not.toContain('registerPortCommands');
    });
 

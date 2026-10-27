@@ -1057,6 +1057,28 @@ test.describe('order-flow in a web worker', () => {
       await expect(page.locator('#selected-editor .view-line').filter({ hasText: 'entity XOrder {' })).toHaveCount(1);
    });
 
+   test('Ctrl+click opens a declaration in the stdlib read-only, on the text the server serves', async ({ page }) => {
+      await page.goto('/');
+      const line = 'quantity: Number';
+      await expect
+         .poll(async () => (await tokenSpansOnLine(page, '#selected-editor', line)).map(span => span.text.trim()))
+         .toContain('Number');
+      await page
+         .locator('#selected-editor .view-line')
+         .filter({ hasText: line })
+         .locator('span[class^="mtk"]', { hasText: 'Number' })
+         .first()
+         .click({ modifiers: ['ControlOrMeta'] });
+
+      await expect(page.locator('#selected-editor-title')).toHaveText('virtual:order-flow-builtin/primitives.domain');
+      const declaration = page.locator('#selected-editor .view-line').filter({ hasText: 'valuetype Number {}' });
+      await expect(declaration).toHaveCount(1);
+
+      // The server owns the text, so a keystroke changes nothing.
+      await page.keyboard.type('X');
+      await expect(declaration).toHaveCount(1);
+   });
+
    test('occurrence highlighting comes from the server, so a comment is not an occurrence', async ({ page }) => {
       await page.goto('/');
       await expect(page.locator(`${PROCESS_EDITOR} .view-lines`)).toContainText(EFFECT_LINE.trim());

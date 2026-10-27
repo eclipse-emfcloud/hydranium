@@ -45,7 +45,7 @@ import type { VisibleDocuments } from './workspace-panel.js';
 interface Pane {
    readonly title: HTMLElement;
    readonly editor: monaco.editor.IStandaloneCodeEditor;
-   /** The document currently in it, by path under the workspace root. */
+   /** The document currently in it, by path under the workspace root, or by URI for one only the server holds. */
    path: string;
 }
 
@@ -104,6 +104,9 @@ export class EditorArea {
     * visit it has ever had.
     */
    private readonly watched = new Set<string>();
+
+   /** URIs of documents only the server holds, shown read-only under their URI. */
+   private readonly served = new Set<string>();
 
    /**
     * The diagram's title, which is marked from the FIXED pair rather than from
@@ -199,17 +202,21 @@ export class EditorArea {
     * Show the document `uri` addresses at `position`, and report whether this
     * page had a document to show.
     *
-    * `false` rather than a throw for a URI with no seeded file behind it, and
-    * that case is REACHABLE rather than defensive: this workspace validates an
-    * in-code contribution on the `virtual:` scheme, which has no file and no
-    * text to open an editor over. A resolved reference into one is a jump the
-    * page genuinely cannot make, and saying so lets the caller leave the reader
-    * where they are instead of moving them to an editor built on invented text.
+    * A URI outside the workspace is REACHABLE rather than defensive: this
+    * workspace validates an in-code contribution on the `virtual:` scheme,
+    * which has no file. Its text comes from the server and opens read-only.
+    * `false` for a URI with neither, so the caller leaves the reader where they
+    * are instead of moving them to an editor built on invented text.
     */
-   revealUri(uri: string, position: monaco.IPosition): boolean {
+   async revealUri(uri: string, position: monaco.IPosition): Promise<boolean> {
       const prefix = `${this.options.rootUri}/`;
       if (!uri.startsWith(prefix)) {
-         return false;
+         const text = await this.options.client.requestDocumentContent(uri);
+         if (text === undefined) {
+            return false;
+         }
+         this.showServed(uri, text, position);
+         return true;
       }
       // Not decoded: the opener hands over Monaco's form, which encodes a
       // space, and the worker keys its files by that same form, the suffix of
@@ -288,7 +295,11 @@ export class EditorArea {
       // `onDidFocusEditorText`, not `…EditorWidget`: the widget form also fires
       // for the find box and any other overlay Monaco mounts inside the editor,
       // which are not a change of document and would republish on every search.
-      pane.editor.onDidFocusEditorText(() => this.options.onFocusChanged?.(pane.path));
+      pane.editor.onDidFocusEditorText(() => {
+         if (!this.served.has(pane.path)) {
+            this.options.onFocusChanged?.(pane.path);
+         }
+      });
       this.setTitle(pane, path);
       this.revealOnce(pane, path);
       return pane;
@@ -300,6 +311,7 @@ export class EditorArea {
       // per keystroke would put that walk on the typing path for no gain.
       this.remember(pane);
       pane.editor.setModel(this.modelFor(path));
+      pane.editor.updateOptions({ readOnly: false });
       pane.path = path;
       this.setTitle(pane, path);
       const state = this.viewStates.get(this.uriOf(path));
@@ -311,6 +323,27 @@ export class EditorArea {
       // The pane now shows a different document, whose dirtiness is its own and
       // is not announced by a content change.
       this.refreshDirtyMarks();
+   }
+
+   /**
+    * Show `uri` read-only in the selection editor, on a model the client does
+    * not own, so no edit, `didOpen` or save reaches the server.
+    */
+   private showServed(uri: string, text: string, position: monaco.IPosition): void {
+      const pane = this.selected;
+      this.remember(pane);
+      const target = monaco.Uri.parse(uri);
+      // No language: Monaco takes it from the extension, as for a typed one.
+      pane.editor.setModel(monaco.editor.getModel(target) ?? monaco.editor.createModel(text, undefined, target));
+      pane.editor.updateOptions({ readOnly: true });
+      this.served.add(uri);
+      pane.path = uri;
+      this.setTitle(pane, uri);
+      pane.editor.setPosition(position);
+      pane.editor.revealLineInCenter(position.lineNumber);
+      this.announce();
+      this.refreshDirtyMarks();
+      this.present(pane);
    }
 
    private setTitle(pane: Pane, path: string): void {
@@ -373,6 +406,9 @@ export class EditorArea {
 
    /** The document's URI in Monaco's form, which the client's dirty records carry. */
    private uriOf(path: string): string {
+      if (this.served.has(path)) {
+         return path;
+      }
       return monaco.Uri.parse(`${this.options.rootUri}/${path}`).toString();
    }
 

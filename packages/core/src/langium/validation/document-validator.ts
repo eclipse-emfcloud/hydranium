@@ -261,8 +261,9 @@ export interface DocumentValidatorOptions extends LogNameOptions {
    /**
     * Validate documents under the virtual URI scheme (see `isVirtualUri`).
     * Default `false`: virtual documents (stdlib / library / built-in content)
-    * are skipped, because a virtual URI cannot be opened, so a diagnostic on it
-    * is un-actionable, and shipped library content is presumed correct. Set
+    * are skipped, because the server owns a virtual document's text and no
+    * client edit reaches it, so a diagnostic on it is un-actionable, and
+    * shipped library content is presumed correct. Set
     * `true` to validate built-in definitions. Read per call, so it accepts a
     * {@link MaybeObservableValue} — bind it to a user setting to toggle live.
     */
@@ -321,9 +322,10 @@ export class HydraniumDocumentValidator extends DefaultDocumentValidator {
       cancelToken?: CancellationToken
    ): Promise<Diagnostic[]> {
       // Skip whole virtual documents (stdlib / library / built-in) unless opted
-      // in — a virtual URI cannot be opened, so diagnostics on it are
-      // un-actionable. Decided per document (not per node) so the walk is
-      // avoided entirely; the per-node `$synthetic` skip is separate.
+      // in — the server owns a virtual document's text and no client edit
+      // reaches it, so diagnostics on it are un-actionable. Decided per
+      // document (not per node) so the walk is avoided entirely. The per-node
+      // `$synthetic` skip is separate.
       if (isVirtualUri(document.uri) && !this.validateVirtualDocuments.value) {
          this.tracer.withUri(document.uri.toString()).debug('skipping validation (virtual document)');
          return Promise.resolve([]);

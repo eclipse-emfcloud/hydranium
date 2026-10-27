@@ -53,6 +53,11 @@ own npm installs the newest Theia beside yours. Theia 1.74 pins
 `vscode-languageserver-types` `3.17.5`; that copy takes the top of the tree
 unless you pin `3.18.4`.
 
+With a VS Code host, also pin `vscode-languageclient` `10.1.2`. Each release
+pins `vscode-languageserver-protocol` exactly, and only `10.1.2` pins `3.18.4`.
+Its package exports `vscode-languageclient/node`, so an import of
+`vscode-languageclient/node.js` no longer resolves.
+
 The framework's peer ranges follow the same chain. `@hydranium/core` declares
 `vscode-languageserver` at `~10.1.0` and `vscode-languageserver-protocol` at
 `>=3.18.2 <3.18.5`, and every head declares `vscode-jsonrpc` at `^9.0.0`.

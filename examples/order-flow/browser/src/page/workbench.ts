@@ -47,6 +47,7 @@
 
 import { connectWorkerHeads, initializeLanguageClient, WORKER_ERROR_EVENT_PHASE, type WorkerHeads } from '@hydranium/client-browser';
 import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient } from '@hydranium/client-browser/monaco';
+import type * as monaco from 'monaco-editor-core';
 import type { GlspDiagramMount } from '@hydranium/glsp-client';
 import { type PublishDiagnosticsParams, PublishDiagnosticsNotification } from 'vscode-languageserver-protocol';
 import {
@@ -916,15 +917,27 @@ export async function main(locale: Locale | undefined): Promise<void> {
    // document — `for Order` in `.process` declares nothing, and `entity Order`
    // lives in a `.domain` file the selection editor has to go and get. Registered
    // once the editors exist, because the opener is what shows the target.
-   client.registerEditorOpener((uri, position) => editors.revealUri(uri, position));
+   // A failed answer from the server is reported here, so neither path drops it.
+   // `true`: the report is the outcome, and no other opener should try.
+   const revealOrReport = (uri: string, position: monaco.IPosition): Promise<boolean> =>
+      editors.revealUri(uri, position).catch((error: unknown) => {
+         setWorkspaceReport(`${uri} could not be opened: ${describeError(error)}`);
+         return true;
+      });
+   client.registerEditorOpener(revealOrReport);
 
    sidebar.panel = new WorkspacePanel(Object.keys(workspace.files), WORKSPACE_ROOT_URI, {
       onOpenDocument: path => editors.show(path),
       onOpenDiagnostic: target => editors.reveal(target.uri.slice(WORKSPACE_ROOT_URI.length + 1), target.line),
-      // A `virtual:` document has no file behind it, so there is nothing to open
-      // and saying so is the honest answer — the alternative is a click that does
-      // nothing, which reads as a broken list.
-      onUnopenable: uri => setWorkspaceReport(`${uri} has no file behind it — an in-code contribution cannot be opened`)
+      // A `virtual:` document has no file behind it, so its text comes from the
+      // server. Without that, saying so is the honest answer — the alternative is
+      // a click that does nothing, which reads as a broken list.
+      onUnopenable: (uri, line) =>
+         void revealOrReport(uri, { lineNumber: line, column: 1 }).then(shown => {
+            if (!shown) {
+               setWorkspaceReport(`${uri} has no file behind it, and the server serves no text for it`);
+            }
+         })
    });
    sidebar.panel.setVisible(editors.visible());
    sidebar.panel.render(diagnosticsByUri);

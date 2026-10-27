@@ -2364,7 +2364,7 @@ vscode-servers/package.json
     "@hydranium/client-vscode": "^__FRAMEWORK_VERSION__",
     "bookstore-protocol": "0.0.0",
     "bookstore-server": "0.0.0",
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "10.1.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -2499,6 +2499,7 @@ vscode-servers/src/language-client.ts
 // Starts the Bookstore server for VS Code, and for a Theia app that sideloads
 // this extension: one launch, so both hand the server the same documents.
 
+import { textDocumentContentMiddleware } from '@hydranium/client-vscode/node';
 import { ALL_LANGUAGES } from 'bookstore-protocol';
 import { type ExtensionContext, workspace } from 'vscode';
 import { LanguageClient, TransportKind } from 'vscode-languageclient/node';
@@ -2509,14 +2510,16 @@ export async function startBookstoreLanguageClient(context: ExtensionContext): P
    // installed extension alike. Over IPC, which keeps the server's stdout free.
    const serverModule = require.resolve('bookstore-server/lib/main.js');
    const extensions = ALL_LANGUAGES.flatMap(language => language.fileExtensions).join(',');
-   const client = new LanguageClient(
+   const client: LanguageClient = new LanguageClient(
       'bookstore',
       'Bookstore',
       { module: serverModule, transport: TransportKind.ipc },
       {
          documentSelector: ALL_LANGUAGES.map(({ languageId }) => ({ scheme: 'file', language: languageId })),
          // Changes on disk the editor does not hold, such as a file another tool writes.
-         synchronize: { fileEvents: workspace.createFileSystemWatcher(`**/*{${extensions}}`) }
+         synchronize: { fileEvents: workspace.createFileSystemWatcher(`**/*{${extensions}}`) },
+         // The text of a document only the server holds, such as a built-in library.
+         middleware: textDocumentContentMiddleware(() => client)
       }
    );
    context.subscriptions.push(client);
@@ -4175,7 +4178,7 @@ host-vscode/package.json
     "bookstore-vscode-servers": "0.0.0",
     "inversify": "^6.1.3",
     "vscode-jsonrpc": "9.0.3",
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "10.1.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",
