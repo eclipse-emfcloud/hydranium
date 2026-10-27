@@ -44,6 +44,10 @@ the call-stack view. The bundles are not minified unless you pass `--minify` to
 - **Jump across grammars.** Ctrl+click `Order` in
   `process Fulfillment for Order`, and the lookup editor opens
   `orders/orders.domain` at `entity Order`.
+- **Open the built-in library.** Ctrl+click `Number` in `quantity: Number` of
+  `orders/orders.domain`, and the lookup editor opens
+  `virtual:order-flow-builtin/primitives.domain` read-only, on the text the
+  server serves. No file holds it.
 - **See occurrence marks.** Leave the caret in `= PAID`. The server marks one
   occurrence, where Monaco's textual matcher would also mark `OrderStatus.PAID`
   in the comment above.
@@ -131,7 +135,7 @@ afterwards.
 | Data head | ✅ on its own channel, same worker, same Langium store |
 | GLSP head | ✅ on a third channel, via `@hydranium/glsp-server/browser` |
 | Diagram editing | ✅ a drag and a palette create, both read back through the data head |
-| Text editors | ✅ three Monaco editors over the LSP channel: diagnostics, semantic highlighting, completion, hover, go-to-definition, occurrence highlighting |
+| Text editors | ✅ three Monaco editors over the LSP channel: diagnostics, semantic highlighting, completion, hover, go-to-definition, occurrence highlighting, and the built-in library read-only |
 | Diagram → text | ✅ `workspace/applyEdit` applied to the Monaco models |
 | Server messages | ✅ a refused undo shows its reason on the diagram |
 | Light / dark | ✅ one switch over the page chrome, the `--order-flow-*` diagram roles and Monaco's theme |

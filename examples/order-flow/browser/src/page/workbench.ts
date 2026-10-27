@@ -708,13 +708,14 @@ function provideLatency(dataHead: DataHead, detail: ReportDetail): void {
  * Save on `Ctrl+S` / `Cmd+S`, scoped to whatever the reader is in.
  *
  * An editor saves ITS document and the properties panel saves the one it is
- * showing; anywhere else saves everything, which is what the toolbar button has
- * always done. Two scopes because the shortcut means "persist what I am working
- * on" and a page with three editors open has to answer which one that is.
+ * showing. Anywhere else saves everything, which is what the toolbar button
+ * has always done. The shortcut means "persist what I am working on", and a
+ * page with three editors open has to answer which one that is. An editor on
+ * a document only the server holds has nothing to persist, so it saves nothing.
  *
  * ONE document-level listener rather than a command registered per editor:
  * measured, Monaco neither binds nor swallows this chord, so the same handler
- * serves the editors, the panel and the rest of the page — and the three cases
+ * serves the editors, the panel and the rest of the page — and the cases
  * are decided in one place instead of diverging across three registrations.
  *
  * `preventDefault` is the whole of the browser accommodation: without it the
@@ -728,9 +729,11 @@ function wireSaveShortcut(save: (only?: string) => void, editors: EditorArea, pr
             return;
          }
          event.preventDefault();
-         const focused = editors.focusedPath();
+         const focused = editors.focusedPane();
          if (focused !== undefined) {
-            save(`${WORKSPACE_ROOT_URI}/${focused}`);
+            if (!focused.content) {
+               save(`${WORKSPACE_ROOT_URI}/${focused.path}`);
+            }
             return;
          }
          const inPanel = event.target instanceof Element && event.target.closest('#properties-body') !== null;
@@ -835,16 +838,20 @@ export async function main(locale: Locale | undefined): Promise<void> {
          locale,
          // What the Monaco client renders, with the two workspace answers: the
          // client handles `workspace/applyEdit`, and the level picker below
-         // answers the configuration request.
-         capabilities: MONACO_CLIENT_CAPABILITIES,
+         // answers the configuration request. Plus the stdlib's text, which
+         // the editor opener shows.
+         capabilities: { ...MONACO_CLIENT_CAPABILITIES, workspace: { ...MONACO_CLIENT_CAPABILITIES.workspace, textDocumentContent: {} } },
          configuration: wireLogLevelControl(connection),
          // The lines from the first workspace build are the ones worth having: a
          // handler attached after `initialize` resolves would miss the whole of
          // server startup, the part a reader most wants when the page does not
          // come up.
          onLogMessage: params => log.append(params.type, params.message),
-         beforeInitialized: result => {
-            client = new MonacoLspClient(connection, result.capabilities, { languages: ORDER_FLOW_LANGUAGES });
+         beforeInitialized: (result, capabilities) => {
+            client = new MonacoLspClient(connection, result.capabilities, {
+               languages: ORDER_FLOW_LANGUAGES,
+               clientCapabilities: capabilities
+            });
             // ONE handler for the notification, fanning out to all three consumers.
             // A second `onNotification` for the same method would silently REPLACE
             // this one — `MessageConnection` keys its handlers by method and still
@@ -923,12 +930,13 @@ export async function main(locale: Locale | undefined): Promise<void> {
       onOpenDocument: path => editors.show(path),
       onOpenDiagnostic: target => editors.reveal(target.uri.slice(WORKSPACE_ROOT_URI.length + 1), target.line),
       // A `virtual:` document has no file behind it, so its text comes from the
-      // server. Without that, saying so is the honest answer — the alternative is
-      // a click that does nothing, which reads as a broken list.
+      // server. This page validates none, so only a host that sets
+      // `validateVirtualDocuments` lists one. A click that does nothing would read
+      // as a broken list, so a document the server sent no text for is reported.
       onUnopenable: (uri, line) =>
          void revealOrReport(uri, { lineNumber: line, column: 1 }).then(shown => {
             if (!shown) {
-               setWorkspaceReport(`${uri} has no file behind it, and the server serves no text for it`);
+               setWorkspaceReport(`${uri} has no file behind it, and the server sent no text for it`);
             }
          })
    });

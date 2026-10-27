@@ -124,7 +124,10 @@ await client.saveAll();
 
 `MONACO_CLIENT_CAPABILITIES` declares `workspace.applyEdit`, which the Monaco
 client answers, and every form it renders, so a server that gates a form on
-its capability sends it. A host with another editor declares its own, and
+its capability sends it. A host that shows the documents only the server
+holds, through `openContentDocument`, adds `workspace.textDocumentContent`,
+and passes the capabilities `beforeInitialized` receives to `MonacoLspClient`
+as `clientCapabilities`. A host with another editor declares its own, and
 registers its own `workspace/applyEdit` handler before it opens a document,
 as any LSP client does, or the server's writes to that document are lost.
 
