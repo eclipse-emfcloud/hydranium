@@ -392,6 +392,40 @@ describe('data head sessions', () => {
       expect(readFileSync(path(NEW_FILE), 'utf8')).toBe(EDITED);
    });
 
+   it('keys a document created through a symlinked directory by its real path before and after its first save', async () => {
+      scratch = await makeScratchWorkspaceHarness(
+         prepared => {
+            prepared.write(`real/${FILE}`, CLEAN);
+            symlinkSync(prepared.resolve('real'), prepared.resolve('link'), 'dir');
+         },
+         {
+            extraSharedModules: [
+               { workspace: { DocumentUriPolicy: (shared: ServerSharedServices) => new RealpathDocumentUriPolicy(shared) } }
+            ]
+         }
+      );
+      const { harness: services, workspace } = scratch;
+      const policy = services.shared.workspace.DocumentUriPolicy;
+      const viaLink = workspace.uri(`link/${NEW_FILE}`);
+      const real = policy.canonicalUri(workspace.uri(`real/${NEW_FILE}`));
+      const head = makeDataServerHarness<RestoreProbeServer, DomainModel>({
+         server: channel => new RestoreProbeServer(channel, services.shared)
+      });
+      heads.push(head);
+      await head.proxy.createSession({ clientId: SESSION });
+
+      expect(policy.canonicalUri(viaLink)).toBe(real);
+      const created = await head.proxy.createModelDocument({ uri: viaLink, clientId: SESSION, text: CLEAN });
+      await head.proxy.saveModelDocument({ uri: viaLink, clientId: SESSION, model: EDITED, baseVersion: created.model!.version });
+      expect(policy.canonicalUri(viaLink)).toBe(real);
+
+      // The open, the text store and the build still name the one document.
+      await head.proxy.saveModelDocument({ uri: viaLink, clientId: SESSION, model: THEIRS, baseVersion: 'any' });
+      expect(readFileSync(workspace.resolve(`real/${NEW_FILE}`), 'utf8')).toBe(THEIRS);
+      expect(services.shared.workspace.TextDocuments.get(real)?.getText()).toBe(THEIRS);
+      expect(services.shared.workspace.LangiumDocuments.all.filter(document => document.uri.path.endsWith(NEW_FILE)).count()).toBe(1);
+   });
+
    it("createModelDocument answers the version the create made beside the state another session's write left", async () => {
       const { services, newUri, path } = await boot();
       const head = makeDataServerHarness<WriteBeforeAnswerServer, DomainModel>({
