@@ -13,6 +13,7 @@ import {
    ActionDispatchScope,
    type ActionMessage,
    ClientSessionManager,
+   ComputedBoundsAction,
    EndProgressAction,
    GLSPClientProxy,
    GLSPServer,
@@ -42,6 +43,7 @@ import {
 import { Container, ContainerModule, type interfaces } from 'inversify';
 import type { AstNode } from '@hydranium/langium';
 import type { ServerSharedServices } from '@hydranium/core';
+import { SystemClock } from '@hydranium/protocol';
 import type { Harness } from '@hydranium/protocol/testing';
 import type { AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
@@ -193,10 +195,32 @@ export interface GlspHarness<TState extends AbstractHydraniumGlspState<AstNode, 
     * a client-laid-out one. Awaiting the wrong one is a 2s timeout that names
     * the wrong subsystem, and a test should not have to know which applies.
     *
+    * A client-laid-out open stays pending until {@link answerBoundsRequest},
+    * and while it is pending the storage resubmits nothing for another
+    * client's edit.
+    *
     * Rejects if nothing is published within `timeoutMs`. Valid only after
     * {@link start}.
     */
    openDocument(sourceUri: string, timeoutMs?: number): Promise<Action>;
+   /**
+    * Answer the latest `RequestBoundsAction` as a client does, with `measured`
+    * (empty bounds by default) at the request's revision, and resolve with the
+    * model the server then publishes. An earlier unanswered request is skipped,
+    * since the server drops an answer at its stale revision. When the latest is
+    * already answered, wait for the next one. If a further request follows it
+    * before the server takes the answer, the answer is stale and the call
+    * times out, naming what arrived. Both waits share one `timeoutMs`.
+    * Resolves `undefined` when none was ever sent, as for a server-laid-out
+    * diagram.
+    *
+    * The harness owns the revision: an answer at any other one is rejected or
+    * dropped, and the test times out without saying why.
+    */
+   answerBoundsRequest(
+      measured?: Partial<Omit<ComputedBoundsAction, 'kind' | 'revision' | 'responseId'>>,
+      timeoutMs?: number
+   ): Promise<Action | undefined>;
    /**
     * Resolve with the next action that publishes a model — the settling point
     * after an operation, since a successful operation re-submits. Matches as
@@ -266,6 +290,7 @@ export function makeGlspHarness<TState extends AbstractHydraniumGlspState<AstNod
 
    const actions: Action[] = [];
    const consumed = new WeakSet<Action>();
+   const answeredBoundsRequests = new WeakSet<Action>();
    // Where the last dispatch fell in `actions`; a wait matches only from here.
    let dispatchedAt = 0;
    const waiters: PendingWaiter[] = [];
@@ -296,7 +321,13 @@ export function makeGlspHarness<TState extends AbstractHydraniumGlspState<AstNod
     * at all, so the only observable is the absence of one. Mirrors GLSP's own
     * `ActionDispatcher.requestUntil(action, timeoutMs, rejectOnTimeout)`.
     */
-   function waitFor(kinds: ReadonlyArray<string>, timeoutMs: number, rejectOnTimeout: boolean): Promise<Action | undefined> {
+   function waitFor(
+      kinds: ReadonlyArray<string>,
+      timeoutMs: number,
+      rejectOnTimeout: boolean,
+      // A wait that spends what is left of the caller's budget names the caller's timeout.
+      reportedTimeoutMs = timeoutMs
+   ): Promise<Action | undefined> {
       const existing = actions.find((action, index) => index >= dispatchedAt && kinds.includes(action.kind) && !consumed.has(action));
       if (existing) {
          consumed.add(existing);
@@ -334,7 +365,7 @@ export function makeGlspHarness<TState extends AbstractHydraniumGlspState<AstNod
                           : `captured before the last dispatch, which a wait does not match: ${kindsIn(0, dispatchedAt)}; since: ${kindsIn(dispatchedAt)}`;
                   reject(
                      new Error(
-                        `makeGlspHarness: no ${kinds.map(kind => `'${kind}'`).join(' / ')} action within ${timeoutMs}ms — ${context}`
+                        `makeGlspHarness: no ${kinds.map(kind => `'${kind}'`).join(' / ')} action within ${reportedTimeoutMs}ms — ${context}`
                      )
                   );
                } else {
@@ -438,6 +469,31 @@ export function makeGlspHarness<TState extends AbstractHydraniumGlspState<AstNod
          const submission = await waitFor(MODEL_SUBMISSION_KINDS, timeoutMs, true);
          // `waitFor` with rejectOnTimeout only resolves with a real action.
          return submission as Action;
+      },
+
+      async answerBoundsRequest(measured = {}, timeoutMs = 2000): Promise<Action | undefined> {
+         const stopwatch = new SystemClock().stopwatch();
+         let request = actions.filter(RequestBoundsAction.is).at(-1);
+         if (!request) {
+            return undefined;
+         }
+         if (answeredBoundsRequests.has(request)) {
+            // An edit's request may still be on its way, and answering nothing would leave it pending.
+            request = (await waitFor([RequestBoundsAction.KIND], timeoutMs, true)) as RequestBoundsAction;
+         }
+         answeredBoundsRequests.add(request);
+         consumed.add(request);
+         dispatchedAt = actions.length;
+         const answer = {
+            ...ComputedBoundsAction.create([]),
+            ...measured,
+            // `Partial` admits `bounds: undefined`, which the spread would keep and the handler throw on.
+            bounds: measured.bounds ?? [],
+            revision: request.newRoot.revision,
+            responseId: request.requestId
+         };
+         server.process({ clientId: clientSessionId, action: answer });
+         return waitFor([SetModelAction.KIND, UpdateModelAction.KIND], Math.max(0, timeoutMs - stopwatch.elapsedMs), true, timeoutMs);
       },
 
       nextModelSubmission(options: NextModelSubmissionOptions = {}): Promise<Action | undefined> {

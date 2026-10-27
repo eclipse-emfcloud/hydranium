@@ -40,14 +40,7 @@
  */
 
 import 'reflect-metadata';
-import {
-   type Action,
-   ChangeBoundsOperation,
-   ComputedBoundsAction,
-   ServerModule,
-   SetDirtyStateAction,
-   SetModelAction
-} from '@eclipse-glsp/server';
+import { type Action, ChangeBoundsOperation, ServerModule, SetDirtyStateAction } from '@eclipse-glsp/server';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, MODEL_SUBMISSION_KINDS, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
@@ -124,16 +117,9 @@ async function openDiagram({ preValidate = true }: { preValidate?: boolean } = {
    }
 
    await harness.openDocument(sourceUri);
-   // Complete the initial handshake the way a client does. This diagram is
-   // client-laid-out, so opening it publishes a `RequestBoundsAction` and the
-   // load stays PENDING until the measurement comes back — and while it is
-   // pending the storage suppresses every external resubmit, to protect the
-   // client's first computed bounds from a revision bump. Skipping this step
-   // makes both assertions below vacuous rather than failing them: nothing
-   // resubmits for any reason, so the second test would pass with the authorship
-   // guard deleted.
-   harness.dispatch(ComputedBoundsAction.create([], { revision: harness.state.root.revision }));
-   await harness.nextAction(SetModelAction.KIND);
+   // Without the answer the open stays pending and nothing resubmits, so the
+   // second test would pass with the authorship guard deleted.
+   await harness.answerBoundsRequest();
 
    open = {
       harness,

@@ -22,7 +22,6 @@ import 'reflect-metadata';
 import {
    type Action,
    ChangeBoundsOperation,
-   ComputedBoundsAction,
    EditMode,
    MarkersReason,
    MessageAction,
@@ -97,7 +96,7 @@ async function openDiagram(prepare?: (workspace: ScratchWorkspace) => void): Pro
    open = { services, harness, workspace };
    await harness.start();
    await harness.openDocument(workspace.resolve(WORKSPACE_FILES.fulfillmentProcess));
-   harness.dispatch(ComputedBoundsAction.create([], { revision: harness.state.root.revision }));
+   await harness.answerBoundsRequest();
    return open;
 }
 
@@ -124,10 +123,8 @@ async function editAsAnotherClient(diagram: OpenDiagram, from: string, to: strin
    const processUri = URI.file(processPath).toString();
    const form = diagram.services.shared.model.ModelService.createSession('form');
    await form.open(processUri);
-   const before = diagram.harness.actions.length;
    await form.update({ uri: processUri, model: readFileSync(processPath, 'utf8').replace(from, to), baseVersion: 'any' });
-   await vi.waitFor(() => expect(diagram.harness.actions.slice(before).some(action => RequestBoundsAction.is(action))).toBe(true));
-   diagram.harness.dispatch(ComputedBoundsAction.create([], { revision: diagram.harness.state.root.revision }));
+   await diagram.harness.answerBoundsRequest();
 }
 
 function lastOf<T extends Action>(diagram: OpenDiagram, is: (action: Action) => action is T): T | undefined {

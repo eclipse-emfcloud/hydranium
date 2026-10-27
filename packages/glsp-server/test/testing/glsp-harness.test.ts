@@ -25,7 +25,7 @@ import {
    GNode,
    type InstanceMultiBinding,
    ModelState,
-   type ModelSubmissionHandler,
+   ModelSubmissionHandler,
    OperationHandler,
    RejectAction,
    type OperationHandlerConstructor,
@@ -447,6 +447,39 @@ describe('makeGlspHarness', () => {
          await harness.start();
          const submission = await harness.openDocument('file:///some/model.test');
          expect(submission.kind).toBe(RequestBoundsAction.KIND);
+      } finally {
+         harness.dispose();
+      }
+   });
+
+   it('answerBoundsRequest completes a client-laid-out open, then waits for the next request', async () => {
+      const harness = makeGlspHarness<TestState>({
+         serverModule: new ServerModule().configureDiagramModule(new ClientLayoutTestDiagramModule()),
+         diagramType: TEST_DIAGRAM_TYPE,
+         appModules: [testAppModule()]
+      });
+      try {
+         await harness.start();
+         await harness.openDocument('file:///some/model.test');
+         const submissions = harness.sessionContainer.get<HydraniumGlspSubmissionHandler<AstNode>>(ModelSubmissionHandler);
+         expect(submissions.hasPendingInitialRequest()).toBe(true);
+
+         await expect(harness.answerBoundsRequest()).resolves.toMatchObject({ kind: SetModelAction.KIND });
+         // The open no longer holds back an external edit's resubmit.
+         expect(submissions.hasPendingInitialRequest()).toBe(false);
+         // Answering nothing here would let a test assert "no resubmit" before the edit's request arrived.
+         await expect(harness.answerBoundsRequest({}, 50)).rejects.toThrow(/no 'requestBounds' action within 50ms/);
+      } finally {
+         harness.dispose();
+      }
+   });
+
+   it('answerBoundsRequest has nothing to answer when the server lays out', async () => {
+      const harness = makeFixtureHarness();
+      try {
+         await harness.start();
+         await harness.openDocument('file:///some/model.test');
+         await expect(harness.answerBoundsRequest()).resolves.toBeUndefined();
       } finally {
          harness.dispose();
       }

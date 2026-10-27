@@ -12,7 +12,6 @@
 import 'reflect-metadata';
 import {
    type Action,
-   ComputedBoundsAction,
    CreateNodeOperation,
    DeleteElementOperation,
    GEdge,
@@ -22,9 +21,7 @@ import {
    RedoAction,
    ServerModule,
    SetDirtyStateAction,
-   SetModelAction,
-   UndoAction,
-   UpdateModelAction
+   UndoAction
 } from '@eclipse-glsp/server';
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
 import { makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
@@ -332,17 +329,13 @@ describe('__GRAMMAR__ diagram', () => {
       const edgeId = edge()?.id ?? '';
 
       // A self-reference's loop as the client routes it around a node not yet sized.
-      const before = harness.actions.length;
       const corners = [
          { x: 19, y: -0.75 },
          { x: 19, y: 19 },
          { x: -0.75, y: 19 }
       ];
       const routes = [{ elementId: edgeId, newRoutingPoints: [{ x: 0, y: 0 }, ...corners, { x: 0, y: 0 }] }];
-      harness.dispatch(ComputedBoundsAction.create([], { revision: harness.state.root.revision, routes }));
-      await waitFor(() => harness.actions.slice(before).some(sent => SetModelAction.is(sent) || UpdateModelAction.is(sent)), {
-         message: 'no model sent after the computed bounds'
-      });
+      await harness.answerBoundsRequest({ routes });
 
       expect(edge()?.routingPoints).toEqual([]);
    });
