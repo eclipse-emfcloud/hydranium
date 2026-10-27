@@ -83,16 +83,17 @@ export function isConnectionGoneError(err: unknown): boolean {
    return CONNECTION_GONE_PATTERNS.some(pattern => pattern.test(normalized));
 }
 
-const SOCKET_GONE_CODES = new Set(['EPIPE', 'ECONNRESET']);
+// Windows reports a write to a socket the peer aborted as `ECONNABORTED`.
+const SOCKET_GONE_CODES = new Set(['EPIPE', 'ECONNRESET', 'ECONNABORTED']);
 
 /** `write EPIPE` / `read ECONNRESET`, as a request's `ResponseError` copies the message. */
-const SOCKET_GONE_PATTERN = /\b(epipe|econnreset)\b/;
+const SOCKET_GONE_PATTERN = /\b(epipe|econnreset|econnaborted)\b/;
 
 /**
  * Whether `err` means the client a connection serves has gone: what
  * {@link isConnectionGoneError} recognises, or a write to a socket the client
- * closed (`EPIPE`, `ECONNRESET`), matched by code or, for a request, by the
- * code's name in the message.
+ * closed (`EPIPE`, `ECONNRESET`, `ECONNABORTED`), matched by code or, for a
+ * request, by the code's name in the message.
  *
  * Only for a call whose errors can come from that connection alone. A socket
  * error names no peer, so where a file system or another socket can fail the

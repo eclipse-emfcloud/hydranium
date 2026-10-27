@@ -112,6 +112,9 @@ describe('isClientGoneError', () => {
       expect(isClientGoneError(Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))).toBe(true);
       expect(isClientGoneError(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }))).toBe(true);
       expect(isClientGoneError(new ResponseError(ErrorCodes.MessageWriteError, 'write EPIPE'))).toBe(true);
+      // Windows names the same write ECONNABORTED.
+      expect(isClientGoneError(Object.assign(new Error('write ECONNABORTED'), { code: 'ECONNABORTED' }))).toBe(true);
+      expect(isClientGoneError(new ResponseError(ErrorCodes.MessageWriteError, 'write ECONNABORTED'))).toBe(true);
    });
 
    it('recognises what isConnectionGoneError does, and still not a genuine failure', () => {
