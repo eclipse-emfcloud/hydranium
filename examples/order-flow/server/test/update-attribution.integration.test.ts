@@ -125,6 +125,23 @@ describe('update attribution against the real builder', () => {
       expect(events.some(event => panel.isOwnEcho(event.sourceClientId))).toBe(false);
    });
 
+   it('does not credit a dependency’s rebuild to the client whose open it overtakes', async () => {
+      const { harness, uri } = await boot();
+      const models = harness.shared.model.ModelService;
+      const panel = models.createSession('panel', 'panel');
+      const editor = models.createSession('editor', 'editor');
+      await editor.open(uri(CUSTOMER));
+      const events = record(harness, uri(ORDER));
+
+      await panel.open(uri(ORDER));
+      await editor.update({ uri: uri(CUSTOMER), model: CUSTOMER_RENAMED, baseVersion: 'any' });
+      await models.validated(uri(ORDER));
+
+      expect(events.length).toBeGreaterThan(0);
+      expect(events.some(event => panel.isOwnEcho(event.sourceClientId))).toBe(false);
+      expect(events.at(-1)).toMatchObject({ reason: 'rebuilt', causedBy: 'editor' });
+   });
+
    it('credits the client’s own write of the document to it', async () => {
       const { harness, uri } = await boot();
       const models = harness.shared.model.ModelService;

@@ -192,6 +192,29 @@ describe('AstDocumentManager.attributeUpdate', () => {
       expect(manager.attributeUpdate(documentAt(URI_A, 2)).reason).toBe('changed');
    });
 
+   it.each([
+      ['the text the build parsed', 'rebuilt', 'nobody', UNKNOWN_CLIENT_ID, { otherText: false, placeholder: false }],
+      ['the text of a placeholder', 'changed', 'the opener', 'c1', { otherText: false, placeholder: true }],
+      ['other text than the build parsed', 'changed', 'the opener', 'c1', { otherText: true, placeholder: false }]
+   ])('reports the first delivery after an open that reads %s as %s, crediting %s', async (_read, reason, _credited, client, setup) => {
+      const { manager, textDocuments, services, sync, fileSystem } = makeManagerHarness();
+      const built = manager.getDocument(URI_A)!;
+      if (setup.placeholder) {
+         services.workspace.ModelLedger.markPlaceholder(built.parseResult.value);
+      }
+      const text = setup.otherText ? 'other\n' : built.textDocument.getText();
+      fileSystem.readFile = async () => text;
+      recordSyncRequests(sync);
+
+      await manager.open({ uri: URI_A, clientId: 'c1', languageId: 'plaintext' });
+
+      expect(manager.attributeUpdate(documentAt(URI_A, textDocuments.version(URI_A)))).toEqual({
+         reason,
+         sourceClientId: client,
+         causedBy: client
+      });
+   });
+
    it('does not count a delivery whose listeners a cancel skipped', () => {
       const { manager, textDocuments, builder } = makeManagerHarness();
       open(textDocuments, URI_A, 1, 'author-1');
