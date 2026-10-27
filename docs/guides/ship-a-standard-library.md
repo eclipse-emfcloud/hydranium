@@ -82,13 +82,16 @@ export const mySharedModule = {
 
 ## Things to know
 
-- **The library is not validated.** A diagnostic on a document nobody can edit
-  could never be acted on. `validateVirtualDocuments` in
+- **The library is not validated.** A diagnostic on a document your editors
+  keep read-only could never be acted on. `validateVirtualDocuments` in
   `DocumentValidatorOptions` turns validation back on, if you want to check it
   during development.
 - **Open it read-only in your editors.** A client can open the library, for
   example on go-to-definition, and an edit to it lives until the server
-  restarts. Keeping it read-only is up to the client.
+  restarts. Keeping it read-only is up to the client. A client gets its text
+  from the server, a VS Code host through the content middleware and a page
+  through the Monaco client, as [Host in VS Code](host-in-vscode.md#steps) and
+  [Host in a browser](host-in-a-browser.md#steps) describe.
 - **To recognise its content**, compare a document's URI with your exported
   constant, or check `isVirtualUri` for any document no file backs.
 

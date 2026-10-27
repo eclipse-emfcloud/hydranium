@@ -135,11 +135,11 @@ describe('LSP head module tiers', () => {
    // type-checks (the module's type parameter is an intersection) and then does
    // nothing — so the tier itself is the contract worth asserting, not just
    // that some module binds the handler somewhere.
-   it('puts DocumentUpdateHandler on the shared module only', () => {
+   it.each(['DocumentUpdateHandler', 'TextDocumentContentProvider'])('puts %s on the shared module only', slot => {
       const sharedLsp = createLspServerSharedModule(CONTEXT).lsp;
       const languageLsp = createLspServerLanguageModule(CONTEXT).lsp;
-      expect(sharedLsp && 'DocumentUpdateHandler' in sharedLsp).toBe(true);
-      expect(languageLsp && 'DocumentUpdateHandler' in languageLsp).toBe(false);
+      expect(sharedLsp && slot in sharedLsp).toBe(true);
+      expect(languageLsp && slot in languageLsp).toBe(false);
    });
 
    it('keeps CompletionProvider on the language module only', () => {

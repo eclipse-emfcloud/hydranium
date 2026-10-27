@@ -63,6 +63,7 @@ import {
    ResponseError,
    SemanticTokensRequest,
    type ServerCapabilities,
+   TextDocumentContentRequest,
    type WorkspaceEdit
 } from 'vscode-languageserver-protocol';
 import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient } from '../src/monaco';
@@ -1088,6 +1089,26 @@ describe('MonacoLspClient', () => {
                originSelectionRange: range(5, 5, 5, 8)
             }
          ]);
+      });
+
+      it('reads the text of a document the server serves, and asks only for its schemes', async () => {
+         const ends = makeEnds();
+         const asked: string[] = [];
+         ends.server.onRequest(TextDocumentContentRequest.type, params => {
+            asked.push(params.uri);
+            return { text: 'lib' };
+         });
+         const client = new MonacoLspClient(
+            ends.page,
+            { workspace: { textDocumentContent: { schemes: ['virtual'] } } },
+            { languages: LANGUAGES }
+         );
+         toDispose.push(client);
+
+         const served = await client.requestDocumentContent('virtual:lib/a.one');
+         const notServed = await client.requestDocumentContent('file:///a.one');
+
+         expect({ served, notServed, asked }).toEqual({ served: 'lib', notServed: undefined, asked: ['virtual:lib/a.one'] });
       });
 
       it('renders hover contents of every shape as markdown', async () => {

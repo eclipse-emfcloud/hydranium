@@ -19,24 +19,28 @@ Heads: LSP · data · GLSP
 Three libraries carry the VS Code side. What runs in the extension host is
 imported from `./node`, what runs in a webview from `./browser`:
 
-- `@hydranium/client-vscode`: what every head shares, the lookup of a socket
-  head's port and the commands that publish it, all in `./node`;
+- `@hydranium/client-vscode`: the language client's content middleware, the
+  lookup of a socket head's port and the commands that publish it, all in
+  `./node`;
 - `@hydranium/data-client-vscode`: the data head's relay from the extension
   host into a webview, and the webview's end of it;
 - `@hydranium/glsp-client-vscode`: the diagram, over GLSP's VS Code
   integration and `@hydranium/glsp-client`, whose classes it binds for you.
 
-The LSP head needs none: `vscode-languageclient` is its client. The extension
+The LSP head's client is `vscode-languageclient`, with the content
+middleware from `@hydranium/client-vscode` in its options. The extension
 host holds the sockets, because a webview has none, and forwards each
 webview's messages over one `vscode-messenger` hop shared by every head.
 
 ## Steps
 
 1. **Launch the server.** Fork the language server with
-   `vscode-languageclient` over IPC and start the client. If a Theia app also
-   sideloads the extension, publish each socket head's port as a host command
-   with `registerPortCommands`, and keep that launch in an extension that
-   contributes nothing else, so Theia does not get your custom editors too.
+   `vscode-languageclient` over IPC, with `textDocumentContentMiddleware` as
+   its `middleware`, so a document only the server holds opens, and start the
+   client. If a Theia app also sideloads the extension, publish each socket
+   head's port as a host command with `registerPortCommands`, and keep that
+   launch in an extension that contributes nothing else, so Theia does not get
+   your custom editors too.
    Register the commands in that extension's activation, not in a launch your
    VS Code extension shares: VS Code throws on a second registration of one
    command id, so with both installed one would fail to activate.

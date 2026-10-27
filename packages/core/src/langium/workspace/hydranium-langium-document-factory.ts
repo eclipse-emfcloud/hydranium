@@ -19,6 +19,7 @@ import {
    type MultiReference,
    type Mutable,
    type ParseResult,
+   type ParserOptions,
    type Reference,
    type ReferenceInfo,
    type URI
@@ -32,6 +33,7 @@ import { type VersionSyncService } from '../../documents/version-sync-service.js
 import { type ExtendedServiceRegistry } from '../service-registry.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { type Serializer } from '../serialization/serializer.js';
+import { isVirtualUri } from './virtual-document.js';
 
 /** Structural view of the per-language serializer slot on the resolved services. */
 interface WithSerializer {
@@ -71,6 +73,11 @@ interface WithSerializer {
  * point of contributing it as an additional/virtual document — yields broken
  * paths and cross-references into it fail to resolve. Linking is in place, so
  * node identity is preserved.
+ *
+ * Drops a leading BOM from the text a virtual document is built from as a
+ * string, as every editor drops it from the text the server sends, so the
+ * server's positions match the client's. A text document passed in keeps its
+ * text.
  */
 export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFactory {
    /**
@@ -122,8 +129,22 @@ export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFacto
       if (!services) {
          throw new Error(`No grammar is registered for the language id '${languageId}' (parsing ${uri.toString()}).`);
       }
-      const parseResult: ParseResult<T> = services.parser.LangiumParser.parse<T>(text);
-      return this.createLangiumDocument<T>(parseResult, uri, undefined, text);
+      const kept = this.withoutVirtualBom(uri, text);
+      const parseResult: ParseResult<T> = services.parser.LangiumParser.parse<T>(kept);
+      return this.createLangiumDocument<T>(parseResult, uri, undefined, kept);
+   }
+
+   protected override create<T extends AstNode = AstNode>(
+      uri: URI,
+      content: string | TextDocument | { $model: T },
+      options?: ParserOptions
+   ): LangiumDocument<T> {
+      return super.create(uri, typeof content === 'string' ? this.withoutVirtualBom(uri, content) : content, options);
+   }
+
+   /** `text` without a leading BOM when `uri` is virtual, since an editor shows it without one and sends no text back. */
+   protected withoutVirtualBom(uri: URI, text: string): string {
+      return isVirtualUri(uri) && text.startsWith('\uFEFF') ? text.slice(1) : text;
    }
 
    override fromModel<T extends AstNode = AstNode>(model: T, uri: URI): LangiumDocument<T> {
@@ -221,7 +242,8 @@ export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFacto
       cancelToken: CancellationToken
    ): Promise<LangiumDocument<T>> {
       const version = typeof content === 'string' ? undefined : content.version;
-      const document = await super.createAsync<T>(uri, content, cancelToken);
+      const text = typeof content === 'string' ? this.withoutVirtualBom(uri, content) : content;
+      const document = await super.createAsync<T>(uri, text, cancelToken);
       if (version !== undefined) {
          this.versionSyncService().modelProduced(document, { version });
       }

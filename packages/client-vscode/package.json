@@ -1,7 +1,7 @@
 {
   "name": "@hydranium/client-vscode",
   "version": "1.0.0-next",
-  "description": "Cross-head VS Code client primitives for a hydranium host: the extension host asks the language server for each socket head's port, bounded, and registers the host commands through which a Theia app that sideloads the extension reaches those ports.",
+  "description": "Cross-head VS Code client primitives for a hydranium host: the language client shows the documents only the server holds, the extension host asks the language server for each socket head's port, bounded, and registers the host commands through which a Theia app that sideloads the extension reaches those ports.",
   "keywords": [
     "hydranium",
     "langium",

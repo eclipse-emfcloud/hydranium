@@ -386,7 +386,7 @@ const HOST_BROWSER_DEV_DEPENDENCIES: Readonly<Record<string, string>> = {
 };
 
 /** The language client both VS Code extensions start the server with. */
-const VSCODE_LANGUAGE_CLIENT: Readonly<Record<string, string>> = { 'vscode-languageclient': '^9.0.1' };
+const VSCODE_LANGUAGE_CLIENT: Readonly<Record<string, string>> = { 'vscode-languageclient': '10.1.2' };
 
 /** The VS Code API's types, at the oldest VS Code both extensions run in, which `engines` names too. */
 const VSCODE_ENGINE = '^1.101.0';
@@ -449,6 +449,7 @@ export function workspaceRootPins(composition: InitComposition): ReadonlyArray<r
       ...(members.includes('host-browser')
          ? (['base', ...heads] as const).flatMap(head => Object.entries(HOST_BROWSER_THIRD_PARTY_DEPENDENCIES[head]))
          : []),
+      ...(members.includes('vscode-servers') ? Object.entries(VSCODE_LANGUAGE_CLIENT) : []),
       ...(members.includes('host-vscode') && heads.includes('glsp') ? Object.entries(HOST_VSCODE_GLSP_THIRD_PARTY_DEPENDENCIES) : []),
       ...(members.includes('host-vscode') && heads.includes('data') ? Object.entries(HOST_VSCODE_DATA_THIRD_PARTY_DEPENDENCIES) : []),
       ...(members.includes('theia') ? theiaThirdPartyDependencies(heads) : []),
@@ -2979,11 +2980,9 @@ function vscodeServersPackageJson(composition: InitComposition): string {
    const dependencies: Record<string, string> = {
       [memberPackageName(composition, 'protocol')]: MEMBER_PIN,
       [memberPackageName(composition, 'server')]: MEMBER_PIN,
-      ...VSCODE_LANGUAGE_CLIENT
+      ...VSCODE_LANGUAGE_CLIENT,
+      '@hydranium/client-vscode': frameworkPin(composition)
    };
-   if (socketHeads(composition).length > 0) {
-      dependencies['@hydranium/client-vscode'] = frameworkPin(composition);
-   }
    return `{
   "name": "${memberPackageName(composition, 'vscode-servers')}",
   "displayName": "${composition.name} Servers",
@@ -3074,6 +3073,7 @@ function vscodeLanguageClientFile(composition: InitComposition): string {
    return `// Starts the ${composition.name} server for VS Code, and for a Theia app that sideloads
 // this extension: one launch, so both hand the server the same documents.
 
+import { textDocumentContentMiddleware } from '@hydranium/client-vscode/node';
 import { ALL_LANGUAGES } from '${memberPackageName(composition, 'protocol')}';
 import { type ExtensionContext, workspace } from 'vscode';
 import { LanguageClient, TransportKind } from 'vscode-languageclient/node';
@@ -3084,14 +3084,16 @@ export async function start${composition.name}LanguageClient(context: ExtensionC
    // installed extension alike. Over IPC, which keeps the server's stdout free.
    const serverModule = require.resolve('${memberPackageName(composition, 'server')}/lib/main.js');
    const extensions = ALL_LANGUAGES.flatMap(language => language.fileExtensions).join(',');
-   const client = new LanguageClient(
+   const client: LanguageClient = new LanguageClient(
       '${composition.projectId}',
       '${composition.name}',
       { module: serverModule, transport: TransportKind.ipc },
       {
          documentSelector: ALL_LANGUAGES.map(({ languageId }) => ({ scheme: 'file', language: languageId })),
          // Changes on disk the editor does not hold, such as a file another tool writes.
-         synchronize: { fileEvents: workspace.createFileSystemWatcher(\`**/*{\${extensions}}\`) }
+         synchronize: { fileEvents: workspace.createFileSystemWatcher(\`**/*{\${extensions}}\`) },
+         // The text of a document only the server holds, such as a built-in library.
+         middleware: textDocumentContentMiddleware(() => client)
       }
    );
    context.subscriptions.push(client);
