@@ -78,6 +78,9 @@ afterEach(() => {
       disposable.dispose();
    }
    toDispose.length = 0;
+   // Monaco reports a dispose listener's throw instead of rethrowing it, so a
+   // test would pass over one unless it is checked here.
+   expect(monacoDouble.unexpectedErrors).toEqual([]);
 });
 
 beforeEach(() => {
@@ -268,11 +271,14 @@ describe('MonacoLspClient', () => {
          expect(modelOf('file:///a.one').getValue()).toBe('theirs');
       });
 
-      it('closes on the server and opens afresh when the host disposed the model itself', async () => {
+      it('closes on the server as the host disposes the model itself, and opens the URI afresh after', async () => {
          const ends = makeEnds();
          const client = makeClient(ends);
          client.openDocument('file:///a.one', 'one');
          modelOf('file:///a.one').dispose();
+         await ends.flush();
+         expect(ends.closes.map(close => close.textDocument.uri)).toEqual(['file:///a.one']);
+         expect(client.dirtyDocuments()).toEqual([]);
 
          const reopened = client.openDocument('file:///a.one', 'two');
          modelOf('file:///a.one').edit([{ range: range(1, 1, 1, 1), text: 'x' }]);
@@ -284,7 +290,7 @@ describe('MonacoLspClient', () => {
          expect(ends.changes.map(change => change.textDocument.uri)).toEqual(['file:///a.one']);
       });
 
-      it('refuses a model that replaced one the host disposed, after closing the URI on the server', async () => {
+      it('refuses a model that replaced one the host disposed and closed', async () => {
          const ends = makeEnds();
          const client = makeClient(ends);
          client.openDocument('file:///a.one', 'one');
@@ -388,8 +394,6 @@ describe('MonacoLspClient', () => {
             diagnostics: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, message: 'm' }]
          });
          modelOf('file:///a.one').dispose();
-
-         client.closeDocument('file:///a.one');
 
          expect(monacoDouble.markers.get('lsp file:///a.one')).toEqual([]);
       });
@@ -498,7 +502,7 @@ describe('MonacoLspClient', () => {
          expect(ends.closes.map(close => close.textDocument.uri)).toEqual(['file:///a.one']);
       });
 
-      it('reads, writes and marks nothing on a model the host disposed while the client still holds it', async () => {
+      it('reads, writes and marks nothing on a model the host disposed itself', async () => {
          const ends = makeEnds();
          const client = makeClient(ends);
          client.openDocument('file:///a.one', 'one');
@@ -518,7 +522,7 @@ describe('MonacoLspClient', () => {
 
          expect(dirty).toEqual([]);
          expect(answer).toEqual({ applied: false, failureReason: 'No editor open for file:///a.one' });
-         expect(monacoDouble.markers.get('lsp file:///a.one')).toBeUndefined();
+         expect(monacoDouble.markers.get('lsp file:///a.one')).toEqual([]);
       });
 
       it('opens a document once the connection is closed, and keeps its buffer tracked', () => {
@@ -1675,6 +1679,29 @@ describe('MonacoLspClient save over the LSP head', () => {
       await older;
 
       expect(dirtyUris(client)).toEqual(['file:///b.two']);
+   });
+
+   it('records nothing for a document whose model the host disposed while its save was in flight', async () => {
+      class SaveRecords extends MonacoLspClient {
+         get marked(): ReadonlyMap<string, number> {
+            return this.markedSaves;
+         }
+      }
+      const ends = makeEnds();
+      const server = makeSaveServer(ends);
+      server.hold = true;
+      const client = new SaveRecords(ends.page, SAVING, { languages: LANGUAGES });
+      toDispose.push(client);
+      client.openDocument('file:///a.one', 'text');
+      modelOf('file:///a.one').edit([{ range: range(1, 1, 1, 1), text: '!' }]);
+
+      const saving = client.save('file:///a.one');
+      await waitFor(() => server.held.has('file:///a.one@2'));
+      modelOf('file:///a.one').dispose();
+      server.held.get('file:///a.one@2')!();
+      await saving;
+
+      expect([...client.marked.keys()]).toEqual([]);
    });
 
    it('rejects with the refusal and leaves the document dirty', async () => {

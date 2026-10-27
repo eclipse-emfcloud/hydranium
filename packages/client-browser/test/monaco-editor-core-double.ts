@@ -48,6 +48,8 @@ export const providers: RecordedProvider[] = [];
 export const openers: monaco.editor.ICodeEditorOpener[] = [];
 export const editors: RecordedEditor[] = [];
 export const markers = new Map<string, monaco.editor.IMarkerData[]>();
+/** What a model's listeners threw, which Monaco's emitter reports rather than rethrows. */
+export const unexpectedErrors: unknown[] = [];
 
 export function reset(): void {
    models.clear();
@@ -56,6 +58,7 @@ export function reset(): void {
    openers.length = 0;
    editors.length = 0;
    markers.clear();
+   unexpectedErrors.length = 0;
 }
 
 function offsetAt(text: string, lineNumber: number, column: number): number {
@@ -78,6 +81,7 @@ export class TextModelDouble {
    private alternativeVersionId = 1;
    private readonly history: { value: string; alternativeVersionId: number }[] = [];
    private readonly listeners = new Set<(event: monaco.editor.IModelContentChangedEvent) => void>();
+   private readonly willDispose = new Set<() => void>();
    /** Every `pushEditOperations` call, as the operations it carried. */
    readonly pushed: RecordedEdit[][] = [];
    /** Every undo-stack call in order, so a test can see an edit bracketed by its undo stops. */
@@ -111,13 +115,14 @@ export class TextModelDouble {
       return this.languageId;
    }
 
-   isDisposed(): boolean {
-      return this.disposed;
-   }
-
    onDidChangeContent(listener: (event: monaco.editor.IModelContentChangedEvent) => void): monaco.IDisposable {
       this.listeners.add(listener);
       return { dispose: () => this.listeners.delete(listener) };
+   }
+
+   onWillDispose(listener: () => void): monaco.IDisposable {
+      this.willDispose.add(listener);
+      return { dispose: () => this.willDispose.delete(listener) };
    }
 
    pushEditOperations(
@@ -177,9 +182,22 @@ export class TextModelDouble {
       return { word, startColumn: position.column - word.length, endColumn: position.column };
    }
 
+   /**
+    * Fires `onWillDispose` once, after the model leaves the lookup and before
+    * it counts as disposed, and reports a listener's throw without rethrowing
+    * it, as Monaco does.
+    */
    dispose(): void {
-      this.disposed = true;
       models.delete(this.uri.toString());
+      for (const listener of this.willDispose) {
+         try {
+            listener();
+         } catch (error: unknown) {
+            unexpectedErrors.push(error);
+         }
+      }
+      this.willDispose.clear();
+      this.disposed = true;
    }
 
    /** Monaco's model throws on a read or an edit once disposed. */

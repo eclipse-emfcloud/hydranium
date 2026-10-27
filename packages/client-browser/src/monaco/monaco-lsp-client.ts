@@ -961,17 +961,10 @@ export class MonacoLspClient {
       // same URI THROWS — and re-announcing `didOpen` would push the host's
       // startup snapshot over whatever the server's copy has since become.
       const held = this.models.get(key);
-      const existing = monaco.editor.getModel(monaco.Uri.parse(key));
-      if (held !== undefined && existing === held) {
+      if (held !== undefined) {
          return held;
       }
-      if (held !== undefined) {
-         // The host disposed this client's model itself. The server still has
-         // the document open, so it is closed there before anything else:
-         // a second `didOpen` without a `didClose` is a client out of step.
-         this.closeDocument(key);
-      }
-      if (existing !== null) {
+      if (monaco.editor.getModel(monaco.Uri.parse(key)) !== null) {
          throw new Error(`A model for ${key} exists that this client did not open`);
       }
       const languageId = this.languageIdFor(key);
@@ -981,6 +974,18 @@ export class MonacoLspClient {
       // definition already persisted — a document that reported itself dirty on
       // open would make the first save rewrite every file it did not change.
       this.savedVersions.set(key, model.getAlternativeVersionId());
+
+      // Closed on disposal, whoever disposes, so a host's own dispose does not
+      // leave the server refusing every `workspace/applyEdit` for it. The hook
+      // disposes nothing, so `closeDocument` needs no re-entry guard. Monaco
+      // keeps a disposed `file:` model's markers, so they are cleared here.
+      model.onWillDispose(() => {
+         this.models.delete(key);
+         this.savedVersions.delete(key);
+         this.markedSaves.delete(key);
+         monaco.editor.setModelMarkers(model, this.markerOwner, []);
+         notifyUnlessClosed(() => this.connection.sendNotification(DidCloseTextDocumentNotification.type, { textDocument: { uri: key } }));
+      });
 
       notifyUnlessClosed(() =>
          this.connection.sendNotification(DidOpenTextDocumentNotification.type, {
@@ -1005,36 +1010,13 @@ export class MonacoLspClient {
    /**
     * Dispose the model for `uri` and tell the server the document is closed, so
     * the server drops this client's shadow of it and stops pushing to it. A URI
-    * this client never opened is left alone. An editor still showing the model
-    * is the host's to re-point first: Monaco detaches a disposed model from it.
-    * A model the host disposed itself is closed on the server all the same,
-    * here or by the next {@link openDocument} of its URI.
-    *
-    * The markers go first: Monaco drops a disposed model's markers only for its
-    * own schemes, so a `file:` document reopened later would start with the
-    * squiggles the server published before the close.
-    *
-    * The model goes before `didClose`, and a connection already closed does not
-    * fail the call: the page's side of the sync is this client's to release
-    * whatever became of the worker, and the server's side ends with its
-    * connection.
+    * this client never opened, or whose model the host disposed itself, is
+    * left alone: the close is the model's disposal, as {@link openDocument}
+    * wires it. An editor still showing the model is the host's to re-point
+    * first: Monaco detaches a disposed model from it.
     */
    closeDocument(uri: string): void {
-      const key = monaco.Uri.parse(uri).toString();
-      const model = this.models.get(key);
-      if (model === undefined) {
-         return;
-      }
-      this.models.delete(key);
-      this.savedVersions.delete(key);
-      this.markedSaves.delete(key);
-      // Cleared whether or not the host disposed the model already: the marker
-      // service keys by URI and keeps a disposed `file:` model's markers.
-      monaco.editor.setModelMarkers(model, this.markerOwner, []);
-      if (!model.isDisposed()) {
-         model.dispose();
-      }
-      notifyUnlessClosed(() => this.connection.sendNotification(DidCloseTextDocumentNotification.type, { textDocument: { uri: key } }));
+      this.models.get(monaco.Uri.parse(uri).toString())?.dispose();
    }
 
    /**
@@ -1114,7 +1096,8 @@ export class MonacoLspClient {
          .catch((error: unknown) => {
             throw reviveProtocolError(error);
          });
-      if (ticket > (this.markedSaves.get(document.uri) ?? 0)) {
+      // A model closed while its save was in flight is marked nowhere.
+      if (this.models.get(document.uri) === document.model && ticket > (this.markedSaves.get(document.uri) ?? 0)) {
          this.markedSaves.set(document.uri, ticket);
          this.markSaved(document);
       }
@@ -1181,10 +1164,9 @@ export class MonacoLspClient {
       return version === this.savedVersions.get(key) ? undefined : { uri: key, text: model.getValue(), version, model };
    }
 
-   /** The model this client holds for a URI in any form, if it still exists. */
+   /** The model this client holds for a URI in any form. */
    protected modelOf(uri: string): monaco.editor.ITextModel | undefined {
-      const model = this.models.get(monaco.Uri.parse(uri).toString());
-      return model === undefined || model.isDisposed() ? undefined : model;
+      return this.models.get(monaco.Uri.parse(uri).toString());
    }
 
    /**
