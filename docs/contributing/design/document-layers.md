@@ -143,8 +143,10 @@ each wait's contract. Beyond it:
   record it.
 - On a Node host the write-lock scope follows the async stack
   (`AsyncLocalStorage`), so a build's listeners, and async work they start
-  even past the build, wait for the state alone. A browser host installs no
-  scope, so a wait inside a listener waits for a build that cannot start.
+  while the build runs, wait for the state alone. Work still running after
+  the build is outside the scope and waits like any other caller. A browser
+  host installs no scope, so a wait inside a listener waits for a build that
+  cannot start.
 - Until the state is reached, a syncing read rejects once a retried sync or
   re-queued build fails again, or the builder stops re-queuing a document its
   builds do not advance, so a build failing after the parse rejects it too.

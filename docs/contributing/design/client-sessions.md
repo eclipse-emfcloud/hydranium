@@ -432,7 +432,10 @@ the document lives on with every open but the deleting session's, which the
 delete closes, since its client takes the document as gone. A delete from
 inside a holder of the write lock fails with `ReentrantWriteLockError` whatever
 `ModelServiceOptions.allowReentrantBuilds` says, since its builds take that
-lock and would wait for the holder.
+lock and would wait for the holder. One from inside a request's lock read
+releases the read's hold, so its builds can start. A browser host cannot tell
+which read asked, so it releases every running request. From a queued read,
+its builds wait for the lock's read-hold limit.
 
 A file watcher reports a deletion late, the server's own included, so a
 report applies only where the disk agrees: the file is gone, and the document

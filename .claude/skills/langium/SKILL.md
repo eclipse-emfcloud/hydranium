@@ -808,7 +808,7 @@ When files change (`DocumentBuilder.update(changed, deleted)`):
 ### Workspace Lock
 
 - **Write operations** (document updates): Mutually exclusive. New write cancels previous.
-- **Read operations** (LSP queries): Parallel. Queued behind pending writes.
+- **Read operations**: Parallel. An immediate read (an LSP query) runs at once, beside a running write, and a queued write waits for every one to end. A normal-priority read queues behind every queued write.
 
 ---
 

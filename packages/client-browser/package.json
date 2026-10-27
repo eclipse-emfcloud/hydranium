@@ -60,14 +60,14 @@
     "monaco-editor-core": "0.56.0",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",
-    "vscode-jsonrpc": "9.0.0",
-    "vscode-languageserver-protocol": "3.18.1"
+    "vscode-jsonrpc": "9.0.3",
+    "vscode-languageserver-protocol": "3.18.4"
   },
   "peerDependencies": {
     "@hydranium/protocol": "^1.0.0-next",
     "monaco-editor-core": ">=0.56.0 <1.0.0",
     "vscode-jsonrpc": "^9.0.0",
-    "vscode-languageserver-protocol": "~3.18.1"
+    "vscode-languageserver-protocol": ">=3.18.2 <3.18.5"
   },
   "peerDependenciesMeta": {
     "monaco-editor-core": {

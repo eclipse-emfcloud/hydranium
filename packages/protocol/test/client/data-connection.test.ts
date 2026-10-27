@@ -727,6 +727,30 @@ describe('DataConnection.createSession', () => {
       }
    });
 
+   it('reports the failure of an open, write, save or delete its caller drops', async () => {
+      const unhandled: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => {
+         unhandled.push(reason);
+      };
+      process.on('unhandledRejection', onUnhandled);
+      const { connection, dispose } = harness({ refuseSessions: true });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         void panel.openDocument({ uri: URI_A });
+         void panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: 'any' });
+         void panel.saveDocument({ uri: URI_A, model: MODEL, baseVersion: 'any' });
+         void panel.deleteDocument({ uri: URI_A, baseVersion: 'any' });
+
+         await expect.poll(() => unhandled).toHaveLength(4);
+         // One refusal rejects all of them in one turn, so a fifth would be reported by the next.
+         await new Promise(resolve => setImmediate(resolve));
+         expect(unhandled).toHaveLength(4);
+      } finally {
+         process.off('unhandledRejection', onUnhandled);
+         dispose();
+      }
+   });
+
    it('refuses a clientId the framework reserves for its own broadcasts', () => {
       const { connection, dispose } = harness();
       try {

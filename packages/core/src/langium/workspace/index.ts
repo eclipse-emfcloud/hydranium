@@ -18,7 +18,7 @@ export * from './initialize-workspace.js';
 export * from './langium-documents.js';
 export * from './hydranium-workspace-manager.js';
 export * from './hydranium-workspace-lock.js';
-export * from './write-lock-scope.js';
+export * from './lock-scope.js';
 export * from './hydranium-langium-document-factory.js';
 export * from './additional-document-contribution.js';
 export * from './synthetic.js';

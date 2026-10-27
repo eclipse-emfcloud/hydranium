@@ -26,9 +26,28 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { DocumentState, OperationCancelled, URI, type DocumentBuilder, type LangiumDocument } from '@hydranium/langium';
+import {
+   Deferred,
+   DocumentState,
+   OperationCancelled,
+   ReadPriority,
+   URI,
+   type DocumentBuilder,
+   type LangiumDocument
+} from '@hydranium/langium';
+import { SystemClock } from '@hydranium/protocol';
+import { tick } from '@hydranium/protocol/testing';
 import { CancellationToken, CancellationTokenSource } from 'vscode-languageserver';
-import { makeFakeAstNode, makeFakeDocument, makeStubDocumentBuilder, type StubDocumentBuilder } from '../../src/testing/index.js';
+import { HydraniumWorkspaceLock } from '../../src/langium/workspace/hydranium-workspace-lock.js';
+import { setReadLockScope } from '../../src/langium/workspace/lock-scope.js';
+import { nodeReadLockScope } from '../../src/node/lock-scope-node.js';
+import {
+   makeFakeAstNode,
+   makeFakeDocument,
+   makeNoopTracer,
+   makeStubDocumentBuilder,
+   type StubDocumentBuilder
+} from '../../src/testing/index.js';
 
 const URI_ONE = URI.parse('file:///a.x');
 const URI_TWO = URI.parse('file:///b.x');
@@ -140,6 +159,99 @@ describe('makeStubDocumentBuilder waitUntil gate', () => {
    it('lets an ungated waitUntil through without a gate being taken', async () => {
       const builder = makeStubDocumentBuilder();
       await expect(builder.waitUntil(DocumentState.Validated, URI_ONE)).resolves.toBe(URI_ONE);
+   });
+
+   it('lets a write run while a held call waits, and holds one queued as the call is let go off until the read ends, as the real builder does', async () => {
+      setReadLockScope(nodeReadLockScope);
+      try {
+         // A limit beyond the test timeout, so a missing release fails rather than waiting it out.
+         const lock = new HydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() }, { readHoldLimitMs: 60_000 });
+         const builder = makeStubDocumentBuilder(lock);
+         const gate = builder.gateNextWaitUntil();
+         const readOn = new Deferred<void>();
+         let waited = false;
+         const reading = lock.read(async () => {
+            await builder.waitUntil(DocumentState.Validated, URI_ONE);
+            waited = true;
+            await readOn.promise;
+         }, ReadPriority.Immediate);
+         await vi.waitFor(() => expect(gate.consumed).toBe(true));
+         let wroteWhileHeld = false;
+         await lock.write(() => {
+            wroteWhileHeld = true;
+         });
+         gate.resolve();
+         let wrote = false;
+         const writing = lock.write(() => {
+            wrote = true;
+         });
+         await vi.waitFor(() => expect(waited).toBe(true));
+         await tick();
+         const wroteBeforeReadEnded = wrote;
+         readOn.resolve();
+         await Promise.all([reading, writing]);
+         expect({ wroteWhileHeld, wroteBeforeReadEnded }).toEqual({ wroteWhileHeld: true, wroteBeforeReadEnded: false });
+      } finally {
+         setReadLockScope(undefined);
+      }
+   });
+
+   it('cancels no running write while a held call waits, as the real wait never does', async () => {
+      const lock = new HydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() }, { readHoldLimitMs: 60_000 });
+      const builder = makeStubDocumentBuilder(lock);
+      const gate = builder.gateNextWaitUntil();
+      const writeOn = new Deferred<void>();
+      let token: CancellationToken | undefined;
+      const writing = lock.write(async writeToken => {
+         token = writeToken;
+         await writeOn.promise;
+      });
+      await vi.waitFor(() => expect(token).toBeDefined());
+      const reading = lock.read(() => builder.waitUntil(DocumentState.Validated, URI_ONE), ReadPriority.Immediate);
+      await vi.waitFor(() => expect(gate.consumed).toBe(true));
+      const cancelled = token?.isCancellationRequested;
+      gate.resolve();
+      writeOn.resolve();
+      await Promise.all([reading, writing]);
+      expect(cancelled).toBe(false);
+   });
+
+   it('runs the build of a held call beside the waiting read in a host without a read-lock tracker, as the real builder does', async () => {
+      const lock = new HydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() }, { readHoldLimitMs: 60_000 });
+      const builder = makeStubDocumentBuilder(lock);
+      const gate = builder.gateNextWaitUntil();
+      const reading = lock.read(() => builder.waitUntil(DocumentState.Validated, URI_ONE), ReadPriority.Immediate);
+      await vi.waitFor(() => expect(gate.consumed).toBe(true));
+
+      gate.resolve();
+
+      await expect(reading).resolves.toBe(URI_ONE);
+   });
+
+   it('starts a build beside every running read in a host without a read-lock tracker, as the real builder does', async () => {
+      const lock = new HydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() }, { readHoldLimitMs: 60_000 });
+      const builder = makeStubDocumentBuilder(lock);
+      const reading = new Deferred<void>();
+      const read = lock.read(() => reading.promise, ReadPriority.Immediate);
+      await tick();
+      const building = builder.scheduleUpdate([URI_ONE], []);
+      await vi.waitFor(() => expect(builder.updateCalls).toHaveLength(1));
+      reading.resolve();
+      await Promise.all([read, building]);
+   });
+
+   it('holds a build marked as from outside every read off until the read ends, as the real builder does', async () => {
+      const lock = new HydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() }, { readHoldLimitMs: 60_000 });
+      const builder = makeStubDocumentBuilder(lock);
+      const reading = new Deferred<void>();
+      const read = lock.read(() => reading.promise, ReadPriority.Immediate);
+      await tick();
+      const building = builder.scheduleUpdate([URI_ONE], [], { outsideReads: true });
+      await tick();
+      const builtWhileHeld = builder.updateCalls.length;
+      reading.resolve();
+      await Promise.all([read, building]);
+      expect({ builtWhileHeld, built: builder.updateCalls.length }).toEqual({ builtWhileHeld: 0, built: 1 });
    });
 });
 

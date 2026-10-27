@@ -24,7 +24,7 @@ import { type AstNode, DocumentState, type LangiumDocument, type LangiumDocument
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { type AstDiagnostic } from '../langium/validation/document-validator.js';
 import { type WritableFileSystemProvider } from '../langium/workspace/file-system-provider.js';
-import { ReentrantWriteLockError, isInsideWriteLock } from '../langium/workspace/write-lock-scope.js';
+import { ReentrantWriteLockError, isInsideWriteLock } from '../langium/workspace/lock-scope.js';
 import { Disposable } from 'vscode-languageserver';
 import { TextDocumentIdentifier, type TextDocumentItem } from 'vscode-languageserver-protocol';
 import { type TextDocument } from 'vscode-languageserver-textdocument';

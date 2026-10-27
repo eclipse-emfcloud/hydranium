@@ -16,7 +16,7 @@
  * written text would be applied to that old text.
  */
 
-import { serverSharedFactory } from '@hydranium/core';
+import { HydraniumWorkspaceLock, serverSharedFactory } from '@hydranium/core';
 import { startLanguageServer } from '@hydranium/core/lsp';
 import { DefaultFileSystemProvider } from '@hydranium/core/node';
 import {
@@ -160,7 +160,33 @@ async function writeFromForm(composed: LspServerConnection, shared: OrderFlowSha
    await pushed;
 }
 
+/**
+ * Starts a form session's `write`. `landed` resolves once it changes `uri` in the store, and rejects with the
+ * write's failure should it fail first.
+ */
+function changedByForm<T>(
+   shared: OrderFlowSharedServices,
+   uri: string,
+   write: () => Promise<T>
+): { landed: Promise<void>; written: Promise<T> } {
+   const changed = new Deferred();
+   const listener = shared.workspace.TextDocuments.onDidChangeContent(event => {
+      if (event.document.uri === uri && event.clientId === 'form') {
+         changed.resolve();
+      }
+   });
+   const written = write();
+   const landed = Promise.race([changed.promise, written.then(() => changed.promise)]).finally(() => listener.dispose());
+   return { landed, written };
+}
+
 const position = { line: 1, character: 9 };
+/** A read-hold limit short enough that a build a request holds off starts during the test. */
+const SHORT_READ_HOLD_LIMIT: OrderFlowOptions = {
+   extraSharedModules: [
+      { workspace: { WorkspaceLock: (services: OrderFlowSharedServices) => new HydraniumWorkspaceLock(services, { readHoldLimitMs: 50 }) } }
+   ]
+};
 const options = { tabSize: 3, insertSpaces: true };
 
 describe('order-flow edit requests over the real transport', () => {
@@ -398,8 +424,11 @@ describe('order-flow edit requests over the real transport', () => {
 
       const session = shared.model.ModelService.createSession('form', 'form');
       await bounded('the form session open', session.open(editedUri));
-      await bounded('the form save', session.save({ uri: editedUri, model: WRITTEN, baseVersion: 'any' }));
-      await bounded('the form session close', session.close(editedUri));
+      // Its build waits for the code action.
+      const { landed, written: saved } = changedByForm(shared, editedUri, () =>
+         session.save({ uri: editedUri, model: WRITTEN, baseVersion: 'any' })
+      );
+      await bounded('the form save in the store', landed);
       await composed.closeDocument(editedUri);
       composed.openDocument(editedUri, WRITTEN, 'order-flow-process', 1);
       // Answered after the reopen, which the server handles in order.
@@ -407,24 +436,47 @@ describe('order-flow edit requests over the real transport', () => {
       gate.resolve();
 
       expect(await bounded('textDocument/codeAction', codeAction)).toBe(LSPErrorCodes.ContentModified);
+      await bounded('the form save', saved);
+      await bounded('the form session close', session.close(editedUri));
    });
 
    it.each([
       [
-         'refuse a format computed before a form write the editor has already echoed',
+         'refuse a format computed while a form write lands in the store',
+         LSPErrorCodes.ContentModified,
+         async (_composed: LspServerConnection, shared: OrderFlowSharedServices) => {
+            const session = shared.model.ModelService.createSession('form', 'form');
+            await bounded('the form session open', session.open(PROCESS_URI));
+            // Its build, and so its push to the editor, waits for the format.
+            const { landed, written: updated } = changedByForm(shared, PROCESS_URI, () =>
+               session.update({ uri: PROCESS_URI, model: OPENED, baseVersion: 'any' })
+            );
+            await bounded('the form write in the store', landed);
+            return { settled: updated };
+         },
+         undefined
+      ],
+      [
+         'refuse a format computed before a form write the editor has echoed, once the read-hold limit starts its build',
          LSPErrorCodes.ContentModified,
          async (composed: LspServerConnection, shared: OrderFlowSharedServices) => {
             await writeFromForm(composed, shared, PROCESS_URI, OPENED);
             composed.changeDocument(PROCESS_URI, OPENED, 2);
-         }
+            return { settled: Promise.resolve() };
+         },
+         SHORT_READ_HOLD_LIMIT
       ],
       [
          'answer a format computed before the editor typed',
          'answered',
-         async (composed: LspServerConnection) => composed.changeDocument(PROCESS_URI, `${WRITTEN}\n`, 2)
+         async (composed: LspServerConnection) => {
+            composed.changeDocument(PROCESS_URI, `${WRITTEN}\n`, 2);
+            return { settled: Promise.resolve() };
+         },
+         undefined
       ]
-   ] as const)('%s', async (_title, expected, change) => {
-      const { composed, shared, process } = await composeServer();
+   ] as const)('%s', async (_title, expected, change, composition) => {
+      const { composed, shared, process } = await composeServer(composition);
       composed.openDocument(PROCESS_URI, WRITTEN, 'order-flow-process', 1);
       const formatter = process.lsp.Formatter!;
       const format = formatter.formatDocument.bind(formatter);
@@ -440,11 +492,12 @@ describe('order-flow edit requests over the real transport', () => {
       const formatting = outcome(composed.client.sendRequest('textDocument/formatting', { textDocument: { uri: PROCESS_URI }, options }));
       await bounded('the provider call', computed.promise);
 
-      await change(composed, shared);
+      const { settled } = await change(composed, shared);
       // Answered after the change, which the server handles in order.
       await request(composed, 'textDocument/hover', { textDocument: { uri: PROCESS_URI }, position });
       gate.resolve();
 
       expect(await bounded('textDocument/formatting', formatting)).toBe(expected);
+      await bounded<unknown>('the change', settled);
    });
 });

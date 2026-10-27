@@ -828,7 +828,9 @@ describe('HydraniumDocumentBuilder', () => {
             return this.buildDocuments([], {}, CancellationToken.None);
          }
       }
-      const settled = (wait: Promise<void> | undefined): Promise<unknown> => Promise.race([wait, Promise.resolve('pending')]);
+      // A macrotask, so a wait whose resolution is a few microtasks along counts as settled.
+      const settled = (wait: Promise<void> | undefined): Promise<unknown> =>
+         Promise.race([wait, new Promise(resolve => setTimeout(() => resolve('pending'), 0))]);
 
       it('resolves a wait armed while the phase notifies its listeners, and not one for a later phase', async () => {
          const builder = new PhaseBuilder();

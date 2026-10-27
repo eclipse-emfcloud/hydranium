@@ -9,15 +9,6 @@ The packages declare this floor in `engines.node`. The Theia client packages
 are CommonJS and `require()` the ES-module heads, which Node supports
 unflagged only from 22.13.
 
-On Node 24.20 and later, `langium generate` from `langium-cli` 4.3 fails with
-`TypeError: Invalid URL`
-([tdegrunt/jsonschema#423](https://github.com/tdegrunt/jsonschema/issues/423)),
-so the scaffold's first build fails there. A standalone scaffold's `.nvmrc`
-names Node 22, and the steps `init` prints say so before `npm install`. With
-nvm, or NVM for Windows, which ignores `.nvmrc`, run `nvm install 22` and
-`nvm use 22`. Any other Node 22 installation works the same. A workspace
-member gets no `.nvmrc`, so build it on a Node below 24.20.
-
 ## npm 11.6 or newer, or `vitest` below 4.1
 
 npm before 11.6, including every npm a Node 22 release bundles, crashes on a
@@ -43,16 +34,16 @@ framework on the other:
 
 Declare these exact versions, as `init` does:
 
-- `langium` `4.3.1`
-- `vscode-languageserver` `10.0.1`
-- `vscode-languageserver-protocol` `3.18.1`
-- `vscode-jsonrpc` `9.0.0`
-- `vscode-languageserver-types` `3.18.0`
+- `langium` `4.4.0`
+- `vscode-languageserver` `10.1.2`
+- `vscode-languageserver-protocol` `3.18.4`
+- `vscode-jsonrpc` `9.0.3`
+- `vscode-languageserver-types` `3.18.4`
 
 The LSP stack is pinned with Langium because each
 `vscode-languageserver-protocol` release pins its own `vscode-jsonrpc` and
-`vscode-languageserver-types` exactly. Any protocol release other than `3.18.1`
-brings a second copy of each beside the ones `vscode-languageserver@10.0.1`
+`vscode-languageserver-types` exactly. Any protocol release other than `3.18.4`
+brings a second copy of each beside the ones `vscode-languageserver@10.1.2`
 uses. Bump `langium` and this stack together.
 
 With a Theia host, also pin every `@theia/*` package at one exact version.
@@ -60,13 +51,15 @@ GLSP's Theia integration accepts any Theia from 1.66, so without a pin of your
 own npm installs the newest Theia beside yours. Theia 1.74 pins
 `vscode-languageserver-protocol` `3.17.5`, which pins
 `vscode-languageserver-types` `3.17.5`; that copy takes the top of the tree
-unless you pin `3.18.0`.
+unless you pin `3.18.4`.
 
 The framework's peer ranges follow the same chain. `@hydranium/core` declares
-`vscode-languageserver` at `~10.0.1` and `vscode-languageserver-protocol` at
-`~3.18.1`, and every head declares `vscode-jsonrpc` at `^9.0.0`. If you declare
-a version outside a range, npm refuses the install with `ERESOLVE` and names
-the required and the found version.
+`vscode-languageserver` at `~10.1.0` and `vscode-languageserver-protocol` at
+`>=3.18.2 <3.18.5`, and every head declares `vscode-jsonrpc` at `^9.0.0`.
+Protocol `3.18.5` pins `vscode-jsonrpc` `10.0.0`, which is why the protocol
+range stops below it, although Langium's `~3.18.2` admits it. If you declare a
+version outside a range, npm refuses the install with `ERESOLVE` and names the
+required and the found version.
 
 Pins take effect only on a from-scratch install. Deleting the lockfile alone
 leaves stale nested copies behind:
@@ -84,8 +77,8 @@ member's `langium` or LSP packages can take the top, and your package gets its
 own copies beside the framework's, even of the same versions.
 
 **With yarn 1,** also declare
-`"resolutions": { "**/langium/vscode-languageserver-protocol": "3.18.1" }`.
-npm settles Langium's `~3.18.1` on your declared `3.18.1`; yarn 1 nests the
+`"resolutions": { "**/langium/vscode-languageserver-protocol": "3.18.4" }`.
+npm settles Langium's `~3.18.2` on your declared `3.18.4`; yarn 1 nests the
 newest 3.18 under `langium` instead. Do not add a resolution for
 `vscode-jsonrpc`: it would force GLSP's own copy onto 9.x, and GLSP fails at
 startup.

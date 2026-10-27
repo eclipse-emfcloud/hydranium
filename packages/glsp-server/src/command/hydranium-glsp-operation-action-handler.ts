@@ -67,7 +67,7 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
       if (!queued) {
          return run;
       }
-      trackQueuedDelivery(
+      void trackQueuedDelivery(
          this.modelState,
          run.then(
             actions => this.deliverQueued(actions),

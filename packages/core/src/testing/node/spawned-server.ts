@@ -146,7 +146,11 @@ export interface SpawnedServerOptions {
    readonly env?: NodeJS.ProcessEnv;
    /** Interpreter to run. Defaults to the current Node executable. */
    readonly execPath?: string;
-   /** Fields merged over the default `initialize` params, after the workspace folder. */
+   /**
+    * Fields merged over the default `initialize` params, after the workspace
+    * folder. The default `capabilities` declare `insertReplaceSupport` for
+    * completion, and `capabilities` passed here replace them whole.
+    */
    readonly initializeParams?: Partial<InitializeParams>;
    /** Bound on the handshake. Defaults to {@link SPAWNED_SERVER_BOOT_TIMEOUT_MS}. */
    readonly bootTimeoutMs?: number;
@@ -349,7 +353,8 @@ export async function startSpawnedServer(options: SpawnedServerOptions): Promise
          rootUri && options.workspaceRoot
             ? [{ uri: rootUri, name: options.workspaceFolderName ?? path.basename(options.workspaceRoot) }]
             : null,
-      capabilities: {},
+      // So a completion goes out as the insert-and-replace edit an editor asks for.
+      capabilities: { textDocument: { completion: { completionItem: { insertReplaceSupport: true } } } },
       ...options.initializeParams
    };
 

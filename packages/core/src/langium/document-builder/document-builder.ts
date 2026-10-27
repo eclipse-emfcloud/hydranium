@@ -46,6 +46,7 @@ import { type ExtendedServiceRegistry } from '../service-registry.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
 import { HydraniumWorkspaceLock } from '../workspace/hydranium-workspace-lock.js';
+import { releaseCallerReadHolds, releaseReadHolds, runOutsideReadLockScope } from '../workspace/lock-scope.js';
 import { BuildSession, type BuildSessionContext } from './build-session.js';
 import { type LabeledPhaseListener, labelPhaseListener } from './labeled-phase-listener.js';
 
@@ -195,6 +196,8 @@ export interface ScheduledUpdate {
    takenClients?: Map<string, readonly string[]>;
    /** The lock's promise for this write: settles when the build completes or is cancelled. */
    readonly promise: Promise<void>;
+   /** Take back the read holds of the requests this write carries, as its action ends. */
+   readonly retakes: Array<() => void>;
 }
 
 /**
@@ -531,7 +534,9 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * {@link requeueOrphaned}), so a caller that awaits this wait while it holds
     * the lock, inside a read or write action, deadlocks on a document that needs
     * a re-queue: the build waits for that action to end. Await it outside the
-    * lock.
+    * lock. On a Node host a wait from inside a lock read releases the read's
+    * hold until it settles (see `releaseReadHolds`), so the build it waits for
+    * can start.
     */
    protected override awaitDocumentState(
       state: DocumentState,
@@ -540,124 +545,135 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       { rejectWhenStuck = false }: WaitUntilOptions = {}
    ): Promise<URI> {
       const document = this.langiumDocuments.getDocument(uri);
+      if (document && (document.state >= state || (state === DocumentState.Validated && this.skipsValidation(document)))) {
+         return Promise.resolve(uri);
+      }
       if (!document) {
          return super.awaitDocumentState(state, uri, cancelToken);
       }
-      if (document.state >= state || (state === DocumentState.Validated && this.skipsValidation(document))) {
-         return Promise.resolve(uri);
+      // Before the release, which would let a queued write run inside the read.
+      if (cancelToken.isCancellationRequested) {
+         return Promise.reject(OperationCancelled);
       }
-      return new Promise<URI>((resolve, reject) => {
-         // Re-queues since the document last advanced. A re-queue is only ever
-         // worth repeating if the previous one made progress: repeating it for a
-         // document the builder will never carry to `state` — an adopter
-         // narrowing `shouldValidate`, say — would spin builds forever, since
-         // each build's own completion is what re-triggers the branch below.
-         // Bounded rather than one-shot because a re-queue legitimately fails to
-         // land while a busy workspace keeps cancelling builds.
-         let stalledRequeues = 0;
-         let lastRequeueState: DocumentState | undefined;
-         let settled = false;
-         let cancelled = false;
-         const giveUp = (reason: string, cause?: unknown): void => {
-            cleanup();
-            reject(
-               new Error(
-                  `Gave up building ${this.formatUri(uri)} to '${DocumentState[state]}' ` +
-                     `(at '${DocumentState[document.state]}'): ${reason}`,
-                  { cause }
-               )
-            );
-         };
-         const requeue = (reason: string): void => {
-            if (document.state === lastRequeueState) {
-               if (++stalledRequeues > MAX_STALLED_REQUEUES) {
-                  const stalled = `${stalledRequeues} builds did not advance it`;
-                  if (rejectWhenStuck) {
-                     giveUp(stalled);
-                     return;
-                  }
-                  this.tracer
-                     .withUri(uri.toString())
-                     .warn(
-                        `Giving up re-queuing ${this.formatUri(uri)}: stuck at '${DocumentState[document.state]}', needs ` +
-                           `'${DocumentState[state]}' after ${stalled}. The wait now depends on its cancellation token.`
-                     );
-                  return;
-               }
-            } else {
-               stalledRequeues = 0;
-               lastRequeueState = document.state;
-            }
-            this.requeueOrphaned(document, state, reason).catch((error: unknown) => {
-               const line = `A recovery build of ${this.formatUri(uri)} failed. ${describeErrorWithStack(error)}`;
-               if (rejectWhenStuck && !settled) {
-                  giveUp('its recovery build failed', error);
-               } else if (settled && !cancelled) {
-                  // The wait ended with an outcome its caller reports, and the retry warned.
-                  this.tracer.withUri(uri.toString()).debug(line);
-               } else {
-                  // The waiter has gone, or waits on its cancellation token alone, so nothing else reports this.
-                  this.tracer.withUri(uri.toString()).error(line);
-               }
-            });
-         };
-         const phaseDisposable = this.onDocumentPhase(
-            state,
-            labelPhaseListener((doc: LangiumDocument): void => {
-               if (UriUtils.equals(doc.uri, uri)) {
+      return releaseReadHolds(
+         this.workspaceLock,
+         retake =>
+            new Promise<URI>((resolve, reject) => {
+               // Re-queues since the document last advanced. A re-queue is only ever
+               // worth repeating if the previous one made progress: repeating it for a
+               // document the builder will never carry to `state` — an adopter
+               // narrowing `shouldValidate`, say — would spin builds forever, since
+               // each build's own completion is what re-triggers the branch below.
+               // Bounded rather than one-shot because a re-queue legitimately fails to
+               // land while a busy workspace keeps cancelling builds.
+               let stalledRequeues = 0;
+               let lastRequeueState: DocumentState | undefined;
+               let settled = false;
+               let cancelled = false;
+               const giveUp = (reason: string, cause?: unknown): void => {
                   cleanup();
-                  resolve(doc.uri);
+                  reject(
+                     new Error(
+                        `Gave up building ${this.formatUri(uri)} to '${DocumentState[state]}' ` +
+                           `(at '${DocumentState[document.state]}'): ${reason}`,
+                        { cause }
+                     )
+                  );
+               };
+               const requeue = (reason: string): void => {
+                  if (document.state === lastRequeueState) {
+                     if (++stalledRequeues > MAX_STALLED_REQUEUES) {
+                        const stalled = `${stalledRequeues} builds did not advance it`;
+                        if (rejectWhenStuck) {
+                           giveUp(stalled);
+                           return;
+                        }
+                        this.tracer
+                           .withUri(uri.toString())
+                           .warn(
+                              `Giving up re-queuing ${this.formatUri(uri)}: stuck at '${DocumentState[document.state]}', needs ` +
+                                 `'${DocumentState[state]}' after ${stalled}. The wait now depends on its cancellation token.`
+                           );
+                        return;
+                     }
+                  } else {
+                     stalledRequeues = 0;
+                     lastRequeueState = document.state;
+                  }
+                  // Outside the read, whose hold this wait alone releases and takes back.
+                  runOutsideReadLockScope(() => this.requeueOrphaned(document, state, reason)).catch((error: unknown) => {
+                     const line = `A recovery build of ${this.formatUri(uri)} failed. ${describeErrorWithStack(error)}`;
+                     if (rejectWhenStuck && !settled) {
+                        giveUp('its recovery build failed', error);
+                     } else if (settled && !cancelled) {
+                        // The wait ended with an outcome its caller reports, and the retry warned.
+                        this.tracer.withUri(uri.toString()).debug(line);
+                     } else {
+                        // The waiter has gone, or waits on its cancellation token alone, so nothing else reports this.
+                        this.tracer.withUri(uri.toString()).error(line);
+                     }
+                  });
+               };
+               const phaseDisposable = this.onDocumentPhase(
+                  state,
+                  labelPhaseListener((doc: LangiumDocument): void => {
+                     if (UriUtils.equals(doc.uri, uri)) {
+                        cleanup();
+                        resolve(doc.uri);
+                     }
+                  }, 'awaitDocumentState')
+               );
+               // The phase after which a validating build either validates the
+               // document or has skipped it.
+               const skipDisposable =
+                  state === DocumentState.Validated
+                     ? this.onDocumentPhase(
+                          DocumentState.IndexedReferences,
+                          labelPhaseListener((doc: LangiumDocument): void => {
+                             if (UriUtils.equals(doc.uri, uri) && this.skipsValidation(doc)) {
+                                cleanup();
+                                resolve(doc.uri);
+                             }
+                          }, 'awaitDocumentState.skipsValidation')
+                       )
+                     : Disposable.create(() => undefined);
+               const buildEnded = ({ completed }: BuildEndedEvent): void => {
+                  if (document.state >= state || (state === DocumentState.Validated && this.skipsValidation(document))) {
+                     cleanup();
+                     resolve(uri);
+                  } else if (completed ? this.isOrphaned(document, state) : this.activeSession === undefined) {
+                     // No build is left to carry the document to `state`. Either
+                     // check fails only while an unlocked build still runs; that
+                     // build carries the document or ends here too.
+                     requeue(completed ? 'build ended short of the target' : 'build ended early');
+                  }
+               };
+               const buildDisposable = this.onBuildEnded(buildEnded);
+               const cancelDisposable = cancelToken.onCancellationRequested(() => {
+                  cancelled = true;
+                  cleanup();
+                  reject(OperationCancelled);
+               });
+               const cleanup = (): void => {
+                  settled = true;
+                  phaseDisposable.dispose();
+                  skipDisposable.dispose();
+                  buildDisposable.dispose();
+                  cancelDisposable.dispose();
+                  // Settled by a build, maybe as it ends, so taken back before its write does.
+                  retake();
+               };
+               // Orphaned BEFORE the wait was armed: the build that would have
+               // advanced this document has already finished, so none of these
+               // listeners fires until some other build runs. Re-queue now — the listeners are
+               // registered, so the resulting build resolves this wait.
+               // With `rejectWhenStuck`, also a document a failed build left behind:
+               // no build ends to re-queue it, so the wait would never give up.
+               if (this.isOrphaned(document, state) || (rejectWhenStuck && this.activeSession === undefined)) {
+                  requeue('quiescent builder');
                }
-            }, 'awaitDocumentState')
-         );
-         // The phase after which a validating build either validates the
-         // document or has skipped it.
-         const skipDisposable =
-            state === DocumentState.Validated
-               ? this.onDocumentPhase(
-                    DocumentState.IndexedReferences,
-                    labelPhaseListener((doc: LangiumDocument): void => {
-                       if (UriUtils.equals(doc.uri, uri) && this.skipsValidation(doc)) {
-                          cleanup();
-                          resolve(doc.uri);
-                       }
-                    }, 'awaitDocumentState.skipsValidation')
-                 )
-               : Disposable.create(() => undefined);
-         const buildEnded = ({ completed }: BuildEndedEvent): void => {
-            if (document.state >= state || (state === DocumentState.Validated && this.skipsValidation(document))) {
-               cleanup();
-               resolve(uri);
-            } else if (completed ? this.isOrphaned(document, state) : this.activeSession === undefined) {
-               // No build is left to carry the document to `state`. Either
-               // check fails only while an unlocked build still runs; that
-               // build carries the document or ends here too.
-               requeue(completed ? 'build ended short of the target' : 'build ended early');
-            }
-         };
-         const buildDisposable = this.onBuildEnded(buildEnded);
-         const cancelDisposable = cancelToken.onCancellationRequested(() => {
-            cancelled = true;
-            cleanup();
-            reject(OperationCancelled);
-         });
-         const cleanup = (): void => {
-            settled = true;
-            phaseDisposable.dispose();
-            skipDisposable.dispose();
-            buildDisposable.dispose();
-            cancelDisposable.dispose();
-         };
-         // Orphaned BEFORE the wait was armed: the build that would have
-         // advanced this document has already finished, so none of these
-         // listeners fires until some other build runs. Re-queue now — the listeners are
-         // registered, so the resulting build resolves this wait.
-         // With `rejectWhenStuck`, also a document a failed build left behind:
-         // no build ends to re-queue it, so the wait would never give up.
-         if (this.isOrphaned(document, state) || (rejectWhenStuck && this.activeSession === undefined)) {
-            requeue('quiescent builder');
-         }
-      });
+            })
+      );
    }
 
    /**
@@ -720,16 +736,22 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       if (cancelToken.isCancellationRequested) {
          return Promise.reject(OperationCancelled);
       }
-      return new Promise((resolve, reject) => {
-         const settle = (outcome: () => void): void => {
-            this.builderStateWaits.delete(wait);
-            cancelled.dispose();
-            outcome();
-         };
-         const wait: BuilderStateWait = { state, resolve: () => settle(resolve) };
-         const cancelled = cancelToken.onCancellationRequested(() => settle(() => reject(OperationCancelled)));
-         this.builderStateWaits.add(wait);
-      });
+      return releaseReadHolds(
+         this.workspaceLock,
+         retake =>
+            new Promise<void>((resolve, reject) => {
+               const settle = (outcome: () => void): void => {
+                  this.builderStateWaits.delete(wait);
+                  cancelled.dispose();
+                  // Settled by a build, maybe as it ends, so taken back before its write does.
+                  retake();
+                  outcome();
+               };
+               const wait: BuilderStateWait = { state, resolve: () => settle(resolve) };
+               const cancelled = cancelToken.onCancellationRequested(() => settle(() => reject(OperationCancelled)));
+               this.builderStateWaits.add(wait);
+            })
+      );
    }
 
    protected override async runCancelable(
@@ -791,7 +813,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     *   was queued, a new write, which cancels the running build as any lock
     *   write does.
     *
-    * `reason` is staged through {@link markNextReason} when the write runs. The
+    * `options.reason` is staged through {@link markNextReason} when the write runs. The
     * latest reason of a merged request wins, as it does in the update
     * handler's own debounced burst; a joining request's reason is dropped, since
     * the build it joins has already started. A request without one leaves a
@@ -801,8 +823,24 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * lock itself, and forgoes the sharing. A lock that is not a
     * {@link HydraniumWorkspaceLock} cannot report a cancelled queued write, so
     * every request then takes its own write.
+    *
+    * A caller that runs outside every request's read, such as the update
+    * handler for an edit or the recovery loop, passes `options.outsideReads`,
+    * so a host without a read-lock tracker releases no request for its build
+    * (see `releaseReadHolds`).
     */
-   scheduleUpdate(changed: URI[], deleted: URI[], reason?: string): Promise<void> {
+   scheduleUpdate(
+      changed: URI[],
+      deleted: URI[],
+      { reason, outsideReads = false }: { reason?: string; outsideReads?: boolean } = {}
+   ): Promise<void> {
+      const release = outsideReads ? releaseCallerReadHolds : releaseReadHolds;
+      // A request that merges into or joins a queued build takes no write of its own.
+      return release(this.workspaceLock, retake => this.scheduleSharedUpdate(changed, deleted, reason, retake));
+   }
+
+   /** {@link scheduleUpdate} with the caller's read holds released, which `retake` takes back. */
+   protected scheduleSharedUpdate(changed: URI[], deleted: URI[], reason?: string, retake: () => void = () => undefined): Promise<void> {
       const lock = this.workspaceLock;
       if (!(lock instanceof HydraniumWorkspaceLock)) {
          return lock.write(token => {
@@ -824,20 +862,30 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
                scheduled.changed.delete(uri.toString());
             }
             scheduled.reason = reason ?? scheduled.reason;
+            scheduled.retakes.push(retake);
             return scheduled.promise;
          }
          if (this.canJoinRunningUpdate(scheduled, changed, deleted)) {
+            scheduled.retakes.push(retake);
             return scheduled.promise;
          }
       }
       // The action runs on a later tick, by which time `request` is assigned.
-      const promise = lock.write(token => this.runScheduledUpdate(request, token));
+      const promise = lock.write(async token => {
+         try {
+            await this.runScheduledUpdate(request, token);
+         } finally {
+            // Before the write ends, so the lock's next write waits for these reads.
+            request.retakes.splice(0).forEach(retakeHolds => retakeHolds());
+         }
+      });
       const request: ScheduledUpdate = {
          changed: new Map(changed.map(uri => [uri.toString(), uri])),
          deleted: new Map(deleted.map(uri => [uri.toString(), uri])),
          reason,
          cancellations: lock.writeCancellations,
-         promise
+         promise,
+         retakes: [retake]
       };
       this.scheduledUpdate = request;
       return promise;

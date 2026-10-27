@@ -30,12 +30,12 @@ head's client, and gives the data head its port.
 npm install @hydranium/client-browser
 ```
 
-| Peer                             | Range             |
-| -------------------------------- | ----------------- |
-| `@hydranium/protocol`            | `^1.0.0-next`     |
-| `monaco-editor-core`             | `>=0.56.0 <1.0.0` |
-| `vscode-jsonrpc`                 | `^9.0.0`          |
-| `vscode-languageserver-protocol` | `~3.18.1`         |
+| Peer                             | Range              |
+| -------------------------------- | ------------------ |
+| `@hydranium/protocol`            | `^1.0.0-next`      |
+| `monaco-editor-core`             | `>=0.56.0 <1.0.0`  |
+| `vscode-jsonrpc`                 | `^9.0.0`           |
+| `vscode-languageserver-protocol` | `>=3.18.2 <3.18.5` |
 
 `monaco-editor-core` is optional; only `./monaco` needs it.
 

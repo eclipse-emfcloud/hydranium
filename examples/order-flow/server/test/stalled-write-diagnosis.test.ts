@@ -15,8 +15,8 @@
  * request cancelling its enclosing build rather than joining it.
  */
 
-import { HydraniumWorkspaceLock, IntegrityPhase, type IntegrityRule, setWriteLockScope } from '@hydranium/core';
-import { nodeWriteLockScope } from '@hydranium/core/node';
+import { HydraniumWorkspaceLock, IntegrityPhase, type IntegrityRule, setReadLockScope, setWriteLockScope } from '@hydranium/core';
+import { installNodeLockScopes } from '@hydranium/core/node';
 import { type AstNode, type LangiumDocument, URI } from '@hydranium/langium';
 import { waitFor } from '@hydranium/protocol/testing';
 import { afterEach, expect, it } from 'vitest';
@@ -35,13 +35,14 @@ class RecordingLock extends HydraniumWorkspaceLock {
 
 let scratch: ScratchOrderFlowHarness | undefined;
 afterEach(() => {
-   setWriteLockScope(nodeWriteLockScope);
+   installNodeLockScopes();
    scratch?.workspace.dispose();
    scratch = undefined;
 });
 
 it('reports the stalled write when a rule rebuilds from inside its own build without a tracker', async () => {
    setWriteLockScope(undefined);
+   setReadLockScope(undefined);
    let lock: RecordingLock | undefined;
    scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, 'entity Solo {\n   a : string\n}\n'), {
       extraSharedModules: [

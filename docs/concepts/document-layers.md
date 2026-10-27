@@ -209,23 +209,37 @@ Diagnostics come only from the `Validated` state. If you need them, call
 
 Rules for where you wait or write:
 
-- **Never await a wait inside a build phase listener or a
-  `WorkspaceLock.read`.** It waits for a build that cannot start until your
-  code returns.
+- **Never await a wait inside a build phase listener.** It waits for a build
+  that cannot start until your code returns.
+- **Inside a `WorkspaceLock.read`, wait or write only from a request.**
+  Langium runs the provider of each document request that needs a built
+  document, such as completion or hover, inside an immediate read, and a command
+  handler outside one. A read holds every build off. A write or a wait through
+  the model service, or a `scheduleUpdate` or `waitUntil` on the document
+  builder, from a request releases that hold, so the build starts, and the
+  provider goes on with the new state. A browser host cannot tell which read
+  asked, so such a call, from wherever it comes, releases every running
+  request, which then runs beside the build. Langium's own wait before each
+  request is one such call while a build runs. A direct `update` or `build`
+  takes no lock, so it runs at once, beside the read and any build. A
+  queued read keeps its hold, and a wait of your own for a build, such as a
+  promise a build listener resolves, is not seen on any host. Both wait for the
+  lock's `readHoldLimitMs`, after which the build starts beside every running
+  read.
 - **Inside a build's write-lock scope on a Node host**, a wait checks the state
   alone, since a syncing build cannot start there. `ensureDocumentState` on a
   missing document then rejects with `ReentrantWriteLockError` unless
   `ModelServiceOptions.allowReentrantBuilds` is set.
-- **Never start a write from inside a build or a `WorkspaceLock.read`.** A
+- **Never start a write from inside a build.** A
   `ModelService` write, such as a session's `update` or `save`, or a
   `rebuild`, called from an integrity rule, a build-phase pass or a build
   listener waits for the build that called it, which waits for the write. A
   Node host that loads `@hydranium/core/node` detects this and rejects the
   call with `ReentrantWriteLockError`. A browser host cannot detect it: the
   call hangs, every later build queues behind it, and only the lock's
-  stalled-write log after `stalledWriteWarnMs` reports it. A write from inside
-  a `WorkspaceLock.read` hangs on every host. An integrity rule that only
-  changes the AST is unaffected, since the framework writes its repair.
+  stalled-write log after `stalledWriteWarnMs` reports it. An integrity rule
+  that only changes the AST is unaffected, since the framework writes its
+  repair.
 
 ## What a write says it was based on
 
