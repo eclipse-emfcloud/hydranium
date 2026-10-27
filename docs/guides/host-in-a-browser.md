@@ -26,9 +26,10 @@ one workspace.
    import anywhere then fails your build, which is the check you want, rather
    than failing at runtime in a worker with no console. If you mount a diagram,
    add `loader: { '.ttf': 'dataurl' }` for GLSP's font, and declare
-   `@vscode/codicons`, whose stylesheet GLSP's client imports without
-   declaring the package. If you minify, keep class names (`keepNames`): the
-   log tags the framework's and sprotty's classes by name.
+   `@vscode/codicons` if your GLSP client does not
+   ([GLSP requirements](../adopting/requirements.md#glsp-27-or-newer)).
+   If you minify, keep class names (`keepNames`): the log tags the framework's
+   and sprotty's classes by name.
 
 2. **Give every head its own `MessagePort`.** In the page, build the `Worker`
    and hand it to `connectWorkerHeads` from `@hydranium/client-browser`, which

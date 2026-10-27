@@ -31,7 +31,7 @@ npm install @hydranium/client-theia
 | `@theia/editor`       | `^1.70.0`     |
 | `@theia/filesystem`   | `^1.70.0`     |
 | `@theia/output`       | `^1.70.0`     |
-| `inversify`           | `^6.0.0`      |
+| `inversify`           | `^6.1.3`      |
 | `vscode-jsonrpc`      | `^9.0.0`      |
 
 `@theia/output` is easy to miss: the logger and the diagnostics commands both

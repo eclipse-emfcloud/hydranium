@@ -303,11 +303,11 @@ describe('planInitFiles with heads', () => {
 
       const allHeads = contentOf(filesFor(['lsp', 'data', 'glsp']), 'server/package.json');
       expect(allHeads).toContain('"@hydranium/data-server":');
-      expect(allHeads).toContain('"@eclipse-glsp/graph": "2.7.0"');
-      expect(allHeads).toContain('"@eclipse-glsp/server": "2.7.0"');
+      expect(allHeads).toContain('"@eclipse-glsp/graph": "2.8.0"');
+      expect(allHeads).toContain('"@eclipse-glsp/server": "2.8.0"');
       expect(allHeads).toContain('"@hydranium/glsp-server":');
       expect(allHeads).toContain('"reflect-metadata": "~0.2.2"');
-      // ^6.1.3 and not ^6.0.0 — @eclipse-glsp/server@2.7.0 requires it.
+      // ^6.1.3 and not ^6.0.0 — @eclipse-glsp/server requires it.
       expect(allHeads).toContain('"inversify": "^6.1.3"');
    });
 
@@ -653,7 +653,7 @@ describe('planInitFiles project members', () => {
 
    it('gives protocol a GLSP dependency only with the glsp head', () => {
       expect(manifestOf(filesFor(['lsp', 'data']), 'protocol/package.json').dependencies).toBeUndefined();
-      expect(manifestOf(filesFor(['lsp', 'glsp']), 'protocol/package.json').dependencies).toEqual({ '@eclipse-glsp/protocol': '2.7.0' });
+      expect(manifestOf(filesFor(['lsp', 'glsp']), 'protocol/package.json').dependencies).toEqual({ '@eclipse-glsp/protocol': '2.8.0' });
    });
 
    it('re-exports the generated modules from protocol, which init itself does not write', () => {
@@ -1520,8 +1520,8 @@ describe('runInit --monorepo into a yo langium root', () => {
    it('adds the GLSP pins for the GLSP head, the protocol and client members’ included, but no range', () => {
       const { output } = scaffold(['lsp', 'glsp']);
       expect(output).toContain(
-         '    "@eclipse-glsp/client": "2.7.0",\n    "@eclipse-glsp/graph": "2.7.0",\n    "@eclipse-glsp/protocol": "2.7.0",\n' +
-            '    "@eclipse-glsp/server": "2.7.0",\n    "@vscode/codicons": "0.0.45",\n    "langium": "4.3.1",\n'
+         '    "@eclipse-glsp/client": "2.8.0",\n    "@eclipse-glsp/graph": "2.8.0",\n    "@eclipse-glsp/protocol": "2.8.0",\n' +
+            '    "@eclipse-glsp/server": "2.8.0",\n    "langium": "4.3.1",\n'
       );
       expect(output).not.toContain('inversify');
    });

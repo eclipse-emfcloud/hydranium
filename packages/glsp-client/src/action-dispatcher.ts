@@ -174,10 +174,11 @@ export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
    /**
     * Register the one-shot 'model initialized' timing line. Instrumentation
     * only — guarded so a tracer failure degrades logging rather than aborting
-    * diagram init. `initialize()` runs inside `DiagramLoader.load()`, whose
-    * caller (`GLSPDiagramWidget.onAfterAttach`) neither awaits nor catches the
-    * returned promise; an error thrown here would therefore escape as an
-    * uncaught rejection that blanks the diagram with no server-side signal.
+    * diagram init. `initialize()` runs inside `DiagramLoader.load()`, so an
+    * error thrown here fails the whole load over a log line.
+    *
+    * GLSP 2.7: the load's caller (`GLSPDiagramWidget.onAfterAttach`) does not
+    * catch it either, so the error would escape as an uncaught rejection.
     */
    protected registerInitTiming(): void {
       try {

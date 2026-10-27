@@ -102,7 +102,11 @@ describe('DefaultGLSPServer.handleClientRequest', () => {
          digest,
          'upstream @eclipse-glsp/server changed DefaultGLSPServer.handleClientRequest — re-lift the body into ' +
             'HydraniumGlspServer (keeping the requestFailureDetail delegation) and update this digest'
-      ).toBe('dd0b79da356283341241a06abca8765e9da8993b8e5d606a1f15ede6df394c06');
+      ).toBeOneOf([
+         // GLSP 2.7: its build lowers optional chaining, 2.8's keeps it.
+         'dd0b79da356283341241a06abca8765e9da8993b8e5d606a1f15ede6df394c06',
+         'beff2dc238bf5cfa838e049bc68f5d2ab879a8f44b882fe17e19203b0030d848'
+      ]);
    });
 
    // The pin is only worth its brittleness if the projection it guards is
@@ -120,7 +124,11 @@ describe('upstream handleProcessError', () => {
          digest,
          'upstream @eclipse-glsp/server changed DefaultGLSPServer.handleProcessError — re-lift the body into ' +
             'HydraniumGlspServer (keeping the single log line) and update this digest'
-      ).toBe('dc3aec007c202c28d72bf37ee3cafe83d5d084b7a6022ea41dfc00b82cabb16c');
+      ).toBeOneOf([
+         // GLSP 2.7: its build lowers optional chaining, 2.8's keeps it.
+         'dc3aec007c202c28d72bf37ee3cafe83d5d084b7a6022ea41dfc00b82cabb16c',
+         '5bf6d64299bf37c93781bd58c429c00f0a68208894e898c686560234bf24dd3f'
+      ]);
    });
 });
 

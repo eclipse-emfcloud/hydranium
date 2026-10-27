@@ -1,0 +1,389 @@
+name: GLSP Compatibility
+
+# The four GLSP heads declare `@eclipse-glsp/*` as a peer RANGE, and the
+# lockfile installs one point at its top. This installs the other versions the
+# range admits and runs the heads' typecheck and unit suites against them.
+#
+# One override per package pins the whole set at one version, so the plan picks
+# only versions every declared package has published.
+on:
+  workflow_dispatch:
+    inputs:
+      glsp_version:
+        description: Released version to run instead of the default set, e.g. 2.7.0, or latest
+        required: false
+        default: ''
+  # Every change but prose, because the heads also break through the framework
+  # packages they depend on and through the lockfile.
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  # Every minor in the range, so a new GLSP release is tested without a pull
+  # request. No `next`, because its prerelease numbers differ per package.
+  schedule:
+    - cron: '0 8 * * 1'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # The floor is read from the heads' peer ranges, so the leg follows the
+  # published claim.
+  plan:
+    name: plan
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    outputs:
+      versions: ${{ steps.matrix.outputs.versions }}
+      names: ${{ steps.matrix.outputs.names }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Work out which versions to run
+        id: matrix
+        env:
+          DISPATCH_VERSION: ${{ inputs.glsp_version }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          node <<'NODE' >> "$GITHUB_OUTPUT"
+          const { execFileSync } = require('node:child_process');
+          const { existsSync, readdirSync, readFileSync } = require('node:fs');
+
+          const heads = ['glsp-client', 'glsp-client-theia', 'glsp-client-vscode', 'glsp-server'];
+          // Every `@eclipse-glsp/*` entry across the heads, read once.
+          const entries = [];
+          for (const head of heads) {
+            const manifest = JSON.parse(readFileSync('packages/' + head + '/package.json', 'utf8'));
+            for (const block of ['dependencies', 'devDependencies', 'peerDependencies']) {
+              for (const [name, declared] of Object.entries(manifest[block] ?? {})) {
+                if (name.startsWith('@eclipse-glsp/')) entries.push({ block, name, declared: String(declared) });
+              }
+            }
+          }
+          // Every entry of one block must name one version, or a single floor
+          // would test only some of them.
+          const versionIn = (block) => {
+            const found = new Set(entries.filter((entry) => entry.block === block).map((entry) => entry.declared.replace(/^[^0-9]*/, '')));
+            const [version] = found;
+            if (found.size !== 1 || !/^\d+\.\d+\.\d+$/.test(version)) {
+              console.error('The GLSP heads declare ' + JSON.stringify([...found]) + ' in ' + block + ', not one version.');
+              process.exit(1);
+            }
+            return version;
+          };
+          const floor = versionIn('peerDependencies');
+          // The pin the lockfile installs, which ci.yml already tests.
+          const pinned = versionIn('devDependencies');
+
+          // Every `@eclipse-glsp/*` name in the workspace, which the pin step
+          // overrides. Only a version all of them have published can pin them
+          // all, so a release of one package alone is skipped.
+          const rootManifest = JSON.parse(readFileSync('package.json', 'utf8'));
+          const dirs = ['.'];
+          for (const entry of rootManifest.workspaces) {
+            if (!entry.includes('*')) {
+              dirs.push(entry);
+              continue;
+            }
+            // Any other glob shape is refused, so no workspace is dropped.
+            if (!entry.endsWith('/*') || entry.slice(0, -2).includes('*')) {
+              console.error('Unsupported workspace glob: ' + entry);
+              process.exit(1);
+            }
+            const base = entry.slice(0, -2);
+            for (const child of readdirSync(base)) {
+              if (existsSync(base + '/' + child + '/package.json')) dirs.push(base + '/' + child);
+            }
+          }
+          const names = new Set();
+          for (const dir of dirs) {
+            const manifest = JSON.parse(readFileSync(dir + '/package.json', 'utf8'));
+            for (const block of ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies']) {
+              for (const name of Object.keys(manifest[block] ?? {})) {
+                if (name.startsWith('@eclipse-glsp/')) names.add(name);
+              }
+            }
+          }
+          if (names.size === 0) {
+            console.error('No @eclipse-glsp/* dependency in the workspace: a leg would test nothing.');
+            process.exit(1);
+          }
+          const published = [...names].map(
+            (name) => new Set(JSON.parse(execFileSync('npm', ['view', name, 'versions', '--json'], { encoding: 'utf8' })))
+          );
+          const releases = [...published[0]].filter((version) => !version.includes('-') && published.every((set) => set.has(version)));
+
+          // Every released minor from the floor up within its major, highest
+          // patch of each, so a minor between the floor and the newest is
+          // tested too.
+          const rank = (version) => version.split('.').map(Number);
+          const [floorMajor, floorMinor] = rank(floor);
+          const highest = new Map();
+          for (const version of releases) {
+            const [major, minor, patch] = rank(version);
+            if (major !== floorMajor || minor < floorMinor) continue;
+            const seen = highest.get(minor);
+            if (!seen || patch > rank(seen)[2]) highest.set(minor, version);
+          }
+          const inRange = [...highest.entries()].sort(([left], [right]) => left - right).map(([, version]) => version);
+          const newest = inRange.at(-1);
+
+          // `inputs` is not populated at all under `schedule`.
+          const requested = (process.env.DISPATCH_VERSION ?? '').trim();
+
+          let versions;
+          if (requested) {
+            versions = [requested];
+          } else if (process.env.SCHEDULE) {
+            versions = inRange;
+          } else {
+            versions = newest === pinned ? [floor] : [...new Set([floor, newest])];
+          }
+          console.log('versions=' + JSON.stringify(versions));
+          console.log('names=' + JSON.stringify([...names]));
+          NODE
+
+      - name: Show the plan
+        env:
+          PLANNED: ${{ steps.matrix.outputs.versions }}
+        run: echo "planned legs -> $PLANNED"
+
+  compat:
+    name: GLSP ${{ matrix.glsp }}
+    needs: plan
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        glsp: ${{ fromJSON(needs.plan.outputs.versions) }}
+
+    # Compared against the other workflows by ci.yml.
+    env:
+      NODE_OPTIONS: --report-on-fatalerror
+      FORCE_COLOR: 1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # No `cache: npm`, for the reason theia-compat.yml gives.
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      # Mirrors ci.yml's step of the same name.
+      - name: Pin the toolchain
+        run: |
+          pinned=$(node -e "
+            const { packageManager } = require('./package.json');
+            if (typeof packageManager !== 'string' || !packageManager.startsWith('npm@')) {
+              console.error('Root packageManager is not an npm pin: ' + packageManager);
+              process.exit(1);
+            }
+            console.log(packageManager.slice(4));
+          ")
+          npm install -g "npm@$pinned" --no-fund --no-audit
+          if [ "$(npm --version)" != "$pinned" ]; then
+            echo "npm $(npm --version) is first on PATH, but package.json pins npm@$pinned." >&2
+            exit 1
+          fi
+          node -e "
+            const engines = require('./package.json').engines.node;
+            if (!engines.startsWith('>=')) {
+              console.error('engines.node is ' + engines + '. This check understands only a >=x.y[.z] floor.');
+              process.exit(1);
+            }
+            const pad = (version) => (version + '.0.0').split('.').slice(0, 3);
+            const rank = (version) => pad(version).reduce((acc, part) => acc * 1000 + Number(part), 0);
+            if (rank(process.versions.node) < rank(engines.slice(2).trim())) {
+              console.error('Node ' + process.versions.node + ' does not satisfy engines.node ' + engines + '.');
+              process.exit(1);
+            }
+          "
+
+      # A dist-tag becomes one concrete version, so every override names the
+      # same one.
+      - name: Resolve the GLSP version
+        id: resolve
+        env:
+          GLSP_TARGET: ${{ matrix.glsp }}
+        # A release only, because a prerelease is numbered per package and
+        # one version cannot then pin them all.
+        run: |
+          if [[ ! "$GLSP_TARGET" =~ ^([0-9]+\.[0-9]+\.[0-9]+|latest)$ ]]; then
+            echo "'$GLSP_TARGET' is neither a released version nor latest." >&2
+            exit 1
+          fi
+          resolved=$(npm view "@eclipse-glsp/server@$GLSP_TARGET" version)
+          if [[ ! "$resolved" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "'$GLSP_TARGET' resolved to '$resolved', which is not a released version." >&2
+            exit 1
+          fi
+          echo "$GLSP_TARGET resolves to $resolved"
+          echo "version=$resolved" >> "$GITHUB_OUTPUT"
+
+      # A root `overrides` entry per `@eclipse-glsp/*` package the plan found in
+      # the workspace. The packages nobody declares follow, because GLSP pins
+      # them exactly.
+      - name: Pin every @eclipse-glsp/* to the version
+        env:
+          GLSP_VERSION: ${{ steps.resolve.outputs.version }}
+          GLSP_NAMES: ${{ needs.plan.outputs.names }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const rootManifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const names = JSON.parse(process.env.GLSP_NAMES);
+          const overrides = { ...rootManifest.overrides };
+          for (const name of names) {
+            if (name in overrides) {
+              console.error('An existing override already names ' + name + '.');
+              process.exit(1);
+            }
+            overrides[name] = process.env.GLSP_VERSION;
+          }
+          rootManifest.overrides = overrides;
+          fs.writeFileSync('package.json', JSON.stringify(rootManifest, null, 2) + '\n');
+          console.log('Pinned ' + names.length + ' @eclipse-glsp/* packages to ' + process.env.GLSP_VERSION + '.');
+          NODE
+
+      # With the lockfile in place npm replays it and ignores the override.
+      # The nested trees go too, because they change what npm hoists. A runner
+      # checks out clean, so that line only keeps a local reproduction honest.
+      - name: Discard the resolved dependency tree
+        run: |
+          rm -rf node_modules package-lock.json
+          rm -rf packages/*/node_modules examples/*/*/node_modules
+          if [ -e package-lock.json ]; then
+            echo "package-lock.json survived deletion, so the override would be ignored." >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm install --no-fund --no-audit
+
+      # Every physical copy, so a nested copy at another version fails the leg.
+      - name: Assert the installed GLSP version
+        env:
+          GLSP_VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const expected = process.env.GLSP_VERSION;
+          const found = [];
+          // Symlinks are followed, because `node_modules/@hydranium/*` link
+          // to the workspaces and a workspace can nest its own copy.
+          const isDirectory = (at) => fs.statSync(at, { throwIfNoEntry: false })?.isDirectory() ?? false;
+          const visited = new Set();
+          const visit = (dir) => {
+            const real = fs.realpathSync(dir);
+            if (visited.has(real)) {
+              return;
+            }
+            visited.add(real);
+            const scope = path.join(dir, '@eclipse-glsp');
+            if (fs.existsSync(scope)) {
+              for (const pkg of fs.readdirSync(scope)) {
+                const manifest = path.join(scope, pkg, 'package.json');
+                if (fs.existsSync(manifest)) {
+                  const version = JSON.parse(fs.readFileSync(manifest, 'utf8')).version;
+                  found.push({ name: '@eclipse-glsp/' + pkg, version, at: path.relative(process.cwd(), manifest) });
+                }
+              }
+            }
+            for (const name of fs.readdirSync(dir)) {
+              const outer = path.join(dir, name);
+              if (!isDirectory(outer)) {
+                continue;
+              }
+              if (isDirectory(path.join(outer, 'node_modules'))) {
+                visit(path.join(outer, 'node_modules'));
+              }
+              if (name.startsWith('@')) {
+                for (const scoped of fs.readdirSync(outer)) {
+                  const inner = path.join(outer, scoped, 'node_modules');
+                  if (isDirectory(inner)) {
+                    visit(inner);
+                  }
+                }
+              }
+            }
+          };
+          visit('node_modules');
+          // An empty walk finds no mismatch, so it must fail on its own.
+          if (found.length === 0) {
+            console.error('No @eclipse-glsp/* under node_modules: nothing was installed to check.');
+            process.exit(1);
+          }
+          for (const copy of found) {
+            console.log((copy.version === expected ? 'ok    ' : 'WRONG ') + copy.name + '@' + copy.version + '  ' + copy.at);
+          }
+          if (found.some((copy) => copy.version !== expected)) {
+            console.error('Expected every @eclipse-glsp/* copy at ' + expected + '.');
+            process.exit(1);
+          }
+          console.log(found.length + ' @eclipse-glsp/* copies are all at ' + expected + '.');
+          NODE
+
+      - name: Build the framework packages
+        run: npm run build
+
+      - name: Typecheck the tests
+        run: |
+          npm run typecheck:test \
+            -w @hydranium/glsp-client \
+            -w @hydranium/glsp-client-theia \
+            -w @hydranium/glsp-client-vscode \
+            -w @hydranium/glsp-server
+
+      - name: Unit suites
+        run: |
+          npm run test \
+            -w @hydranium/glsp-client \
+            -w @hydranium/glsp-client-theia \
+            -w @hydranium/glsp-client-vscode \
+            -w @hydranium/glsp-server
+
+      - name: Record what this leg tested
+        if: always()
+        # Through the environment, because a dispatch input reaching the
+        # script text would run as shell.
+        env:
+          REQUESTED: ${{ matrix.glsp }}
+          RESOLVED: ${{ steps.resolve.outputs.version || 'unresolved' }}
+        run: |
+          {
+            echo "### GLSP $REQUESTED"
+            echo "- requested: \`$REQUESTED\`"
+            echo "- resolved: \`$RESOLVED\`"
+            echo "- node: \`$(node --version)\`, npm: \`$(npm --version)\`"
+            # Read from the tree, so the line stays true when an override did
+            # not apply.
+            node -e '
+              const fs = require("node:fs");
+              const scope = "node_modules/@eclipse-glsp";
+              if (!fs.existsSync(scope)) { console.log("- installed @eclipse-glsp/*: `none`"); process.exit(0); }
+              const byVersion = new Map();
+              for (const name of fs.readdirSync(scope)) {
+                const at = scope + "/" + name + "/package.json";
+                if (!fs.existsSync(at)) continue;
+                const version = JSON.parse(fs.readFileSync(at, "utf8")).version;
+                if (!byVersion.has(version)) byVersion.set(version, []);
+                byVersion.get(version).push("@eclipse-glsp/" + name);
+              }
+              for (const [version, names] of [...byVersion].sort()) {
+                console.log("- installed @eclipse-glsp/*: `" + version + "` (" + names.join(", ") + ")");
+              }
+            '
+          } | tee -a "$GITHUB_STEP_SUMMARY"

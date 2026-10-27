@@ -199,19 +199,16 @@ jobs:
           # shallow checkout turns it into a silent no-op rather than a red.
           fetch-depth: 0
 
-      # All THREE workflows install this repository and run Node against it, so
+      # Every workflow listed below installs this repository and runs Node, so
       # anything that differs between them is drift, not a decision. Compared
       # rather than duplicated so it fires in BOTH directions: change or drop a
       # key in one file without the others and this reddens here, on a pull
       # request, where it costs nothing. The same divergence discovered in
       # release.yml lands after the version PR has merged and the tags are cut,
-      # and in theia-compat.yml it waits for a schedule nobody is watching.
+      # and in the compat workflows it waits for a schedule nobody is watching.
       #
-      # The third file was added once its `NODE_OPTIONS` was aligned. It had
-      # carried the heap flag without `--report-on-fatalerror`, which was drift
-      # rather than a decision — the flag reached the other two a day after
-      # this file was written — and the comparison cannot express "equal except
-      # where we meant it".
+      # The comparison cannot express "equal except where we meant it", so a
+      # workflow joins the list only once it matches the others.
       #
       # This and the gate-ordering check below read the workflow FILES, so their
       # verdict cannot vary by runner. Pinned to one leg of the matrix so a
@@ -219,7 +216,7 @@ jobs:
       - name: Every workflow carries the same build environment
         if: matrix.os == 'ubuntu-22.04'
         run: |
-          workflows="ci release theia-compat"
+          workflows="ci release theia-compat glsp-compat"
           compare() {
             key="$1"
             found=''

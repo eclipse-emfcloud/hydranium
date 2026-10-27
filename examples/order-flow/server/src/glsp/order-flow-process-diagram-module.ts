@@ -143,10 +143,11 @@ export class OrderFlowProcessDiagramModule extends AbstractHydraniumGlspDiagramM
     * and because the computed-bounds path calls `submitModelDirectly`, which
     * does not bump the model revision, the second handler's revision check
     * still passes: bounds get applied twice and the client receives two
-    * submissions per layout pass. Worse, upstream's unfiltered `applyRoute`
-    * would run first, so the framework override's under-routed-edge filter —
-    * the whole reason it exists, preventing `GLSPServerError: Invalid Route!` —
-    * would never get the chance to act.
+    * submissions per layout pass.
+    *
+    * GLSP 2.7: upstream's unfiltered `applyRoute` would also run first, so the
+    * framework override's under-routed-edge filter, which prevents
+    * `GLSPServerError: Invalid Route!`, would never get the chance to act.
     *
     * What the substitution buys: revision mismatches during the initial
     * `requestModel → setModel` handshake are logged as warnings instead of

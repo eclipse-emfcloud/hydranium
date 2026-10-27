@@ -49,8 +49,8 @@
     "watch": "concurrently --kill-others --names langium,transfer-model,tsc \"npm run langium:watch\" \"npm run generate:transfer-model -- --watch\" \"tsc -b --watch\""
   },
   "dependencies": {
-    "@eclipse-glsp/graph": "2.7.0",
-    "@eclipse-glsp/server": "2.7.0",
+    "@eclipse-glsp/graph": "2.8.0",
+    "@eclipse-glsp/server": "2.8.0",
     "@hydranium/bookstore-protocol": "0.0.0",
     "@hydranium/core": "^1.0.0-next",
     "@hydranium/data-server": "^1.0.0-next",

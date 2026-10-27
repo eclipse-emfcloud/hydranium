@@ -329,9 +329,9 @@ const HEAD_THIRD_PARTY_DEPENDENCIES: Record<InitHead | 'base', Readonly<Record<s
    lsp: {},
    data: {},
    glsp: {
-      '@eclipse-glsp/graph': '2.7.0',
-      '@eclipse-glsp/server': '2.7.0',
-      // `^6.1.3` and NOT `^6.0.0`: `@eclipse-glsp/server@2.7.0` requires it, and
+      '@eclipse-glsp/graph': '2.8.0',
+      '@eclipse-glsp/server': '2.8.0',
+      // `^6.1.3` and NOT `^6.0.0`: `@eclipse-glsp/server` requires it, and
       // `^6.0.0` resolved only because the hoisted copy happened to satisfy it.
       inversify: '^6.1.3',
       'reflect-metadata': '~0.2.2'
@@ -346,16 +346,13 @@ const HEAD_THIRD_PARTY_DEPENDENCIES: Record<InitHead | 'base', Readonly<Record<s
 const PROTOCOL_THIRD_PARTY_DEPENDENCIES: Record<InitHead, Readonly<Record<string, string>>> = {
    lsp: {},
    data: {},
-   glsp: { '@eclipse-glsp/protocol': '2.7.0' }
+   glsp: { '@eclipse-glsp/protocol': '2.8.0' }
 };
 
 /** The client member's packages: the diagram definition and what it registers its elements with. */
 const CLIENT_FRAMEWORK_DEPENDENCIES: readonly string[] = ['@hydranium/glsp-client'];
 const CLIENT_THIRD_PARTY_DEPENDENCIES: Readonly<Record<string, string>> = {
-   '@eclipse-glsp/client': '2.7.0',
-   // GLSP's client imports this package's stylesheet without declaring it, so
-   // a page bundling the diagram does not build without it.
-   '@vscode/codicons': '0.0.45',
+   '@eclipse-glsp/client': '2.8.0',
    inversify: '^6.1.3'
 };
 
@@ -376,7 +373,7 @@ const HOST_BROWSER_THIRD_PARTY_DEPENDENCIES: Record<InitHead | 'base', Readonly<
    base: { 'vscode-jsonrpc': '9.0.0', 'vscode-languageserver-protocol': '3.18.1' },
    lsp: { 'monaco-editor-core': '0.56.0' },
    data: {},
-   glsp: { '@eclipse-glsp/server': '2.7.0', 'reflect-metadata': '~0.2.2' }
+   glsp: { '@eclipse-glsp/server': '2.8.0', 'reflect-metadata': '~0.2.2' }
 };
 
 /** The browser host's tools: the bundler, the smoke tier and the type check. */
@@ -406,9 +403,9 @@ const HOST_VSCODE_GLSP_FRAMEWORK_DEPENDENCIES: readonly string[] = [
    '@hydranium/protocol'
 ];
 const HOST_VSCODE_GLSP_THIRD_PARTY_DEPENDENCIES: Readonly<Record<string, string>> = {
-   '@eclipse-glsp/client': '2.7.0',
-   '@eclipse-glsp/vscode-integration': '2.7.0',
-   '@eclipse-glsp/vscode-integration-webview': '2.7.0',
+   '@eclipse-glsp/client': '2.8.0',
+   '@eclipse-glsp/vscode-integration': '2.8.0',
+   '@eclipse-glsp/vscode-integration-webview': '2.8.0',
    inversify: '^6.1.3',
    'vscode-jsonrpc': '9.0.0'
 };
@@ -3668,8 +3665,8 @@ const THEIA_THIRD_PARTY_DEPENDENCIES: Record<InitHead | 'base', Readonly<Record<
    lsp: {},
    data: { '@theia/workspace': THEIA_VERSION },
    glsp: {
-      '@eclipse-glsp/client': '2.7.0',
-      '@eclipse-glsp/theia-integration': '2.7.0',
+      '@eclipse-glsp/client': '2.8.0',
+      '@eclipse-glsp/theia-integration': '2.8.0',
       '@theia/process': THEIA_VERSION,
       '@theia/workspace': THEIA_VERSION
    }

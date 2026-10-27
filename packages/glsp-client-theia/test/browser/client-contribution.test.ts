@@ -50,6 +50,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NotificationType, ParameterStructures, RAL, type MessageConnection } from 'vscode-jsonrpc';
 import { DEFAULT_GLSP_CLIENT_STARTUP_TIMEOUT_MS, HydraniumGlspClientContribution } from '../../src/browser/client-contribution';
 
+/** GLSP's connection, typed by whichever copy of `vscode-jsonrpc` its protocol
+ *  resolves, which a Theia install can nest apart from the root copy. */
+type GlspConnection = ReturnType<typeof createChannelConnection>;
+
 interface FakeConnection {
    onDispose(): void;
    onClose(listener: () => void): void;
@@ -89,7 +93,7 @@ interface ReportedAttempt {
 /** Each start takes its connection from `connections`, in order, so a test
  *  decides when, and whether, each one arrives. */
 class TestContribution extends HydraniumGlspClientContribution {
-   readonly connections: Array<Deferred<FakeConnection | MessageConnection>> = [];
+   readonly connections: Array<Deferred<FakeConnection | MessageConnection | GlspConnection>> = [];
    readonly clients: FakeClient[] = [];
    /** The connection each client was created over. */
    readonly clientConnections: unknown[] = [];
@@ -127,8 +131,8 @@ class TestContribution extends HydraniumGlspClientContribution {
    }
 
    /** Queue the connection the next start receives. */
-   nextConnection(): Deferred<FakeConnection | MessageConnection> {
-      const connection = new Deferred<FakeConnection | MessageConnection>();
+   nextConnection(): Deferred<FakeConnection | MessageConnection | GlspConnection> {
+      const connection = new Deferred<FakeConnection | MessageConnection | GlspConnection>();
       this.connections.push(connection);
       return connection;
    }

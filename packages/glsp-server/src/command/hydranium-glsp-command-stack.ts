@@ -38,7 +38,7 @@ export class HydraniumGlspCommandStack extends DefaultCommandStack {
    }
 
    /**
-    * Lifted from `@eclipse-glsp/server` 2.7.0's `DefaultCommandStack.execute`,
+    * Lifted from `@eclipse-glsp/server`'s `DefaultCommandStack.execute`,
     * pushing no entry for a recording command executed outside an operation
     * whose write was dropped, or a `CompoundCommand` of only such commands at
     * any depth: its undo would do nothing, and the user's next undo would be
@@ -75,7 +75,7 @@ export class HydraniumGlspCommandStack extends DefaultCommandStack {
    }
 
    /**
-    * Lifted from `@eclipse-glsp/server` 2.7.0's `DefaultCommandStack.handleError`
+    * Lifted from `@eclipse-glsp/server`'s `DefaultCommandStack.handleError`
     * without its `error` line: the failure is rethrown, and whoever ends it
     * logs it. The accompanying test pins upstream's source.
     */

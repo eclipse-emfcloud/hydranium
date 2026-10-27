@@ -23,7 +23,7 @@
     "watch": "tsc --watch --preserveWatchOutput"
   },
   "dependencies": {
-    "@eclipse-glsp/protocol": "2.7.0"
+    "@eclipse-glsp/protocol": "2.8.0"
   },
   "devDependencies": {
     "rimraf": "^5.0.0",

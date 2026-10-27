@@ -72,8 +72,9 @@ It is not redistributed: no published Hydranium package contains it.
 - `@vscode/codicons` is licensed **CC-BY-4.0**, under which attribution is a
   condition rather than a courtesy. Icons are Copyright (c) Microsoft
   Corporation, licensed under the Creative Commons Attribution 4.0
-  International Public License. It is reached through the Theia peer stack, so
-  an application that renders those icons carries this attribution too.
+  International Public License. It is reached through the Theia peer stack and
+  through `@eclipse-glsp/client`, so an application that renders those icons
+  carries this attribution too.
 
 ## Peer dependencies, for orientation
 

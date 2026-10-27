@@ -972,9 +972,6 @@ const SCAFFOLD_PIN_SOURCES: Record<string, PinSource> = {
       path: ['devDependencies', '@eclipse-glsp/theia-integration'],
       rule: 'exact'
    },
-   // Imported by GLSP's client without a declaration; no manifest here
-   // declares it either, so the copy the repo resolves is the source.
-   '@vscode/codicons': { file: 'package-lock.json', path: ['packages', 'node_modules/@vscode/codicons', 'version'], rule: 'exact' },
    esbuild: { file: 'package.json', path: ['devDependencies', 'esbuild'], rule: 'exact' },
    '@types/node': { file: 'package.json', path: ['devDependencies', '@types/node'], rule: 'exact' },
    concurrently: { file: 'package.json', path: ['devDependencies', 'concurrently'], rule: 'exact' },

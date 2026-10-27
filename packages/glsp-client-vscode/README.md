@@ -29,12 +29,12 @@ npm install @hydranium/glsp-client-vscode
 
 | Peer                                       | Range         |
 | ------------------------------------------ | ------------- |
-| `@eclipse-glsp/client`                     | `^2.6.0`      |
-| `@eclipse-glsp/vscode-integration`         | `^2.6.0`      |
-| `@eclipse-glsp/vscode-integration-webview` | `^2.6.0`      |
+| `@eclipse-glsp/client`                     | `^2.7.0`      |
+| `@eclipse-glsp/vscode-integration`         | `^2.7.0`      |
+| `@eclipse-glsp/vscode-integration-webview` | `^2.7.0`      |
 | `@hydranium/glsp-client`                   | `^1.0.0-next` |
 | `@hydranium/protocol`                      | `^1.0.0-next` |
-| `inversify`                                | `^6.0.0`      |
+| `inversify`                                | `^6.1.3`      |
 | `vscode-jsonrpc`                           | `^9.0.0`      |
 
 ## Wiring

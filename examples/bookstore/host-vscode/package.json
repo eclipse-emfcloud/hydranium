@@ -21,9 +21,9 @@
     "watch:syntaxes": "node -e \"const copy = () => require('node:fs').cpSync('../server/syntaxes', 'syntaxes', { recursive: true }); copy(); require('node:fs').watch('../server/syntaxes', copy)\""
   },
   "dependencies": {
-    "@eclipse-glsp/client": "2.7.0",
-    "@eclipse-glsp/vscode-integration": "2.7.0",
-    "@eclipse-glsp/vscode-integration-webview": "2.7.0",
+    "@eclipse-glsp/client": "2.8.0",
+    "@eclipse-glsp/vscode-integration": "2.8.0",
+    "@eclipse-glsp/vscode-integration-webview": "2.8.0",
     "@hydranium/bookstore-client": "0.0.0",
     "@hydranium/bookstore-protocol": "0.0.0",
     "@hydranium/client-vscode": "^1.0.0-next",

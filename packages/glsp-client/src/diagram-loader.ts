@@ -52,20 +52,19 @@ export interface DiagramLoadFailure {
  * `RequestModelAction`, and the model-initialization constraint. Of these only
  * the `IDiagramStartup` hooks are wrapped by the base loader (it logs them to
  * `console.error`); the dispatcher-init / connection / request-model steps are
- * not. The Theia widget that drives loading
- * (`@eclipse-glsp/theia-integration`'s `GLSPDiagramWidget.onAfterAttach`)
- * calls `load()` *without awaiting or catching it*, so any rejection becomes an
- * uncaught promise rejection visible only in the browser devtools console —
- * nothing reaches the e2e output, the server log, or a Theia log sink, and the
- * diagram just stays blank.
+ * not.
  *
- * This subclass closes that gap: it catches every load failure, routes it to
- * the host's logger (in Theia the Output channel the server log and action
- * traffic share, so it is discoverable where a developer already looks), and
- * surfaces a persistent error to the user via a `severity: 'ERROR'`
- * {@link StatusAction} on the diagram's status overlay. It deliberately does
- * **not** rethrow — the caller drops the promise, so rethrowing would only
- * reproduce the uncaught rejection this exists to prevent.
+ * This subclass catches every load failure, routes it to the host's logger (in
+ * Theia the Output channel the server log and action traffic share, so it is
+ * discoverable where a developer already looks), and surfaces a persistent
+ * error to the user via a `severity: 'ERROR'` {@link StatusAction} on the
+ * diagram's status overlay. It deliberately does **not** rethrow. GLSP's Theia
+ * widget would render a rethrown failure a second time, in place of the
+ * diagram.
+ *
+ * GLSP 2.7: its Theia widget calls `load()` without catching it, so a rethrown
+ * failure becomes an uncaught rejection visible only in the browser devtools
+ * console, and the diagram stays blank.
  *
  * It also publishes the load's terminal state ({@link loadOutcome} /
  * {@link onceLoadSettled}) so a pending indicator has one authority to key on.

@@ -236,9 +236,9 @@ export function startGlspServer(options: GlspServerOptions): StartedGlspServer {
          (error: unknown) => stopped.reject(error)
       );
 
-      // GLSP's `SocketServerLauncher.netServer` field is `protected`; we
-      // access it via property indexing. The alternative is to fork the
-      // launcher or add a 'listening' callback to GLSP upstream.
+      // GLSP 2.7: the launcher has no `listening` or `onConnection`, so its
+      // protected `netServer` is reached by property indexing. 2.8 still sets
+      // the field before `start` returns.
       const netServer = (launcher as unknown as { netServer: net.Server }).netServer;
 
       netServer.on('listening', () => {
@@ -293,9 +293,11 @@ export function startGlspServer(options: GlspServerOptions): StartedGlspServer {
       started.reject(error);
       stopped.resolve();
    });
-   // `started` is always observed internally, as `startStdioServer`'s is, so a
-   // caller that closes early and ignores it cannot crash the process.
+   // Both are always observed internally, as `startStdioServer`'s `started`
+   // is, so a caller that ignores them cannot crash the process. `stopped`
+   // rejects when the socket fails, as on a port already in use.
    void started.promise.catch(() => undefined);
+   void stopped.promise.catch(() => undefined);
 
    return {
       get port() {

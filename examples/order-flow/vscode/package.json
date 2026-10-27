@@ -34,9 +34,9 @@
     "watch:webview": "node esbuild.mjs --watch"
   },
   "dependencies": {
-    "@eclipse-glsp/client": "2.7.0",
-    "@eclipse-glsp/vscode-integration": "2.7.0",
-    "@eclipse-glsp/vscode-integration-webview": "2.7.0",
+    "@eclipse-glsp/client": "2.8.0",
+    "@eclipse-glsp/vscode-integration": "2.8.0",
+    "@eclipse-glsp/vscode-integration-webview": "2.8.0",
     "@hydranium/client-vscode": "^1.0.0-next",
     "@hydranium/data-client-vscode": "^1.0.0-next",
     "@hydranium/example-order-flow-client": "0.0.0",
