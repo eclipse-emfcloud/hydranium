@@ -72,7 +72,7 @@ function collectWrittenFields(task: Task): Field[] {
       if (!isWrite(effect)) {
          continue;
       }
-      const field = effect.field.ref;
+      const field = effect.field?.ref;
       if (field && !seen.has(field)) {
          seen.add(field);
          result.push(field);
@@ -90,13 +90,13 @@ function collectWrittenFields(task: Task): Field[] {
 function summariseEffects(task: Task): string {
    return task.effects
       .map(effect => {
-         const fieldName = effect.field.ref?.name ?? effect.field.$refText;
+         const fieldName = effect.field?.ref?.name ?? effect.field?.$refText ?? '';
          if (!isWrite(effect)) {
             return `reads ${fieldName}`;
          }
-         const literal = effect.literal.ref;
+         const literal = effect.literal?.ref;
          const enumeration = isEnumeration(literal?.$container) ? literal.$container.name : undefined;
-         return `writes ${fieldName}=${literal?.name ?? effect.literal.$refText}${enumeration ? ` (${enumeration})` : ''}`;
+         return `writes ${fieldName}=${literal?.name ?? effect.literal?.$refText ?? ''}${enumeration ? ` (${enumeration})` : ''}`;
       })
       .join(', ');
 }

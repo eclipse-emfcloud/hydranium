@@ -87,8 +87,8 @@ export class LayoutSerializer extends AbstractSerializer<LayoutModel> {
     * `120.00000000000001` and makes the layout file churn on saves that changed
     * nothing visible.
     */
-   private emitNumber(value: number): string {
-      return String(Math.round(value * 100) / 100);
+   private emitNumber(value: number | undefined): string {
+      return value === undefined ? '' : String(Math.round(value * 100) / 100);
    }
 
    private indent(level: number): string {

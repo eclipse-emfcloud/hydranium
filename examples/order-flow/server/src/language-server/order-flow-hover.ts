@@ -55,11 +55,11 @@ export class OrderFlowHoverProvider extends AstNodeHoverProvider {
          return `**task** \`${node.name}\`${node._effectSummary ? ` — ${node._effectSummary}` : ''}`;
       }
       if (isGateway(node)) {
-         const branches = node.branches.map(branch => `\`${branch.label}\` → \`${branch.target.$refText}\``).join(', ');
+         const branches = node.branches.map(branch => `\`${branch.label}\` → \`${branch.target?.$refText ?? ''}\``).join(', ');
          return `**gateway** \`${node.name}\`${branches ? ` — ${branches}` : ''}`;
       }
       if (isProcessModel(node)) {
-         return `**process** \`${node.name}\` for \`${node.subject.$refText}\`, ${node.nodes.length} node(s)`;
+         return `**process** \`${node.name}\` for \`${node.subject?.$refText ?? ''}\`, ${node.nodes.length} node(s)`;
       }
       if (isField(node)) {
          return `**field** \`${node.name}\`: ${describeFieldType(node)}`;
@@ -74,7 +74,7 @@ export class OrderFlowHoverProvider extends AstNodeHoverProvider {
          return `${visibilityPrefix(node.visibility)}**enum** \`${node.name}\` { ${literals} }`;
       }
       if (isEnumLiteral(node)) {
-         return `**literal** \`${node.name}\` of \`${node.$container.name}\``;
+         return `**literal** \`${node.name}\` of \`${node.$container.name ?? ''}\``;
       }
       return undefined;
    }
@@ -89,7 +89,7 @@ export class OrderFlowHoverProvider extends AstNodeHoverProvider {
  * on broken documents as readily as on valid ones.
  */
 function describeFieldType(field: Field): string {
-   return `\`${field.type.declared.$refText}\`${field.many ? '[]' : ''}`;
+   return `\`${field.type?.declared.$refText ?? ''}\`${field.many ? '[]' : ''}`;
 }
 
 /**

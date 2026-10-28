@@ -172,4 +172,34 @@ describe('order-flow per-grammar serializers routed per URI', () => {
       expect(reparsedProcess.value.nodes.map(node => node.name)).toEqual(['Pay', 'PaymentOk', 'Pick', 'Ship', 'Cancel']);
       expect(reparsedProcess.value.transitions).toHaveLength(2);
    });
+
+   it('serializes declarations whose names, types and coordinates parser recovery left absent', async () => {
+      const harness = await makeWorkspaceHarness();
+      const serialize = async (services: typeof harness.domain, text: string): Promise<string> =>
+         services.serializer.Serializer.serializeAst(services.parser.LangiumParser.parse(text).value);
+
+      expect(await serialize(harness.domain, 'entity {\n   status:\n}\nenum {\n   A\n}\n')).toMatchInlineSnapshot(`
+        "entity  {
+           status: 
+        }
+
+        enum  { A }"
+      `);
+      expect(await serialize(harness.domain, 'project requires x\nentity A {}\n')).toMatchInlineSnapshot(`
+        "project  requires x
+
+        entity A {}"
+      `);
+      expect(await serialize(harness.process, 'process for Order {\n   task\n   gateway\n}\n')).toMatchInlineSnapshot(`
+        "process  for Order {
+           task 
+           gateway 
+        }"
+      `);
+      expect(await serialize(harness.layout, 'layout {\n   node Pay at , 2\n}\n')).toMatchInlineSnapshot(`
+        "layout {
+           node Pay at , 2
+        }"
+      `);
+   });
 });

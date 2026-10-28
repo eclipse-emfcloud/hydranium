@@ -51,7 +51,7 @@ async function openWorkspace(options: OrderFlowOptions = {}): Promise<{ harness:
    return { harness, uri: relativePath => workspace!.uri(relativePath) };
 }
 
-/** Distinguishes the probe documents, one per {@link completionLabels} call. */
+/** Distinguishes the probe documents, one per probe call. */
 let probeCount = 0;
 /**
  * Completion labels at a position in a freshly opened `.process` document.
@@ -536,6 +536,99 @@ describe('order-flow LSP head over the wire', () => {
          // always-present one would pass nothing — the pair is what makes the
          // prefix mean the modifier.
          expect(await hoverText(open, EFFECT_DOCUMENT, 1, 19)).toMatch(/^\*\*entity\*\* `Order`/);
+      });
+
+      it('renders declarations that parser recovery left incomplete', async () => {
+         const open = await openWorkspace();
+
+         const cut = 'process Cut for {\n   gateway Check ok ->\n}\n';
+         expect(await hoverText(open, cut, 0, 8)).toMatchInlineSnapshot(`"**process** \`Cut\` for \`\`, 1 node(s)"`);
+         expect(await hoverText(open, cut, 1, 11)).toMatchInlineSnapshot(`"**gateway** \`Check\` — \`ok\` → \`\`"`);
+
+         const target = open.uri('orders/hover-cut.domain');
+         open.harness.openDocument(target, 'entity Cut {\n   status:\n}\n', DomainLanguageMetaData.languageId);
+         const field = await open.harness.hover(target, { line: 1, character: 4 });
+         expect(field?.contents).toMatchInlineSnapshot(`
+           {
+             "kind": "markdown",
+             "value": "**field** \`status\`: \`\`",
+           }
+         `);
+
+         const enumeration = open.uri('orders/hover-cut-enum.domain');
+         open.harness.openDocument(enumeration, 'enum {\n   A\n}\n', DomainLanguageMetaData.languageId);
+         const literal = await open.harness.hover(enumeration, { line: 1, character: 3 });
+         expect(literal?.contents).toMatchInlineSnapshot(`
+           {
+             "kind": "markdown",
+             "value": "**literal** \`A\` of \`\`",
+           }
+         `);
+      });
+   });
+
+   describe('linking after parser recovery', () => {
+      /** Diagnostic messages published for a freshly opened `.process` document. */
+      async function processDiagnostics(
+         open: { harness: LspHarness; uri: (relativePath: string) => string },
+         text: string
+      ): Promise<string[]> {
+         const target = open.uri(`orders/link-probe-${(probeCount += 1)}.process`);
+         const published = open.harness.nextDiagnostics(target);
+         open.harness.openDocument(target, text, ProcessLanguageMetaData.languageId);
+         return (await published).map(diagnostic =>
+            typeof diagnostic.message === 'string' ? diagnostic.message : diagnostic.message.value
+         );
+      }
+
+      it('reports an unresolved reference, not a TypeError, when an effect lost a reference', async () => {
+         const open = await openWorkspace();
+         const domain = open.uri('orders/link-cut.domain');
+         const settled = open.harness.nextDiagnostics(domain);
+         open.harness.openDocument(domain, 'entity LinkCut {\n   status:\n}\n', DomainLanguageMetaData.languageId);
+         await settled;
+
+         // The field's type is absent, so the literal's scope has no enumeration to read.
+         expect(await processDiagnostics(open, 'process P for Order {\n   task T writes LinkCut.status = PAID\n}\n'))
+            .toMatchInlineSnapshot(`
+           [
+             "Could not resolve reference to EnumLiteral named 'PAID'.",
+           ]
+         `);
+         // The entity is absent, so the field's scope has no entity to read.
+         expect(await processDiagnostics(open, 'process P for Order {\n   task T reads .status\n}\n')).toMatchInlineSnapshot(`
+           [
+             "Expecting token of type 'ID' but found \`.\`.",
+             "Could not resolve reference to Field named 'status'.",
+           ]
+         `);
+         // The field is absent, so the literal's scope has no field to read.
+         expect(await processDiagnostics(open, 'process P for Order {\n   task T writes Order. = PAID\n}\n')).toMatchInlineSnapshot(`
+           [
+             "Expecting token of type 'ID' but found \`=\`.",
+             "Could not resolve reference to EnumLiteral named 'PAID'.",
+           ]
+         `);
+      });
+
+      it('publishes the parse errors of two declarations that both lost their name', async () => {
+         const open = await openWorkspace();
+         expect(await processDiagnostics(open, 'process P for Order {\n   task\n   task\n}\n')).toMatchInlineSnapshot(`
+           [
+             "Expecting token of type 'ID' but found \`task\`.",
+             "Expecting token of type 'ID' but found \`}\`.",
+           ]
+         `);
+
+         const domain = open.uri('orders/nameless.domain');
+         const published = open.harness.nextDiagnostics(domain);
+         open.harness.openDocument(domain, 'entity {\n}\nentity {\n}\n', DomainLanguageMetaData.languageId);
+         expect((await published).map(diagnostic => `${diagnostic.range.start.line}: ${diagnostic.message}`)).toMatchInlineSnapshot(`
+           [
+             "0: Expecting token of type 'ID' but found \`{\`.",
+             "2: Expecting token of type 'ID' but found \`{\`.",
+           ]
+         `);
       });
    });
 });

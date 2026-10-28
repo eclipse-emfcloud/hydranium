@@ -98,12 +98,12 @@ export class DomainSerializer extends AbstractSerializer<DomainModel> {
 
    private emitManifest(manifest: ProjectManifest): string {
       const requires = manifest.dependencies.length > 0 ? ` requires ${manifest.dependencies.join(', ')}` : '';
-      return `project ${manifest.name}${requires}`;
+      return `project ${manifest.name ?? ''}${requires}`;
    }
 
    private emitStructure(keyword: 'entity' | 'valuetype', declaration: Extract<Declaration, { fields: Field[] }>, level: number): string {
       const indent = this.indent(level);
-      const header = `${indent}${this.visibilityPrefix(declaration)}${keyword} ${declaration.name}`;
+      const header = `${indent}${this.visibilityPrefix(declaration)}${keyword} ${declaration.name ?? ''}`;
       if (declaration.fields.length === 0) {
          return `${header} {}`;
       }
@@ -113,7 +113,7 @@ export class DomainSerializer extends AbstractSerializer<DomainModel> {
 
    private emitEnumeration(enumeration: Enumeration, level: number): string {
       const indent = this.indent(level);
-      const header = `${indent}${this.visibilityPrefix(enumeration)}enum ${enumeration.name}`;
+      const header = `${indent}${this.visibilityPrefix(enumeration)}enum ${enumeration.name ?? ''}`;
       if (enumeration.literals.length === 0) {
          return `${header} {}`;
       }
@@ -125,7 +125,7 @@ export class DomainSerializer extends AbstractSerializer<DomainModel> {
       // `valuetype` declarations rather than a keyword alternative — so there is
       // no non-reference branch. `serializeReferenceText` accepts both shapes: an
       // AST-mode Langium `Reference` and a transfer-mode plain string id.
-      const type = this.serializeReferenceText(field.type.declared) ?? '';
+      const type = this.serializeReferenceText(field.type?.declared) ?? '';
       return `${this.indent(level)}${field.name}: ${type}${field.many ? '[]' : ''}`;
    }
 

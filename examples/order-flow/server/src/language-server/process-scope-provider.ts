@@ -61,7 +61,7 @@ export class OrderFlowProcessScopeProvider extends HydraniumScopeProvider {
 
    /** The fields of the entity the effect's `entity` reference resolved to. */
    protected createFieldScope(effect: Write | Read): Scope {
-      const entity = effect.entity.ref;
+      const entity = effect.entity?.ref;
       return entity ? this.createScopeForNodes(entity.fields) : EMPTY_SCOPE;
    }
 
@@ -71,8 +71,8 @@ export class OrderFlowProcessScopeProvider extends HydraniumScopeProvider {
     * an enum literal is only assignable where an enum is declared.
     */
    protected createLiteralScope(write: Write): Scope {
-      const field: Field | undefined = write.field.ref;
-      const declared = field?.type.declared?.ref;
+      const field: Field | undefined = write.field?.ref;
+      const declared = field?.type?.declared?.ref;
       return isEnumeration(declared) ? this.createScopeForNodes(declared.literals) : EMPTY_SCOPE;
    }
 }

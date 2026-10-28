@@ -1126,4 +1126,77 @@ describe('trivia preservation', () => {
       expect(commentsOf(extracted)).toHaveLength(0);
       expect(endingOf(extracted)).toBe('\n');
    });
+
+   /**
+    * A write of a valid model over a document that parser recovery left with an
+    * absent reference. The output parses, so the source tree's nodes are keyed,
+    * the recovered ones included.
+    */
+   describe('a source reference that parser recovery left absent', () => {
+      async function writeOverRecovered(extension: string, recovered: string, written: string): Promise<string> {
+         const harness = makeServices();
+         const uri = URI.parse(`memory:///recovered${extension}`);
+         const services = harness.shared.ServiceRegistry.getServices(uri);
+         const source = harness.shared.workspace.LangiumDocumentFactory.fromString(recovered, uri);
+         const output = harness.shared.workspace.LangiumDocumentFactory.fromString(written, URI.parse(`memory:///written${extension}`));
+         const serialized = await services.serializer.Serializer.serializeAst(output.parseResult.value);
+         return services.trivia.TriviaService.apply(serialized, services.trivia.TriviaService.extract(source), uri);
+      }
+
+      it('keys cut-off effects and transitions, dropping a comment whose key the write changed', async () => {
+         const written = await writeOverRecovered(
+            '.process',
+            'process Cut for Order {\n   // on the task\n   task Pay\n      // on the effect\n      writes Order.status =\n   task Pick\n      reads Order.\n   task Ship\n      reads .id\n   // on the transition\n   transition Pay ->\n   transition -> Pay\n}\n',
+            'process Cut for Order {\n   task Pay\n      writes Order.status = PAID\n   task Pick\n      reads Order.id\n   task Ship\n      reads Order.id\n   transition Pay -> Pay\n   transition Pay -> Pay\n}\n'
+         );
+         expect(written).toMatchInlineSnapshot(`
+           "process Cut for Order {
+              // on the task
+              task Pay
+                 // on the effect
+                 writes Order.status = PAID
+              task Pick
+                 reads Order.id
+              task Ship
+                 reads Order.id
+              transition Pay -> Pay
+              transition Pay -> Pay
+           }
+           "
+         `);
+      });
+
+      it('keeps a cut-off reference apart from one named undefined', async () => {
+         const written = await writeOverRecovered(
+            '.process',
+            'process Cut for Order {\n   task Pay\n      // on the cut field\n      reads Order.\n   task Ship\n      // on the cut entity\n      reads .id\n   // on the cut target\n   transition Pay ->\n   // on the cut source\n   transition -> Pay\n}\n',
+            'process Cut for Order {\n   task Pay\n      reads Order.undefined\n   task Ship\n      reads undefined.id\n   transition Pay -> undefined\n   transition undefined -> Pay\n}\n'
+         );
+         expect(written).toMatchInlineSnapshot(`
+           "process Cut for Order {
+              task Pay
+                 reads Order.undefined
+              task Ship
+                 reads undefined.id
+              transition Pay -> undefined
+              transition undefined -> Pay
+           }
+           "
+         `);
+      });
+
+      it('drops the comment on a cut-off layout entry, which has no key', async () => {
+         const written = await writeOverRecovered(
+            '.layout',
+            'layout {\n   // on the entry\n   node at 1, 2\n}\n',
+            'layout {\n   node Pay at 1, 2\n}\n'
+         );
+         expect(written).toMatchInlineSnapshot(`
+           "layout {
+              node Pay at 1, 2
+           }
+           "
+         `);
+      });
+   });
 });

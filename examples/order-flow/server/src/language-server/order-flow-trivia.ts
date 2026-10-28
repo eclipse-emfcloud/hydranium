@@ -32,7 +32,7 @@ import { isBranch, isDiagramNode, isRead, isTransition, isWrite } from './ast.js
 export class OrderFlowCommentPreserver extends CommentPreserver {
    protected override anchorKey(node: AstNode): string | undefined {
       if (isDiagramNode(node)) {
-         const flowNode = node.flowNode.$refText;
+         const flowNode = node.flowNode?.$refText;
          return flowNode ? `DiagramNode#${this.escapeKeySegment(flowNode)}` : undefined;
       }
       if (isBranch(node) || isRead(node) || isWrite(node) || isTransition(node)) {
@@ -43,8 +43,8 @@ export class OrderFlowCommentPreserver extends CommentPreserver {
          const identity = isBranch(node)
             ? node.label
             : isTransition(node)
-              ? `${node.source.$refText}->${node.target.$refText}`
-              : `${node.entity.$refText}.${node.field.$refText}`;
+              ? `${node.source?.$refText ?? ''}->${node.target?.$refText ?? ''}`
+              : `${node.entity?.$refText ?? ''}.${node.field?.$refText ?? ''}`;
          return identity ? `${parent}/${node.$type}#${this.escapeKeySegment(identity)}` : undefined;
       }
       return super.anchorKey(node);
