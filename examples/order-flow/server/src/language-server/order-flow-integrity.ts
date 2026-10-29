@@ -39,6 +39,10 @@ function deduplicateNames(named: readonly NamedAstNode[], kind: string, logger: 
    const seen = new Set<string>();
    let mutated = false;
    for (const entry of named) {
+      // Parser recovery can leave a name absent, and there is nothing to rename then.
+      if (entry.name === undefined) {
+         continue;
+      }
       if (!seen.has(entry.name)) {
          seen.add(entry.name);
          continue;

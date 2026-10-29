@@ -1,0 +1,9 @@
+// Test-only fixture, deliberately outside the sample workspace.
+//
+// The effect stops after `=`, so parser recovery leaves `literal` absent
+// rather than unresolved. Every reader of an effect must survive that.
+
+process TruncatedEffect for Order {
+   task Pay writes Order.status =
+   task Pick writes Order. = PAID
+}

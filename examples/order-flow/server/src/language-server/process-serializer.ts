@@ -99,12 +99,12 @@ export class ProcessSerializer extends AbstractSerializer<ProcessModel> {
          ...model.transitions.map(transition => this.emitTransition(transition, 1))
       ];
       const subject = this.serializeReferenceText(model.subject) ?? '';
-      const header = `process ${model.name} for ${subject}`;
+      const header = `process ${model.name ?? ''} for ${subject}`;
       return body.length === 0 ? `${header} {}` : `${header} {\n${body.join('\n')}\n}`;
    }
 
    private emitTask(task: Task, level: number): string {
-      const header = `${this.indent(level)}task ${task.name}`;
+      const header = `${this.indent(level)}task ${task.name ?? ''}`;
       if (task.effects.length === 0) {
          return header;
       }
@@ -112,7 +112,7 @@ export class ProcessSerializer extends AbstractSerializer<ProcessModel> {
    }
 
    private emitGateway(gateway: Gateway, level: number): string {
-      const header = `${this.indent(level)}gateway ${gateway.name}`;
+      const header = `${this.indent(level)}gateway ${gateway.name ?? ''}`;
       if (gateway.branches.length === 0) {
          return header;
       }

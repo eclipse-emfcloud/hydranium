@@ -123,5 +123,10 @@ describe('order-flow AST extensions computing a cross-grammar property', () => {
       const broken = (await loadFixture<ProcessModel>(harness, 'broken-effect.process')).parseResult.value;
       expect(taskNamed(broken, 'Overreach')._effectSummary).toBe('writes total=PAID');
       expect(taskNamed(broken, 'Ghost')._effectSummary).toBe('reads nosuchfield');
+
+      // A truncated effect has no literal at all, not an unresolved one.
+      const truncated = (await loadFixture<ProcessModel>(harness, 'truncated-effect.process')).parseResult.value;
+      expect(taskNamed(truncated, 'Pay')._effectSummary).toBe('writes status=');
+      expect(taskNamed(truncated, 'Pick')._effectSummary).toBe('writes =PAID');
    });
 });
