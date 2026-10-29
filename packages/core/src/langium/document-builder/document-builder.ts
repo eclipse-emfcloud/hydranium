@@ -41,7 +41,7 @@ import { type VersionSyncService } from '../../documents/version-sync-service.js
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { IntegrityService } from '../integrity/integrity-service.js';
 import type { MessageRenderer } from '../../messages/renderer.js';
-import { CST_REHYDRATION_RESET_STATE, isCstShed } from '../residency/cst-residency-service.js';
+import { CST_REHYDRATION_RESET_STATE, type CstResidencyService, isCstShed } from '../residency/cst-residency-service.js';
 import { type ExtendedServiceRegistry } from '../service-registry.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
@@ -309,8 +309,10 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected readonly builderStateWaits = new Set<BuilderStateWait>();
    /** Set while the lock read {@link checkWaitsOnceDrained} queued has not run. */
    protected drainCheckQueued = false;
-   /** Resolved per call: the sync service reaches this builder. */
+   /** A thunk: a version-sync service whose constructor reads the builder would otherwise be a cycle. */
    protected readonly versionSyncService: () => VersionSyncService;
+   /** A thunk: a residency service whose constructor reads the builder would otherwise be a cycle. */
+   protected readonly cstResidency: () => CstResidencyService;
 
    constructor(services: ServerSharedServicesMinimal, options: DocumentBuilderOptions = {}) {
       super(services);
@@ -320,6 +322,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       this.messageRenderer = services.MessageRenderer;
       this.workspaceLock = services.workspace.WorkspaceLock;
       this.versionSyncService = () => services.workspace.VersionSyncService;
+      this.cstResidency = () => services.workspace.CstResidencyService;
       this.tracer = services.Tracer.for(options.logName ?? 'DocumentBuilder').trace('instantiated');
       this.logLevel = options.logLevel ?? 'debug';
       this.loggedPhases = options.loggedPhases ?? DEFAULT_LOGGED_PHASES;
@@ -929,8 +932,34 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       options: BuildOptions,
       cancelToken: CancellationToken
    ): Promise<void> {
+      await this.rehydrateShedDocuments(documents, cancelToken);
       await super.buildDocuments(documents, options, cancelToken);
       this.notifyBuildEnded({ completed: true });
+   }
+
+   /**
+    * Graft the CST back onto every shed document the build advances, keeping
+    * its AST nodes so dependents outside the build stay linked to them.
+    * Indexing a document's references without its CST drops them from the
+    * reference index, so it would no longer be relinked when its targets
+    * change. Runs before Langium prepares the build, one document at a time
+    * with a cancellation check between, as the parse phase does. A refused or
+    * diverged graft resets the document to `Changed`, so this build re-parses
+    * it, and asks for a build after this one, whose relink selection reaches
+    * its dependents as those of a changed document.
+    */
+   protected async rehydrateShedDocuments(documents: LangiumDocument[], cancelToken: CancellationToken): Promise<void> {
+      for (const document of documents) {
+         if (document.state < DocumentState.Validated && isCstShed(document)) {
+            await interruptAndCheck(cancelToken);
+            this.tracer.debug(`rehydrating CST of ${this.formatUri(document.uri)} (re-entered build while shed)`);
+            this.cstResidency().rehydrate(document);
+            if (isCstShed(document)) {
+               this.resetToState(document, CST_REHYDRATION_RESET_STATE);
+               this.versionSyncService().rebuildWhileCurrent(document);
+            }
+         }
+      }
    }
 
    /**
@@ -1091,27 +1120,6 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * document per cascade.
     */
    override resetToState(document: LangiumDocument, state: DocumentState): void {
-      // Rehydrate-on-re-entry after CST shedding. A document whose CST was shed to
-      // reclaim memory (its `parseResult.value.$cstNode` nulled while the AST stays
-      // resident) cannot be relinked or re-indexed in place: Langium's
-      // `DefaultReferenceDescriptionProvider` derives the reference index — and thus
-      // `IndexManager.isAffected`, plus the `segment` used by rename / find-references —
-      // from each `reference.$refNode`. Re-running `IndexedReferences` with a shed CST
-      // drops the document's cross-references from the index (the provider skips any
-      // reference whose `$refNode` is missing), so its dependents silently stop being
-      // relinked when a referenced document changes, and they keep stale `.ref`s.
-      //
-      // So any re-entry into the build for a shed document must start from a full
-      // re-parse, which rebuilds the CST (and every `$refNode`). The residency
-      // feature owns both the "is shed" predicate and the recovery reset state
-      // (`CST_REHYDRATION_RESET_STATE`, necessarily `Changed`); this
-      // supersedes the `IndexedContent` cascade reset below — a re-parse re-runs
-      // every phase regardless.
-      if (isCstShed(document)) {
-         this.tracer.debug(`rehydrating CST of ${this.formatUri(document.uri)} (re-entered build while shed)`);
-         super.resetToState(document, CST_REHYDRATION_RESET_STATE);
-         return;
-      }
       const targetState =
          this.refreshCrossDocumentComputedScopes && state === DocumentState.ComputedScopes ? DocumentState.IndexedContent : state;
       super.resetToState(document, targetState);

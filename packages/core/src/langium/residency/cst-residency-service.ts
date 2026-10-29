@@ -10,8 +10,13 @@
 import { asMutable, type Clock, Debouncer, Format, type Tracer, UNRECORDED_VERSION } from '@hydranium/protocol';
 import {
    type AstNode,
+   type AstReflection,
    AstUtils,
    DocumentState,
+   isAstNode,
+   isMultiReference,
+   isReference,
+   type ReferenceInfo,
    type LangiumDocument,
    type LangiumDocumentFactory,
    type LangiumDocuments,
@@ -47,9 +52,10 @@ export const CST_RESIDENCY_PASS_PRIORITY = 1_000_000;
  *   once it has been idle (not in any build) for `idleMs`, keeping the AST
  *   resident. Open documents are always kept. The timer starts when a build
  *   includes the document, so `idleMs: 0` sheds a closed document on the tick
- *   after each such build. A shed document that re-enters a build is re-parsed
- *   in full, so a window shorter than the gap between a document's builds
- *   re-parses a closed document on every build it rides in.
+ *   after each such build. A shed document that re-enters a build has its CST
+ *   grafted back, which parses its text, so a window shorter than the gap
+ *   between a document's builds parses a closed document on every build it
+ *   rides in.
  */
 export type CstResidencyStrategy = { readonly kind: 'always-keep' } | { readonly kind: 'shed-closed-when-idle'; readonly idleMs: number };
 
@@ -72,13 +78,14 @@ export interface CstResidencyOptions extends LogNameOptions {
 }
 
 /**
- * The build state a shed document must be reset to so the next build re-parses it
- * and rebuilds its CST — and every `reference.$refNode` — before it is relinked or
- * re-indexed (rehydration). It is `DocumentState.Changed` by necessity: the only
- * state below `Parsed`, hence the only one that forces a re-parse rather than an
- * in-place relink. Exposed as a named landmark of the residency feature (cf.
- * `IntegrityService.SettledState`) so the document builder references the feature's
- * declared recovery contract instead of a bare enum value.
+ * The build state a shed document is reset to when the identity-preserving graft
+ * fails, so the next build re-parses it and rebuilds its CST — and every
+ * `reference.$refNode` — before it is relinked or re-indexed. It is
+ * `DocumentState.Changed` by necessity: the only state below `Parsed`, hence
+ * the only one that forces a re-parse rather than an in-place relink. Exposed
+ * as a named landmark of the residency feature (cf.
+ * `IntegrityService.SettledState`) so the document builder references the
+ * feature's declared recovery contract instead of a bare enum value.
  */
 export const CST_REHYDRATION_RESET_STATE: DocumentState = DocumentState.Changed;
 
@@ -99,8 +106,8 @@ export function isCstShed(document: LangiumDocument): boolean {
 }
 
 /**
- * Reattach a CST to a shed document **on demand**, without a rebuild — the
- * read-side counterpart of the build-side rehydrate-on-re-entry seam. Re-parses
+ * Reattach a CST to a shed document **on demand**, without a rebuild. Both the
+ * read side and the build-side rehydrate-on-re-entry seam use it. Re-parses
  * the document's retained text into a throwaway document, then **grafts** the
  * fresh CST onto the already-built, resident AST nodes — preserving AST node
  * identity, so every cross-reference *into* this document (resolved to a resident
@@ -127,10 +134,12 @@ export function isCstShed(document: LangiumDocument): boolean {
  * `reference.$refNode` is restored the same way (paired over
  * {@link AstUtils.streamReferences}).
  *
- * **Safe degrade.** If the re-parse diverges structurally from the resident AST
- * (different node count — should not happen for unchanged text, but a guard
- * against drift) the graft is abandoned and the document stays shed; the caller
- * degrades exactly as it did before (no wrong attachment).
+ * **Safe degrade.** If the re-parse diverges from the resident AST (a
+ * different node count, or a different type, container slot, reference slots
+ * or grammar value on any node — should not happen for unchanged text, but a
+ * guard against an AST changed in place) the graft is abandoned before any
+ * write and the document stays shed. A read-side caller degrades as it did
+ * before (no wrong attachment), and the build re-parses.
  *
  * **Module-private mechanism.** The public entry points are
  * {@link CstResidencyService.rehydrateNode} / {@link CstResidencyService.rehydrate},
@@ -142,7 +151,7 @@ export function isCstShed(document: LangiumDocument): boolean {
  * @returns `true` if the document now has a resident CST (already-resident is a
  * no-op `true`); `false` if the text is unrecoverable or the re-parse diverged.
  */
-function rehydrateCst(document: LangiumDocument, factory: LangiumDocumentFactory): boolean {
+function rehydrateCst(document: LangiumDocument, factory: LangiumDocumentFactory, reflection: AstReflection): boolean {
    const root = document.parseResult?.value;
    if (root === undefined) {
       return false;
@@ -158,8 +167,30 @@ function rehydrateCst(document: LangiumDocument, factory: LangiumDocumentFactory
    const fresh = factory.fromString(text, document.uri);
    const existingNodes = [...AstUtils.streamAst(root)];
    const freshNodes = [...AstUtils.streamAst(fresh.parseResult.value)];
-   if (existingNodes.length !== freshNodes.length) {
+   // Pre-order follows property order, so a property re-added in place would
+   // pair siblings of one type crosswise. Their container slots tell them
+   // apart, and their grammar values tell apart siblings that traded slots too.
+   const pairsDiffer = (node: AstNode, freshNode: AstNode): boolean =>
+      node.$type !== freshNode.$type ||
+      node.$containerProperty !== freshNode.$containerProperty ||
+      node.$containerIndex !== freshNode.$containerIndex ||
+      Object.keys(reflection.getTypeMetaData(node.$type).properties).some(
+         property => !sameGrammarValue(Reflect.get(node, property), Reflect.get(freshNode, property))
+      );
+   if (existingNodes.length !== freshNodes.length || existingNodes.some((node, index) => pairsDiffer(node, freshNodes[index]))) {
       return false; // structural divergence — stay shed rather than mis-attach
+   }
+   // `streamReferences` yields a node's *own* cross-references only (not its
+   // descendants'), in property enumeration order, which a property re-added
+   // in place changes. So each pair must hold one property and array index.
+   // Checked before any write, so a divergence leaves the document shed rather
+   // than half grafted.
+   const residentRefs = existingNodes.map(node => [...AstUtils.streamReferences(node)]);
+   const freshRefs = freshNodes.map(node => [...AstUtils.streamReferences(node)]);
+   const refsDiffer = (refs: ReferenceInfo[], fresh: ReferenceInfo[]): boolean =>
+      refs.length !== fresh.length || refs.some((ref, index) => ref.property !== fresh[index].property || ref.index !== fresh[index].index);
+   if (residentRefs.some((refs, index) => refsDiffer(refs, freshRefs[index]))) {
+      return false;
    }
    for (let index = 0; index < existingNodes.length; index++) {
       const residentNode = existingNodes[index];
@@ -172,30 +203,51 @@ function rehydrateCst(document: LangiumDocument, factory: LangiumDocumentFactory
          // at the resident node so CST→AST navigation reaches the linked AST.
          asMutable(freshCst).astNode = residentNode;
       }
-      // Restore each reference's `$refNode` from the fresh parse. `streamReferences`
-      // yields a node's *own* cross-references only (not its descendants'), so this
-      // must run per node — paired by the stable key/array order a re-parse of the
-      // same text reproduces. The resolved `.ref` link is untouched (still resident).
-      const residentRefs = [...AstUtils.streamReferences(residentNode)];
-      const freshRefs = [...AstUtils.streamReferences(freshNode)];
-      if (residentRefs.length === freshRefs.length) {
-         for (let refIndex = 0; refIndex < residentRefs.length; refIndex++) {
-            asMutable(residentRefs[refIndex].reference).$refNode = freshRefs[refIndex].reference.$refNode;
-         }
-      }
+      // Restore each reference's `$refNode` from the fresh parse. The resolved
+      // `.ref` link is untouched (still resident).
+      residentRefs[index].forEach((resident, refIndex) => {
+         asMutable(resident.reference).$refNode = freshRefs[index][refIndex].reference.$refNode;
+      });
    }
    return true;
+}
+
+/**
+ * Whether two values of one grammar property match. Child nodes are paired on
+ * their own, so a reference counts by its text. A converter's `Date` counts by
+ * its time, and any other object as equal, since its equality is unknown.
+ */
+function sameGrammarValue(value: unknown, freshValue: unknown): boolean {
+   if (Array.isArray(value)) {
+      return (
+         Array.isArray(freshValue) &&
+         value.length === freshValue.length &&
+         value.every((item, index) => sameGrammarValue(item, freshValue[index]))
+      );
+   }
+   if (isReference(value) || isMultiReference(value)) {
+      return (isReference(freshValue) || isMultiReference(freshValue)) && value.$refText === freshValue.$refText;
+   }
+   if (isAstNode(value)) {
+      return isAstNode(freshValue);
+   }
+   if (value instanceof Date) {
+      return freshValue instanceof Date && value.getTime() === freshValue.getTime();
+   }
+   if (typeof value === 'object' && value !== null) {
+      return typeof freshValue === 'object' && freshValue !== null;
+   }
+   return Object.is(value, freshValue);
 }
 
 /**
  * Keeps a document's CST available to the readers that need one, shedding it
  * for documents that have gone idle and re-grafting on demand.
  *
- * Each build refreshes
- * the idle window of the documents in its batch; when a closed, sheddable
- * document's window elapses, every AST node's `$cstNode` and every reference's
- * `$refNode` are nulled, and the CST becomes unreachable with the `Range`s
- * and `Position`s only it holds. The reference index's segments, and a
+ * Each build refreshes the idle window of the documents in its batch. When a
+ * closed, sheddable document's window elapses, every AST node's `$cstNode` and
+ * every reference's `$refNode` are nulled, and the CST becomes unreachable with
+ * the `Range`s and `Position`s only it holds. The reference index's segments, and a
  * description's segments once read, share the CST's `Range` objects, so
  * those stay.
  *
@@ -207,21 +259,25 @@ function rehydrateCst(document: LangiumDocument, factory: LangiumDocumentFactory
  * retained source text and graft it back, identity-preserving — deliberately not
  * "reload", which would suggest bytes coming back unchanged).
  *
- * **Re-entry is safe.** A shed document that later re-enters a build (because it
- * is relinked as an affected dependent, re-validated, or edited) is re-parsed
- * first by `HydraniumDocumentBuilder.resetToState`
- * ("rehydrate-on-re-entry"), which rebuilds the CST and every `$refNode`. That
+ * **Re-entry is safe.** A shed document that later re-enters a build has its
+ * CST and every `$refNode` grafted back first ("rehydrate-on-re-entry"),
+ * keeping its AST nodes so dependents outside the build stay linked to them.
+ * `HydraniumDocumentBuilder.rehydrateShedDocuments` grafts a document that is
+ * relinked or re-validated, before the build's phases, and
+ * `HydraniumLangiumDocumentFactory.update` one reset to `Changed` whose text
+ * has not changed. An edited document is re-parsed, and so is one whose graft
+ * is refused or diverges, and a build after it relinks its dependents. That
  * matters because Langium derives the reference index — and thus
- * `IndexManager.isAffected` and the `segment` used by rename / find-references —
- * from `$refNode`; without rehydration a re-index would silently drop the
- * document's cross-references and its dependents would stop being relinked.
+ * `IndexManager.isAffected` and the `segment` used by rename /
+ * find-references — from `$refNode`. Without rehydration a re-index would
+ * silently drop the document's cross-references, and it would no longer be
+ * relinked when its targets change.
  *
  * Constructed with `(services, options)` and self-registers a `Validated`
- * `BuildPhasePass`, which
- * is why the framework constructs it eagerly — the pass must be registered before
- * the first build. Shedding itself is opt-in: the bound default strategy is
- * `always-keep`, so the pass runs and sheds nothing until an adopter rebinds the
- * slot with a shedding strategy.
+ * `BuildPhasePass`, which is why the framework constructs it eagerly — the pass
+ * must be registered before the first build. Shedding itself is opt-in: the
+ * bound default strategy is `always-keep`, so the pass runs and sheds nothing
+ * until an adopter rebinds the slot with a shedding strategy.
  *
  * **Read-side navigation under a shedding strategy.** Read-only LSP requests do
  * not run a build, so they do not trigger the build-side rehydrate. Features that
@@ -240,9 +296,11 @@ function rehydrateCst(document: LangiumDocument, factory: LangiumDocumentFactory
  */
 export interface CstResidencyService {
    /**
-    * Ensure `document` has a CST, re-parsing its retained text if it was shed.
-    * A resident document is left exactly as it is, so this is safe to call on
-    * a hot path and safe to call twice.
+    * Ensure `document` has a CST, re-parsing its retained text if it was shed
+    * and that text is the one its AST was parsed from. A resident document is
+    * left exactly as it is, so this is safe to call on a hot path and safe to
+    * call twice. A document whose graft diverged is not attempted again on the
+    * same text.
     */
    rehydrate(document: LangiumDocument): void;
 
@@ -271,6 +329,14 @@ export class DefaultCstResidencyService implements CstResidencyService {
     * cycles, and all cancelled by {@link dispose}.
     */
    protected readonly idleTimers = new Map<string, Debouncer>();
+   /**
+    * The text each document's graft diverged on. Until its text changes, the
+    * document is not shed again: an AST the build keeps mutating away from its
+    * text would otherwise cost a graft, a re-parse and a build on every
+    * re-entry. Keyed by document, because the re-parse after a divergence
+    * replaces the root.
+    */
+   protected readonly diverged = new WeakMap<LangiumDocument, string>();
    protected shedTotal = 0;
 
    constructor(
@@ -293,8 +359,8 @@ export class DefaultCstResidencyService implements CstResidencyService {
 
    /**
     * Restore `document`'s shed CST on demand — the ergonomic entry point over
-    * {@link rehydrateCst} (resolves the document factory itself). No-op `true`
-    * when the CST is resident, so read-side seams call it unconditionally.
+    * {@link rehydrateCst} (resolves the document factory itself). A no-op when
+    * the CST is resident, so read-side seams call it unconditionally.
     *
     * **Residency note (deliberate).** Rehydration does NOT count as a "use" for
     * the `shed-closed-when-idle` idle timer (which is refreshed only by build
@@ -306,13 +372,29 @@ export class DefaultCstResidencyService implements CstResidencyService {
     * method is where that hook goes.
     */
    rehydrate(document: LangiumDocument): void {
-      rehydrateCst(document, this.services.workspace.LangiumDocumentFactory);
+      const root = document.parseResult?.value;
+      // A graft from other text would attach its CST to nodes it does not
+      // describe. `shed` records the text the AST was parsed from.
+      // A diverged graft diverges again on the same text, so it is not parsed twice.
+      const parsedFrom = root === undefined ? undefined : this.services.workspace.ModelLedger.textOf(root);
+      if (
+         root === undefined ||
+         root.$cstNode !== undefined ||
+         parsedFrom === undefined ||
+         parsedFrom !== document.textDocument?.getText() ||
+         this.hasDiverged(document)
+      ) {
+         return;
+      }
+      if (!rehydrateCst(document, this.services.workspace.LangiumDocumentFactory, this.services.AstReflection)) {
+         this.diverged.set(document, parsedFrom);
+      }
    }
 
    /**
     * Node-level convenience over {@link rehydrate}: a resident node (its
     * `$cstNode` is set — true for every node of a non-shed document) returns
-    * `true` without even resolving the document, so hot read paths
+    * without even resolving the document, so hot read paths
     * (`getNameNode`, comment lookup) call this unconditionally.
     */
    rehydrateNode(node: AstNode): void {
@@ -340,11 +422,8 @@ export class DefaultCstResidencyService implements CstResidencyService {
       }
       for (const document of documents) {
          const uri = document.uri.toString();
-         if (this.textDocuments.isOpenInAnyClient(uri)) {
+         if (this.textDocuments.isOpenInAnyClient(uri) || !this.canShed(document) || !this.isSheddable(document)) {
             this.idleTimers.get(uri)?.cancel();
-            continue;
-         }
-         if (!this.isSheddable(document)) {
             continue;
          }
          this.idleTimerFor(uri).schedule();
@@ -371,14 +450,17 @@ export class DefaultCstResidencyService implements CstResidencyService {
     * Idle-timer fire: shed the document's CST if it is still closed and resident.
     * Re-checks open-state (a reopen within the window cancels the timer, but guard
     * anyway) and resolves the current document by URI (it may have been deleted,
-    * or its object replaced by a rebuild).
+    * or its object replaced by a rebuild). Re-checks {@link canShed} and
+    * {@link isSheddable} too. The timer was armed by an earlier build, and the
+    * document may since be mid-rebuild or have gained an unresolved reference
+    * in a cancelled build.
     */
    protected onIdle(uri: string): void {
       if (this.textDocuments.isOpenInAnyClient(uri)) {
          return;
       }
       const document = this.langiumDocs.getDocument(URI.parse(uri));
-      if (document === undefined) {
+      if (document === undefined || !this.canShed(document) || !this.isSheddable(document)) {
          return;
       }
       this.shedTotal += this.shed(document);
@@ -392,16 +474,42 @@ export class DefaultCstResidencyService implements CstResidencyService {
       this.idleTimers.clear();
    }
 
+   /** Whether `document`'s graft diverged on the text its root was parsed from. */
+   protected hasDiverged(document: LangiumDocument): boolean {
+      const text = this.diverged.get(document);
+      return text !== undefined && text === this.services.workspace.ModelLedger.textOf(document.parseResult.value);
+   }
+
+   /**
+    * Whether `document` can be shed without losing its AST identity or its
+    * references. Only a `Validated` document qualifies: the idle timer can fire
+    * while a build waits between documents, and a build that indexes a
+    * document's references without their CST drops them from the reference
+    * index. Its root needs a recorded version, because `shed` then records no
+    * text and the graft refuses it. A document whose graft diverged on its
+    * current text would cost a parse on every re-entry. Checked before
+    * {@link isSheddable}, so an override of that policy keeps these guards.
+    */
+   protected canShed(document: LangiumDocument): boolean {
+      return (
+         document.state === DocumentState.Validated &&
+         !this.hasDiverged(document) &&
+         this.services.workspace.ModelLedger.versionOf(document.parseResult.value) !== UNRECORDED_VERSION
+      );
+   }
+
    /**
     * Whether a closed document may have its CST shed. Only documents whose text
-    * a re-parse on re-entry can recover are sheddable; the default admits
-    * `file`-scheme documents (re-read from disk) and excludes synthetic / in-memory
-    * documents — e.g. built-in definitions registered under a custom URI scheme —
-    * whose text lives only in the CST and would be lost irrecoverably (a later
-    * relink would `readFile` a non-existent path). Adopters override to refine.
+    * a re-parse can recover are sheddable, because a re-entry whose graft
+    * diverges re-parses from disk. The default admits `file`-scheme documents
+    * and excludes synthetic / in-memory documents — e.g. built-in definitions
+    * registered under a custom URI scheme — for which that re-parse would
+    * `readFile` a non-existent path. A document with an unresolved
+    * reference stays resident too: Langium relinks it on every update, so a shed
+    * would only buy a re-graft each time. Adopters override to refine.
     */
    protected isSheddable(document: LangiumDocument): boolean {
-      return document.uri.scheme === 'file';
+      return document.uri.scheme === 'file' && !document.references.some(reference => reference.error !== undefined);
    }
 
    /**

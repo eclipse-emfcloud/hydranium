@@ -28,19 +28,33 @@
  * so this suite stays on the graft and the seams that call it.
  */
 
+import { DefaultCstResidencyService, DefaultModelLedger, DefaultVersionSyncService } from '@hydranium/core';
 import { asMutable } from '@hydranium/protocol';
 import {
    type AstNode,
    AstUtils,
    type CstNode,
+   DocumentState,
    isReference,
    type LangiumDocument,
    type MultiReference,
    type Reference,
    URI
 } from '@hydranium/langium';
-import { describe, expect, it } from 'vitest';
-import { type DomainModel, type Entity, isEntity, isTask, type ProcessModel, type Task } from '../src/language-server/ast.js';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+   type DomainModel,
+   type Entity,
+   isEntity,
+   isEnumeration,
+   isTask,
+   isWrite,
+   type ProcessModel,
+   type Task
+} from '../src/language-server/ast.js';
 import { makeServices, type OrderFlowHarness } from './order-flow-harness.js';
 
 /**
@@ -99,9 +113,15 @@ async function buildPair(slug: string): Promise<RehydrationFixture> {
    return { harness, domainDocument, processDocument };
 }
 
-/** Replicate the residency service's shed: null every node's `$cstNode` and every reference's `$refNode`. */
-function shed(document: LangiumDocument): void {
-   for (const node of AstUtils.streamAst(document.parseResult.value)) {
+/**
+ * Replicate the residency service's shed: record the root's text in the ledger,
+ * then null every node's `$cstNode` and every reference's `$refNode`.
+ */
+function shed(harness: OrderFlowHarness, document: LangiumDocument): void {
+   const root = document.parseResult.value;
+   const ledger = harness.shared.workspace.ModelLedger;
+   ledger.record(root, ledger.versionOf(root), ledger.textOf(root));
+   for (const node of AstUtils.streamAst(root)) {
       asMutable(node).$cstNode = undefined;
    }
    for (const reference of document.references ?? []) {
@@ -111,8 +131,8 @@ function shed(document: LangiumDocument): void {
 
 /** Shed BOTH documents, so a rehydrate of one is never helped by the other. */
 function shedBoth(fixture: RehydrationFixture): void {
-   shed(fixture.domainDocument);
-   shed(fixture.processDocument);
+   shed(fixture.harness, fixture.domainDocument);
+   shed(fixture.harness, fixture.processDocument);
 }
 
 /** Position fingerprint shared by `CstNode` and `DocumentSegment` (a reference description's `segment`). */
@@ -262,6 +282,129 @@ describe('CstResidencyService.rehydrate identity-preserving CST graft', () => {
       expect(document.parseResult.value.$cstNode).toBe(rootCst); // unchanged — early-return on resident CST
    });
 
+   it('leaves a document shed, with no node grafted, when one node lost a reference its text still has', async () => {
+      const fixture = await buildPair('reference-divergence');
+      const typeReference = entityNamed(fixture.domainDocument, 'Order').fields[0].type;
+      shedBoth(fixture);
+      Reflect.deleteProperty(typeReference, 'declared');
+
+      fixture.harness.shared.workspace.CstResidencyService.rehydrate(fixture.domainDocument);
+
+      const nodes = [...AstUtils.streamAst(fixture.domainDocument.parseResult.value)];
+      expect(nodes.every(node => node.$cstNode === undefined)).toBe(true);
+   });
+
+   it('leaves a document shed, with no node grafted, when one node has another type than its text parses to', async () => {
+      const fixture = await buildPair('type-divergence');
+      const order: AstNode = entityNamed(fixture.domainDocument, 'Order');
+      shedBoth(fixture);
+      asMutable(order).$type = 'Enumeration';
+
+      fixture.harness.shared.workspace.CstResidencyService.rehydrate(fixture.domainDocument);
+
+      const nodes = [...AstUtils.streamAst(fixture.domainDocument.parseResult.value)];
+      expect(nodes.every(node => node.$cstNode === undefined)).toBe(true);
+   });
+
+   it('leaves a document shed, with no node grafted, when two siblings of one type traded places', async () => {
+      const fixture = await buildPair('slot-divergence');
+      const status = fixture.domainDocument.parseResult.value.declarations.find(isEnumeration);
+      shedBoth(fixture);
+      status?.literals.reverse();
+
+      fixture.harness.shared.workspace.CstResidencyService.rehydrate(fixture.domainDocument);
+
+      const nodes = [...AstUtils.streamAst(fixture.domainDocument.parseResult.value)];
+      expect(status?.literals).toHaveLength(2);
+      expect(nodes.every(node => node.$cstNode === undefined)).toBe(true);
+   });
+
+   it('leaves a document shed, with no node grafted, when two siblings of one type traded places and slots', async () => {
+      const fixture = await buildPair('restamped-divergence');
+      const status = fixture.domainDocument.parseResult.value.declarations.find(isEnumeration);
+      shedBoth(fixture);
+      status?.literals.reverse();
+      status?.literals.forEach((literal, index) => {
+         asMutable(literal).$containerIndex = index;
+      });
+
+      fixture.harness.shared.workspace.CstResidencyService.rehydrate(fixture.domainDocument);
+
+      const nodes = [...AstUtils.streamAst(fixture.domainDocument.parseResult.value)];
+      expect(nodes.every(node => node.$cstNode === undefined)).toBe(true);
+   });
+
+   it('leaves a document shed, with no node grafted, when one node has another name than its text', async () => {
+      const fixture = await buildPair('value-divergence');
+      const order = entityNamed(fixture.domainDocument, 'Order');
+      shedBoth(fixture);
+      asMutable(order).name = 'Purchase';
+
+      fixture.harness.shared.workspace.CstResidencyService.rehydrate(fixture.domainDocument);
+
+      const nodes = [...AstUtils.streamAst(fixture.domainDocument.parseResult.value)];
+      expect(nodes.every(node => node.$cstNode === undefined)).toBe(true);
+   });
+
+   it('leaves a document shed, with no node grafted, when one reference has another text than its text', async () => {
+      const fixture = await buildPair('reference-text-divergence');
+      const typeReference = entityNamed(fixture.domainDocument, 'Order').fields[0].type;
+      shedBoth(fixture);
+      asMutable(typeReference.declared).$refText = 'Other';
+
+      fixture.harness.shared.workspace.CstResidencyService.rehydrate(fixture.domainDocument);
+
+      const nodes = [...AstUtils.streamAst(fixture.domainDocument.parseResult.value)];
+      expect(nodes.every(node => node.$cstNode === undefined)).toBe(true);
+   });
+
+   it('leaves a document shed, with no node grafted, when one node holds its references in another property order', async () => {
+      const fixture = await buildPair('reference-order-divergence');
+      const write = AstUtils.streamAst(fixture.processDocument.parseResult.value).find(isWrite);
+      if (write === undefined) {
+         throw new Error('the process declares no write');
+      }
+      shedBoth(fixture);
+      // Re-added with its own value, so it now enumerates after `field` and `literal`.
+      const entity = write.entity;
+      Reflect.deleteProperty(write, 'entity');
+      write.entity = entity;
+
+      fixture.harness.shared.workspace.CstResidencyService.rehydrate(fixture.processDocument);
+
+      const nodes = [...AstUtils.streamAst(fixture.processDocument.parseResult.value)];
+      expect(nodes.every(node => node.$cstNode === undefined)).toBe(true);
+   });
+
+   it('leaves a document shed when its text is not the one its AST was parsed from', async () => {
+      const fixture = await buildPair('other-text');
+      const root = fixture.domainDocument.parseResult.value;
+      const ledger = fixture.harness.shared.workspace.ModelLedger;
+      shedBoth(fixture);
+      ledger.record(root, ledger.versionOf(root), 'entity Order {}\n');
+
+      fixture.harness.shared.workspace.CstResidencyService.rehydrate(fixture.domainDocument);
+
+      expect(root.$cstNode).toBeUndefined();
+   });
+
+   it('leaves a code-built document without a CST, though its serialized text parses', () => {
+      // The serialized text is not the text the model was parsed from, so its
+      // pre-order node pairing would not have to match.
+      const harness = makeServices();
+      const factory = harness.shared.workspace.LangiumDocumentFactory;
+      const model = factory.fromString<DomainModel>(DOMAIN_SOURCE, URI.parse('file:///parsed.domain')).parseResult.value;
+      for (const node of AstUtils.streamAst(model)) {
+         asMutable(node).$cstNode = undefined;
+      }
+      const document = factory.fromModel(model, URI.parse('file:///code-built.domain'));
+      expect(document.textDocument.getText()).not.toBe('');
+
+      harness.shared.workspace.CstResidencyService.rehydrate(document);
+
+      expect(model.$cstNode).toBeUndefined();
+   });
+
    it('NameProvider.getNameNode transparently rehydrates a shed document in either grammar', async () => {
       // Mirrors go-to-definition / hierarchy: the target node lives in a closed
       // (shed) file and the provider reaches its name through `getNameNode`,
@@ -345,5 +488,287 @@ describe('CstResidencyService.rehydrate identity-preserving CST graft', () => {
       expect(references.some(description => description.sourceUri.toString() === processUri)).toBe(true);
       const declaration = references.find(description => rangeKey(description.segment) === declarationRange);
       expect(declaration, 'declaration self-reference must survive CST shedding').toBeDefined();
+   });
+});
+
+/**
+ * A chain of three: `order.domain` references `status.domain`, and the
+ * `.process` document references `order.domain` only. Changing `status.domain`
+ * relinks `order.domain` while the `.process` document stays out of the build.
+ */
+const STATUS_SOURCE = `enum OrderStatus { NEW, PAID }
+`;
+const ORDER_SOURCE = `entity Order {
+   status: OrderStatus
+}
+`;
+const FULFILLMENT_SOURCE = `process Fulfillment for Order {
+   task Ship reads Order.status
+}
+`;
+
+describe('a shed document re-entering a build without a text change', () => {
+   // Real files, because an update and a re-parse read the text from disk.
+   let folder = '';
+   beforeEach(() => {
+      folder = mkdtempSync(join(tmpdir(), 'order-flow-cst-re-entry-'));
+   });
+   afterEach(() => rmSync(folder, { recursive: true, force: true }));
+
+   async function buildChain(): Promise<{
+      harness: OrderFlowHarness;
+      statusUri: URI;
+      orderDocument: LangiumDocument<DomainModel>;
+      processDocument: LangiumDocument<ProcessModel>;
+   }> {
+      const harness = makeServices();
+      const factory = harness.shared.workspace.LangiumDocumentFactory;
+      const create = <T extends AstNode>(name: string, text: string): LangiumDocument<T> => {
+         writeFileSync(join(folder, name), text);
+         const document = factory.fromString<T>(text, URI.file(join(folder, name)));
+         harness.shared.workspace.LangiumDocuments.addDocument(document);
+         return document;
+      };
+      const statusDocument = create<DomainModel>('status.domain', STATUS_SOURCE);
+      const orderDocument = create<DomainModel>('order.domain', ORDER_SOURCE);
+      const processDocument = create<ProcessModel>('fulfillment.process', FULFILLMENT_SOURCE);
+      const documents: LangiumDocument[] = [statusDocument, orderDocument, processDocument];
+      await harness.shared.workspace.DocumentBuilder.build(documents, { validation: true });
+      for (const document of documents) {
+         expect(document.references.filter(reference => reference.error !== undefined)).toHaveLength(0);
+      }
+      return { harness, statusUri: statusDocument.uri, orderDocument, processDocument };
+   }
+
+   /** Change `status.domain` on disk and run the update that relinks `order.domain`. */
+   async function changeStatus(harness: OrderFlowHarness, statusUri: URI): Promise<void> {
+      writeFileSync(statusUri.fsPath, 'enum OrderStatus { NEW, PAID, SHIPPED }\n');
+      // Under the lock, as the server builds, so a build it requests waits for this one.
+      await harness.shared.workspace.WorkspaceLock.write(token => harness.shared.workspace.DocumentBuilder.update([statusUri], [], token));
+   }
+
+   it('keeps its AST nodes, so a dependent outside the build still resolves to them', async () => {
+      const { harness, statusUri, orderDocument, processDocument } = await buildChain();
+      const order = entityNamed(orderDocument, 'Order');
+      const subject = processDocument.parseResult.value.subject;
+      expect(subject.ref).toBe(order);
+
+      shed(harness, orderDocument);
+      await changeStatus(harness, statusUri);
+
+      expect(orderDocument.parseResult.value.$cstNode).toBeDefined();
+      expect(entityNamed(orderDocument, 'Order')).toBe(order);
+      expect(subject.ref).toBe(order);
+   });
+
+   /** Reset `order.domain` to `Changed` once the update has picked its relinks, as a project change does. */
+   async function resetToChanged(harness: OrderFlowHarness, document: LangiumDocument): Promise<void> {
+      const builder = harness.shared.workspace.DocumentBuilder;
+      const listener = builder.onUpdate(() => {
+         listener.dispose();
+         builder.resetToState(document, DocumentState.Changed);
+      });
+      await harness.shared.workspace.WorkspaceLock.write(token => builder.update([], [], token));
+   }
+
+   it('keeps its AST nodes across a reset to Changed, so a dependent outside the build still resolves to them', async () => {
+      const { harness, orderDocument, processDocument } = await buildChain();
+      const root = orderDocument.parseResult.value;
+      const subject = processDocument.parseResult.value.subject;
+
+      shed(harness, orderDocument);
+      await resetToChanged(harness, orderDocument);
+
+      expect(orderDocument.parseResult.value).toBe(root);
+      expect(orderDocument.parseResult.value.$cstNode).toBeDefined();
+      expect(subject.ref).toBe(entityNamed(orderDocument, 'Order'));
+   });
+
+   it('is re-parsed on a reset to Changed when its AST was not parsed from its current text', async () => {
+      const { harness, orderDocument } = await buildChain();
+      const root = orderDocument.parseResult.value;
+      const ledger = harness.shared.workspace.ModelLedger;
+      ledger.record(root, ledger.versionOf(root), 'entity Order {}\n');
+
+      shed(harness, orderDocument);
+      await resetToChanged(harness, orderDocument);
+
+      expect(orderDocument.parseResult.value).not.toBe(root);
+   });
+
+   it('is re-parsed on a reset to Changed after a disk change, without a graft first', async () => {
+      const { harness, orderDocument } = await buildChain();
+      const root = orderDocument.parseResult.value;
+      const rehydrate = vi.spyOn(harness.shared.workspace.CstResidencyService, 'rehydrate');
+
+      shed(harness, orderDocument);
+      writeFileSync(orderDocument.uri.fsPath, 'entity Order {\n   state: OrderStatus\n}\n');
+      await resetToChanged(harness, orderDocument);
+
+      expect(rehydrate).not.toHaveBeenCalled();
+      expect(orderDocument.parseResult.value).not.toBe(root);
+      expect(entityNamed(orderDocument, 'Order').fields[0].name).toBe('state');
+   });
+
+   /** Open `document` in the store with `text`, as an editor does. */
+   function open(harness: OrderFlowHarness, document: LangiumDocument, text: string): void {
+      const textDocument = { uri: document.uri.toString(), languageId: 'domain', version: 1, text };
+      harness.shared.workspace.TextDocuments.notifyDidOpenTextDocument({ textDocument });
+   }
+
+   it('keeps its AST nodes across a reset to Changed once opened with the text it was parsed from', async () => {
+      const { harness, orderDocument, processDocument } = await buildChain();
+      const root = orderDocument.parseResult.value;
+      const subject = processDocument.parseResult.value.subject;
+
+      shed(harness, orderDocument);
+      open(harness, orderDocument, ORDER_SOURCE);
+      await resetToChanged(harness, orderDocument);
+
+      expect(orderDocument.parseResult.value).toBe(root);
+      expect(orderDocument.parseResult.value.$cstNode).toBeDefined();
+      expect(subject.ref).toBe(entityNamed(orderDocument, 'Order'));
+   });
+
+   it('is re-parsed on a reset to Changed once opened with edited text, without a graft first', async () => {
+      const { harness, orderDocument } = await buildChain();
+      const root = orderDocument.parseResult.value;
+      const rehydrate = vi.spyOn(harness.shared.workspace.CstResidencyService, 'rehydrate');
+
+      shed(harness, orderDocument);
+      open(harness, orderDocument, 'entity Order {\n   state: OrderStatus\n}\n');
+      await resetToChanged(harness, orderDocument);
+
+      expect(rehydrate).not.toHaveBeenCalled();
+      expect(orderDocument.parseResult.value).not.toBe(root);
+      expect(entityNamed(orderDocument, 'Order').fields[0].name).toBe('state');
+   });
+
+   it('re-parses when the graft diverges and relinks the dependents in a build after the update', async () => {
+      const { harness, statusUri, orderDocument, processDocument } = await buildChain();
+      const subject = processDocument.parseResult.value.subject;
+      const recovery = vi.spyOn(harness.shared.workspace.VersionSyncService, 'requestRecoveryBuild');
+
+      shed(harness, orderDocument);
+      // An AST that no longer matches its text makes the graft's node count differ.
+      orderDocument.parseResult.value.declarations.pop();
+      await changeStatus(harness, statusUri);
+      await Promise.all(recovery.mock.results.map(result => result.value));
+
+      const order = entityNamed(orderDocument, 'Order');
+      expect(order.$cstNode).toBeDefined();
+      expect(subject.ref).toBe(order);
+      const built = harness.shared.workspace.LangiumDocuments.all.toArray();
+      expect(built.map(document => [document.uri.path, document.state])).toEqual(
+         built.map(document => [document.uri.path, DocumentState.Validated])
+      );
+   });
+
+   it('keeps its AST nodes and gets its CST back when a build resumes a validation category', async () => {
+      const { harness, orderDocument } = await buildChain();
+      const builder = harness.shared.workspace.DocumentBuilder;
+      const lock = harness.shared.workspace.WorkspaceLock;
+      builder.resetToState(orderDocument, DocumentState.IndexedReferences);
+      await lock.write(token => builder.build([orderDocument], { validation: { categories: ['fast'] } }, token));
+      const root = orderDocument.parseResult.value;
+
+      shed(harness, orderDocument);
+      await lock.write(token => builder.build([orderDocument], { validation: { categories: ['slow'] } }, token));
+
+      expect(orderDocument.parseResult.value).toBe(root);
+      expect(root.$cstNode).toBeDefined();
+      expect(orderDocument.state).toBe(DocumentState.Validated);
+   });
+
+   it('re-parses when the graft is refused and relinks the dependents in a build after the update', async () => {
+      const { harness, statusUri, orderDocument, processDocument } = await buildChain();
+      const root = orderDocument.parseResult.value;
+      const subject = processDocument.parseResult.value.subject;
+      const ledger = harness.shared.workspace.ModelLedger;
+      const recovery = vi.spyOn(harness.shared.workspace.VersionSyncService, 'requestRecoveryBuild');
+
+      shed(harness, orderDocument);
+      ledger.record(root, ledger.versionOf(root), 'entity Order {}\n');
+      await changeStatus(harness, statusUri);
+      await Promise.all(recovery.mock.results.map(result => result.value));
+
+      expect(orderDocument.parseResult.value).not.toBe(root);
+      expect(subject.ref).toBe(entityNamed(orderDocument, 'Order'));
+      expect(processDocument.state).toBe(DocumentState.Validated);
+   });
+
+   it('re-parses when the graft diverges on a reset to Changed, keeps the build whole and relinks the dependents in a build after it', async () => {
+      const { harness, orderDocument, processDocument } = await buildChain();
+      const subject = processDocument.parseResult.value.subject;
+      const recovery = vi.spyOn(harness.shared.workspace.VersionSyncService, 'requestRecoveryBuild');
+      const built = harness.shared.workspace.LangiumDocuments.all.toArray();
+      const allValidated = built.map(document => [document.uri.path, DocumentState.Validated]);
+
+      shed(harness, orderDocument);
+      orderDocument.parseResult.value.declarations.pop();
+      await resetToChanged(harness, orderDocument);
+
+      // The reset came after the update picked its relinks, so a build after it relinks the dependents.
+      expect(built.map(document => [document.uri.path, document.state])).toEqual(allValidated);
+      await Promise.all(recovery.mock.results.map(result => result.value));
+      expect(built.map(document => [document.uri.path, document.state])).toEqual(allValidated);
+      expect(subject.ref).toBe(entityNamed(orderDocument, 'Order'));
+   });
+});
+
+describe('the service slots', () => {
+   it('takes a residency service whose constructor subscribes to the document builder', () => {
+      let subscribed = false;
+      const harness = makeServices({
+         extraSharedModules: [
+            {
+               workspace: {
+                  CstResidencyService: services => {
+                     services.workspace.DocumentBuilder.onUpdate(() => undefined);
+                     subscribed = true;
+                     return new DefaultCstResidencyService(services);
+                  }
+               }
+            }
+         ]
+      });
+      expect(harness.shared.workspace.DocumentBuilder).toBeDefined();
+      expect(subscribed).toBe(true);
+   });
+
+   it('takes a version-sync service whose constructor reads the document builder', () => {
+      const harness = makeServices({
+         extraSharedModules: [
+            {
+               workspace: {
+                  VersionSyncService: services => {
+                     services.workspace.DocumentBuilder.onUpdate(() => undefined);
+                     return new DefaultVersionSyncService(services);
+                  }
+               }
+            }
+         ]
+      });
+      expect(harness.shared.workspace.VersionSyncService).toBeInstanceOf(DefaultVersionSyncService);
+   });
+
+   it('takes a version-sync service and a ledger whose constructors read the document factory', () => {
+      const harness = makeServices({
+         extraSharedModules: [
+            {
+               workspace: {
+                  VersionSyncService: services => {
+                     expect(services.workspace.LangiumDocumentFactory).toBeDefined();
+                     return new DefaultVersionSyncService(services);
+                  },
+                  ModelLedger: services => {
+                     expect(services.workspace.LangiumDocumentFactory).toBeDefined();
+                     return new DefaultModelLedger();
+                  }
+               }
+            }
+         ]
+      });
+      expect(harness.shared.workspace.ModelLedger).toBeInstanceOf(DefaultModelLedger);
    });
 });

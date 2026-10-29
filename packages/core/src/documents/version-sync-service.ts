@@ -62,6 +62,12 @@ export interface VersionSyncService {
     */
    syncTo(uri: URI, textVersion: number): Promise<void> | undefined;
    /**
+    * Build `document` through {@link requestRecoveryBuild}, unless it is no
+    * longer the document for its URI by then. Nothing waits on the build, so
+    * a failure is logged here.
+    */
+   rebuildWhileCurrent(document: LangiumDocument): void;
+   /**
     * Whether `uri`'s root was parsed from text at `textVersion` or later; requests
     * nothing. A root with no recorded version or a placeholder counts as synced,
     * since no build records a version for it, and so does a URI with no document.
@@ -156,6 +162,14 @@ export class DefaultVersionSyncService implements VersionSyncService {
    syncTo(uri: URI, textVersion: number): Promise<void> | undefined {
       const behind = (): boolean => !this.isSyncedTo(uri, textVersion);
       return behind() ? this.requestRecoveryBuild(uri, { stillNeeded: behind }) : undefined;
+   }
+
+   rebuildWhileCurrent(document: LangiumDocument): void {
+      const uri = document.uri;
+      this.requestRecoveryBuild(uri, { stillNeeded: () => this.services.workspace.LangiumDocuments.getDocument(uri) === document }).catch(
+         (error: unknown) =>
+            this.tracer.withUri(uri.toString()).error(`The rebuild of a current document failed. ${describeErrorWithStack(error)}`)
+      );
    }
 
    requestRecoveryBuild(uri: URI, request: RecoveryBuildRequest): Promise<void> {

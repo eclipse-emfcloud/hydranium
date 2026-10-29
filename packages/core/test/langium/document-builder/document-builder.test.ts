@@ -7,11 +7,13 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { waitFor } from '@hydranium/protocol/testing';
-import { type CanonicalUri, Deferred, Disposable, Logger, type LogThreshold, SystemClock } from '@hydranium/protocol';
+import { asMutable, type CanonicalUri, Deferred, Disposable, Logger, type LogThreshold, SystemClock } from '@hydranium/protocol';
 import {
    type BuildOptions,
+   type CstNode,
+   DefaultDocumentBuilder,
    DocumentState,
    type DocumentPhaseListener,
    type FileSystemNode,
@@ -690,7 +692,7 @@ describe('HydraniumDocumentBuilder', () => {
       });
    });
 
-   describe('resetToState rehydrating the CST on re-entry', () => {
+   describe('resetToState, and the CST graft a build runs first on shed documents', () => {
       // Stub the dependencies that the inherited `resetToState` touches so it runs
       // without the full DI graph (index removal + linker unlink are no-ops here;
       // the test only asserts the resulting target state). `indexManager` and
@@ -698,25 +700,135 @@ describe('HydraniumDocumentBuilder', () => {
       // (`services.workspace.IndexManager` / `services.ServiceRegistry`), so the
       // doubles go in through the services tree — the seam an adopter uses — not
       // by reassigning fields after construction.
-      function rehydrateBuilder(refreshCrossDocumentComputedScopes = false): HydraniumDocumentBuilder {
+      // `graft` stands in for the residency service: `true` reattaches a CST,
+      // `false` leaves the document shed as a diverged graft does. `rebuilds`
+      // collects the follow-up builds asked of the version sync service.
+      function rehydrateBuilder({
+         refreshCrossDocumentComputedScopes = false,
+         graft = true,
+         documents = [],
+         rebuilds = [],
+         onGraft = () => undefined
+      }: {
+         refreshCrossDocumentComputedScopes?: boolean;
+         graft?: boolean;
+         documents?: LangiumDocument[];
+         rebuilds?: LangiumDocument[];
+         onGraft?: () => void;
+      } = {}): HydraniumDocumentBuilder {
          const services = makeNoopSharedServices({
             Logger: makeNoopLogger(),
-            ServiceRegistry: { getServices: () => ({ references: { Linker: { unlink: () => undefined } } }) },
+            ServiceRegistry: {
+               getServices: () => ({
+                  references: { Linker: { unlink: () => undefined } },
+                  validation: { ValidationRegistry: { getAllValidationCategories: () => new Set(['fast', 'slow']) } }
+               })
+            },
             workspace: {
-               LangiumDocuments: { getDocument: () => undefined, all: { filter: () => ({ map: () => ({ toArray: () => [] }) }) } },
-               IndexManager: { removeContent: () => undefined, removeReferences: () => undefined, remove: () => undefined }
+               LangiumDocuments: {
+                  getDocument: (uri: URI) => documents.find(document => document.uri.toString() === uri.toString()),
+                  all: documents
+               },
+               // A cancelled build queues a read for the waits it may have left.
+               WorkspaceLock: { read: () => Promise.resolve() },
+               VersionSyncService: {
+                  rebuildWhileCurrent: (document: LangiumDocument) => {
+                     rebuilds.push(document);
+                  }
+               },
+               IndexManager: {
+                  removeContent: () => undefined,
+                  removeReferences: () => undefined,
+                  remove: () => undefined
+               },
+               CstResidencyService: {
+                  rehydrate: (document: LangiumDocument) => {
+                     if (graft) {
+                        asMutable(document.parseResult.value).$cstNode = {} as CstNode;
+                     }
+                     onGraft();
+                  }
+               }
             }
          });
          return new HydraniumDocumentBuilder(services, { logLevel: 'off', refreshCrossDocumentComputedScopes });
       }
-      function doc(state: DocumentState, root: object | undefined): LangiumDocument {
-         return { uri: URI.parse('file:///a.a'), state, parseResult: { value: root } } as unknown as LangiumDocument;
+      function doc(state: DocumentState, root: object | undefined, path = '/a.a'): LangiumDocument {
+         return { uri: URI.file(path), state, parseResult: { value: root }, references: [] } as unknown as LangiumDocument;
       }
 
-      it('relinking a shed document forces a full re-parse (reset to Changed)', () => {
+      /** Langium's phase runner, which is protected. */
+      interface LangiumPhases {
+         buildDocuments(): Promise<void>;
+      }
+      // Langium's phases are stubbed out, so a build runs only the graft before them.
+      async function buildWithoutPhases(run: () => Promise<void>): Promise<void> {
+         const phases = vi.spyOn(DefaultDocumentBuilder.prototype as unknown as LangiumPhases, 'buildDocuments').mockResolvedValue();
+         try {
+            await run();
+         } finally {
+            phases.mockRestore();
+         }
+      }
+
+      it('a build grafts a shed document an update relinked before its phases, keeping the relink state', async () => {
+         const shed = doc(DocumentState.Validated, { $type: 'Model' });
+         const rebuilds: LangiumDocument[] = [];
+         const builder = rehydrateBuilder({ documents: [shed], rebuilds });
+         // The reset alone leaves the CST to the build.
+         builder.resetToState(shed, DocumentState.ComputedScopes);
+         expect(shed.parseResult.value.$cstNode).toBeUndefined();
+         await buildWithoutPhases(() => builder.build([shed], {}, new CancellationTokenSource().token));
+         expect(shed.parseResult.value.$cstNode).toBeDefined();
+         expect(shed.state).toBe(DocumentState.ComputedScopes);
+         expect(rebuilds).toEqual([]);
+      });
+
+      it('a build resuming a validation category grafts a shed document first', async () => {
          const builder = rehydrateBuilder();
          const shed = doc(DocumentState.Validated, { $type: 'Model' });
+         // Langium sets the state of a resumed category validation itself, past `resetToState`.
+         await buildWithoutPhases(() => builder.build([shed], { validation: { categories: ['slow'] } }));
+         expect(shed.parseResult.value.$cstNode).toBeDefined();
+         expect(shed.state).toBe(DocumentState.IndexedReferences);
+      });
+
+      it('a build with no validation category left to run leaves a shed document shed', async () => {
+         const builder = rehydrateBuilder();
+         const shed = doc(DocumentState.Validated, { $type: 'Model' });
+         await buildWithoutPhases(() => builder.build([shed], { validation: { categories: [] } }));
+         expect(shed.parseResult.value.$cstNode).toBeUndefined();
+      });
+
+      it('a diverged graft resets the document to Changed and asks for a build after this one', async () => {
+         const shed = doc(DocumentState.Validated, { $type: 'Model' });
+         const rebuilds: LangiumDocument[] = [];
+         const builder = rehydrateBuilder({ graft: false, documents: [shed], rebuilds });
          builder.resetToState(shed, DocumentState.ComputedScopes);
+         await buildWithoutPhases(() => builder.build([shed], {}));
+         expect(shed.state).toBe(DocumentState.Changed);
+         // The build after this one relinks the dependents, as a changed document's.
+         expect(rebuilds).toEqual([shed]);
+      });
+
+      it('a cancelled build stops grafting between shed documents', async () => {
+         const first = doc(DocumentState.ComputedScopes, { $type: 'Model' });
+         const second = doc(DocumentState.ComputedScopes, { $type: 'Model' }, '/b.a');
+         const cancellation = new CancellationTokenSource();
+         const builder = rehydrateBuilder({ documents: [first, second], onGraft: () => cancellation.cancel() });
+         await buildWithoutPhases(async () => {
+            await expect(builder.build([first, second], {}, cancellation.token)).rejects.toBe(OperationCancelled);
+         });
+         expect(first.parseResult.value.$cstNode).toBeDefined();
+         expect(second.parseResult.value.$cstNode).toBeUndefined();
+      });
+
+      it('a shed document reset to Changed is left to the document factory, without a graft here', async () => {
+         const builder = rehydrateBuilder();
+         const shed = doc(DocumentState.Validated, { $type: 'Model' });
+         builder.resetToState(shed, DocumentState.Changed);
+         await buildWithoutPhases(() => builder.build([shed], {}));
+         expect(shed.parseResult.value.$cstNode).toBeUndefined();
          expect(shed.state).toBe(DocumentState.Changed);
       });
 
@@ -728,7 +840,7 @@ describe('HydraniumDocumentBuilder', () => {
       });
 
       it('resident document drops to IndexedContent when refreshCrossDocumentComputedScopes is set', () => {
-         const builder = rehydrateBuilder(true);
+         const builder = rehydrateBuilder({ refreshCrossDocumentComputedScopes: true });
          const resident = doc(DocumentState.Validated, { $type: 'Model', $cstNode: {} });
          builder.resetToState(resident, DocumentState.ComputedScopes);
          expect(resident.state).toBe(DocumentState.IndexedContent);
