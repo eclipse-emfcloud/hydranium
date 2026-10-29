@@ -132,6 +132,7 @@ export class ReconcilingTransferHydraniumGlspState<
          logger: this.logger,
          onConflictDropped: () => this.writeDropped(),
          onAlreadyApplied: () => this.captureBuiltRoot(),
+         assertParses: () => this.assertStoredTextParses(this._sourceUri),
          maxWrites: this.maxSourceModelWrites
       });
    }
@@ -158,9 +159,10 @@ export class ReconcilingTransferHydraniumGlspState<
    /**
     * Refetch hook — the stored text parsed afresh, as a persisted-shape
     * projection with the version of that text (or `undefined` when
-    * unavailable): theirs, which the `conflictResolver` replays the user's
-    * intent onto. Default uses {@link AbstractHydraniumGlspState.readCurrentRoot}
-    * + the framework encoder's `'grammar'` mode; adopters override alongside
+    * unavailable). Throws `DocumentSyntaxError` when the text does not parse.
+    * This is theirs, which the `conflictResolver` replays the user's intent
+    * onto. Default uses {@link AbstractHydraniumGlspState.readCurrentRoot} +
+    * the framework encoder's `'grammar'` mode. Adopters override alongside
     * {@link persist}.
     */
    protected async refetch(): Promise<VersionedModel<TransferTypeFor<TRoot, TTransferMap>> | undefined> {

@@ -11,10 +11,13 @@ import 'reflect-metadata';
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { Container } from 'inversify';
-import { type Command, DefaultCommandStack, Logger as GlspLogger, ModelState } from '@eclipse-glsp/server';
+import { type Command, CompoundCommand, DefaultCommandStack, Logger as GlspLogger, ModelState } from '@eclipse-glsp/server';
+import { DocumentSyntaxError } from '@hydranium/protocol';
 import type { ServerSharedServices } from '@hydranium/core';
 import { makeNoopSharedServices } from '@hydranium/core/testing';
 import { HydraniumGlspCommandStack } from '../src/command/hydranium-glsp-command-stack.js';
+import { HydraniumGlspOperationCommand } from '../src/command/hydranium-glsp-operation-command.js';
+import { HydraniumGlspRecordingCommand } from '../src/command/hydranium-glsp-recording-command.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { makeNoopGlspLogger } from '../src/testing/make-noop-glsp-logger.js';
 
@@ -47,6 +50,15 @@ const noopCommand: Command = {
    redo: async () => undefined,
    canUndo: () => true
 };
+
+/** An operation command whose undo and redo do what `fail` says, without the state an operation needs. */
+function operationFailingWith(fail: () => Promise<void>): HydraniumGlspOperationCommand {
+   const command = Object.create(HydraniumGlspOperationCommand.prototype) as HydraniumGlspOperationCommand;
+   Object.assign(command, { execute: async () => undefined, undo: fail, redo: fail, canUndo: () => true });
+   return command;
+}
+
+const refused = (): Promise<void> => Promise.reject(new DocumentSyntaxError(OWN));
 
 describe('HydraniumGlspCommandStack', () => {
    it('is dirty when any document the diagram has open is, the secondaries included', () => {
@@ -89,6 +101,84 @@ describe('HydraniumGlspCommandStack', () => {
    });
 });
 
+describe('HydraniumGlspCommandStack after a refused undo or redo', () => {
+   it('keeps the history and its place when an operation’s undo is refused for a syntax error', async () => {
+      const stack = makeStack({}, new Set());
+      await stack.execute(noopCommand);
+      await stack.execute(operationFailingWith(refused));
+
+      await expect(stack.undo()).rejects.toBeInstanceOf(DocumentSyntaxError);
+
+      expect({ undo: stack.canUndo(), redo: stack.canRedo(), top: stack['top'] }).toEqual({ undo: true, redo: false, top: 1 });
+   });
+
+   it('keeps the history and its place when an operation’s redo is refused for a syntax error', async () => {
+      const stack = makeStack({}, new Set());
+      let fail = false;
+      await stack.execute(noopCommand);
+      await stack.execute(operationFailingWith(() => (fail ? refused() : Promise.resolve())));
+      await stack.undo();
+      fail = true;
+
+      await expect(stack.redo()).rejects.toBeInstanceOf(DocumentSyntaxError);
+
+      expect({ undo: stack.canUndo(), redo: stack.canRedo(), top: stack['top'] }).toEqual({ undo: true, redo: true, top: 0 });
+   });
+
+   it('keeps the history when a recording command executed on its own is refused for a syntax error, as its operation is', async () => {
+      const stack = makeStack({}, new Set());
+      const command = Object.create(HydraniumGlspRecordingCommand.prototype) as HydraniumGlspRecordingCommand<object>;
+      Object.assign(command, { execute: async () => undefined, undo: refused, canUndo: () => true });
+      await stack.execute(command);
+
+      await expect(stack.undo()).rejects.toBeInstanceOf(DocumentSyntaxError);
+
+      expect(stack.canUndo()).toBe(true);
+   });
+
+   it('flushes when a compound is refused for a syntax error, and fails as a plain error carrying the refusal', async () => {
+      // Its children's own compensation may have failed, so the refusal no longer says nothing changed.
+      const stack = makeStack({}, new Set());
+      await stack.execute(new CompoundCommand([noopCommand, operationFailingWith(refused)]));
+
+      const failure = await stack.undo().then(
+         () => undefined,
+         (error: unknown) => error
+      );
+
+      expect({
+         refusal: failure instanceof DocumentSyntaxError,
+         cause: failure instanceof Error && failure.cause instanceof DocumentSyntaxError,
+         canUndo: stack.canUndo()
+      }).toEqual({ refusal: false, cause: true, canUndo: false });
+   });
+
+   it('flushes when a command that is no operation is refused for a syntax error, and fails as a plain error carrying the refusal', async () => {
+      const stack = makeStack({}, new Set());
+      await stack.execute({ ...noopCommand, undo: refused });
+
+      const failure = await stack.undo().then(
+         () => undefined,
+         (error: unknown) => error
+      );
+
+      expect({
+         refusal: failure instanceof DocumentSyntaxError,
+         cause: failure instanceof Error && failure.cause instanceof DocumentSyntaxError,
+         canUndo: stack.canUndo()
+      }).toEqual({ refusal: false, cause: true, canUndo: false });
+   });
+
+   it('flushes when an operation’s undo fails otherwise', async () => {
+      const stack = makeStack({}, new Set());
+      await stack.execute(operationFailingWith(() => Promise.reject(new Error('undo failed'))));
+
+      await expect(stack.undo()).rejects.toThrow('undo failed');
+
+      expect(stack.canUndo()).toBe(false);
+   });
+});
+
 describe('upstream handleError', () => {
    it('still matches the body HydraniumGlspCommandStack was lifted from', () => {
       // Whitespace-insensitive so a reformat alone does not redden.
@@ -110,5 +200,20 @@ describe('upstream execute', () => {
          'upstream @eclipse-glsp/server changed DefaultCommandStack.execute — re-lift the body into ' +
             'HydraniumGlspCommandStack (keeping the skipped push of a dropped recording command) and update this digest'
       ).toBe('64d5c7e074f0e3f7f791f8f6c769e6108f6f99acef6db95a58d6e36994362355');
+   });
+});
+
+describe('upstream undo and redo', () => {
+   it.each([
+      ['undo', 'eb967c5f68398abda1b165582135f590bf417933fb5f941da79c05310f90988a'],
+      ['redo', '0acc4dc9848f2080c63906e2092d436fa870ce3e7c12fb9b5a9489d950d9c5d9']
+   ] as const)('%s still matches the body HydraniumGlspCommandStack was lifted from', (name, digest) => {
+      // Whitespace-insensitive so a reformat alone does not redden.
+      const body = DefaultCommandStack.prototype[name].toString().replace(/\s+/g, ' ').trim();
+      expect(
+         createHash('sha256').update(body).digest('hex'),
+         `upstream @eclipse-glsp/server changed DefaultCommandStack.${name} — re-lift the body into ` +
+            'HydraniumGlspCommandStack (keeping the history after a refusal that left nothing behind) and update this digest'
+      ).toBe(digest);
    });
 });

@@ -17,9 +17,11 @@
  * listener, so calling the classes by hand tests the class and not the wiring.
  */
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { type DomainModel, type ProcessModel, type Task, isTask } from '../src/language-server/ast.js';
-import { documentFor, loadFixture, makeWorkspaceHarness, type OrderFlowHarness } from './order-flow-harness.js';
+import { documentFor, FIXTURE_ROOT, loadFixture, makeWorkspaceHarness, type OrderFlowHarness } from './order-flow-harness.js';
 
 function taskNamed(model: ProcessModel, name: string): Task {
    const found = model.nodes.find(node => isTask(node) && node.name === name);
@@ -79,6 +81,17 @@ describe('order-flow integrity rules bound and running in the build', () => {
       // Renaming from the name as found would nest (`Pay__1__1`) and grow a
       // segment for every further copy.
       expect(model.nodes.map(node => node.name)).toEqual(['Pay', 'Pay__1', 'Pay__2']);
+   });
+
+   it('leaves a file that does not parse as written, duplicates included', async () => {
+      const harness = await makeWorkspaceHarness();
+      const document = await loadFixture<ProcessModel>(harness, 'duplicate-nodes-cut-off.process');
+
+      // A repair writes back the recovered AST, which has no `-> Pay` branch.
+      expect(document.parseResult.value.nodes.map(node => node.name)).toEqual(['Pay', 'Pay', undefined, 'G']);
+      expect(readFileSync(document.uri.fsPath, 'utf8')).toBe(
+         readFileSync(path.join(FIXTURE_ROOT, 'duplicate-nodes-cut-off.process'), 'utf8')
+      );
    });
 });
 

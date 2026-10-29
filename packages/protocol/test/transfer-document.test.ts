@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { type TransferDiagnostic, TransferDocument, type TransferElement } from '../src';
+import { TransferDiagnostic, TransferDocument, type TransferElement } from '../src';
 
 interface FakeRoot extends TransferElement {
    readonly $type: 'FakeRoot';
@@ -36,5 +36,17 @@ describe('TransferDocument.absent', () => {
       const doc = TransferDocument.absent<FakeRoot>('file:///A.fake');
       expect(doc).toEqual({ uri: 'file:///A.fake' });
       expect(TransferDocument.isLoaded(doc)).toBe(false);
+   });
+});
+
+describe('TransferDiagnostic.hasSyntaxErrors', () => {
+   const of = (type: TransferDiagnostic['type']): TransferDiagnostic => ({ type, severity: 'error', message: 'boom', element: '' });
+
+   it.each([
+      ['counts a lexer error', 'lexing-error', true],
+      ['counts a parser error', 'parsing-error', true],
+      ['does not count a validation error', 'validation-error', false]
+   ] as const)('%s', (_title, type, expected) => {
+      expect(TransferDiagnostic.hasSyntaxErrors([of('validation-error'), of(type)])).toBe(expected);
    });
 });

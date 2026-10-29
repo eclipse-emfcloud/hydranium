@@ -46,7 +46,7 @@ So read a repair from the AST, never from the text:
 - Do not read `textDocument.getText()`.
 
 `IntegrityService.SettledState` is the phase after which repairs are in the
-AST.
+AST. A document that does not parse gets no repair until it does.
 
 ### Layer 3 — `AstDocument`, the live AST with its version
 

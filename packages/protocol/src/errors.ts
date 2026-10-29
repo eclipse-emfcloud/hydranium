@@ -63,7 +63,8 @@ export const HYDRANIUM_ERROR_CODES = {
    documentNotOpen: 42005,
    duplicateClientId: 42006,
    reservedClientId: 42007,
-   saveFailed: 42008
+   saveFailed: 42008,
+   documentSyntaxError: 42009
 } as const;
 
 /**
@@ -178,6 +179,8 @@ export const DUPLICATE_CLIENT_ID_ERROR_CODE = HYDRANIUM_ERROR_CODES.duplicateCli
 export const RESERVED_CLIENT_ID_ERROR_CODE = HYDRANIUM_ERROR_CODES.reservedClientId;
 /** JSON-RPC code for {@link SaveFailedError}. */
 export const SAVE_FAILED_ERROR_CODE = HYDRANIUM_ERROR_CODES.saveFailed;
+/** JSON-RPC code for {@link DocumentSyntaxError}. */
+export const DOCUMENT_SYNTAX_ERROR_CODE = HYDRANIUM_ERROR_CODES.documentSyntaxError;
 
 /**
  * The catalogue declaration behind {@link SessionClosedError}'s default
@@ -352,6 +355,39 @@ export class SaveFailedError extends ResponseError<SaveFailedErrorData> {
    }
 }
 
+/** The catalogue declaration behind {@link DocumentSyntaxError}'s sentence. */
+export const DOCUMENT_SYNTAX_ERROR = defineMessage(
+   'hydranium/protocol/document-syntax-error',
+   'The edit to {uri} was not applied: the document has a syntax error. Fix it in the text first.'
+);
+
+/** Structured payload carried in {@link DocumentSyntaxError.data}. */
+export interface DocumentSyntaxErrorData extends HydraniumMessageData {
+   readonly uri: string;
+}
+
+/**
+ * Thrown when a write would serialize a model over text that does not parse.
+ * A model read from a build with lexer or parser errors lacks what the parser
+ * skipped, so writing it would delete that text. A client session refuses a
+ * model write while the document's last build has such errors and its text
+ * is not blank, unless the write is a `restore`. A diagram refuses an edit,
+ * undo or redo that would write such a document, or whose merge or collision
+ * reads one. A client's write of text is not refused, since that is how the
+ * text is repaired.
+ */
+export class DocumentSyntaxError extends ResponseError<DocumentSyntaxErrorData> {
+   constructor(uri: string) {
+      super(DOCUMENT_SYNTAX_ERROR_CODE, DOCUMENT_SYNTAX_ERROR.format({ uri }), { uri, ...messageData(DOCUMENT_SYNTAX_ERROR, { uri }) });
+      this.name = 'DocumentSyntaxError';
+      Object.setPrototypeOf(this, DocumentSyntaxError.prototype);
+   }
+
+   get uri(): string {
+      return this.data!.uri;
+   }
+}
+
 /**
  * Rebuilds one typed error from the `data` that crossed the wire, or
  * `undefined` when `data` lacks the fields the class reads.
@@ -368,7 +404,8 @@ const PROTOCOL_ERROR_REVIVERS: ReadonlyMap<number, ProtocolErrorReviver> = new M
    [DOCUMENT_NOT_OPEN_ERROR_CODE, data => (hasDocumentNotOpenFields(data) ? new DocumentNotOpenError(data.uri, data.clientId) : undefined)],
    [DUPLICATE_CLIENT_ID_ERROR_CODE, data => (hasClientId(data) ? new DuplicateClientIdError(data.clientId) : undefined)],
    [RESERVED_CLIENT_ID_ERROR_CODE, data => (hasClientId(data) ? new ReservedClientIdError(data.clientId) : undefined)],
-   [SAVE_FAILED_ERROR_CODE, data => (hasSaveFailures(data) ? new SaveFailedError(data.failures) : undefined)]
+   [SAVE_FAILED_ERROR_CODE, data => (hasSaveFailures(data) ? new SaveFailedError(data.failures) : undefined)],
+   [DOCUMENT_SYNTAX_ERROR_CODE, data => (hasUri(data) ? new DocumentSyntaxError(data.uri) : undefined)]
 ]);
 
 // One check per class of the fields its getters read, run by its reviver on
@@ -385,6 +422,10 @@ function hasClientId(value: unknown): value is { clientId: string } {
 
 function hasDocumentNotOpenFields(value: unknown): value is { uri: string; clientId: string } {
    return isRecord(value) && typeof value.uri === 'string' && typeof value.clientId === 'string';
+}
+
+function hasUri(value: unknown): value is { uri: string } {
+   return isRecord(value) && typeof value.uri === 'string';
 }
 
 function hasSaveFailures(value: unknown): value is { failures: SaveFailure[] } {
@@ -481,6 +522,7 @@ const DOCUMENT_NOT_OPEN_BRAND = brand(DocumentNotOpenError, 'DocumentNotOpenErro
 const DUPLICATE_CLIENT_ID_BRAND = brand(DuplicateClientIdError, 'DuplicateClientIdError');
 const RESERVED_CLIENT_ID_BRAND = brand(ReservedClientIdError, 'ReservedClientIdError');
 const SAVE_FAILED_BRAND = brand(SaveFailedError, 'SaveFailedError');
+const DOCUMENT_SYNTAX_ERROR_BRAND = brand(DocumentSyntaxError, 'DocumentSyntaxError');
 
 /**
  * Whether `error` is a {@link SessionClosedError} whose getters read valid
@@ -512,6 +554,11 @@ export function isReservedClientIdError(error: unknown): error is ReservedClient
 /** Whether `error` is a {@link SaveFailedError}. See {@link isSessionClosedError}. */
 export function isSaveFailedError(error: unknown): error is SaveFailedError {
    return hasBrand(error, SAVE_FAILED_BRAND) && hasSaveFailures(error);
+}
+
+/** Whether `error` is a {@link DocumentSyntaxError}. See {@link isSessionClosedError}. */
+export function isDocumentSyntaxError(error: unknown): error is DocumentSyntaxError {
+   return hasBrand(error, DOCUMENT_SYNTAX_ERROR_BRAND) && hasUri(error);
 }
 
 /** Whether `error` is a {@link ConflictError}. See {@link isSessionClosedError}. */

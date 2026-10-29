@@ -85,6 +85,11 @@ export interface IntegrityRule<T extends AstNode = AstNode> extends RegistryItem
    /**
     * Apply the rule. Returns `true` if the AST was mutated.
     *
+    * The build does not call it for a document whose parse lacks some of its
+    * text, see `hasSkippedText`, unless an override of `isStructurallyBroken`
+    * says otherwise, since a repair is written back by serializing the AST. A
+    * direct call of `IntegrityService.enforceIntegrity` has no such check.
+    *
     * Mirrors Langium's `ValidationCheck` shape (`MaybePromise<void>`) so a
     * rule that must consult an external system can return a promise without
     * forcing every sync rule to pay a microtask tick per node. The

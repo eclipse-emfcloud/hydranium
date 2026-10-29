@@ -27,6 +27,7 @@ export * from './primitives';
 
 export {
    DOCUMENT_NOT_OPEN,
+   DOCUMENT_SYNTAX_ERROR,
    DUPLICATE_CLIENT_ID,
    SAVE_FAILED,
    SESSION_CLOSED,

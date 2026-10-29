@@ -16,6 +16,12 @@ export interface SourceModelWriteHooks<TModel> extends Omit<ReconcileWriteHooks<
    onConflictDropped(): void;
    /** Invoked when the document already held the edit, so the caller can take its built root. */
    onAlreadyApplied(): void;
+   /**
+    * Throw `DocumentSyntaxError` when the stored text of a document `refetch`
+    * read does not parse. Run after every refetch, so an override of it cannot
+    * merge into a recovered model.
+    */
+   assertParses(): void;
 }
 
 /**
@@ -35,7 +41,13 @@ export async function reconcileSourceModelWrite<TModel extends object>(
 ): Promise<void> {
    const outcome = await reconcileWrite(model, baseVersion, {
       persist: (candidate, candidateBaseVersion) => hooks.persist(candidate, candidateBaseVersion),
-      refetch: () => hooks.refetch(),
+      refetch: async () => {
+         const refetched = await hooks.refetch();
+         if (refetched) {
+            hooks.assertParses();
+         }
+         return refetched;
+      },
       base: hooks.base,
       conflictResolver: hooks.conflictResolver,
       maxWrites: hooks.maxWrites

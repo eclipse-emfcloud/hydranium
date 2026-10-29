@@ -22,6 +22,7 @@ import {
 } from '@hydranium/langium';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type HydraniumLanguageServices } from '../language-module.js';
+import { hasSyntaxErrors } from '../workspace/syntax-errors.js';
 import { type TriviaContribution, type TriviaRegistry } from './trivia-contribution.js';
 import { type TriviaPreserver } from './trivia-preserver.js';
 
@@ -768,7 +769,7 @@ export class CommentPreserver implements TriviaPreserver<CommentTrivia> {
       } catch {
          document = undefined;
       }
-      if (document !== undefined && (document.parseResult.parserErrors.length > 0 || document.parseResult.lexerErrors.length > 0)) {
+      if (document !== undefined && hasSyntaxErrors(document.parseResult)) {
          document = undefined;
       }
       if (memo !== undefined) {

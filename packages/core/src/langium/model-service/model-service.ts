@@ -32,6 +32,7 @@ import {
 } from '@hydranium/langium';
 import { type AstDiagnostic } from '../validation/document-validator.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
+import { hasSyntaxErrors } from '../workspace/syntax-errors.js';
 import { ReentrantWriteLockError, isInsideWriteLock, isWriteLockScopeInstalled } from '../workspace/write-lock-scope.js';
 import { type ApplyWorkspaceEditResult, CancellationToken, Disposable } from 'vscode-languageserver';
 import { AstDocument } from '../../documents/ast-document-manager.js';
@@ -123,7 +124,8 @@ export interface ModelServiceOptions extends LogNameOptions {
     * Costs a parse, an encode and a serialization per write whose text
     * differs; remembering the text last written instead would not cover a
     * file formatted outside the framework. Text with lexer or parser errors is
-    * replaced as usual.
+    * replaced as usual by {@link ModelService.modelToText}, though a session
+    * refuses to write a model there.
     *
     * Accepts a {@link MaybeObservableValue} so it can be bound to a setting.
     */
@@ -1106,18 +1108,14 @@ export class DefaultModelService<
       // equal and apply the text from before the mutation. Parsed into a
       // document at `target`, so the encoder's hooks see the URI the written
       // side was encoded with.
-      const {
-         value: root,
-         lexerErrors,
-         parserErrors
-      } = this.services.workspace.LangiumDocumentFactory.fromString(parsedText, target).parseResult;
-      if (lexerErrors.length > 0 || parserErrors.length > 0) {
+      const parsed = this.services.workspace.LangiumDocumentFactory.fromString(parsedText, target).parseResult;
+      if (hasSyntaxErrors(parsed)) {
          return text;
       }
       // Through `serialize`, so an override of it applies to both sides. Not
       // rewritten: a rewrite that changes the document's model then compares
       // unequal and is written, rather than hidden behind the kept text.
-      const transfer = this.services.model.TransferEncoder.toTransfer(root, 'grammar') as TTransfer;
+      const transfer = this.services.model.TransferEncoder.toTransfer(parsed.value, 'grammar') as TTransfer;
       const current = withTrivia(await this.serialize(uri, transfer));
       return current === text ? parsedText : text;
    }

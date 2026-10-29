@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { AbstractProjectManager } from '@hydranium/core';
+import { AbstractProjectManager, hasSyntaxErrors } from '@hydranium/core';
 import { DOMAIN_LANGUAGE } from '@hydranium/example-order-flow-protocol';
 import { type Project, UNQUALIFIED_PROJECT_REFERENCE } from '@hydranium/protocol';
 import type { LangiumDocument, URI } from '@hydranium/langium';
@@ -62,7 +62,7 @@ export class OrderFlowProjectManager extends AbstractProjectManager<Project> {
    }
 
    protected override async parseProjectDescriptor(uri: URI, document: LangiumDocument): Promise<Project | undefined> {
-      if (document.parseResult.lexerErrors.length > 0 || document.parseResult.parserErrors.length > 0) {
+      if (hasSyntaxErrors(document.parseResult)) {
          this.tracer.warn(`Parse errors in ${uri.toString()}; skipping descriptor.`);
          return undefined;
       }

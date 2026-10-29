@@ -18,6 +18,7 @@ import {
    asModelVersion,
    ConflictError,
    type ConflictResolver,
+   isDocumentSyntaxError,
    type ModelVersion,
    type ReconcileOutcome,
    SyntheticStep
@@ -169,7 +170,14 @@ function createState(harness: Harness, stateClass: new () => TestReconcilingStat
             version: (uri: string) => harness.documents.get(uri)?.textDocument?.version ?? 0
          },
          LangiumDocumentFactory: {
-            fromString: (text: string) => ({ parseResult: { value: makeRoot(text) } })
+            fromString: (text: string) => ({
+               parseResult: {
+                  value: makeRoot(text),
+                  parserErrors: text.startsWith('broken') ? [{ message: 'broken' }] : [],
+                  lexerErrors: []
+               },
+               textDocument: { getText: () => text }
+            })
          }
       },
       model: {
@@ -504,6 +512,26 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
 
          expect(seenBase).toEqual({ $type: 'TestRoot', label: 'base-label' });
          expect(seenRefetch).toEqual({ $type: 'TestRoot', label: 'server-current' });
+      });
+
+      it('refuses the write as a syntax error when the stored text the refetch reads does not parse', async () => {
+         const harness = makeHarness();
+         harness.throwConflictOnNextUpdate = true;
+         harness.validatedRoot = makeRoot('built');
+         harness.storeText = 'broken-current';
+         harness.resolve = async (_base, ours, refetch) => {
+            await refetch();
+            return { status: 'merged', merged: ours };
+         };
+         const state = createState(harness);
+         state.setSourceRoot('file:///a.a', makeRoot('base-label'));
+
+         const outcome = await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(5)).then(
+            () => undefined,
+            (error: unknown) => error
+         );
+
+         expect(isDocumentSyntaxError(outcome)).toBe(true);
       });
    });
 

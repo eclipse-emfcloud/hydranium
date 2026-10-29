@@ -13,6 +13,7 @@ import {
    asModelVersion,
    type ModelVersion,
    type ConflictResolver,
+   DocumentSyntaxError,
    ForceConflictResolver,
    ReconcilingConflictResolver
 } from '@hydranium/protocol';
@@ -25,10 +26,11 @@ interface TestSourceModel {
 
 interface LogCapture {
    timings: Array<{ label: string; durationMs: number }>;
+   errors: string[];
 }
 
 function makeLog(): LogCapture {
-   return { timings: [] };
+   return { timings: [], errors: [] };
 }
 
 function makeFakeLogger(log: LogCapture): unknown {
@@ -45,6 +47,9 @@ function makeFakeLogger(log: LogCapture): unknown {
       warn(): void {
          // no-op: skip-on-divergence warnings are not asserted by these tests
       },
+      error(message: string): void {
+         log.errors.push(message);
+      },
       async time<T>(label: string, fn: () => Promise<T> | T): Promise<T> {
          const start = performance.now();
          const result = await fn();
@@ -53,6 +58,19 @@ function makeFakeLogger(log: LogCapture): unknown {
       }
    };
    return logger;
+}
+
+interface FakeBuiltRoot {
+   $document: { parseResult: { value: unknown; parserErrors: unknown[]; lexerErrors: unknown[] }; textDocument: { getText(): string } };
+}
+
+/** A root built from a parse with `parserErrors`, or, when `reparsed`, one its document has parsed again since. */
+function builtRoot(parserErrors: unknown[], reparsed = false): FakeBuiltRoot {
+   const root: FakeBuiltRoot = {
+      $document: { parseResult: { value: undefined, parserErrors, lexerErrors: [] }, textDocument: { getText: () => 'source text' } }
+   };
+   root.$document.parseResult.value = reparsed ? {} : root;
+   return root;
 }
 
 interface FakeRecordingState {
@@ -68,6 +86,9 @@ interface FakeRecordingState {
    runExclusive<T>(run: () => T | Promise<T>): Promise<T>;
    index: { reindexSemanticElements(): void; remapSemanticAliases(): void };
    sourceRoot: undefined;
+   secondaryUris: readonly string[];
+   /** The built root of `uri`, read only for its parse: none by default. */
+   operationRootOf(uri: string): FakeBuiltRoot | undefined;
 }
 
 function makeFakeState(
@@ -90,6 +111,8 @@ function makeFakeState(
       runExclusive: async run => run(),
       index: { reindexSemanticElements: () => undefined, remapSemanticAliases: () => undefined },
       sourceRoot: undefined,
+      secondaryUris: [],
+      operationRootOf: () => undefined,
       async updateSourceModel(model: TestSourceModel, baseVersion?: BaseVersion): Promise<void> {
          state.updateCalls.push({ model: JSON.parse(JSON.stringify(model)) as TestSourceModel, baseVersion });
          state.sourceModel = model;
@@ -267,6 +290,85 @@ describe('HydraniumGlspRecordingCommand', () => {
       // Guard tripped: the undo must not clobber the foreign value or write.
       expect(state.sourceModel.nodes[0].label).toBe('foreign');
       expect(state.updateCalls).toHaveLength(writesAfterExecute);
+   });
+
+   it.each([
+      ['refuses', 'does not parse', builtRoot([{}])],
+      ['refuses', 'has parsed again since its root was read', builtRoot([], true)],
+      ['skips', 'parses', builtRoot([])]
+   ] as const)('%s an undo that collides while its source %s, without writing', async (outcome, _source, root) => {
+      const log = makeLog();
+      const state = makeFakeState(log);
+      state.sourceModel = { nodes: [{ id: 'N1', label: 'first' }] };
+      const command = makeCommand(state, 'Relabel node', () => {
+         state.sourceModel.nodes[0].label = 'edited';
+      });
+
+      await command.execute();
+      const writesAfterExecute = state.updateCalls.length;
+
+      // A recovered root holds what the parser made of the broken line.
+      state.sourceModel = { nodes: [{ id: 'N1', label: '' }] };
+      state.operationRootOf = () => root;
+
+      const error = await command.undo().then(
+         () => undefined,
+         (thrown: unknown) => thrown
+      );
+      expect({ refused: error instanceof DocumentSyntaxError, writes: state.updateCalls.length }).toEqual({
+         refused: outcome === 'refuses',
+         writes: writesAfterExecute
+      });
+   });
+
+   it.each([
+      ['an undo', 'both hooks', 'kept', 'undo', true, true],
+      ['an undo', 'an undo hook alone', 'cleared', 'undo', true, false],
+      ['a redo', 'a redo hook alone', 'cleared', 'redo', false, true],
+      // Nothing ran, so nothing is reverted.
+      ['an undo', 'a redo hook alone', 'kept', 'undo', false, true],
+      ['a redo', 'an undo hook alone', 'kept', 'redo', true, false]
+   ] as const)('%s refused, with %s, leaves the history %s', async (_name, _hooks, history, direction, withUndo, withRedo) => {
+      const log = makeLog();
+      const state = makeFakeState(log);
+      state.sourceModel = { nodes: [{ id: 'N1', label: 'first' }] };
+      // A side effect the model does not carry, which the hooks re-emit.
+      let emitted = 1;
+      const command = makeCommand(
+         state,
+         'Relabel node',
+         () => {
+            state.sourceModel.nodes[0].label = 'edited';
+         },
+         withUndo ? () => void emitted-- : undefined,
+         withRedo ? () => void emitted++ : undefined
+      );
+      await command.execute();
+      if (direction === 'redo') {
+         await command.undo();
+      }
+      const before = emitted;
+      state.updateSourceModel = async () => {
+         throw new DocumentSyntaxError('file:///test.a');
+      };
+
+      const error = await (direction === 'undo' ? command.undo() : command.redo()).then(
+         () => undefined,
+         (thrown: unknown) => thrown
+      );
+
+      // A bare refusal tells the stack nothing changed, which keeps the history.
+      // The error the stack sees says why, so no step logs one.
+      expect({
+         bare: error instanceof DocumentSyntaxError,
+         cause: error instanceof Error && error.cause instanceof DocumentSyntaxError,
+         reverted: emitted === before,
+         errors: log.errors
+      }).toEqual(
+         history === 'kept'
+            ? { bare: true, cause: false, reverted: true, errors: [] }
+            : { bare: false, cause: true, reverted: false, errors: [] }
+      );
    });
 
    it('skips redo (no write) when a foreign edit changed the same field since undo', async () => {

@@ -77,6 +77,21 @@ An undo or redo that fails clears the undo and redo history, as GLSP does, and
 its message says so. A write dropped or conflicting while it runs is told as a
 foreign edit; any other failure as an error.
 
+The exception is an undo or redo whose own write is refused with
+`DocumentSyntaxError` because a document it reads or writes does not parse. It
+reverts the steps it ran and writes nothing, so the command stack keeps the
+history and its place, and the refusal is told as a warning. The undo works
+once the text parses again. An undo that collides while a document the model is
+read from does not parse is refused the same way rather than skipped, since the
+parser's recovery, not a foreign edit, may have changed the field. A refusal a
+step threw, a step that cannot be reverted, or an entry that is a
+`CompoundCommand`, whose revert of its children reports no failure, clears the
+history as any other failure does. A recording command with only one of
+`undoAction` and `redoAction` has a step that cannot be reverted once that hook
+ran, and nothing to revert when it did not. The full-text state refuses its own
+write while its source does not parse, since the session accepts text without
+that check.
+
 A recording command executed outside an operation whose write is dropped pushes
 no undo step. In a compound whose other commands wrote, the step is pushed
 without it, and the server logs a warning.

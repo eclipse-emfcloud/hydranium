@@ -32,13 +32,22 @@ import {
    ReentrantWriteLockError,
    ReservedClientIdError,
    type ServerSharedServices,
-   SessionClosedError
+   SessionClosedError,
+   DocumentSyntaxError
 } from '@hydranium/core';
-import { type AstNode, DocumentState, URI } from '@hydranium/langium';
+import {
+   type AstNode,
+   DefaultLexer,
+   DocumentState,
+   type LexerResult,
+   type LexingDiagnostic,
+   type TokenizeOptions,
+   URI
+} from '@hydranium/langium';
 import { asModelVersion, isConflictError, type TextVersion, type TransferElement, UNKNOWN_CLIENT_ID } from '@hydranium/protocol';
 import { type CancellationToken, FileChangeType, type FileEvent } from 'vscode-languageserver';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
-import { afterEach, describe, expect, it, onTestFinished } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { isDomainModel, isEntity } from '../src/language-server/ast.js';
 import type { OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
 import { makeCapturingTracer } from '@hydranium/core/testing';
@@ -54,6 +63,12 @@ const CLEAN = `entity Solo {
 const EDITED = `entity Solo {
    a : string
    b : string
+}
+`;
+// `b` lost its type: a model read from this parse has no `b`.
+const WITH_SYNTAX_ERROR = `entity Solo {
+   a : string
+   b :
 }
 `;
 
@@ -166,6 +181,41 @@ describe('ClientSession writes', () => {
 
       expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
       expect(harness.shared.workspace.TextDocuments.isOpen(uri)).toBe(false);
+   });
+
+   it('refuses to write a model over text that does not parse, and writes the text that repairs it', async () => {
+      const { harness, uri, path } = await boot();
+      const models = harness.shared.model.ModelService;
+      const session = models.createSession('form');
+      await session.open(uri);
+      await session.update({ uri, model: WITH_SYNTAX_ERROR, baseVersion: 'any' });
+      const recovered = harness.shared.model.TransferEncoder.toTransfer(models.getDocument(uri)!.parseResult.value, 'grammar');
+
+      const serialize = vi.spyOn(models, 'modelToText');
+      await expect(session.update({ uri, model: recovered, baseVersion: 'any' })).rejects.toBeInstanceOf(DocumentSyntaxError);
+      await expect(session.save({ uri, model: recovered, baseVersion: 'any' })).rejects.toBeInstanceOf(DocumentSyntaxError);
+      // Refused before the adopter's serializer runs.
+      expect(serialize).not.toHaveBeenCalled();
+      expect(harness.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(WITH_SYNTAX_ERROR);
+      expect(readFileSync(path(FILE), 'utf8')).toBe(CLEAN);
+
+      await session.update({ uri, model: EDITED, baseVersion: 'any' });
+      const repaired = harness.shared.model.TransferEncoder.toTransfer(models.getDocument(uri)!.parseResult.value, 'grammar');
+      await expect(session.update({ uri, model: repaired, baseVersion: 'any' })).resolves.toBeDefined();
+   });
+
+   it('refuses a model write whose document stopped parsing while the model was serialized', async () => {
+      const { harness, uri } = await boot();
+      const models = harness.shared.model.ModelService;
+      const session = models.createSession('form');
+      await session.open(uri);
+      const editor = models.createSession('editor');
+      await editor.open(uri);
+      const model = harness.shared.model.TransferEncoder.toTransfer(models.getDocument(uri)!.parseResult.value, 'grammar');
+      interveneWhileSerialising(harness, FILE, () => editor.update({ uri, model: WITH_SYNTAX_ERROR, baseVersion: 'any' }));
+
+      await expect(session.update({ uri, model, baseVersion: 'any' })).rejects.toBeInstanceOf(DocumentSyntaxError);
+      expect(harness.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(WITH_SYNTAX_ERROR);
    });
 
    it('writes and saves a document it has open, and recognises its own save', async () => {
@@ -383,6 +433,57 @@ describe('ClientSession.updateAll', () => {
       await expect(write).rejects.toBeInstanceOf(DocumentNotOpenError);
       expect(textDocuments.get(uri)?.getText()).toBe(CLEAN);
       expect(textDocuments.get(otherUri)?.getText()).toBe(CLEAN);
+   });
+
+   it('applies nothing when a later document of the set does not parse', async () => {
+      const { harness, uri, otherUri } = await boot();
+      const models = harness.shared.model.ModelService;
+      const session = models.createSession('diagram');
+      await session.open(uri);
+      await session.open(otherUri);
+      await session.update({ uri: otherUri, model: WITH_SYNTAX_ERROR, baseVersion: 'any' });
+      const recovered = harness.shared.model.TransferEncoder.toTransfer(models.getDocument(otherUri)!.parseResult.value, 'grammar');
+      const serialize = vi.spyOn(models, 'modelToText');
+
+      const write = session.updateAll({
+         updates: [
+            { uri, model: EDITED, baseVersion: 'any' },
+            { uri: otherUri, model: recovered, baseVersion: 'any' }
+         ]
+      });
+
+      await expect(write).rejects.toBeInstanceOf(DocumentSyntaxError);
+      // Refused before the adopter's serializer runs.
+      expect(serialize).not.toHaveBeenCalled();
+      expect(harness.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(CLEAN);
+      expect(harness.shared.workspace.TextDocuments.get(otherUri)?.getText()).toBe(WITH_SYNTAX_ERROR);
+
+      // Text is how a client repairs it.
+      await session.updateAll({ updates: [{ uri: otherUri, model: EDITED, baseVersion: 'any' }] });
+      expect(harness.shared.workspace.TextDocuments.get(otherUri)?.getText()).toBe(EDITED);
+   });
+
+   it('applies nothing when a document of the set stops parsing while the set is serialized', async () => {
+      const { harness, uri, otherUri } = await boot();
+      const models = harness.shared.model.ModelService;
+      const session = models.createSession('diagram');
+      await session.open(uri);
+      await session.open(otherUri);
+      const editor = models.createSession('editor');
+      await editor.open(otherUri);
+      const model = harness.shared.model.TransferEncoder.toTransfer(models.getDocument(otherUri)!.parseResult.value, 'grammar');
+      interveneWhileSerialising(harness, OTHER_FILE, () => editor.update({ uri: otherUri, model: WITH_SYNTAX_ERROR, baseVersion: 'any' }));
+
+      const write = session.updateAll({
+         updates: [
+            { uri, model: EDITED, baseVersion: 'any' },
+            { uri: otherUri, model, baseVersion: 'any' }
+         ]
+      });
+
+      await expect(write).rejects.toBeInstanceOf(DocumentSyntaxError);
+      expect(harness.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(CLEAN);
+      expect(harness.shared.workspace.TextDocuments.get(otherUri)?.getText()).toBe(WITH_SYNTAX_ERROR);
    });
 
    it('refuses a set naming one document twice, before applying anything', async () => {
@@ -1533,6 +1634,32 @@ describe('ModelServiceOptions.keepUnchangedText', () => {
       expect(await updateWith(harness, uri, edited)).toBe(CANONICAL.replace('Solo', 'Renamed'));
    });
 
+   it('answers the canonical text when the kept text has a lexing error only a token builder reports', async () => {
+      /** Reports an error on the hand-formatted text that leaves the parse clean, as an indentation lexer's invalid dedent does. */
+      class HandFormattingFlaggingLexer extends DefaultLexer {
+         override tokenize(text: string, options?: TokenizeOptions): LexerResult {
+            const result = super.tokenize(text, options);
+            const diagnostic: LexingDiagnostic = { severity: 'error', message: 'Invalid dedent', offset: 0, length: 0, line: 1, column: 1 };
+            return text === HAND_FORMATTED ? { ...result, report: { diagnostics: [diagnostic] } } : result;
+         }
+      }
+      scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, HAND_FORMATTED), {
+         extraSharedModules: [
+            {
+               model: {
+                  ModelService: (services: OrderFlowSharedServices) => new DefaultModelService(services, { keepUnchangedText: true })
+               }
+            }
+         ],
+         extraLanguageModules: [{ parser: { Lexer: services => new HandFormattingFlaggingLexer(services) } }]
+      });
+      const { harness } = scratch;
+      const uri = scratch.workspace.uri(FILE);
+      const root = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))!.parseResult.value;
+
+      expect(await harness.shared.model.ModelService.modelToText(uri, transferOf(harness)(root))).toBe(CANONICAL);
+   });
+
    it('writes the edit of a writer that mutates the live root in place and hands it over', async () => {
       const { harness, uri } = await bootWith(true, HAND_FORMATTED);
       const mutated = (root: AstNode): TransferElement => {
@@ -1615,10 +1742,12 @@ describe('ModelServiceOptions.keepUnchangedText', () => {
       expect(await updateWith(harness, uri, transferOf(harness))).toBe(HAND_FORMATTED);
    });
 
-   it('writes the canonical text over text with parse errors', async () => {
+   it('serializes the canonical text for text with parse errors, which a session then refuses to write', async () => {
       const { harness, uri } = await bootWith(true, 'entity Solo {\n  a: string\n  ?\n}\n');
+      const root = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))!.parseResult.value;
 
-      expect(await updateWith(harness, uri, transferOf(harness))).toBe(CANONICAL);
+      expect(await harness.shared.model.ModelService.modelToText(uri, transferOf(harness)(root))).toBe(CANONICAL);
+      await expect(updateWith(harness, uri, transferOf(harness))).rejects.toBeInstanceOf(DocumentSyntaxError);
    });
 
    it('writes the model, not newer unbuilt text, when the store moved past the root', async () => {

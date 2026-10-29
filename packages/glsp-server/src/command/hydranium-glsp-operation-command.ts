@@ -19,7 +19,8 @@ import {
    type MultiReferenceItem,
    type Reference
 } from '@hydranium/langium';
-import { type ModelVersion, describeErrorWithStack } from '@hydranium/protocol';
+import { hasSkippedText } from '@hydranium/core';
+import { DocumentSyntaxError, type ModelVersion, describeErrorWithStack, isDocumentSyntaxError } from '@hydranium/protocol';
 import { DiagramEditDroppedError } from './diagram-edit-dropped-error.js';
 import { type HydraniumGlspRecordingState } from './hydranium-glsp-recording-command.js';
 
@@ -31,11 +32,13 @@ export type OperationOutcome = 'executed' | 'dropped' | 'none';
 
 /**
  * One executed side effect the operation undoes and redoes: a recording
- * command's bridge, or a command that does not record.
+ * command's bridge, or a command that does not record. A step without a hook
+ * does nothing in that direction, and one that ran a hook it has no reverse
+ * for cannot be reverted.
  */
 export interface OperationSideEffect {
-   undo(): MaybePromise<void>;
-   redo(): MaybePromise<void>;
+   undo?(): MaybePromise<void>;
+   redo?(): MaybePromise<void>;
 }
 
 /** The source model an operation changed, before and after it; a redo applies `from → to`, an undo the reverse. */
@@ -385,7 +388,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
     */
    protected async rollback(): Promise<void> {
       await this.runEach(
-         [...this.steps].reverse().map(step => () => step.undo()),
+         [...this.steps].reverse().map(step => () => step.undo?.()),
          'Rolling back a failed operation',
          'rollback'
       );
@@ -395,21 +398,24 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
     * Run each of `actions`, each reverting a side effect of its own: a failure
     * is logged as `what` failing and the rest still run, so one step that
     * cannot be reverted leaves no other step applied. The caller reports its
-    * own failure, not these.
+    * own failure, not these. Resolves to whether every action succeeded.
     */
    protected async runEach(
       actions: ReadonlyArray<() => MaybePromise<void>>,
       what: string,
       point: 'rollback' | 'compensate'
-   ): Promise<void> {
+   ): Promise<boolean> {
+      let succeeded = true;
       for (const action of actions) {
          try {
             await this.checkpoint(point);
             await action();
          } catch (error: unknown) {
+            succeeded = false;
             this.modelState.logger.error(`${what} failed at one step: ${describeErrorWithStack(error)}`);
          }
       }
+      return succeeded;
    }
 
    /**
@@ -451,9 +457,10 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
    /**
     * Resolve the transition onto the current model, run the commands' side
     * effects, then write once, gated on the versions the model was read at. A
-    * collision does nothing but warn; a transition with nothing left to
-    * apply, or one the model already holds, still runs the side effects. Either
-    * way the outcome is counted for {@link takeUndoRedoTally}.
+    * collision does nothing but warn, unless a document the model is read from
+    * does not parse, which throws `DocumentSyntaxError`. A transition with
+    * nothing left to apply, or one the model already holds, still runs the side
+    * effects. Either way the outcome is counted for {@link takeUndoRedoTally}.
     *
     * The caller holds `runExclusive`, which nothing here takes again.
     */
@@ -476,6 +483,12 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
          if (outcome.status === 'merged') {
             merged = outcome.merged;
          } else if (outcome.status !== 'no-op' && outcome.status !== 'already-applied') {
+            // A root recovered from text that does not parse lacks what the
+            // parser skipped, so the conflict is the syntax error's.
+            const broken = this.unparsedSourceUri();
+            if (broken !== undefined) {
+               throw new DocumentSyntaxError(broken);
+            }
             this.modelState.logger.warn(
                `${direction === 'undo' ? 'Undo' : 'Redo'} of an operation skipped (${outcome.status}); a foreign edit changed a shared field`
             );
@@ -485,6 +498,19 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
       }
       await this.undoOrRedoSideEffects(direction, merged);
       tallyOf(this.modelState).applied++;
+   }
+
+   /**
+    * The first document the source model is read from whose root has syntax
+    * errors. A root its document has parsed again since counts too, since the
+    * parse it came from is no longer there to tell.
+    */
+   protected unparsedSourceUri(): string | undefined {
+      return [this.modelState.sourceUri, ...this.modelState.secondaryUris].find(uri => {
+         const root = this.modelState.operationRootOf(uri);
+         const document = root?.$document;
+         return document !== undefined && (document.parseResult.value !== root || hasSkippedText(document));
+      });
    }
 
    /**
@@ -508,8 +534,11 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
     *
     * When a step or the write throws, or the write's reconcile drops it, the
     * steps already run are run the other way, newest first, and the error is
-    * rethrown with nothing written; GLSP's command stack then flushes, as it
-    * does for any undo or redo that fails.
+    * rethrown with nothing written. GLSP's command stack then flushes, except
+    * for a `DocumentSyntaxError` the write threw, after which the model is as
+    * it was. A refusal a step threw, or one after a step that cannot be run
+    * back, is rethrown as the `cause` of a plain error, so the stack flushes:
+    * that step may have written before it was refused.
     */
    protected async undoOrRedoSideEffects(direction: UndoRedoDirection, merged?: TSourceModel): Promise<void> {
       this.operationRoots.clear();
@@ -519,6 +548,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
       this.open();
       const { steps, run } = this.inDirection(direction);
       const done: OperationSideEffect[] = [];
+      let writing = false;
       try {
          for (const step of steps) {
             await this.checkpoint(direction);
@@ -528,11 +558,19 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
          if (merged === undefined) {
             // Nothing to write, but a step may have rebuilt the document: close on its built root, not the one opened on.
             this.modelState.captureBuiltRoot();
-         } else if (!(await this.write(merged))) {
-            throw new DiagramEditDroppedError(`The ${direction} of an operation was dropped: a foreign edit changed a field it writes`);
+         } else {
+            writing = true;
+            if (!(await this.write(merged))) {
+               throw new DiagramEditDroppedError(`The ${direction} of an operation was dropped: a foreign edit changed a field it writes`);
+            }
          }
       } catch (error: unknown) {
-         await this.compensate(done, direction);
+         const reverted = await this.compensate(done, direction);
+         if (isDocumentSyntaxError(error) && !(writing && reverted)) {
+            throw new Error(`The ${direction} was refused for a syntax error after a step that may have changed the model`, {
+               cause: error
+            });
+         }
          throw error;
       } finally {
          this.close();
@@ -542,16 +580,22 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
 
    /**
     * Run `steps`, which a failed undo or redo already ran, the other way, each
-    * on its own as {@link rollback} does; the undo or redo's own error is the
-    * one thrown.
+    * on its own as {@link rollback} does. The undo or redo's own error is the
+    * one thrown. A step with no hook in `direction` ran nothing and is skipped.
+    * Resolves to whether every step was reverted, which a step that ran a hook
+    * it has no reverse for was not. That step is skipped too, unlogged, since
+    * the error the caller throws already tells it.
     */
-   protected async compensate(steps: readonly OperationSideEffect[], direction: UndoRedoDirection): Promise<void> {
+   protected async compensate(steps: readonly OperationSideEffect[], direction: UndoRedoDirection): Promise<boolean> {
       const { revert } = this.inDirection(direction);
-      await this.runEach(
-         steps.map(step => () => revert(step)),
+      const reverse = direction === 'undo' ? 'redo' : 'undo';
+      const ran = steps.filter(step => step[direction] !== undefined);
+      const reverted = await this.runEach(
+         ran.filter(step => step[reverse] !== undefined).map(step => () => revert(step)),
          `Reverting a failed ${direction}`,
          'compensate'
       );
+      return reverted && ran.every(step => step[reverse] !== undefined);
    }
 
    /**
@@ -565,14 +609,16 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
       run(step: OperationSideEffect): MaybePromise<void>;
       revert(step: OperationSideEffect): MaybePromise<void>;
    } {
+      const undo = (step: OperationSideEffect): MaybePromise<void> => step.undo?.();
+      const redo = (step: OperationSideEffect): MaybePromise<void> => step.redo?.();
       if (direction === 'redo') {
-         return { transition: this.transition, steps: [...this.steps], run: step => step.redo(), revert: step => step.undo() };
+         return { transition: this.transition, steps: [...this.steps], run: redo, revert: undo };
       }
       return {
          transition: this.transition && { from: this.transition.to, to: this.transition.from },
          steps: [...this.steps].reverse(),
-         run: step => step.undo(),
-         revert: step => step.redo()
+         run: undo,
+         revert: redo
       };
    }
 

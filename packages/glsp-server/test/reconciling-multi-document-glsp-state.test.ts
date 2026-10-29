@@ -22,7 +22,8 @@ import {
    type ReconcileOutcome,
    ReconcilingConflictResolver,
    type TransferElement,
-   UNRECORDED_VERSION
+   UNRECORDED_VERSION,
+   isDocumentSyntaxError
 } from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
@@ -216,7 +217,14 @@ function createState(harness: Harness, stateClass: new () => TestMultiState = Te
             version: (uri: string): number => harness.store.get(uri)?.version ?? 0
          },
          LangiumDocumentFactory: {
-            fromString: (text: string) => ({ parseResult: { value: makeRoot(text) } })
+            fromString: (text: string) => ({
+               parseResult: {
+                  value: makeRoot(text),
+                  parserErrors: text.startsWith('broken') ? [{ message: 'broken' }] : [],
+                  lexerErrors: []
+               },
+               textDocument: { getText: () => text }
+            })
          }
       },
       model: {
@@ -964,6 +972,33 @@ describe('ReconcilingMultiDocumentGlspState', () => {
 
          expect(refetched?.primary).toEqual({ $type: 'TestRoot', label: 'theirs-primary' });
          expect(refetched?.secondaries).toEqual({ [SEMANTIC_URI]: { $type: 'TestRoot', label: 'theirs-semantic' } });
+      });
+
+      it('refuses the write as a syntax error when a secondary it would not write does not parse', async () => {
+         const harness = makeHarness();
+         seed(harness, DIAGRAM_URI, 'diagram', 1);
+         seed(harness, SEMANTIC_URI, 'semantic', 1);
+         harness.validated.set(DIAGRAM_URI, makeRoot('built-primary'));
+         harness.validated.set(SEMANTIC_URI, makeRoot('built-semantic'));
+         harness.store.set(DIAGRAM_URI, { version: 2, text: 'theirs-primary' });
+         harness.store.set(SEMANTIC_URI, { version: 2, text: 'broken-semantic' });
+         harness.conflictOn = DIAGRAM_URI;
+         harness.resolve = async (_base, ours, refetch) => {
+            await refetch();
+            return { status: 'merged', merged: ours };
+         };
+         const state = createState(harness);
+         state.setSourceRoot(DIAGRAM_URI, builtRoot(harness, DIAGRAM_URI));
+         state.trackSecondaryDocument(SEMANTIC_URI);
+
+         const outcome = await state
+            .updateSourceModel({ primary: { $type: 'TestRoot', label: 'x' }, secondaries: {} }, asModelVersion(1))
+            .then(
+               () => undefined,
+               (error: unknown) => error
+            );
+
+         expect(isDocumentSyntaxError(outcome)).toBe(true);
       });
    });
 

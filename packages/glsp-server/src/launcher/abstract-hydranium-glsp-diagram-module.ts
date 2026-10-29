@@ -85,7 +85,11 @@ export abstract class AbstractHydraniumGlspDiagramModule extends DiagramModule {
       return HydraniumGlspServerActionDispatcher;
    }
 
-   /** {@link HydraniumGlspCommandStack}, so the diagram is dirty exactly while a document it has open is. */
+   /**
+    * {@link HydraniumGlspCommandStack}, so the diagram is dirty exactly while a
+    * document it has open is. The warning for an undo or redo refused for a
+    * syntax error says the history is kept, which only this stack does.
+    */
    protected override bindCommandStack(): BindingTarget<CommandStack> {
       return HydraniumGlspCommandStack;
    }

@@ -683,7 +683,7 @@ export class DataServer<
     * through an override of this.
     */
    protected toSessionWrite(request: Omit<TransferUpdateDocumentArgs<TTransfer>, 'clientId'>): ClientSessionWriteArgs<TTransfer> {
-      return { uri: request.uri, model: request.model, baseVersion: request.baseVersion };
+      return { uri: request.uri, model: request.model, baseVersion: request.baseVersion, restore: request.restore };
    }
 
    /**

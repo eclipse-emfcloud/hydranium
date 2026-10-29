@@ -137,7 +137,10 @@ interface IndentedLanguage {
    parse(text: string): LangiumDocument;
 }
 
-function makeIndentedLanguage(tokenBuilder: () => IndentationAwareTokenBuilder): IndentedLanguage {
+function makeIndentedLanguage(
+   tokenBuilder: () => IndentationAwareTokenBuilder,
+   Preserver: typeof CommentPreserver = CommentPreserver
+): IndentedLanguage {
    const shared = inject(createDefaultSharedCoreModule(EmptyFileSystem), {
       AstReflection: () =>
          makeFakeReflection({
@@ -160,7 +163,7 @@ function makeIndentedLanguage(tokenBuilder: () => IndentationAwareTokenBuilder):
          CstResidencyService: { rehydrate: () => undefined }
       }
    };
-   const preserver = new CommentPreserver(
+   const preserver = new Preserver(
       makeNoopLanguageServices({
          Grammar: language.Grammar,
          parser: language.parser,
@@ -229,5 +232,22 @@ describe.each([
       expect(write(source, 'element a:\n    member x\nelement c:\n    member z\n')).toBe(
          'element a:\n    member x\nelement c:\n    member z\n'
       );
+   });
+});
+
+describe('CommentPreserver with a lexer that reports an error the parser does not see', () => {
+   /** Places the comment at a column no enclosing block opened, an invalid dedent. */
+   class MisplacingCommentPreserver extends CommentPreserver {
+      protected override spliceComments(serialized: string): string {
+         return serialized.replace('    member w', '  # about w\n    member w');
+      }
+   }
+   const { preserver, parse } = makeIndentedLanguage(() => new IndentationAwareTokenBuilder(), MisplacingCommentPreserver);
+
+   it('writes without the comments when their placement is an invalid dedent', () => {
+      const document = parse('element a:\n    member x\n    # about w\n    member w\n');
+      const serialized = 'element a:\n    member x\n    member w\n';
+
+      expect(preserver.apply(serialized, preserver.extract(document), document.uri)).toBe(serialized);
    });
 });

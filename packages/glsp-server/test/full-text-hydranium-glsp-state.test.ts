@@ -13,7 +13,14 @@ import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
 import { type AstNode, type LangiumDocument } from '@hydranium/langium';
 import { type ClientSession, DefaultModelLedger, type ServerSharedServices } from '@hydranium/core';
-import { type BaseVersion, asModelVersion, ConflictError, isModelVersion, ReconcilingConflictResolver } from '@hydranium/protocol';
+import {
+   type BaseVersion,
+   asModelVersion,
+   ConflictError,
+   isDocumentSyntaxError,
+   isModelVersion,
+   ReconcilingConflictResolver
+} from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { FullTextHydraniumGlspState, type FullTextSourceModel } from '../src/state/full-text-hydranium-glsp-state.js';
@@ -72,6 +79,8 @@ interface Harness {
    storeText?: string;
    /** Whether the next update throws a `ConflictError` instead of writing. */
    conflictOnNextUpdate?: boolean;
+   /** Whether the last build of the source has a parser error. */
+   broken?: boolean;
    /** The debug lines the state logged. */
    readonly debugLines: string[];
 }
@@ -146,7 +155,15 @@ function createState(harness: Harness): TestFullTextState {
                return { root: harness.nextUpdatedRoot };
             },
             snapshot: (uri: string) => ({ uri, version: harness.documentVersion, root: undefined, diagnostics: [] }),
-            getDocument: () => ({ parseResult: { value: parsedAt(harness.documentVersion) }, diagnostics: [] })
+            getDocument: () => ({
+               parseResult: {
+                  value: parsedAt(harness.documentVersion),
+                  parserErrors: harness.broken ? [{ message: 'broken' }] : [],
+                  lexerErrors: []
+               },
+               textDocument: { getText: () => 'source text' },
+               diagnostics: []
+            })
          }
       }
    };
@@ -213,6 +230,21 @@ describe('FullTextHydraniumGlspState', () => {
             { uri: 'file:///a.a', model: 'new document text', clientId: 'test-client', baseVersion: asModelVersion(0) }
          ]);
          expect(state.sourceRoot).toBe(harness.nextUpdatedRoot);
+      });
+
+      it('refuses to write text serialized from a root whose source does not parse, with a DocumentSyntaxError', async () => {
+         // The storage captures the recovered root once the broken text is built, so text serialized from it lacks what the parser skipped.
+         const harness = makeHarness();
+         const state = createState(harness);
+         state.setSourceRoot('file:///a.a', parsedAt(harness.documentVersion));
+         harness.broken = true;
+
+         const refused = await state.updateSourceModel({ text: 'recovered text' }).then(
+            () => undefined,
+            (error: unknown) => error
+         );
+
+         expect({ syntaxError: isDocumentSyntaxError(refused), writes: harness.updateCalls }).toEqual({ syntaxError: true, writes: [] });
       });
 
       it('takes a conflicting write the text already holds as applied, at the document version it is built to', async () => {

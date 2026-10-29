@@ -10,10 +10,20 @@
 import { DefaultModelState, EditMode, type MaybePromise, SOURCE_URI_ARG } from '@eclipse-glsp/server';
 import { Emitter, type Event } from 'vscode-jsonrpc';
 import { inject, injectable } from 'inversify';
-import { type AstNode, AstUtils, DocumentState, isAstNode, type Reference, type ReferenceInfo, URI } from '@hydranium/langium';
+import {
+   type AstNode,
+   AstUtils,
+   DocumentState,
+   isAstNode,
+   type LangiumDocument,
+   type Reference,
+   type ReferenceInfo,
+   URI
+} from '@hydranium/langium';
 import {
    buildAstNode,
    type ClientSession,
+   hasSkippedText,
    type HydraniumScopeProvider,
    type LanguageTarget,
    type NameProvider,
@@ -29,6 +39,7 @@ import {
    type Logger,
    type Tracer,
    type TransferElement,
+   DocumentSyntaxError,
    asModelVersion,
    TIMED_OUT,
    UNRECORDED_VERSION,
@@ -817,11 +828,13 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    }
 
    /**
-    * The root that `uri`'s text parses to (the text store's, or the built
-    * document's when the store holds none) and the store's version of that
-    * text, read once the document has validated; `undefined` when it cannot be
+    * The root that `uri`'s text parses to, see {@link parseStoredText}, and
+    * the store's version of that text, read once the document has validated; `undefined` when it cannot be
     * read. The version is read in the tick the text is, so a write based on it
-    * conflicts with any edit made after.
+    * conflicts with any edit made after. Throws `DocumentSyntaxError` when the
+    * parse lacks some of the text: a merge written from a recovered root
+    * deletes what the parser skipped, and the session's own check reads the
+    * last build, which can still be clean.
     *
     * **Parsed afresh, never the built root.** The built root can lag the
     * store, and a root behind the text it is versioned with makes the replay
@@ -838,13 +851,38 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
       if (!validated) {
          return undefined;
       }
-      const store = this.sharedServices.workspace.TextDocuments;
-      const text = store.get(uri)?.getText() ?? modelService.getDocument(uri)?.textDocument.getText();
-      if (text === undefined) {
+      const parsed = this.parseStoredText(uri);
+      if (parsed === undefined) {
          return undefined;
       }
-      const version = asModelVersion(store.version(uri));
-      return { root: this.sharedServices.workspace.LangiumDocumentFactory.fromString(text, URI.parse(uri)).parseResult.value, version };
+      const version = asModelVersion(this.sharedServices.workspace.TextDocuments.version(uri));
+      if (hasSkippedText(parsed)) {
+         throw new DocumentSyntaxError(uri);
+      }
+      return { root: parsed.parseResult.value, version };
+   }
+
+   /**
+    * Throw `DocumentSyntaxError` when the parse of `uri`'s text, see
+    * {@link parseStoredText}, lacks some of it, see `hasSkippedText`. Checks
+    * the text as it is now, not as last built.
+    */
+   protected assertStoredTextParses(uri: string): void {
+      const parsed = this.parseStoredText(uri);
+      if (parsed !== undefined && hasSkippedText(parsed)) {
+         throw new DocumentSyntaxError(uri);
+      }
+   }
+
+   /**
+    * `uri`'s text parsed afresh, unlinked: the text store's, or the built
+    * document's when the store holds none. `undefined` when neither has it.
+    */
+   protected parseStoredText(uri: string): LangiumDocument | undefined {
+      const text =
+         this.sharedServices.workspace.TextDocuments.get(uri)?.getText() ??
+         this.sharedServices.model.ModelService.getDocument(uri)?.textDocument.getText();
+      return text === undefined ? undefined : this.sharedServices.workspace.LangiumDocumentFactory.fromString(text, URI.parse(uri));
    }
 
    /**

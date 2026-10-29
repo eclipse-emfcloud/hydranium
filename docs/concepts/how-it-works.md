@@ -77,6 +77,10 @@ text editor behind the LSP head takes part under an id the framework reserves.
   not have open fails with `DocumentNotOpenError`.
 - **Name the version a write is based on.** If that version has since moved on,
   the write fails with `ConflictError` rather than overwriting the newer text.
+- **Write a model only to a document that parses.** A model write replaces the
+  whole text, and a model read from text with a syntax error lacks what the
+  parser skipped. Such a write fails with `DocumentSyntaxError`. A write of
+  text is accepted, so a client can still repair the document.
 - **An update changes the shared model; a save writes it to disk.** A save
   writes the document's current text, which includes the unsaved edits of
   every other client working on it.

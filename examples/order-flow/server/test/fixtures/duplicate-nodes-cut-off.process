@@ -1,0 +1,14 @@
+// Test-only fixture, deliberately outside the sample workspace.
+//
+// Two `Pay` tasks the duplicate-name rule would rename, in a file that does
+// not parse: one task lost its name and the branch has no label. A repair
+// would write back the recovered AST, which drops the branch the parser
+// skipped, so the file must stay as written until it parses.
+
+process CutOff for Order {
+   task Pay
+   task Pay
+   task
+   gateway G
+      -> Pay
+}

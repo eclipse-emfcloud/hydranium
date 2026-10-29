@@ -17,8 +17,10 @@
  */
 
 import {
+   DATA_SESSION_RESTORE_FAILED,
    DATA_SESSION_UNSAVED_LOST,
    DataConnectionWithEvents,
+   isDocumentSyntaxError,
    DataSession,
    isConflictError,
    isDocumentNotOpenError,
@@ -56,9 +58,9 @@ import type {
 } from '@hydranium/protocol/data';
 import { Emitter, type Event } from 'vscode-jsonrpc';
 import { type CancellationToken, FileChangeType } from 'vscode-languageserver';
-import { existsSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { DomainModel } from '@hydranium/example-order-flow-protocol';
+import type { DomainModel, Entity } from '@hydranium/example-order-flow-protocol';
 import { makeScratchWorkspaceHarness, makeServices, type OrderFlowHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
 
 const FILE = 'wire-session.domain';
@@ -78,6 +80,10 @@ const THEIRS = `entity Solo {
    c : string
 }
 `;
+/** Missing its closing brace, so it does not parse. */
+const BROKEN = `entity Solo {
+   a : string
+`;
 const SESSION = 'form#wire-1';
 const OTHER_SESSION = 'form#wire-2';
 const GRACE_MS = 300;
@@ -87,14 +93,16 @@ type Harness = DataServerHarness<DataServer<DomainModel>, DomainModel>;
 /**
  * Records the writes it is sent, can lose its connection as a dropped
  * transport ends it, runs a hook after each watch, which a restore sends
- * between its re-open and any write it sends again, and can hold the answer
- * to an update it has applied.
+ * between its re-open and any write it sends again, can hold the answer to an
+ * update it has applied, and can fail model writes.
  */
 class RestoreProbeServer extends DataServer<DomainModel> {
    readonly writes: string[] = [];
    afterWatch?: () => Promise<void>;
    /** Set, an update is applied at once and answers once this settles. */
    answerGate?: Promise<void>;
+   /** How many of the next model writes fail, applying nothing. */
+   failModelWrites = 0;
 
    lose(): void {
       this.dispose('lost');
@@ -102,6 +110,10 @@ class RestoreProbeServer extends DataServer<DomainModel> {
 
    override async updateModelDocument(args: TransferUpdateDocumentArgs<DomainModel>): Promise<TransferDocument<DomainModel>> {
       this.writes.push(`update ${args.uri}`);
+      if (typeof args.model !== 'string' && this.failModelWrites > 0) {
+         this.failModelWrites--;
+         throw new Error('model write failed');
+      }
       const held = this.answerGate;
       if (!held) {
          return super.updateModelDocument(args);
@@ -204,6 +216,29 @@ async function boot(releaseGraceMs?: number): Promise<Booted> {
          return head;
       }
    };
+}
+
+/**
+ * Save text that does not parse through `session`, write text that does, then
+ * rename its entity with a model write. Resolves to the text the writes left.
+ */
+async function fixThenRename(
+   session: DataSession<DomainModel, DataServerProtocol<DomainModel>>,
+   services: OrderFlowHarness,
+   uri: string
+): Promise<string | undefined> {
+   await session.openDocument({ uri });
+   await session.saveDocument({ uri, model: BROKEN, baseVersion: 'any' });
+   const fixed = TransferDocument.assertLoaded(
+      await session.updateDocument({ uri, model: EDITED, baseVersion: (await session.openDocument({ uri })).model!.version })
+   );
+   const [entity] = fixed.model.root.declarations as Entity[];
+   await session.updateDocument({
+      uri,
+      model: { ...fixed.model.root, declarations: [{ ...entity, name: 'Renamed' }] },
+      baseVersion: fixed.model.version
+   });
+   return services.shared.workspace.TextDocuments.get(uri)?.getText();
 }
 
 /** Settle a promise into its rejection, or `undefined` when it resolved. */
@@ -723,6 +758,265 @@ describe('DataSession re-apply against the real stack', () => {
       expect(head.server.writes).toEqual([`update ${uri}`]);
       expect(reported).toEqual([]);
       expect(restarted.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(EDITED);
+   });
+
+   it('sends a model write nowhere after a restart whose text does not parse, and reports it lost', async () => {
+      const { uri, path, connect } = await boot();
+      let head: ProbeHarness = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      const opened = TransferDocument.assertLoaded(await session.openDocument({ uri }));
+      const [entity] = opened.model.root.declarations as Entity[];
+      await session.updateDocument({
+         uri,
+         model: { ...opened.model.root, declarations: [{ ...entity, name: 'Renamed' }] },
+         baseVersion: opened.model.version
+      });
+
+      drop(head);
+      // A record of model writes alone starts from text that parses, so a re-opened text that does not is never the one it started from.
+      writeFileSync(path(FILE), BROKEN);
+      const restarted = makeServices();
+      await initializeWorkspaceProgrammatically(restarted.shared, scratch!.workspace.root);
+      head = makeDataServerHarness<RestoreProbeServer, DomainModel>({
+         server: channel => new RestoreProbeServer(channel, restarted.shared)
+      });
+      heads.push(head);
+      await session.connected();
+
+      expect(head.server.writes).toEqual([]);
+      expect(reported.map(message => message.code)).toEqual([DATA_SESSION_UNSAVED_LOST.code]);
+      expect(restarted.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(BROKEN);
+   });
+
+   it('restores a model write over a text write that fixed saved text which does not parse, after each of two restarts', async () => {
+      const { services, uri, connect } = await boot();
+      let head: ProbeHarness = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      const edited = await fixThenRename(session, services, uri);
+
+      const restart = async (): Promise<string | undefined> => {
+         drop(head);
+         const restarted = makeServices();
+         await initializeWorkspaceProgrammatically(restarted.shared, scratch!.workspace.root);
+         head = makeDataServerHarness<RestoreProbeServer, DomainModel>({
+            server: channel => new RestoreProbeServer(channel, restarted.shared)
+         });
+         heads.push(head);
+         await session.connected();
+         return restarted.shared.workspace.TextDocuments.get(uri)?.getText();
+      };
+
+      expect([await restart(), await restart(), reported.map(message => message.code)]).toEqual([edited, edited, []]);
+   });
+
+   it('puts back no text of a set when another client edited one of its documents before the restore sent them', async () => {
+      const { services, uri, otherUri, connect } = await boot(GRACE_MS);
+      const textDocuments = services.shared.workspace.TextDocuments;
+      let head = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      const fixedA = TransferDocument.assertLoaded(
+         await session.updateDocument({ uri, model: EDITED, baseVersion: (await session.openDocument({ uri })).model!.version })
+      );
+      const fixedB = TransferDocument.assertLoaded(
+         await session.updateDocument({
+            uri: otherUri,
+            model: EDITED,
+            baseVersion: (await session.openDocument({ uri: otherUri })).model!.version
+         })
+      );
+      const renamed = (document: typeof fixedA): DomainModel => {
+         const [entity] = document.model.root.declarations as Entity[];
+         return { ...document.model.root, declarations: [{ ...entity, name: 'Renamed' }] };
+      };
+      await session.updateDocuments({
+         updates: [
+            { uri, model: renamed(fixedA), baseVersion: fixedA.model.version },
+            { uri: otherUri, model: renamed(fixedB), baseVersion: fixedB.model.version }
+         ]
+      });
+
+      head.server.lose();
+      head.dispose();
+      await outlastGrace();
+      head = connect();
+      const other = services.shared.model.ModelService.createSession('other');
+      let watches = 0;
+      // After both re-opens, so only sending the second text again conflicts.
+      head.server.afterWatch = async () => {
+         if (++watches === 2) {
+            await other.open(otherUri);
+            await other.update({ uri: otherUri, model: THEIRS, baseVersion: 'any' });
+         }
+      };
+      await session.connected();
+
+      expect({
+         reported: [...new Set(reported.map(message => message.code))],
+         text: textDocuments.get(uri)?.getText()
+      }).toEqual({ reported: [DATA_SESSION_UNSAVED_LOST.code], text: CLEAN });
+   });
+
+   it('restores a model write alone when another client wrote between it and the text write before it', async () => {
+      const { services, uri, connect } = await boot();
+      let head: ProbeHarness = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      const opened = await session.openDocument({ uri });
+      await session.updateDocument({ uri, model: BROKEN, baseVersion: opened.model!.version });
+      const other = services.shared.model.ModelService.createSession('other');
+      await other.open(uri);
+      await other.update({ uri, model: THEIRS, baseVersion: 'any' });
+      const fixed = TransferDocument.assertLoaded(await session.openDocument({ uri }));
+      const [entity] = fixed.model.root.declarations as Entity[];
+      await session.updateDocument({
+         uri,
+         model: { ...fixed.model.root, declarations: [{ ...entity, name: 'Renamed' }] },
+         baseVersion: fixed.model.version
+      });
+      const edited = services.shared.workspace.TextDocuments.get(uri)?.getText();
+
+      drop(head);
+      const restarted = makeServices();
+      await initializeWorkspaceProgrammatically(restarted.shared, scratch!.workspace.root);
+      head = makeDataServerHarness<RestoreProbeServer, DomainModel>({
+         server: channel => new RestoreProbeServer(channel, restarted.shared)
+      });
+      heads.push(head);
+      await session.connected();
+
+      expect({
+         reported: reported.map(message => message.code),
+         writes: head.server.writes,
+         text: restarted.shared.workspace.TextDocuments.get(uri)?.getText()
+      }).toEqual({ reported: [], writes: [`update ${uri}`], text: edited });
+   });
+
+   it('restores a model write over saved text that does not parse when another client wrote after the text write that fixed it', async () => {
+      const { services, uri, connect } = await boot();
+      let head: ProbeHarness = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      await session.openDocument({ uri });
+      await session.saveDocument({ uri, model: BROKEN, baseVersion: 'any' });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: (await session.openDocument({ uri })).model!.version });
+      const other = services.shared.model.ModelService.createSession('other');
+      await other.open(uri);
+      await other.update({ uri, model: THEIRS, baseVersion: 'any' });
+      const theirs = TransferDocument.assertLoaded(await session.openDocument({ uri }));
+      const [entity] = theirs.model.root.declarations as Entity[];
+      await session.updateDocument({
+         uri,
+         model: { ...theirs.model.root, declarations: [{ ...entity, name: 'Renamed' }] },
+         baseVersion: theirs.model.version
+      });
+      const edited = services.shared.workspace.TextDocuments.get(uri)?.getText();
+
+      drop(head);
+      const restarted = makeServices();
+      await initializeWorkspaceProgrammatically(restarted.shared, scratch!.workspace.root);
+      head = makeDataServerHarness<RestoreProbeServer, DomainModel>({
+         server: channel => new RestoreProbeServer(channel, restarted.shared)
+      });
+      heads.push(head);
+      await session.connected();
+
+      expect({
+         reported: reported.map(message => message.code),
+         text: restarted.shared.workspace.TextDocuments.get(uri)?.getText()
+      }).toEqual({ reported: [], text: edited });
+   });
+
+   it('restores a model write over saved text that does not parse on the reconnect after its restore failed', async () => {
+      const { services, uri, connect } = await boot(GRACE_MS);
+      const textDocuments = services.shared.workspace.TextDocuments;
+      let head = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      const edited = await fixThenRename(session, services, uri);
+
+      head.server.lose();
+      head.dispose();
+      await outlastGrace();
+      head = connect();
+      head.server.failModelWrites = 1;
+      await session.connected();
+      head.server.lose();
+      head.dispose();
+      head = connect();
+      await session.connected();
+
+      expect({
+         reported: reported.map(message => message.code),
+         writes: head.server.writes,
+         text: textDocuments.get(uri)?.getText()
+      }).toEqual({ reported: [DATA_SESSION_RESTORE_FAILED.code], writes: [`update ${uri}`], text: edited });
+   });
+
+   it('restores a set model write over saved text that does not parse, which a set text write fixed', async () => {
+      const { services, uri, otherUri, connect } = await boot();
+      let head: ProbeHarness = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      await session.openDocument({ uri });
+      await session.saveDocument({ uri, model: BROKEN, baseVersion: 'any' });
+      const otherOpened = await session.openDocument({ uri: otherUri });
+      const fixed = await session.updateDocuments({
+         updates: [
+            { uri: otherUri, model: THEIRS, baseVersion: otherOpened.model!.version },
+            { uri, model: EDITED, baseVersion: (await session.openDocument({ uri })).model!.version }
+         ]
+      });
+      const [theirs, loaded] = fixed.map(document => TransferDocument.assertLoaded(document));
+      const [entity] = loaded.model.root.declarations as Entity[];
+      await session.updateDocuments({
+         updates: [
+            { uri: otherUri, model: theirs.model.root, baseVersion: theirs.model.version },
+            { uri, model: { ...loaded.model.root, declarations: [{ ...entity, name: 'Renamed' }] }, baseVersion: loaded.model.version }
+         ]
+      });
+      const edited = [uri, otherUri].map(written => services.shared.workspace.TextDocuments.get(written)?.getText());
+
+      drop(head);
+      const restarted = makeServices();
+      await initializeWorkspaceProgrammatically(restarted.shared, scratch!.workspace.root);
+      head = makeDataServerHarness<RestoreProbeServer, DomainModel>({
+         server: channel => new RestoreProbeServer(channel, restarted.shared)
+      });
+      heads.push(head);
+      await session.connected();
+
+      const textDocuments = restarted.shared.workspace.TextDocuments;
+      expect({ texts: [uri, otherUri].map(written => textDocuments.get(written)?.getText()), reported }).toEqual({
+         texts: edited,
+         reported: []
+      });
+   });
+
+   it('keeps no model write the session refused over text that does not parse, so a restart sends only the text write', async () => {
+      const { uri, connect } = await boot();
+      let head: ProbeHarness = connect();
+      const reported: ResolvedMessage[] = [];
+      const session = sessionOver(() => head, reported);
+      const opened = TransferDocument.assertLoaded(await session.openDocument({ uri }));
+      const broken = TransferDocument.assertLoaded(await session.updateDocument({ uri, model: BROKEN, baseVersion: opened.model.version }));
+      const refused = await rejectionOf(session.updateDocument({ uri, model: broken.model.root, baseVersion: broken.model.version }));
+      expect(isDocumentSyntaxError(refused)).toBe(true);
+
+      drop(head);
+      const restarted = makeServices();
+      await initializeWorkspaceProgrammatically(restarted.shared, scratch!.workspace.root);
+      head = makeDataServerHarness<RestoreProbeServer, DomainModel>({
+         server: channel => new RestoreProbeServer(channel, restarted.shared)
+      });
+      heads.push(head);
+      await session.connected();
+
+      expect(head.server.writes).toEqual([`update ${uri}`]);
+      expect(reported).toEqual([]);
+      expect(restarted.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(BROKEN);
    });
 
    it('writes a set written together again in one call', async () => {

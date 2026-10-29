@@ -364,8 +364,9 @@ carries or the documents a save failed for; a line beside it is for context
 the error cannot carry. The line that ends a thrown error takes
 `describeErrorWithStack` at any level, since a handled throw from adopter code
 needs its frame as much as a failure does; a conflict declined by design
-carries its versions instead. The client takes `describeError`, because only
-the log's reader can act on a stack.
+carries its versions instead, and a write refused because its document does
+not parse carries that document's URI. The client takes `describeError`,
+because only the log's reader can act on a stack.
 
 **A level states what was done about the problem**, so the reader of the
 default log, who runs an adopter's server and does not know its internals, can
