@@ -9,8 +9,8 @@
 // link error. A node drawn for another document's target is not deletable, and
 // its id finds no node here.
 //
-// Like the create handler, it edits the operation's working copy, which the
-// operation writes once, with undo and redo applying that one change.
+// Like the create handler, it edits the operation's copy, which the operation
+// writes once, with undo and redo applying that one change.
 
 import { type Command, DeleteElementOperation, GEdge, JsonOperationHandler, type MaybePromise } from '@eclipse-glsp/server';
 import { removeChildren } from '@hydranium/core';

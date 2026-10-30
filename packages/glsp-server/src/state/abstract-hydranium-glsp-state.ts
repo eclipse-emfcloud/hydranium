@@ -246,7 +246,7 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
 
    /** The root operation handlers edit: during an operation a copy of the built root, outside one the built root. */
    get sourceRoot(): TRoot {
-      return openOperationOf(this) && this._sourceRoot !== undefined ? (this.workingRootOf(this._sourceUri) as TRoot) : this._sourceRoot;
+      return openOperationOf(this) && this._sourceRoot !== undefined ? (this.operationRootOf(this._sourceUri) as TRoot) : this._sourceRoot;
    }
 
    /**
@@ -272,9 +272,9 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * added through `indexSemanticElement` for a node of that root names the
     * node's copy from then on.
     */
-   workingRootOf(uri: string, orElse?: () => AstNode | undefined): AstNode | undefined {
-      const key = this.workingKey(uri);
-      const primary = this._sourceUri !== undefined && key === this.workingKey(this._sourceUri);
+   operationRootOf(uri: string, orElse?: () => AstNode | undefined): AstNode | undefined {
+      const key = this.canonicalKey(uri);
+      const primary = this._sourceUri !== undefined && key === this.canonicalKey(this._sourceUri);
       const operation = openOperationOf(this);
       if (!operation) {
          return primary ? this._sourceRoot : (this.sharedServices.model.ModelService.getDocument(uri)?.parseResult.value ?? orElse?.());
@@ -288,19 +288,19 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
          }
       }
       built ??= orElse?.();
-      return built === undefined ? undefined : operation.workingRootOf(key, built);
+      return built === undefined ? undefined : operation.operationRootOf(key, built);
    }
 
    /** The copy of `uri` the open operation made, without making one. */
-   protected existingWorkingRootOf(uri: string): AstNode | undefined {
-      return openOperationOf(this)?.existingWorkingRootOf(this.workingKey(uri));
+   protected existingOperationRootOf(uri: string): AstNode | undefined {
+      return openOperationOf(this)?.existingOperationRootOf(this.canonicalKey(uri));
    }
 
    /**
-    * The key of `uri` among an operation's copies: its canonical form, so two
-    * spellings of one document share one copy.
+    * The key of `uri` in the state's maps: its canonical form, so two
+    * spellings of one document share one entry.
     */
-   protected workingKey(uri: string): string {
+   protected canonicalKey(uri: string): string {
       return this.sharedServices.workspace.DocumentUriPolicy.canonicalUri(uri);
    }
 
@@ -416,7 +416,7 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
       const operation = openOperationOf(this);
       for (let current: AstNode | undefined = node; current; current = current.$container) {
          const built: AstNode = this.builtNodeOf(current);
-         if (built !== current || operation?.workingUriOf(current) === undefined) {
+         if (built !== current || operation?.operationUriOf(current) === undefined) {
             return built;
          }
       }
@@ -519,8 +519,8 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
 
    /**
     * The language services owning `target`. An AST node routes by its
-    * document or a copy's working document. A URI or URI string that routes
-    * nowhere falls back to {@link diagramLanguage}.
+    * document or by the document a copy stands for. A URI or URI string that
+    * routes nowhere falls back to {@link diagramLanguage}.
     *
     * Use this wherever the thing being named, keyed or completed may live in
     * another document than the diagram. Two registered languages are free to
@@ -633,7 +633,7 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
          return;
       }
       const added = !this._secondaryVersions.has(uri);
-      const key = this.workingKey(uri);
+      const key = this.canonicalKey(uri);
       // During an operation, the root the operation copied or first reached, not a later build's.
       const root = (openOperationOf(this) ? this.capturedRoots.get(key) : undefined) ?? this.readBuiltRoot(uri);
       this.recordSecondary(uri, root);
@@ -783,14 +783,14 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    /** Take `root` as the secondary `uri` was read at, and its version, `UNRECORDED_VERSION` without one. */
    protected recordSecondary(uri: string, root: AstNode | undefined): void {
       if (root !== undefined) {
-         this.capturedRoots.set(this.workingKey(uri), root);
+         this.capturedRoots.set(this.canonicalKey(uri), root);
       }
       this._secondaryVersions.set(uri, root ? this.sharedServices.workspace.ModelLedger.versionOf(root) : UNRECORDED_VERSION);
    }
 
    /** The root the secondary `uri` was read at; see {@link capturedRoots}. */
    protected capturedRootOf(uri: string): AstNode | undefined {
-      return this.capturedRoots.get(this.workingKey(uri));
+      return this.capturedRoots.get(this.canonicalKey(uri));
    }
 
    /**

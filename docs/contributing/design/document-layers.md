@@ -220,7 +220,7 @@ old name to another produces exactly the text of a plain insertion, so the
 comment follows the name; only a caller recording the rename could tell, and
 the transfer model has nowhere to put that. An integrity repair is unaffected,
 since it writes in place and the comment is anchored to the node object; a
-diagram gesture is affected, since it writes a working copy's transfer
+diagram gesture is affected, since it writes an operation copy's transfer
 projection. An `anchorKey` override does not carry a node across a rename,
 which asks the `NameProvider` what changed.
 

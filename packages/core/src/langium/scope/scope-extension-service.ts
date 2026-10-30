@@ -90,7 +90,7 @@ export interface ScopeExtension extends RegistryItem {
     * are built once per node rather than once per reference: a reference with
     * the same node is answered with the first one's descriptions. Without it, for
     * `undefined`, outside a link, such as a completion request, or for a
-    * `context` outside a built document, such as an operation's working copy,
+    * `context` outside a built document, such as an operation's copy,
     * {@link addDescriptions} runs for every reference.
     *
     * The descriptions must depend on the node and `referenceType` alone. What

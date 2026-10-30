@@ -1346,13 +1346,13 @@ server/src/glsp/bookstore/create-node-operation-handler.ts
 // way: editable → read-only is a deletion the compiler checks, while read-only →
 // editable is authoring against a seam you have not used yet.
 //
-// **It edits the operation's working copy.** A handler runs inside an operation,
-// where `sourceRoot` is a copy of the built root: the recording command's
-// runnable appends to the copy, and the operation writes the copy's text through
-// the grammar's `Serializer` once, gated on the version the copy was made at,
-// with undo and redo applying that one change. A command that writes the
-// document itself instead reads no text off the copy, which has no `$document`,
-// and the operation's own write then overwrites it.
+// **It edits the operation's copy.** A handler runs inside an operation, where
+// `sourceRoot` is a copy of the built root: the recording command's runnable
+// appends to the copy, and the operation writes the copy's text through the
+// grammar's `Serializer` once, gated on the version the copy was made at, with
+// undo and redo applying that one change. A command that writes the document
+// itself instead reads no text off the copy, which has no `$document`, and the
+// operation's own write then overwrites it.
 //
 // **The drop location is discarded.** `needsClientLayout` is `true` and the
 // starter grammar persists no bounds, so there is nowhere to put a coordinate: the
@@ -1412,8 +1412,8 @@ server/src/glsp/bookstore/delete-operation-handler.ts
 // link error. A node drawn for another document's target is not deletable, and
 // its id finds no node here.
 //
-// Like the create handler, it edits the operation's working copy, which the
-// operation writes once, with undo and redo applying that one change.
+// Like the create handler, it edits the operation's copy, which the operation
+// writes once, with undo and redo applying that one change.
 
 import { type Command, DeleteElementOperation, GEdge, JsonOperationHandler, type MaybePromise } from '@eclipse-glsp/server';
 import { removeChildren } from '@hydranium/core';

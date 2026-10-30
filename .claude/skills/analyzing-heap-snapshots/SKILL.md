@@ -34,7 +34,7 @@ is the order to read the report in, and that structure.
      its targets through `_items`;
    - in a GLSP session, the model state's `_sourceRoot`, the index's
      `idToSemanticNode`, and each operation command on the undo stack, through
-     `trace`, `workingRoots`, `sourceRootAtOpen` and `writtenRoot`, until an
+     `trace`, `operationRoots`, `sourceRootAtOpen` and `writtenRoot`, until an
      undo or redo of that command replaces them.
 
    A `ReferenceDescription` in the index manager's `referenceIndex` holds URIs,

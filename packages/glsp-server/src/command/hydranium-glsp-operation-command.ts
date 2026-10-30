@@ -54,9 +54,9 @@ export type UndoRedoDirection = 'undo' | 'redo';
  */
 export interface OperationInternals {
    run(create: () => MaybePromise<Command | undefined>): Promise<OperationOutcome>;
-   workingRootOf(key: string, built: AstNode): AstNode;
-   existingWorkingRootOf(key: string): AstNode | undefined;
-   workingUriOf(node: AstNode): string | undefined;
+   operationRootOf(key: string, built: AstNode): AstNode;
+   existingOperationRootOf(key: string): AstNode | undefined;
+   operationUriOf(node: AstNode): string | undefined;
    builtNodeOf<T extends AstNode>(node: T): T;
    recordWrittenRoot(root: AstNode): void;
    recordDropped(current: AstNode | undefined): void;
@@ -67,18 +67,18 @@ export interface OperationInternals {
 }
 
 const internals = new WeakMap<object, OperationInternals>();
-/** The URI of the document every working root an operation made copies, by root. */
-const workingRootUris = new WeakMap<AstNode, string>();
+/** The URI of the document each operation copy stands for, by copy root. */
+const operationRootUris = new WeakMap<AstNode, string>();
 
 /**
- * The URI of the document whose working copy `node` belongs to, spelled as
+ * The URI of the document whose operation copy `node` belongs to, spelled as
  * that document's own, so a lookup keyed by it matches the built node's;
  * `undefined` for a node of no copy or of a detached root's, as for the
  * built node. A copy has no `$document`, so a lookup
  * that routes by a node's document routes a copy node through this instead.
  */
-export function workingUriOfCopy(node: AstNode): string | undefined {
-   return workingRootUris.get(AstUtils.findRootNode(node));
+export function operationUriOfCopy(node: AstNode): string | undefined {
+   return operationRootUris.get(AstUtils.findRootNode(node));
 }
 const openOperations = new WeakMap<object, OperationInternals>();
 
@@ -157,9 +157,9 @@ function membersOf(operation: object): OperationInternals {
  * do nothing there.
  */
 export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyObject> implements Command {
-   /** Working copies by canonical URI. */
-   protected readonly workingRoots = new Map<string, AstNode>();
-   /** Built node to copy and copy to built node, across every working root, as `AstUtils.copyAstNode` records it. */
+   /** Operation copies by canonical URI. */
+   protected readonly operationRoots = new Map<string, AstNode>();
+   /** Built node to copy and copy to built node, across every operation root, as `AstUtils.copyAstNode` records it. */
    protected readonly trace = new Map<AstNode, AstNode>();
    /** The source root captured when the operation opened. */
    protected sourceRootAtOpen?: AstNode;
@@ -189,9 +189,9 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
    constructor(protected readonly modelState: HydraniumGlspRecordingState<TSourceModel>) {
       const members: OperationInternals = {
          run: create => this.run(create),
-         workingRootOf: (key, built) => this.workingRootOf(key, built),
-         existingWorkingRootOf: key => this.workingRoots.get(key),
-         workingUriOf: node => this.workingUriOf(node),
+         operationRootOf: (key, built) => this.operationRootOf(key, built),
+         existingOperationRootOf: key => this.operationRoots.get(key),
+         operationUriOf: node => this.operationUriOf(node),
          builtNodeOf: node => this.builtNodeOf(node),
          recordWrittenRoot: root => {
             this.writtenRoot = root;
@@ -305,33 +305,33 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
       return this.command?.canUndo?.() ?? true;
    }
 
-   /** The working copy of `built`, the root of the document whose canonical URI is `key`, made on the first request. */
-   protected workingRootOf(key: string, built: AstNode): AstNode {
-      let working = this.workingRoots.get(key);
-      if (!working) {
-         working = AstUtils.copyAstNode(
+   /** The operation copy of `built`, the root of the document whose canonical URI is `key`, made on the first request. */
+   protected operationRootOf(key: string, built: AstNode): AstNode {
+      let copy = this.operationRoots.get(key);
+      if (!copy) {
+         copy = AstUtils.copyAstNode(
             built,
-            (_node, _property, _refNode, _refText, original) => this.buildWorkingReference(original),
+            (_node, _property, _refNode, _refText, original) => this.buildOperationReference(original),
             this.trace
          );
-         this.rebuildWorkingMultiReferences(working);
-         this.workingRoots.set(key, working);
+         this.rebuildOperationMultiReferences(copy);
+         this.operationRoots.set(key, copy);
          const uri = built.$document?.uri.toString();
          if (uri !== undefined) {
-            workingRootUris.set(working, uri);
+            operationRootUris.set(copy, uri);
          }
          this.modelState.index.remapSemanticAliases(node =>
             AstUtils.findRootNode(node) === built ? (this.trace.get(node) ?? node) : node
          );
       }
-      return working;
+      return copy;
    }
 
-   /** The canonical URI of the working root `node` belongs to; `undefined` for a node of no copy. */
-   protected workingUriOf(node: AstNode): string | undefined {
+   /** The canonical URI of the operation root `node` belongs to, or `undefined` for a node of no copy. */
+   protected operationUriOf(node: AstNode): string | undefined {
       const root = AstUtils.findRootNode(node);
-      for (const [key, working] of this.workingRoots) {
-         if (working === root) {
+      for (const [key, copy] of this.operationRoots) {
+         if (copy === root) {
             return key;
          }
       }
@@ -343,7 +343,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
     * and for a node the operation created.
     */
    protected builtNodeOf<T extends AstNode>(node: T): T {
-      if (this.workingUriOf(node) === undefined) {
+      if (this.operationUriOf(node) === undefined) {
          return node;
       }
       const built = this.trace.get(node);
@@ -369,7 +369,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
     * root again, whether or not the write changed it.
     */
    protected close(): void {
-      const copies = new Set(this.workingRoots.values());
+      const copies = new Set(this.operationRoots.values());
       this.modelState.index.remapSemanticAliases(node => (copies.has(AstUtils.findRootNode(node)) ? this.trace.get(node) : node));
       openOperations.delete(this.modelState);
       const root = this.writtenRoot ?? this.sourceRootAtOpen;
@@ -442,7 +442,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
       };
    }
 
-   /** The model projected from the working copies, cloned; `undefined` for a state that projects none. */
+   /** The model projected from the operation copies, cloned, or `undefined` for a state that projects none. */
    protected async project(): Promise<TSourceModel | undefined> {
       const model: TSourceModel | undefined = await this.modelState.sourceModel;
       return model === undefined ? undefined : structuredClone(model);
@@ -512,7 +512,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
     * does for any undo or redo that fails.
     */
    protected async undoOrRedoSideEffects(direction: UndoRedoDirection, merged?: TSourceModel): Promise<void> {
-      this.workingRoots.clear();
+      this.operationRoots.clear();
       this.trace.clear();
       this.writtenRoot = undefined;
       this.undoingOrRedoing = true;
@@ -582,7 +582,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
     * in the operation is found, else that target itself. A handler compares a
     * target by identity with nodes it resolved from a copy.
     */
-   protected buildWorkingReference(original: Reference): Reference {
+   protected buildOperationReference(original: Reference): Reference {
       const trace = this.trace;
       return {
          $refText: original.$refText,
@@ -600,8 +600,8 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
       };
    }
 
-   /** {@link buildWorkingReference} for a reference with several targets. */
-   protected buildWorkingMultiReference(original: MultiReference): MultiReference {
+   /** {@link buildOperationReference} for a reference with several targets. */
+   protected buildOperationMultiReference(original: MultiReference): MultiReference {
       const trace = this.trace;
       return {
          $refText: original.$refText,
@@ -616,23 +616,23 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
    }
 
    /**
-    * Replace every multi-reference under `working` with a working one.
+    * Replace every multi-reference under `copy` with one into the copies.
     * `AstUtils.copyAstNode` rebuilds single references only and leaves a
     * multi-reference object shared with the built root, whose targets are
     * built nodes.
     */
-   protected rebuildWorkingMultiReferences(working: AstNode): void {
-      for (const node of AstUtils.streamAst(working)) {
+   protected rebuildOperationMultiReferences(copy: AstNode): void {
+      for (const node of AstUtils.streamAst(copy)) {
          const properties = node as GenericAstNode;
          for (const [name, value] of Object.entries(properties)) {
             if (name.startsWith('$')) {
                continue;
             }
             if (isMultiReference(value)) {
-               properties[name] = this.buildWorkingMultiReference(value);
+               properties[name] = this.buildOperationMultiReference(value);
             } else if (Array.isArray(value) && value.some(element => isMultiReference(element))) {
                properties[name] = value.map((element: unknown) =>
-                  isMultiReference(element) ? this.buildWorkingMultiReference(element) : element
+                  isMultiReference(element) ? this.buildOperationMultiReference(element) : element
                );
             }
          }

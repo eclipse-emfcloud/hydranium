@@ -3,29 +3,29 @@
 How a diagram operation edits the shared model, and why its handler follows the
 rules in [Make a diagram editable](../../guides/editable-diagram.md).
 
-## A working copy, written once
+## An operation copy, written once
 
 A handler mutates `sourceRoot` inside `HydraniumGlspRecordingCommand`; the
 operation writes the copy's projection once when it completes, which persists
 and republishes it to the other heads, and undo and redo apply that one change.
-During an operation `sourceRoot` is a working copy of the built root, so no
+During an operation `sourceRoot` is an operation copy of the built root, so no
 other reader sees the edit before its write lands. The operation opens before
 the handler's `createCommand` runs, because handlers resolve their targets
 there. A node of the source document that `createCommand` resolves by id or
 from `sourceRoot` is therefore already the copy.
 
 The root of any other document the handler edits is reached through
-`modelState.workingRootOf(uri)`; a root read from the model service is the one
+`modelState.operationRootOf(uri)`. A root read from the model service is the one
 every reader shares. An id added through `indexSemanticElement` for a node of
 that document names the built node until that call makes the copy.
 
 ## Nodes without a document
 
-Nodes of a working copy have no `$document`, so a transfer encoder hook sees no
-`context.uri` while it projects them, and a lookup that reads a node's document
-— a scope, or the project a name is qualified in — throws or answers for no
-document. `modelState.builtNodeOf(node)` answers the built node for such
-lookups, while the handler keeps editing the copy.
+Nodes of an operation copy have no `$document`, so a transfer encoder hook sees
+no `context.uri` while it projects them, and a lookup that reads a node's
+document — a scope, or the project a name is qualified in — throws or answers
+for no document. `modelState.builtNodeOf(node)` answers the built node for
+such lookups, while the handler keeps editing the copy.
 
 ## References into the copy
 
@@ -51,8 +51,8 @@ chain from `SyntheticStep`s, as a protocol context's `syntheticPath` is built.
 
 A side effect a command carries outside the model — a command that does not
 record, or a recording command's `undoAction` / `redoAction` — runs again on
-undo and redo, against throwaway copies: `sourceRoot` and `workingRootOf` answer
-copies there, discarded afterwards, and the model changes only by the
+undo and redo, against throwaway copies: `sourceRoot` and `operationRootOf`
+answer copies there, discarded afterwards, and the model changes only by the
 operation's recorded transition. A recording command executed there throws; the
 undo then fails whole: the steps it already ran are run back, nothing is
 written, and GLSP's command stack flushes.
