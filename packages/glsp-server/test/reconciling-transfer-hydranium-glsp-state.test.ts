@@ -27,9 +27,8 @@ import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testin
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { ReconcilingTransferHydraniumGlspState } from '../src/state/reconciling-transfer-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
-import { HydraniumGlspOperationCommand, runOperation } from '../src/command/hydranium-glsp-operation-command.js';
+import { HydraniumGlspOperationCommand, runOperation, takeUndoRedoTally } from '../src/command/hydranium-glsp-operation-command.js';
 import { HydraniumGlspRecordingCommand } from '../src/command/hydranium-glsp-recording-command.js';
-import { DiagramEditDroppedError } from '../src/command/diagram-edit-dropped-error.js';
 
 interface TestRoot extends AstNode {
    readonly $type: 'TestRoot';
@@ -756,7 +755,7 @@ describe('ReconcilingTransferHydraniumGlspState under an operation', () => {
       expect(harness.warns.find(message => message.includes("Normalizing an operation's transition failed"))).toMatch(/\n\s+at /);
    });
 
-   it('fails an undo whose write the reconcile drops with a DiagramEditDroppedError', async () => {
+   it('skips an undo whose write the reconcile drops, and writes nothing on the redo after it', async () => {
       const harness = makeHarness();
       const state = createState(harness);
       state.setSourceRoot('file:///a.a', makeRoot('built'));
@@ -776,7 +775,16 @@ describe('ReconcilingTransferHydraniumGlspState under an operation', () => {
       harness.resolve = async () => outcomes.shift()!;
       harness.throwConflictOnNextUpdate = true;
 
-      await expect(state.runExclusive(() => operation.undo())).rejects.toBeInstanceOf(DiagramEditDroppedError);
+      await state.runExclusive(() => operation.undo());
+      const undone = takeUndoRedoTally(state);
+      const writes = harness.updateCalls.length;
+      await state.runExclusive(() => operation.redo());
+
+      expect({ undone, redone: takeUndoRedoTally(state), writes: harness.updateCalls.length - writes }).toEqual({
+         undone: { skipped: 1, applied: 0 },
+         redone: { skipped: 0, applied: 1 },
+         writes: 0
+      });
    });
 
    it('refuses setSourceRoot while an operation is open', async () => {

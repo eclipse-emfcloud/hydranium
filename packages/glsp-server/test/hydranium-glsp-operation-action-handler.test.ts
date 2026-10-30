@@ -71,6 +71,14 @@ describe('HydraniumGlspOperationActionHandler.reportFailure', () => {
       expect(handler.warnings[0]).toContain('model v1 / text v2');
    });
 
+   it('logs a conflict wrapped as the cause of a failure as an error, still naming both versions', () => {
+      const handler = new RecordingHandler();
+      handler.fail(new Error('refused after a step', { cause: new ConflictError('file:///a.x', asModelVersion(1), 2) }));
+      expect(handler.warnings).toEqual([]);
+      expect(handler.errors).toHaveLength(1);
+      expect(handler.errors[0]).toContain('model v1 / text v2');
+   });
+
    it('warns without a stack for a write to a document that does not parse, which is declined too', () => {
       const handler = new RecordingHandler();
       handler.fail(new DocumentSyntaxError('file:///a.x'));

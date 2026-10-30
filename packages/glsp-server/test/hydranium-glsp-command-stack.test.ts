@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { Container } from 'inversify';
 import { type Command, CompoundCommand, DefaultCommandStack, Logger as GlspLogger, ModelState } from '@eclipse-glsp/server';
-import { DocumentSyntaxError } from '@hydranium/protocol';
+import { ConflictError, DocumentSyntaxError, asModelVersion } from '@hydranium/protocol';
 import type { ServerSharedServices } from '@hydranium/core';
 import { makeNoopSharedServices } from '@hydranium/core/testing';
 import { HydraniumGlspCommandStack } from '../src/command/hydranium-glsp-command-stack.js';
@@ -59,6 +59,7 @@ function operationFailingWith(fail: () => Promise<void>): HydraniumGlspOperation
 }
 
 const refused = (): Promise<void> => Promise.reject(new DocumentSyntaxError(OWN));
+const conflicted = (): Promise<void> => Promise.reject(new ConflictError(OWN, asModelVersion(1), 2));
 
 describe('HydraniumGlspCommandStack', () => {
    it('is dirty when any document the diagram has open is, the secondaries included', () => {
@@ -136,6 +137,44 @@ describe('HydraniumGlspCommandStack after a refused undo or redo', () => {
       expect(stack.canUndo()).toBe(true);
    });
 
+   it('keeps the history when a recording command executed on its own is refused for a conflict, as its operation is', async () => {
+      const stack = makeStack({}, new Set());
+      const command = Object.create(HydraniumGlspRecordingCommand.prototype) as HydraniumGlspRecordingCommand<object>;
+      const conflicting = (): Promise<void> => Promise.reject(new ConflictError(OWN, asModelVersion(1), 2));
+      Object.assign(command, { execute: async () => undefined, undo: conflicting, canUndo: () => true });
+      await stack.execute(command);
+
+      await expect(stack.undo()).rejects.toBeInstanceOf(ConflictError);
+
+      expect(stack.canUndo()).toBe(true);
+   });
+
+   it('keeps the history and its place when an operation’s undo is refused for a conflict', async () => {
+      const stack = makeStack({}, new Set());
+      await stack.execute(noopCommand);
+      await stack.execute(operationFailingWith(conflicted));
+
+      await expect(stack.undo()).rejects.toBeInstanceOf(ConflictError);
+
+      expect({ undo: stack.canUndo(), redo: stack.canRedo(), top: stack['top'] }).toEqual({ undo: true, redo: false, top: 1 });
+   });
+
+   it('flushes when a compound is refused for a conflict, and fails as a plain error carrying the refusal', async () => {
+      const stack = makeStack({}, new Set());
+      await stack.execute(new CompoundCommand([noopCommand, operationFailingWith(conflicted)]));
+
+      const failure = await stack.undo().then(
+         () => undefined,
+         (error: unknown) => error
+      );
+
+      expect({
+         refusal: failure instanceof ConflictError,
+         cause: failure instanceof Error && failure.cause instanceof ConflictError,
+         canUndo: stack.canUndo()
+      }).toEqual({ refusal: false, cause: true, canUndo: false });
+   });
+
    it('flushes when a compound is refused for a syntax error, and fails as a plain error carrying the refusal', async () => {
       // Its children's own compensation may have failed, so the refusal no longer says nothing changed.
       const stack = makeStack({}, new Set());
@@ -149,8 +188,9 @@ describe('HydraniumGlspCommandStack after a refused undo or redo', () => {
       expect({
          refusal: failure instanceof DocumentSyntaxError,
          cause: failure instanceof Error && failure.cause instanceof DocumentSyntaxError,
+         tellsTheRefusal: failure instanceof Error && failure.message.includes(new DocumentSyntaxError(OWN).message),
          canUndo: stack.canUndo()
-      }).toEqual({ refusal: false, cause: true, canUndo: false });
+      }).toEqual({ refusal: false, cause: true, tellsTheRefusal: true, canUndo: false });
    });
 
    it('flushes when a command that is no operation is refused for a syntax error, and fails as a plain error carrying the refusal', async () => {

@@ -19,7 +19,7 @@ import {
    UndoAction
 } from '@eclipse-glsp/server';
 import { DiagramStatus, type HydraniumGlspSubmissionHandler } from '@hydranium/glsp-server';
-import { DIAGRAM_EDIT_DROPPED } from '@hydranium/glsp-server/messages';
+import { DIAGRAM_EDIT_DROPPED, DIAGRAM_UNDO_CONFLICT } from '@hydranium/glsp-server/messages';
 import { waitFor } from '@hydranium/protocol/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { OrderFlowCommand } from '../../src/glsp/order-flow-command.js';
@@ -318,10 +318,10 @@ describe('the exits of an operation', () => {
    });
 
    it.each([
-      ['the operation', 'do'],
-      ['an undo', 'undo']
+      ['fails the operation', 'do'],
+      ['refuses an undo, keeping the history and its place,', 'undo']
    ] as const)(
-      'fails %s whose write conflicts and cannot read the current text, writing nothing and keeping the foreign edit',
+      '%s whose write conflicts and cannot read the current text, writing nothing and keeping the foreign edit',
       async (_what, phase) => {
          const opened = await openDiagram();
          const { diagram, layoutUri } = opened;
@@ -340,15 +340,53 @@ describe('the exits of an operation', () => {
          vi.spyOn(state, 'refetch').mockResolvedValueOnce(undefined);
          const layoutBefore = textOf(opened, layoutUri);
 
-         const message = await applyFailing(diagram, phase === 'do' ? create : UndoAction.create());
+         const before = diagram.actions.length;
+         if (phase === 'do') {
+            await applyFailing(diagram, create);
+         } else {
+            await dispatcherOf(diagram).dispatch(UndoAction.create());
+         }
 
          expect({
-            reported: message.details?.includes('was not applied'),
+            messages: diagram.actions
+               .slice(before)
+               .filter(MessageAction.is)
+               .map(({ severity, message, details }) => ({ severity, message, reported: details?.includes('was not applied') ?? false })),
             layout: textOf(opened, layoutUri) === layoutBefore,
             count,
             canUndo: commandStackOf(diagram).canUndo(),
             canRedo: commandStackOf(diagram).canRedo()
-         }).toEqual({ reported: true, layout: true, count: phase === 'do' ? 0 : 1, canUndo: false, canRedo: false });
+         }).toEqual(
+            phase === 'do'
+               ? {
+                    messages: [expect.objectContaining({ severity: 'ERROR', reported: true })],
+                    layout: true,
+                    count: 0,
+                    canUndo: false,
+                    canRedo: false
+                 }
+               : {
+                    messages: [{ severity: 'WARNING', message: DIAGRAM_UNDO_CONFLICT.text, reported: true }],
+                    layout: true,
+                    count: 1,
+                    canUndo: true,
+                    canRedo: false
+                 }
+         );
+         if (phase === 'undo') {
+            // Read again, the foreign edit to another entry merges.
+            await undoOrRedo(diagram, UndoAction.create());
+            const layout = textOf(opened, layoutUri);
+            expect({
+               count,
+               payUndone: layout.includes('node Pay at 40, 100'),
+               foreign: layout.includes('node PaymentOk at 270, 95')
+            }).toEqual({
+               count: 0,
+               payUndone: true,
+               foreign: true
+            });
+         }
       }
    );
 

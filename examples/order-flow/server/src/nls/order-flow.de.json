@@ -29,6 +29,8 @@
   "hydranium/glsp-server/diagram-redo-skipped": "Es wurde nichts wiederholt: Was dieser Schritt erneut anwenden würde, wurde inzwischen in einem anderen Editor geändert.",
   "hydranium/glsp-server/diagram-undo-syntax-error": "Es wurde nichts rückgängig gemacht: Ein Dokument dieses Diagramms enthält einen Syntaxfehler. Beheben Sie ihn zuerst im Text.",
   "hydranium/glsp-server/diagram-redo-syntax-error": "Es wurde nichts wiederholt: Ein Dokument dieses Diagramms enthält einen Syntaxfehler. Beheben Sie ihn zuerst im Text.",
+  "hydranium/glsp-server/diagram-undo-conflict": "Es wurde nichts rückgängig gemacht: Dieses Diagramm wurde währenddessen in einem anderen Editor geändert. Versuchen Sie es erneut.",
+  "hydranium/glsp-server/diagram-redo-conflict": "Es wurde nichts wiederholt: Dieses Diagramm wurde währenddessen in einem anderen Editor geändert. Versuchen Sie es erneut.",
   "hydranium/glsp-server/diagram-undo-partly-skipped": "Dieser Schritt wurde nur teilweise rückgängig gemacht: Einiges von dem, was er wiederherstellen würde, wurde inzwischen in einem anderen Editor geändert.",
   "hydranium/glsp-server/diagram-redo-partly-skipped": "Dieser Schritt wurde nur teilweise wiederholt: Einiges von dem, was er erneut anwenden würde, wurde inzwischen in einem anderen Editor geändert.",
   "hydranium/glsp-server/diagram-undo-failed": "Der Schritt konnte nicht rückgängig gemacht werden: Dasselbe Element wurde währenddessen in einem anderen Editor geändert. Der Verlauf zum Rückgängigmachen und Wiederholen wurde für dieses Diagramm gelöscht.",

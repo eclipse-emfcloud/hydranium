@@ -9,7 +9,7 @@
 
 import { type Command, CompoundCommand, DefaultCommandStack, ModelState } from '@eclipse-glsp/server';
 import { type ServerSharedServices } from '@hydranium/core';
-import { isDocumentSyntaxError } from '@hydranium/protocol';
+import { describeError, isConflictError, isDocumentSyntaxError } from '@hydranium/protocol';
 import { inject, injectable } from 'inversify';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { HydraniumGlspOperationCommand, isCommandArray } from './hydranium-glsp-operation-command.js';
@@ -79,8 +79,8 @@ export class HydraniumGlspCommandStack extends DefaultCommandStack {
    /**
     * Lifted from `@eclipse-glsp/server`'s `DefaultCommandStack.undo`, keeping
     * the history and its place when {@link leftNothingBehind} says the failure
-    * changed nothing, so the user can undo again once the text parses. The
-    * accompanying test pins upstream's source.
+    * changed nothing, so the user can undo again once the text parses or after
+    * a conflict. The accompanying test pins upstream's source.
     */
    override async undo(): Promise<void> {
       if (this.canUndo()) {
@@ -117,25 +117,25 @@ export class HydraniumGlspCommandStack extends DefaultCommandStack {
     * Whether `command` failed with `error` without changing anything. An
     * operation's undo or redo lets a `DocumentSyntaxError` out only when it
     * collides before running a step, or when its own write was refused and it
-    * reverted every step it ran. A `CompoundCommand` runs its other children
-    * back on its own, and a failure there is not reported, so it never
-    * qualifies.
+    * reverted every step it ran, and a `ConflictError` only in the latter case.
+    * A `CompoundCommand` runs its other children back on its own, and a
+    * failure there is not reported, so it never qualifies.
     */
    protected leftNothingBehind(command: Command, error: unknown): boolean {
       return (
-         isDocumentSyntaxError(error) &&
+         (isDocumentSyntaxError(error) || isConflictError(error)) &&
          (command instanceof HydraniumGlspOperationCommand || command instanceof HydraniumGlspRecordingCommand)
       );
    }
 
    /**
-    * `error` as the stack flushes on it. A `DocumentSyntaxError` says nothing
-    * changed, which is no longer known here, so it becomes the `cause` of a
-    * plain error.
+    * `error` as the stack flushes on it. A `DocumentSyntaxError` or
+    * `ConflictError` says nothing changed, which is no longer known here, so
+    * it becomes the `cause` of a plain error.
     */
    protected flushedFailure(error: unknown): unknown {
-      return isDocumentSyntaxError(error)
-         ? new Error('A command was refused for a syntax error after it may have changed the model', { cause: error })
+      return isDocumentSyntaxError(error) || isConflictError(error)
+         ? new Error(`A command was refused after it may have changed the model: ${describeError(error)}`, { cause: error })
          : error;
    }
 
