@@ -37,7 +37,10 @@ export async function startEditor(heads: WorkerHeads, shownFile: ShownFile): Pro
       onLogMessage: params => appendLog(params.message),
       // Before `initialized`, since the server publishes from then on.
       beforeInitialized: result => {
-         client = new MonacoLspClient(heads.lsp, result.capabilities, { languages: LANGUAGES });
+         client = new MonacoLspClient(heads.lsp, result.capabilities, {
+            languages: LANGUAGES,
+            clientCapabilities: MONACO_CLIENT_CAPABILITIES
+         });
          heads.lsp.onNotification(PublishDiagnosticsNotification.type, params => client.applyDiagnostics(params));
       }
    });

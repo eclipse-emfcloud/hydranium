@@ -15,18 +15,18 @@
 // `node:fs`-backed sink (see `installNodeLogFileSink`) at module load, before
 // the first logger is constructed. The function is re-exported for explicit
 // control / tests.
-// Node hosts also get workspace-write-lock reentrancy detection for free, by the
+// Node hosts also get workspace lock reentrancy detection for free, by the
 // same mechanism and for the same reason: the check needs `node:async_hooks`, so
 // the neutral tree can only declare the seam.
 // A Node host is also profiled from here when `HYDRANIUM_CPU_PROFILE_FILE` is
 // set, so the profile covers the workspace load that follows the import.
 import { installNodeLogFileSink } from './log-file-sink.js';
 import { startCpuProfileFromEnv } from './startup-cpu-profile.js';
-import { installNodeWriteLockScope } from './write-lock-scope-node.js';
+import { installNodeLockScopes } from './lock-scope-node.js';
 
 export * from './node-file-system-provider.js';
 export * from './log-file-sink.js';
-export * from './write-lock-scope-node.js';
+export * from './lock-scope-node.js';
 export * from './log-preamble-node.js';
 export * from './server-diagnostics.js';
 
@@ -53,5 +53,5 @@ export * from './stdio-launcher.js';
 export * from './validate-workspace.js';
 
 installNodeLogFileSink();
-installNodeWriteLockScope();
+installNodeLockScopes();
 startCpuProfileFromEnv();

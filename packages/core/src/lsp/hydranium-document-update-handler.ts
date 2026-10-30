@@ -502,7 +502,7 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
       const reason = this.pendingReason;
       this.pendingReason = undefined;
       this.workspaceManager.ready
-         .then(() => this.documentBuilder.scheduleUpdate(changed, deleted, reason))
+         .then(() => this.documentBuilder.scheduleUpdate(changed, deleted, { reason, outsideReads: true }))
          .catch(err => {
             // A deferred rebuild can finish after the LSP peer has gone away.
             // Unless the head was started through `startLanguageServer`, whose

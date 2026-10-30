@@ -20,10 +20,11 @@
  * "the report names documents the page cannot show" is therefore this panel,
  * which makes every one of them openable.
  *
- * It also lists documents the page CANNOT open, and that asymmetry is real
- * rather than an oversight: in-code contributions arrive on the `virtual:`
- * scheme, are registered independently of the workspace folder, and have no file
- * behind them. They are shown with the reason instead of a click target.
+ * A host that sets `validateVirtualDocuments` gets problems for documents with
+ * no file behind them too: in-code contributions arrive on the `virtual:`
+ * scheme and are registered independently of the workspace folder. This page
+ * sets none. A click opens one read-only on the text the server holds, or
+ * says why the page cannot.
  */
 
 import * as monaco from 'monaco-editor-core';
@@ -50,8 +51,8 @@ export interface WorkspacePanelHandlers {
    readonly onOpenDocument: (path: string) => void;
    /** Reveal a diagnostic. The panel has already established that the URI is openable. */
    readonly onOpenDiagnostic: (target: DiagnosticTarget) => void;
-   /** Called for a URI with no file behind it, so the page can say so. */
-   readonly onUnopenable: (uri: string) => void;
+   /** Called for a URI with no file behind it, so the page can ask the server for its text or say why not. */
+   readonly onUnopenable: (uri: string, line: number) => void;
 }
 
 /**
@@ -262,7 +263,7 @@ export class WorkspacePanel {
    private reveal(uri: string, line: number): void {
       const path = uri.startsWith(`${this.rootUri}/`) ? uri.slice(this.rootUri.length + 1) : undefined;
       if (path === undefined || !this.paths.includes(path)) {
-         this.handlers.onUnopenable(uri);
+         this.handlers.onUnopenable(uri, line);
          return;
       }
       this.handlers.onOpenDiagnostic({ uri, line });

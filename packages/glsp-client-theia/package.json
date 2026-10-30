@@ -80,7 +80,7 @@
     "rimraf": "^5.0.0",
     "snabbdom": "3.5.1",
     "typescript": "^7.0.2",
-    "vscode-jsonrpc": "9.0.0"
+    "vscode-jsonrpc": "9.0.3"
   },
   "peerDependencies": {
     "@eclipse-glsp/client": "^2.7.0",

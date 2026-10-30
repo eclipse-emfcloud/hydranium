@@ -981,10 +981,10 @@ describe('a text change no build follows', () => {
       await models.validated(uri);
       const builder = services.shared.workspace.DocumentBuilder;
       const scheduleUpdate = builder.scheduleUpdate.bind(builder);
-      builder.scheduleUpdate = (changed, deleted, reason) =>
+      builder.scheduleUpdate = (changed, deleted, options) =>
          changed.some(target => target.toString() === uri)
             ? Promise.reject(new Error('build failed'))
-            : scheduleUpdate(changed, deleted, reason);
+            : scheduleUpdate(changed, deleted, options);
       await services.shared.workspace.AstDocumentManager.update(uri, OTHER, session.clientId);
 
       const settled = await Promise.race([

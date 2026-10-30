@@ -316,15 +316,15 @@ const HEAD_FRAMEWORK_DEPENDENCIES: Record<InitHead | 'base', readonly string[]> 
  */
 const HEAD_THIRD_PARTY_DEPENDENCIES: Record<InitHead | 'base', Readonly<Record<string, string>>> = {
    base: {
-      langium: '4.3.1',
+      langium: '4.4.0',
       // Exact, as are the protocol and transport it pins, so Langium and the
       // framework share their copies; across copies, an error a handler throws
       // or returns loses its code, and a later patch can pin another protocol.
-      'vscode-languageserver': '10.0.1',
-      'vscode-jsonrpc': '9.0.0',
-      'vscode-languageserver-protocol': '3.18.1',
+      'vscode-languageserver': '10.1.2',
+      'vscode-jsonrpc': '9.0.3',
+      'vscode-languageserver-protocol': '3.18.4',
       // The copy that protocol pins; a root without it takes the one Theia pins.
-      'vscode-languageserver-types': '3.18.0'
+      'vscode-languageserver-types': '3.18.4'
    },
    lsp: {},
    data: {},
@@ -370,7 +370,7 @@ const HOST_BROWSER_FRAMEWORK_DEPENDENCIES: Record<InitHead | 'base', readonly st
    glsp: ['@hydranium/glsp-client', '@hydranium/glsp-server']
 };
 const HOST_BROWSER_THIRD_PARTY_DEPENDENCIES: Record<InitHead | 'base', Readonly<Record<string, string>>> = {
-   base: { 'vscode-jsonrpc': '9.0.0', 'vscode-languageserver-protocol': '3.18.1' },
+   base: { 'vscode-jsonrpc': '9.0.3', 'vscode-languageserver-protocol': '3.18.4' },
    lsp: { 'monaco-editor-core': '0.56.0' },
    data: {},
    glsp: { '@eclipse-glsp/server': '2.8.0', 'reflect-metadata': '~0.2.2' }
@@ -386,7 +386,7 @@ const HOST_BROWSER_DEV_DEPENDENCIES: Readonly<Record<string, string>> = {
 };
 
 /** The language client both VS Code extensions start the server with. */
-const VSCODE_LANGUAGE_CLIENT: Readonly<Record<string, string>> = { 'vscode-languageclient': '^9.0.1' };
+const VSCODE_LANGUAGE_CLIENT: Readonly<Record<string, string>> = { 'vscode-languageclient': '10.1.2' };
 
 /** The VS Code API's types, at the oldest VS Code both extensions run in, which `engines` names too. */
 const VSCODE_ENGINE = '^1.101.0';
@@ -407,7 +407,7 @@ const HOST_VSCODE_GLSP_THIRD_PARTY_DEPENDENCIES: Readonly<Record<string, string>
    '@eclipse-glsp/vscode-integration': '2.8.0',
    '@eclipse-glsp/vscode-integration-webview': '2.8.0',
    inversify: '^6.1.3',
-   'vscode-jsonrpc': '9.0.0'
+   'vscode-jsonrpc': '9.0.3'
 };
 
 /** What the data head adds to the VS Code extension: the Show Model command's socket to it. */
@@ -417,7 +417,7 @@ const HOST_VSCODE_DATA_FRAMEWORK_DEPENDENCIES: readonly string[] = [
    '@hydranium/protocol'
 ];
 // Exact, as the server's is: the socket's connection and the framework's must be one copy.
-const HOST_VSCODE_DATA_THIRD_PARTY_DEPENDENCIES: Readonly<Record<string, string>> = { 'vscode-jsonrpc': '9.0.0' };
+const HOST_VSCODE_DATA_THIRD_PARTY_DEPENDENCIES: Readonly<Record<string, string>> = { 'vscode-jsonrpc': '9.0.3' };
 
 /** The VS Code extension's tools: the smoke tier, the download it runs in, the type check and the watch. */
 const HOST_VSCODE_DEV_DEPENDENCIES: Readonly<Record<string, string>> = {
@@ -429,13 +429,6 @@ const HOST_VSCODE_DEV_DEPENDENCIES: Readonly<Record<string, string>> = {
    rimraf: '^5.0.0',
    typescript: '^7.0.2'
 };
-
-/**
- * The Node major a standalone scaffold's `.nvmrc` and printed steps name.
- * `langium generate` from the pinned `langium-cli` fails on Node 24.20 and
- * later, which `engines` still admits.
- */
-export const SCAFFOLD_NODE_MAJOR = '22';
 
 /**
  * The exact pins of every member the composition emits, for a workspace root
@@ -595,7 +588,7 @@ __DEPENDENCIES__
     "@hydranium/cli": "__FRAMEWORK_PIN__",
     "@types/node": "^22.0.0",
     "concurrently": "^9.0.0",
-    "langium-cli": "4.3.0",
+    "langium-cli": "4.4.0",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",
     "vitest": "__VITEST__"
@@ -1774,10 +1767,6 @@ function readme(composition: InitComposition): string {
       '',
       '## Getting started',
       '',
-      '`langium generate` fails on Node 24.20 and later with `TypeError: Invalid URL`',
-      '([tdegrunt/jsonschema#423](https://github.com/tdegrunt/jsonschema/issues/423)),',
-      'so build on Node 22.',
-      '',
       '```bash',
       'npm install',
       'npm run langium:generate   # generate the AST from the grammar',
@@ -1894,15 +1883,12 @@ function readme(composition: InitComposition): string {
       'atomic set and depends on a single physical copy, so a floating range can',
       'silently resolve a second one.',
       '',
-      '`vscode-languageserver` is pinned to `10.0.1`, and',
-      '`vscode-languageserver-protocol` and `vscode-jsonrpc` to the `3.18.1` and',
-      '`9.0.0` it pins, so Langium, the LSP connection and the framework share one',
+      '`vscode-languageserver` is pinned to `10.1.2`, and',
+      '`vscode-languageserver-protocol` and `vscode-jsonrpc` to the `3.18.4` and',
+      '`9.0.3` it pins, so Langium, the LSP connection and the framework share one',
       'copy of each. With two, an error a Langium handler returns, such as a request',
       'for a document the server does not have, reaches the client as a result, and a',
-      'framework error your own LSP handler throws loses its code. The Langium 4.4',
-      'upgrade',
-      '([eclipse-emfcloud/hydranium#142](https://github.com/eclipse-emfcloud/hydranium/issues/142))',
-      'replaces these pins.',
+      'framework error your own LSP handler throws loses its code.',
       '',
       ...(pinsVitest(composition)
          ? [
@@ -2993,11 +2979,9 @@ function vscodeServersPackageJson(composition: InitComposition): string {
    const dependencies: Record<string, string> = {
       [memberPackageName(composition, 'protocol')]: MEMBER_PIN,
       [memberPackageName(composition, 'server')]: MEMBER_PIN,
-      ...VSCODE_LANGUAGE_CLIENT
+      ...VSCODE_LANGUAGE_CLIENT,
+      '@hydranium/client-vscode': frameworkPin(composition)
    };
-   if (socketHeads(composition).length > 0) {
-      dependencies['@hydranium/client-vscode'] = frameworkPin(composition);
-   }
    return `{
   "name": "${memberPackageName(composition, 'vscode-servers')}",
   "displayName": "${composition.name} Servers",
@@ -3088,6 +3072,7 @@ function vscodeLanguageClientFile(composition: InitComposition): string {
    return `// Starts the ${composition.name} server for VS Code, and for a Theia app that sideloads
 // this extension: one launch, so both hand the server the same documents.
 
+import { textDocumentContentMiddleware } from '@hydranium/client-vscode/node';
 import { ALL_LANGUAGES } from '${memberPackageName(composition, 'protocol')}';
 import { type ExtensionContext, workspace } from 'vscode';
 import { LanguageClient, TransportKind } from 'vscode-languageclient/node';
@@ -3098,14 +3083,16 @@ export async function start${composition.name}LanguageClient(context: ExtensionC
    // installed extension alike. Over IPC, which keeps the server's stdout free.
    const serverModule = require.resolve('${memberPackageName(composition, 'server')}/lib/main.js');
    const extensions = ALL_LANGUAGES.flatMap(language => language.fileExtensions).join(',');
-   const client = new LanguageClient(
+   const client: LanguageClient = new LanguageClient(
       '${composition.projectId}',
       '${composition.name}',
       { module: serverModule, transport: TransportKind.ipc },
       {
          documentSelector: ALL_LANGUAGES.map(({ languageId }) => ({ scheme: 'file', language: languageId })),
          // Changes on disk the editor does not hold, such as a file another tool writes.
-         synchronize: { fileEvents: workspace.createFileSystemWatcher(\`**/*{\${extensions}}\`) }
+         synchronize: { fileEvents: workspace.createFileSystemWatcher(\`**/*{\${extensions}}\`) },
+         // The text of a document only the server holds, such as a built-in library.
+         middleware: textDocumentContentMiddleware(() => client)
       }
    );
    context.subscriptions.push(client);
@@ -3660,7 +3647,7 @@ const THEIA_THIRD_PARTY_DEPENDENCIES: Record<InitHead | 'base', Readonly<Record<
       '@theia/filesystem': THEIA_VERSION,
       '@theia/output': THEIA_VERSION,
       inversify: '^6.1.3',
-      'vscode-jsonrpc': '9.0.0'
+      'vscode-jsonrpc': '9.0.3'
    },
    lsp: {},
    data: { '@theia/workspace': THEIA_VERSION },
@@ -4446,8 +4433,7 @@ ${sortedBlock(devDependencies, '    ')}
       ignoreFile(''),
       { path: '.editorconfig', content: template('editorconfig') },
       { path: '.oxfmtrc.json', content: oxfmtConfig(composition) },
-      { path: '.oxlintrc.json', content: template('oxlintrc.json') },
-      { path: '.nvmrc', content: `${SCAFFOLD_NODE_MAJOR}\n` }
+      { path: '.oxlintrc.json', content: template('oxlintrc.json') }
    ];
 }
 

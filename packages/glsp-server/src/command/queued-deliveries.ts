@@ -24,12 +24,14 @@ export function queuedDeliveriesOf(state: object): Set<Promise<unknown>> {
    return deliveries;
 }
 
-/** Track `delivery` in {@link queuedDeliveriesOf} until it settles. */
-export function trackQueuedDelivery(state: object, delivery: Promise<unknown>): void {
+/**
+ * Track `delivery` in {@link queuedDeliveriesOf} until it settles. Returns a
+ * promise that settles as `delivery` does, so a rejection is still reported.
+ */
+export function trackQueuedDelivery<T>(state: object, delivery: Promise<T>): Promise<T> {
    const deliveries = queuedDeliveriesOf(state);
    deliveries.add(delivery);
-   const done = (): void => {
+   return delivery.finally(() => {
       deliveries.delete(delivery);
-   };
-   delivery.then(done, done);
+   });
 }

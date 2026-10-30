@@ -32,7 +32,13 @@ import {
 } from '@hydranium/langium';
 import { type AstDiagnostic } from '../validation/document-validator.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
-import { ReentrantWriteLockError, isInsideWriteLock, isWriteLockScopeInstalled } from '../workspace/write-lock-scope.js';
+import {
+   ReentrantWriteLockError,
+   isInsideWriteLock,
+   isWriteLockScopeInstalled,
+   releaseReadHolds,
+   runOutsideReadLockScope
+} from '../workspace/lock-scope.js';
 import { type ApplyWorkspaceEditResult, CancellationToken, Disposable } from 'vscode-languageserver';
 import { AstDocument } from '../../documents/ast-document-manager.js';
 import { isClientGoneError } from '../../util/connection-liveness.js';
@@ -223,8 +229,16 @@ export interface SyncedWaitOptions {
  *
  * Do not await one inside a build phase listener: a browser host installs no
  * write-lock scope, so the wait cannot tell it is inside a build and waits for
- * one that cannot start. Nor inside a `WorkspaceLock.read`: the lock starts no
- * write, the build included, while a read runs.
+ * one that cannot start. The lock starts no write, the build included, while
+ * a `WorkspaceLock.read` runs, and Langium runs the provider of each document
+ * request, such as completion or hover, inside one. A Node host lets the read
+ * release its hold when it waits here or writes, so the build can start. A
+ * browser host cannot tell which read asked, so it releases every running
+ * request. A call from a queued read, or a wait of your own on any host,
+ * waits for the lock's read-hold limit.
+ * While the hold is released, the rest of the read runs beside the build,
+ * also when the provider does not await the write. A build that started
+ * meanwhile runs on once the hold is back.
  *
  * **Diagnostics are typed `never` below `Validated`.** Validation is the last
  * phase, so at any earlier landmark the array either is not yet computed or
@@ -620,11 +634,19 @@ export class DefaultModelService<
          return;
       }
       while (!sync.isSyncedTo(uri, textVersion)) {
-         const build = options.sync === true ? sync.syncTo(uri, textVersion) : undefined;
+         // Before the build, whose failure only the wait below handles, and before the release, as in the builder's waits.
+         if (cancelToken?.isCancellationRequested) {
+            throw OperationCancelled;
+         }
+         // Outside the read, whose hold the wait below alone releases and takes back.
+         const build = options.sync === true ? runOutsideReadLockScope(() => sync.syncTo(uri, textVersion)) : undefined;
          this.tracer
             .withUri(uri.toString())
             .debug(`waiting for ${uri.toString()} to reach ${DocumentState[state]} at v${textVersion} or later`);
-         await this.nextParseOrDeletion(uri, cancelToken, build);
+         // The build this waits for cannot start while the caller's read holds the lock. A parse or a
+         // deletion settles it while the build still has phases to run, which the take-back outruns.
+         await releaseReadHolds(this.services.workspace.WorkspaceLock, () => this.nextParseOrDeletion(uri, cancelToken, build));
+         // Releases and takes back on its own.
          await builder.waitUntil(state, uri, cancelToken, waitOptions);
       }
    }

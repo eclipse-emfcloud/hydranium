@@ -105,6 +105,7 @@ interface ServicesStubOptions {
    selfSaveRegistered?: (fsPath: string, mtimeMs: number) => boolean;
    /** Optional bookkeeping side-channels. When provided, the stub appends to these arrays. */
    scheduledReasons?: Array<string | undefined>;
+   scheduledOutsideReads?: boolean[];
    /** Drives `TextDocuments.onDidReleaseDocument`. */
    documentReleased?: Emitter<{ uri: string }>;
    loggedErrors?: string[];
@@ -171,8 +172,13 @@ function makeServicesStub(opts: ServicesStubOptions = {}): ServerSharedServices 
       workspace: {
          WorkspaceManager: { ready: Promise.resolve() },
          DocumentBuilder: {
-            scheduleUpdate: async (_changed: URI[], _deleted: URI[], reason?: string) => {
+            scheduleUpdate: async (
+               _changed: URI[],
+               _deleted: URI[],
+               { reason, outsideReads = false }: { reason?: string; outsideReads?: boolean } = {}
+            ) => {
                scheduledReasons?.push(reason);
+               opts.scheduledOutsideReads?.push(outsideReads);
             }
          },
          VersionSyncService: {
@@ -443,6 +449,14 @@ describe('HydraniumDocumentUpdateHandler reason stamping', () => {
       handler.didChangeContent(event);
       await flushMicrotasks();
       expect(scheduledReasons).toEqual(['didChangeContent']);
+   });
+
+   it('schedules an edit build as one from outside every lock read', async () => {
+      const scheduledOutsideReads: boolean[] = [];
+      const handler = new HydraniumDocumentUpdateHandler(makeServicesStub({ scheduledOutsideReads }));
+      handler.didChangeContent({ document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>);
+      await flushMicrotasks();
+      expect(scheduledOutsideReads).toEqual([true]);
    });
 
    it('coalesced didChangeContent burst forwards a single reason on the trailing flush', async () => {

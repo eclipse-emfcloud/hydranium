@@ -23,8 +23,12 @@
  * immediately before it.
  */
 
+import { startLanguageServer } from '@hydranium/core/lsp';
+import { makeLspServerConnection, type LspServerConnection } from '@hydranium/core/testing/node';
 import { URI } from '@hydranium/langium';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { type CompletionList, type InsertReplaceEdit } from 'vscode-languageserver';
+import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
 import { makeServices, type OrderFlowHarness } from './order-flow-harness.js';
 
 const harness: OrderFlowHarness = makeServices();
@@ -102,5 +106,44 @@ describe('order-flow completion around comments', () => {
       // to hold for a language that never sees a `.layout` keyword.
       const source = 'project orders // a trailing note\n';
       expect(await completeAt(source, '.domain', source.indexOf('note') + 'note'.length)).toEqual([]);
+   });
+});
+
+describe('order-flow completion over the LSP connection', () => {
+   let composed: LspServerConnection | undefined;
+   afterEach(() => {
+      composed?.dispose();
+      composed = undefined;
+   });
+
+   it('replaces the whole name a completion at its start stands in for', async () => {
+      composed = makeLspServerConnection();
+      const services = createOrderFlowServices({ connection: composed.serverConnection });
+      startLanguageServer(services.shared);
+      // The harness's default capabilities, which declare insertReplaceSupport.
+      await composed.initialize();
+      const domain = {
+         uri: 'file:///completion-over-lsp.domain',
+         languageId: 'domain',
+         version: 1,
+         text: 'entity Crate {\n   a : string\n}\n'
+      };
+      const processDocument = {
+         uri: 'file:///completion-over-lsp.process',
+         languageId: 'process',
+         version: 1,
+         text: 'process Handling for Crate {\n}\n'
+      };
+      await composed.client.sendNotification('textDocument/didOpen', { textDocument: domain });
+      await composed.client.sendNotification('textDocument/didOpen', { textDocument: processDocument });
+      const start = processDocument.text.indexOf('Crate');
+
+      const list = await composed.client.sendRequest<CompletionList>('textDocument/completion', {
+         textDocument: { uri: processDocument.uri },
+         position: { line: 0, character: start }
+      });
+
+      const edit = list.items.find(item => item.label === 'Crate')?.textEdit as InsertReplaceEdit | undefined;
+      expect(edit?.replace.end).toEqual({ line: 0, character: start + 'Crate'.length });
    });
 });

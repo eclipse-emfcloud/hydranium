@@ -148,7 +148,7 @@ function makeRig(releaseGraceMs?: number, workspaceInitialized: Promise<unknown>
                staged = reason;
             },
             update,
-            scheduleUpdate: (changed: URI[], deleted: URI[], reason?: string) =>
+            scheduleUpdate: (changed: URI[], deleted: URI[], { reason }: { reason?: string } = {}) =>
                lockTail.then(() => {
                   staged = reason ?? staged;
                   return update(changed, deleted);

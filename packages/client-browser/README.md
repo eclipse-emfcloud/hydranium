@@ -30,12 +30,12 @@ head's client, and gives the data head its port.
 npm install @hydranium/client-browser
 ```
 
-| Peer                             | Range             |
-| -------------------------------- | ----------------- |
-| `@hydranium/protocol`            | `^1.0.0-next`     |
-| `monaco-editor-core`             | `>=0.56.0 <1.0.0` |
-| `vscode-jsonrpc`                 | `^9.0.0`          |
-| `vscode-languageserver-protocol` | `~3.18.1`         |
+| Peer                             | Range              |
+| -------------------------------- | ------------------ |
+| `@hydranium/protocol`            | `^1.0.0-next`      |
+| `monaco-editor-core`             | `>=0.56.0 <1.0.0`  |
+| `vscode-jsonrpc`                 | `^9.0.0`           |
+| `vscode-languageserver-protocol` | `>=3.18.2 <3.18.5` |
 
 `monaco-editor-core` is optional; only `./monaco` needs it.
 
@@ -112,7 +112,8 @@ await initializeLanguageClient(heads.lsp, {
    capabilities: MONACO_CLIENT_CAPABILITIES,
    beforeInitialized: result => {
       client = new MonacoLspClient(heads.lsp, result.capabilities, {
-         languages: [{ id: 'my-language', extensions: ['.my'] }]
+         languages: [{ id: 'my-language', extensions: ['.my'] }],
+         clientCapabilities: MONACO_CLIENT_CAPABILITIES
       });
       heads.lsp.onNotification(PublishDiagnosticsNotification.type, params => client.applyDiagnostics(params));
    }
@@ -123,10 +124,15 @@ await client.saveAll();
 ```
 
 `MONACO_CLIENT_CAPABILITIES` declares `workspace.applyEdit`, which the Monaco
-client answers, and every form it renders, so a server that gates a form on
-its capability sends it. A host with another editor declares its own, and
-registers its own `workspace/applyEdit` handler before it opens a document,
-as any LSP client does, or the server's writes to that document are lost.
+client answers, `workspace.textDocumentContent`, whose text
+`openContentDocument` shows, and every form it renders, so a server that gates
+a form on its capability sends it. Pass the capabilities you declared to
+`MonacoLspClient` as `clientCapabilities` too. The client opens a content
+document only when they declare `workspace.textDocumentContent`, since a
+server refreshes its text only for a client that does, and it declares none by
+default. A host with another editor declares its own, and registers its own
+`workspace/applyEdit` handler before it opens a document, as any LSP client
+does, or the server's writes to that document are lost.
 
 For the whole setup, see *Host in a browser* in
 [Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).

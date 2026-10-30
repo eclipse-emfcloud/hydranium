@@ -75,7 +75,7 @@
     "reflect-metadata": "0.2.2",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",
-    "vscode-jsonrpc": "9.0.0"
+    "vscode-jsonrpc": "9.0.3"
   },
   "peerDependencies": {
     "@hydranium/protocol": "^1.0.0-next",

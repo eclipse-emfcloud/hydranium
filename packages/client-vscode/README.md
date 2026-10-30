@@ -2,12 +2,17 @@
 
 The cross-head VS Code side of a
 [Hydranium](https://github.com/eclipse-emfcloud/hydranium) host. Install it
-when a VS Code extension starts your language server and a socket head (data
-or GLSP) runs beside it: it finds each head's port from the extension host,
-and publishes the ports to a Theia app that sideloads the extension.
+when a VS Code extension starts your language server: it shows the documents
+only the server holds, finds each socket head's port (data or GLSP) from the
+extension host, and publishes the ports to a Theia app that sideloads the
+extension.
 
 ## What it gives you
 
+- A language client middleware for the text of a document only the server
+  holds, such as a built-in library. It answers no text once the server holds
+  the document no more, where the client's own provider throws. VS Code then
+  opens no such document, and a view already open keeps its last text.
 - A head's port, asked from the running language client and polled until the
   server answers, bounded so a request the server never publishes fails
   instead of waiting forever.
@@ -20,9 +25,28 @@ and publishes the ports to a Theia app that sideloads the extension.
 npm install @hydranium/client-vscode
 ```
 
-No peer dependencies; the extension host provides `vscode`.
+No peer dependencies; the extension host provides `vscode`. The content
+middleware needs `vscode-languageclient` 10, whose client calls it.
 
 ## Wiring
+
+Give the language client the content middleware in its options. It reads the
+client on each request, so it can take the client the options build. A client
+with middleware of its own spreads this one in:
+
+<!-- snippet-preamble
+import { LanguageClient, type ServerOptions } from 'vscode-languageclient/node';
+declare const serverOptions: ServerOptions;
+-->
+
+```ts
+import { textDocumentContentMiddleware } from '@hydranium/client-vscode/node';
+
+const client: LanguageClient = new LanguageClient('my-language', 'My Language', serverOptions, {
+   documentSelector: [{ scheme: 'file', language: 'my-language' }],
+   middleware: textDocumentContentMiddleware(() => client)
+});
+```
 
 After the language client has started, register the port commands a Theia
 host polls, and ask for a port where a head's client connects. Ask once per
@@ -31,7 +55,7 @@ port.
 
 <!-- snippet-preamble
 import type { ExtensionContext } from 'vscode';
-import type { LanguageClient } from 'vscode-languageclient/node.js';
+import type { LanguageClient } from 'vscode-languageclient/node';
 declare const context: ExtensionContext;
 declare const client: LanguageClient;
 -->
@@ -53,10 +77,10 @@ Code* in
 
 ## Entry points
 
-| Subpath  | Use it for                            | Runs in                    |
-| -------- | ------------------------------------- | -------------------------- |
-| `.`      | Nothing yet                           | anywhere                   |
-| `./node` | The port lookup and the port commands | the VS Code extension host |
+| Subpath  | Use it for                                                    | Runs in                    |
+| -------- | ------------------------------------------------------------- | -------------------------- |
+| `.`      | Nothing yet                                                   | anywhere                   |
+| `./node` | The content middleware, the port lookup and the port commands | the VS Code extension host |
 
 The subpaths need a TypeScript `moduleResolution` that reads `exports`
 (`NodeNext` or `Bundler`); see *Requirements* in

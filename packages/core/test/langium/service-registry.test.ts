@@ -127,7 +127,7 @@ describe('ExtendedServiceRegistry', () => {
       });
 
       it('resolves an extensionless URI that only its declared id can route', () => {
-         // The untitled-buffer case. Langium 4.3.1 has no sole-language
+         // The untitled-buffer case. Langium has no sole-language
          // fallback despite its interface doc, so without this rung an
          // extensionless URI throws no matter how many languages are registered.
          const registry = twoLanguages(sharedWithOpen({ 'untitled:Untitled-1': 'beta' }));

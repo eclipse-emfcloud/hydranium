@@ -1487,14 +1487,14 @@ export class DataSession<
 
    /** Run `call`, counted as in flight on each of `uris` until it settles. */
    protected track<T>(uris: readonly string[], call: () => Promise<T>): Promise<T> {
-      const running = call();
+      let running = call();
       for (const uri of uris) {
          let tracker = this.inFlight.get(uri);
          if (tracker === undefined) {
             tracker = new PendingWorkTracker();
             this.inFlight.set(uri, tracker);
          }
-         tracker.track(running);
+         running = tracker.track(running);
       }
       return running;
    }
@@ -1525,8 +1525,7 @@ export class DataSession<
       };
       const ending = this.endings.get(uri);
       const running = this.track([uri], () => (ending ? ending.then(() => call(opening)) : call(opening)));
-      running.then(done, done);
-      return running;
+      return running.finally(done);
    }
 
    /**

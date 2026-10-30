@@ -17,14 +17,15 @@ export class PendingWorkTracker {
    /** The tracked work. {@link track} removes each entry once it settles. */
    protected readonly pending = new Set<Promise<unknown>>();
 
-   /** Watch `work` until it settles, and hand it back. */
+   /**
+    * Watch `work` until it settles. Returns a promise that settles as `work`
+    * does, so a caller that drops it still gets a rejection reported.
+    */
    track<T>(work: Promise<T>): Promise<T> {
       this.pending.add(work);
-      const done = (): void => {
+      return work.finally(() => {
          this.pending.delete(work);
-      };
-      work.then(done, done);
-      return work;
+      });
    }
 
    /** How much of the tracked work has not settled yet. */

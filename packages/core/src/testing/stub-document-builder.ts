@@ -25,6 +25,7 @@ import {
    type DocumentPhaseDeliveredListener,
    HydraniumDocumentBuilder
 } from '../langium/document-builder/document-builder.js';
+import { releaseCallerReadHolds, releaseReadHolds } from '../langium/workspace/lock-scope.js';
 
 /** Recorded call to a stubbed {@link DocumentBuilder} method. */
 export interface RecordedBuilderCall<TArgs extends unknown[]> {
@@ -164,9 +165,10 @@ function reraise(result: unknown): void {
  * registry and then call `firePhase` to trigger the framework's post-build
  * read path.
  *
- * `workspaceLock` is the lock `scheduleUpdate` writes under, without the real
- * builder's sharing: pass the services tree's own, so a caller's lock ordering
- * and reentrancy behave as against the real builder. Without one,
+ * `workspaceLock` is the lock `scheduleUpdate` writes under, and the one whose
+ * read holds `scheduleUpdate` and `waitUntil` release as the real builder's
+ * do, without its sharing: pass the services tree's own, so a caller's lock
+ * ordering and reentrancy behave as against the real builder. Without one,
  * `scheduleUpdate` records the update unlocked.
  */
 export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocumentBuilder {
@@ -204,16 +206,45 @@ export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocu
       async update(changed: URI[], deleted: URI[]) {
          updateCalls.push({ args: [changed, deleted] });
       },
-      scheduleUpdate(changed: URI[], deleted: URI[]) {
-         return workspaceLock ? workspaceLock.write(() => stub.update(changed, deleted)) : stub.update(changed, deleted);
+      scheduleUpdate(changed: URI[], deleted: URI[], { outsideReads = false }: { outsideReads?: boolean } = {}) {
+         if (!workspaceLock) {
+            return stub.update(changed, deleted);
+         }
+         // As the real builder, which takes the holds back inside its write.
+         const release = outsideReads ? releaseCallerReadHolds : releaseReadHolds;
+         return release(workspaceLock, retake =>
+            workspaceLock.write(async () => {
+               try {
+                  await stub.update(changed, deleted);
+               } finally {
+                  retake();
+               }
+            })
+         );
       },
-      async waitUntil(state: DocumentState, uri?: URI) {
+      waitUntil(state: DocumentState, uri?: URI) {
          waitUntilCalls.push({ args: [state, uri] });
          const gate = gates.shift();
-         if (gate) {
-            await new Promise<void>(resolve => gate.take(resolve));
+         if (!gate) {
+            return Promise.resolve(uri);
          }
-         return uri;
+         // Taken now, so the gate is consumed as the call is recorded.
+         if (!workspaceLock) {
+            return new Promise<void>(resolve => gate.take(resolve)).then(() => uri);
+         }
+         // As the real builder, a read holds no write off while it waits and keeps its hold for a state already
+         // reached. It takes the hold back as the test lets the call go, before the caller resumes. No write stands
+         // in for the build, since its start would cancel a running write, which the real wait never does.
+         return releaseReadHolds(
+            workspaceLock,
+            retake =>
+               new Promise<void>(resolve =>
+                  gate.take(() => {
+                     retake();
+                     resolve();
+                  })
+               )
+         ).then(() => uri);
       },
       onDocumentPhase(state: DocumentState, listener: DocumentPhaseListener) {
          const list = phaseListeners.get(state) ?? [];

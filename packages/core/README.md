@@ -21,16 +21,16 @@ Every Hydranium server installs it, and `@hydranium/data-server` and
 npm install @hydranium/core
 ```
 
-| Peer                                 | Range         |
-| ------------------------------------ | ------------- |
-| `@hydranium/langium`                 | `^1.0.0-next` |
-| `@hydranium/protocol`                | `^1.0.0-next` |
-| `@playwright/test`                   | `^1.40.0`     |
-| `vscode-jsonrpc`                     | `^9.0.0`      |
-| `vscode-languageserver`              | `~10.0.1`     |
-| `vscode-languageserver-protocol`     | `~3.18.1`     |
-| `vscode-languageserver-textdocument` | `^1.0.12`     |
-| `vscode-languageserver-types`        | `^3.18.0`     |
+| Peer                                 | Range              |
+| ------------------------------------ | ------------------ |
+| `@hydranium/langium`                 | `^1.0.0-next`      |
+| `@hydranium/protocol`                | `^1.0.0-next`      |
+| `@playwright/test`                   | `^1.40.0`          |
+| `vscode-jsonrpc`                     | `^9.0.0`           |
+| `vscode-languageserver`              | `~10.1.0`          |
+| `vscode-languageserver-protocol`     | `>=3.18.2 <3.18.5` |
+| `vscode-languageserver-textdocument` | `^1.0.12`          |
+| `vscode-languageserver-types`        | `^3.18.0`          |
 
 Import Langium through `@hydranium/langium`, so your project uses the same copy
 as the framework. `@playwright/test` is optional; only `./testing/playwright`

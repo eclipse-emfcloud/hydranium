@@ -45,7 +45,7 @@ import type { VisibleDocuments } from './workspace-panel.js';
 interface Pane {
    readonly title: HTMLElement;
    readonly editor: monaco.editor.IStandaloneCodeEditor;
-   /** The document currently in it, by path under the workspace root. */
+   /** The document currently in it, by path under the workspace root, or by URI for one only the server holds. */
    path: string;
 }
 
@@ -106,6 +106,17 @@ export class EditorArea {
    private readonly watched = new Set<string>();
 
    /**
+    * URIs of documents only the server holds, shown read-only under their URI,
+    * whose models the page holds open. One closes once the selection editor
+    * leaves it and no reveal waits for it.
+    */
+   private readonly contentUris = new Set<string>();
+   /** The last workspace file the selection editor showed, which it goes back to when a content model closes under it. */
+   private lastFile: string;
+   /** Per content URI, how many reveals wait for the server's text. */
+   private readonly waitingReveals = new Map<string, number>();
+
+   /**
     * The diagram's title, which is marked from the FIXED pair rather than from
     * a document of its own.
     *
@@ -117,6 +128,8 @@ export class EditorArea {
     * show moving together.
     */
    private readonly diagramTitle = requireElement('diagram-title');
+   /** Bumped by every navigation, so a content open answered after a newer one shows nothing. */
+   private navigations = 0;
 
    constructor(private readonly options: EditorAreaOptions) {
       this.fixed = [
@@ -124,6 +137,7 @@ export class EditorArea {
          this.mount('layout-editor', 'layout-editor-title', options.fixed[1])
       ];
       this.selected = this.mount('selected-editor', 'selected-editor-title', options.initialSelection);
+      this.lastFile = options.initialSelection;
       this.announce();
    }
 
@@ -136,6 +150,7 @@ export class EditorArea {
     * last clicked with no way to tell them apart.
     */
    show(path: string): void {
+      this.navigations++;
       const fixed = this.fixed.find(pane => pane.path === path);
       if (fixed !== undefined) {
          this.present(fixed);
@@ -199,17 +214,46 @@ export class EditorArea {
     * Show the document `uri` addresses at `position`, and report whether this
     * page had a document to show.
     *
-    * `false` rather than a throw for a URI with no seeded file behind it, and
-    * that case is REACHABLE rather than defensive: this workspace validates an
-    * in-code contribution on the `virtual:` scheme, which has no file and no
-    * text to open an editor over. A resolved reference into one is a jump the
-    * page genuinely cannot make, and saying so lets the caller leave the reader
-    * where they are instead of moving them to an editor built on invented text.
+    * A URI outside the workspace is REACHABLE rather than defensive: a
+    * reference into the built-in library lands on an in-code contribution on
+    * the `virtual:` scheme, which has no file. Its text comes from the server
+    * and opens read-only.
+    * `false` for a URI with neither, so the caller leaves the reader where they
+    * are instead of moving them to an editor built on invented text. `true`
+    * with nothing shown when a newer navigation overtook the server's answer.
     */
-   revealUri(uri: string, position: monaco.IPosition): boolean {
+   async revealUri(uri: string, position: monaco.IPosition): Promise<boolean> {
       const prefix = `${this.options.rootUri}/`;
       if (!uri.startsWith(prefix)) {
-         return false;
+         // Keyed in Monaco's form, as the client keys its models.
+         const key = monaco.Uri.parse(uri).toString();
+         const navigation = ++this.navigations;
+         this.waitingReveals.set(key, (this.waitingReveals.get(key) ?? 0) + 1);
+         let model: monaco.editor.ITextModel | undefined;
+         try {
+            model = await this.options.client.openContentDocument(key);
+         } catch (error: unknown) {
+            // A failure the reader has navigated past is not theirs to see.
+            if (navigation === this.navigations) {
+               throw error;
+            }
+         } finally {
+            const waiting = (this.waitingReveals.get(key) ?? 1) - 1;
+            if (waiting === 0) {
+               this.waitingReveals.delete(key);
+            } else {
+               this.waitingReveals.set(key, waiting);
+            }
+         }
+         if (navigation !== this.navigations) {
+            this.closeContentIfUnused(key);
+            return true;
+         }
+         if (model === undefined) {
+            return false;
+         }
+         this.showContent(key, model, position);
+         return true;
       }
       // Not decoded: the opener hands over Monaco's form, which encodes a
       // space, and the worker keys its files by that same form, the suffix of
@@ -228,16 +272,17 @@ export class EditorArea {
    }
 
    /**
-    * The document of whichever editor holds the caret, or `undefined` when none
-    * does.
+    * The document of whichever editor holds the caret, and whether only the
+    * server holds it, or `undefined` when no editor does.
     *
     * `hasTextFocus` rather than reading `document.activeElement` against the
     * container: Monaco mounts overlays of its own inside that container — the
     * find box among them — and a reader typing in one of those is not editing
     * the document.
     */
-   focusedPath(): string | undefined {
-      return [...this.fixed, this.selected].find(pane => pane.editor.hasTextFocus())?.path;
+   focusedPane(): { readonly path: string; readonly content: boolean } | undefined {
+      const pane = [...this.fixed, this.selected].find(candidate => candidate.editor.hasTextFocus());
+      return pane === undefined ? undefined : { path: pane.path, content: this.contentUris.has(pane.path) };
    }
 
    /** Re-measure every editor, for a divider drag that changed their boxes. */
@@ -288,7 +333,13 @@ export class EditorArea {
       // `onDidFocusEditorText`, not `…EditorWidget`: the widget form also fires
       // for the find box and any other overlay Monaco mounts inside the editor,
       // which are not a change of document and would republish on every search.
-      pane.editor.onDidFocusEditorText(() => this.options.onFocusChanged?.(pane.path));
+      pane.editor.onDidFocusEditorText(() => {
+         // A reader who moved into an editor has left a reveal still waiting for the server.
+         this.navigations++;
+         if (!this.contentUris.has(pane.path)) {
+            this.options.onFocusChanged?.(pane.path);
+         }
+      });
       this.setTitle(pane, path);
       this.revealOnce(pane, path);
       return pane;
@@ -299,8 +350,15 @@ export class EditorArea {
       // cursor move: `saveViewState` walks the editor's contributions, so doing it
       // per keystroke would put that walk on the typing path for no gain.
       this.remember(pane);
+      const left = pane.path;
       pane.editor.setModel(this.modelFor(path));
       pane.path = path;
+      if (pane === this.selected) {
+         this.lastFile = path;
+      }
+      if (this.contentUris.has(left)) {
+         this.closeContentIfUnused(left);
+      }
       this.setTitle(pane, path);
       const state = this.viewStates.get(this.uriOf(path));
       if (state !== undefined) {
@@ -311,6 +369,44 @@ export class EditorArea {
       // The pane now shows a different document, whose dirtiness is its own and
       // is not announced by a content change.
       this.refreshDirtyMarks();
+   }
+
+   /** Show `uri`, whose text the server owns, read-only in the selection editor. */
+   private showContent(uri: string, model: monaco.editor.ITextModel, position: monaco.IPosition): void {
+      const pane = this.selected;
+      this.remember(pane);
+      const left = pane.path;
+      pane.editor.setModel(model);
+      if (!this.contentUris.has(uri)) {
+         // The client closes it when the server no longer holds the document, which would leave the editor blank.
+         model.onWillDispose(() => {
+            if (this.selected.path === uri) {
+               this.load(this.selected, this.lastFile);
+               this.announce();
+            }
+         });
+      }
+      this.contentUris.add(uri);
+      pane.path = uri;
+      if (this.contentUris.has(left)) {
+         this.closeContentIfUnused(left);
+      }
+      this.setTitle(pane, uri);
+      pane.editor.setPosition(position);
+      pane.editor.revealLineInCenter(position.lineNumber);
+      this.announce();
+      this.refreshDirtyMarks();
+      this.present(pane);
+   }
+
+   /** Close the model of content `uri` once no editor shows it and no reveal waits for it. */
+   private closeContentIfUnused(uri: string): void {
+      if (this.selected.path === uri || this.waitingReveals.has(uri)) {
+         return;
+      }
+      this.contentUris.delete(uri);
+      this.viewStates.delete(uri);
+      this.options.client.closeDocument(uri);
    }
 
    private setTitle(pane: Pane, path: string): void {
@@ -373,6 +469,9 @@ export class EditorArea {
 
    /** The document's URI in Monaco's form, which the client's dirty records carry. */
    private uriOf(path: string): string {
+      if (this.contentUris.has(path)) {
+         return path;
+      }
       return monaco.Uri.parse(`${this.options.rootUri}/${path}`).toString();
    }
 

@@ -20,7 +20,7 @@
     "@hydranium/bookstore-protocol": "0.0.0",
     "@hydranium/bookstore-server": "0.0.0",
     "@hydranium/client-vscode": "^1.0.0-next",
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "10.1.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

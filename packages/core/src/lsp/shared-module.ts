@@ -8,9 +8,14 @@
  ********************************************************************************/
 
 import { type Module } from '@hydranium/langium';
-import { type PartialLangiumSharedServices } from '@hydranium/langium/lsp';
+import {
+   DefaultTextDocumentContentProvider,
+   type PartialLangiumSharedServices,
+   type TextDocumentContentProvider
+} from '@hydranium/langium/lsp';
 import { LspLogger } from '../langium/diagnostics/lsp-logger.js';
 import { type ServerModuleContext, type ServerSharedServices } from '../langium/module.js';
+import { VIRTUAL_SCHEME } from '../langium/workspace/virtual-document.js';
 import { HydraniumDocumentUpdateHandler } from './hydranium-document-update-handler.js';
 
 /**
@@ -33,6 +38,10 @@ import { HydraniumDocumentUpdateHandler } from './hydranium-document-update-hand
  *   should extend it (not Langium's `DefaultDocumentUpdateHandler`) to keep
  *   that handling.
  *
+ * - Langium's `DefaultTextDocumentContentProvider` answers content requests
+ *   for `virtual:` documents, so a client can open a definition in one.
+ *   Langium declares it shared too.
+ *
  * **Why this is a shared slot and not a per-language one.** Langium declares
  * `DocumentUpdateHandler` in `LangiumSharedLSPServices` — there is exactly one
  * per server, and `startLanguageServer` reads it off the shared tree. It is
@@ -46,6 +55,7 @@ export interface LspServerAddedSharedServices {
    /* override */ Logger: LspLogger;
    lsp: {
       /* override */ DocumentUpdateHandler: HydraniumDocumentUpdateHandler;
+      TextDocumentContentProvider: TextDocumentContentProvider;
    };
 }
 
@@ -78,7 +88,8 @@ export function createLspServerSharedModule(
    return {
       Logger: services => new LspLogger(services),
       lsp: {
-         DocumentUpdateHandler: services => new HydraniumDocumentUpdateHandler(services)
+         DocumentUpdateHandler: services => new HydraniumDocumentUpdateHandler(services),
+         TextDocumentContentProvider: services => new DefaultTextDocumentContentProvider(services, VIRTUAL_SCHEME)
       }
    };
 }

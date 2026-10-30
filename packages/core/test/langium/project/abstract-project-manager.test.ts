@@ -14,6 +14,7 @@ import {
    DocumentState,
    type DocumentUpdateListener,
    OperationCancelled,
+   ReadPriority,
    type FileSystemProvider,
    type LangiumDocument,
    type LangiumDocuments,
@@ -23,9 +24,19 @@ import {
 } from '@hydranium/langium';
 import { CancellationToken, Disposable } from 'vscode-languageserver';
 import { Deferred, type Logger, type Project, UNQUALIFIED_PROJECT_REFERENCE } from '@hydranium/protocol';
+import { makeFakeClock } from '@hydranium/protocol/testing';
 import { AbstractProjectManager, type ProjectManagerOptions } from '../../../src/langium/project/abstract-project-manager.js';
 import type { ProjectChangeEvent } from '../../../src/langium/project/project-change-event.js';
-import { makeCapturingLogger, makeFakeAstNode, makeFakeDocument, makeNoopSharedServices } from '../../../src/testing/index.js';
+import { HydraniumWorkspaceLock } from '../../../src/langium/workspace/hydranium-workspace-lock.js';
+import { setReadLockScope } from '../../../src/langium/workspace/lock-scope.js';
+import { nodeReadLockScope } from '../../../src/node/lock-scope-node.js';
+import {
+   makeCapturingLogger,
+   makeFakeAstNode,
+   makeFakeDocument,
+   makeNoopSharedServices,
+   makeNoopTracer
+} from '../../../src/testing/index.js';
 
 // ============================================================
 // Test fixtures
@@ -233,7 +244,7 @@ class TestProjectManager extends AbstractProjectManager {
    descriptors = new Map<string, FakeDescriptor>();
    discoveryUris: URI[] = [];
 
-   constructor(stubs: Stubs, options: ProjectManagerOptions = {}) {
+   constructor(stubs: Stubs, options: ProjectManagerOptions = {}, lock: WorkspaceLock = new DefaultWorkspaceLock()) {
       // The default Tracer wraps the Logger slot, so the manager's log lines
       // flow into stubs.logger (a capturing logger, asserted via stubs.logs).
       const services = makeNoopSharedServices({
@@ -243,7 +254,7 @@ class TestProjectManager extends AbstractProjectManager {
             LangiumDocuments: stubs.langiumDocuments,
             DocumentBuilder: stubs.documentBuilder,
             WorkspaceManager: stubs.workspaceManager,
-            WorkspaceLock: new DefaultWorkspaceLock()
+            WorkspaceLock: lock
          }
       });
       super(services, options);
@@ -1215,9 +1226,9 @@ describe('AbstractProjectManager change logging', () => {
 // ============================================================
 
 describe('AbstractProjectManager with deferMemberRelink', () => {
-   async function setup(): Promise<{ stubs: Stubs; mgr: TestProjectManager; log: string[] }> {
+   async function setup(lock?: WorkspaceLock): Promise<{ stubs: Stubs; mgr: TestProjectManager; log: string[] }> {
       const stubs = makeStubs([URI_DESCRIPTOR_A, URI_DESCRIPTOR_B, URI_MEMBER_A1, URI_MEMBER_A2, URI_MEMBER_B1]);
-      const mgr = new TestProjectManager(stubs, { deferMemberRelink: true });
+      const mgr = new TestProjectManager(stubs, { deferMemberRelink: true }, lock);
       mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1' });
       mgr.descriptors.set(URI_DESCRIPTOR_B.toString(), { id: 'B@1' });
       mgr.discoveryUris = [URI_DESCRIPTOR_A, URI_DESCRIPTOR_B];
@@ -1265,6 +1276,19 @@ describe('AbstractProjectManager with deferMemberRelink', () => {
       ]);
       expect(stubs.updates).toBe(1);
       expect(log).toEqual(['started Element1.a,Element2.a', 'finished completed=true']);
+   });
+
+   it('settles inside a request, whose read releases its hold for the relink', async () => {
+      setReadLockScope(nodeReadLockScope);
+      onTestFinished(() => setReadLockScope(undefined));
+      // A fake clock nobody advances, so the read-hold limit never helps.
+      const { stubs, mgr } = await setup(new HydraniumWorkspaceLock({ Clock: makeFakeClock(), Tracer: makeNoopTracer() }));
+
+      await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
+      const settled = await mgr.lock.read(() => mgr.memberRelinkSettled().then(() => 'settled'), ReadPriority.Immediate);
+
+      expect(settled).toBe('settled');
+      expect(stubs.updates).toBe(1);
    });
 
    it('leaves out of the follow-up build a member the build of the change was given', async () => {

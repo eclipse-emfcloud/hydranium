@@ -55,7 +55,7 @@ function makeRig(): SyncRig {
    services.workspace.VersionSyncService = sync;
    const builds: ScheduledBuild[] = [];
    const outcomes: SyncRig['outcomes'] = [];
-   bundle.documentBuilder.scheduleUpdate = (changed: URI[], deleted: URI[], reason?: string) => {
+   bundle.documentBuilder.scheduleUpdate = (changed: URI[], deleted: URI[], { reason }: { reason?: string } = {}) => {
       builds.push({ changed: changed.map(String), deleted: deleted.map(String), reason });
       const outcome = outcomes.shift();
       if (outcome === 'fail') {

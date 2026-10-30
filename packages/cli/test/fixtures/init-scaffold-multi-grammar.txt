@@ -20,13 +20,13 @@ package.json
   },
   "devDependencies": {
     "concurrently": "^9.0.0",
-    "langium": "4.3.1",
+    "langium": "4.4.0",
     "oxfmt": "0.71.0",
     "oxlint": "1.82.0",
-    "vscode-jsonrpc": "9.0.0",
-    "vscode-languageserver": "10.0.1",
-    "vscode-languageserver-protocol": "3.18.1",
-    "vscode-languageserver-types": "3.18.0"
+    "vscode-jsonrpc": "9.0.3",
+    "vscode-languageserver": "10.1.2",
+    "vscode-languageserver-protocol": "3.18.4",
+    "vscode-languageserver-types": "3.18.4"
   },
   "engines": {
     "node": ">=22.13"
@@ -89,11 +89,6 @@ trim_trailing_whitespace = false
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "ignorePatterns": ["**/generated", "**/generated-hydranium"]
 }
-
-==============================================================================
-.nvmrc
-==============================================================================
-22
 
 ==============================================================================
 protocol/package.json
@@ -260,18 +255,18 @@ server/package.json
     "@hydranium/data-server": "^__FRAMEWORK_VERSION__",
     "@hydranium/langium": "^__FRAMEWORK_VERSION__",
     "@hydranium/protocol": "^__FRAMEWORK_VERSION__",
-    "langium": "4.3.1",
+    "langium": "4.4.0",
     "order-flow-protocol": "0.0.0",
-    "vscode-jsonrpc": "9.0.0",
-    "vscode-languageserver": "10.0.1",
-    "vscode-languageserver-protocol": "3.18.1",
-    "vscode-languageserver-types": "3.18.0"
+    "vscode-jsonrpc": "9.0.3",
+    "vscode-languageserver": "10.1.2",
+    "vscode-languageserver-protocol": "3.18.4",
+    "vscode-languageserver-types": "3.18.4"
   },
   "devDependencies": {
     "@hydranium/cli": "^__FRAMEWORK_VERSION__",
     "@types/node": "^22.0.0",
     "concurrently": "^9.0.0",
-    "langium-cli": "4.3.0",
+    "langium-cli": "4.4.0",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",
     "vitest": "~4.0.18"
@@ -399,10 +394,6 @@ A Hydranium language project scaffolded by `hydranium-cli init`.
 
 ## Getting started
 
-`langium generate` fails on Node 24.20 and later with `TypeError: Invalid URL`
-([tdegrunt/jsonschema#423](https://github.com/tdegrunt/jsonschema/issues/423)),
-so build on Node 22.
-
 ```bash
 npm install
 npm run langium:generate   # generate the AST from the grammar
@@ -492,15 +483,12 @@ ranged: the framework treats `langium` and its `vscode-*` chain as one
 atomic set and depends on a single physical copy, so a floating range can
 silently resolve a second one.
 
-`vscode-languageserver` is pinned to `10.0.1`, and
-`vscode-languageserver-protocol` and `vscode-jsonrpc` to the `3.18.1` and
-`9.0.0` it pins, so Langium, the LSP connection and the framework share one
+`vscode-languageserver` is pinned to `10.1.2`, and
+`vscode-languageserver-protocol` and `vscode-jsonrpc` to the `3.18.4` and
+`9.0.3` it pins, so Langium, the LSP connection and the framework share one
 copy of each. With two, an error a Langium handler returns, such as a request
 for a document the server does not have, reaches the client as a result, and a
-framework error your own LSP handler throws loses its code. The Langium 4.4
-upgrade
-([eclipse-emfcloud/hydranium#142](https://github.com/eclipse-emfcloud/hydranium/issues/142))
-replaces these pins.
+framework error your own LSP handler throws loses its code.
 
 `vitest` is held below 4.1, whose peer set crashes the npm every Node 22
 release bundles. Raise it once every npm that installs this project is

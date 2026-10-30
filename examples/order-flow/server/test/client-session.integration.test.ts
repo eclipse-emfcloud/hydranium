@@ -943,8 +943,8 @@ describe('ClientSession.delete', () => {
       const uri = scratch.workspace.uri(FILE);
       const builder = harness.shared.workspace.DocumentBuilder;
       const scheduleUpdate = builder.scheduleUpdate.bind(builder);
-      builder.scheduleUpdate = async (changed, deleted, reason) => {
-         await scheduleUpdate(changed, deleted, reason);
+      builder.scheduleUpdate = async (changed, deleted, options) => {
+         await scheduleUpdate(changed, deleted, options);
          throw new Error('build failed');
       };
       const session = harness.shared.model.ModelService.createSession('form');
@@ -1003,8 +1003,8 @@ describe('ClientSession.delete', () => {
       // watcher's late report of a save is, merges over the deletion.
       const builder = harness.shared.workspace.DocumentBuilder;
       const scheduleUpdate = builder.scheduleUpdate.bind(builder);
-      builder.scheduleUpdate = (changed, deleted, reason) => {
-         const scheduled = scheduleUpdate(changed, deleted, reason);
+      builder.scheduleUpdate = (changed, deleted, options) => {
+         const scheduled = scheduleUpdate(changed, deleted, options);
          if (deleted.length > 0) {
             void scheduleUpdate([URI.parse(uri)], []);
          }
@@ -1197,8 +1197,8 @@ describe('ClientSession.delete at each of its awaits', () => {
       const session = harness.shared.model.ModelService.createSession('form');
       await session.create(newUri, CLEAN);
       const scheduleUpdate = builder.scheduleUpdate.bind(builder);
-      builder.scheduleUpdate = (changed, deleted, reason) =>
-         deleted.length === 0 ? Promise.reject(new Error('build refused')) : scheduleUpdate(changed, deleted, reason);
+      builder.scheduleUpdate = (changed, deleted, options) =>
+         deleted.length === 0 ? Promise.reject(new Error('build refused')) : scheduleUpdate(changed, deleted, options);
 
       await expect(session.delete({ uri: newUri, baseVersion: 'any' })).rejects.toThrow('build refused');
 
@@ -1220,12 +1220,12 @@ describe('ClientSession.delete at each of its awaits', () => {
       const held = new Promise<void>(resolve => (release = resolve));
       let reach = (): void => undefined;
       const reached = new Promise<void>(resolve => (reach = resolve));
-      builder.scheduleUpdate = async (changed, deleted, reason) => {
+      builder.scheduleUpdate = async (changed, deleted, options) => {
          if (deleted.length > 0) {
             reach();
             await held;
          }
-         return scheduleUpdate(changed, deleted, reason);
+         return scheduleUpdate(changed, deleted, options);
       };
 
       const deleting = session.delete({ uri, baseVersion: 'any' });

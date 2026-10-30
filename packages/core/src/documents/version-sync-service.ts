@@ -13,6 +13,7 @@ import { Disposable, Emitter, type Event } from 'vscode-languageserver-protocol'
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { type ServerSharedServices } from '../langium/module.js';
 import { HydraniumWorkspaceLock } from '../langium/workspace/hydranium-workspace-lock.js';
+import { releaseReadHolds, runOutsideReadLockScope } from '../langium/workspace/lock-scope.js';
 import { HydraniumTextDocuments } from './hydranium-text-documents.js';
 
 /** A build {@link VersionSyncService.requestRecoveryBuild} schedules. */
@@ -52,7 +53,8 @@ export interface VersionSyncService {
     * request rides the next one. Rejects with the last build's error once builds
     * carrying this request have failed more often than it may retry, so a
     * caller waiting on the build can stop; the caller ends that failure, and
-    * logs it if nothing else reports it.
+    * logs it if nothing else reports it. A caller inside a lock read holds
+    * no build off until it settles.
     */
    requestRecoveryBuild(uri: URI, request: RecoveryBuildRequest): Promise<void>;
    /**
@@ -159,19 +161,25 @@ export class DefaultVersionSyncService implements VersionSyncService {
    }
 
    requestRecoveryBuild(uri: URI, request: RecoveryBuildRequest): Promise<void> {
-      return new Promise<void>((resolve, reject) => {
-         const key = uri.toString();
-         const queued: QueuedRecoveryBuild = { request, failures: 0, resolve, reject };
-         const pending = this.pendingBuilds.get(key);
-         if (pending) {
-            // Not dropped: the pending build may have read the text before this request's change.
-            pending.queued.push(queued);
-            return;
-         }
-         const entry: PendingRecoveryBuilds = { queued: [queued] };
-         this.pendingBuilds.set(key, entry);
-         void this.runBuilds(key, uri, entry);
-      });
+      // Its build may be one of a loop another caller started, which releases nothing of this read.
+      return releaseReadHolds(
+         this.services.workspace.WorkspaceLock,
+         () =>
+            new Promise<void>((resolve, reject) => {
+               const key = uri.toString();
+               const queued: QueuedRecoveryBuild = { request, failures: 0, resolve, reject };
+               const pending = this.pendingBuilds.get(key);
+               if (pending) {
+                  // Not dropped: the pending build may have read the text before this request's change.
+                  pending.queued.push(queued);
+                  return;
+               }
+               const entry: PendingRecoveryBuilds = { queued: [queued] };
+               this.pendingBuilds.set(key, entry);
+               // Later requests feed it, so it must not run in this read and release it again once it has resumed.
+               void runOutsideReadLockScope(() => this.runBuilds(key, uri, entry));
+            })
+      );
    }
 
    registerDeferredBuilds(isDeferred: (uri: URI) => boolean): Disposable {
@@ -266,7 +274,11 @@ export class DefaultVersionSyncService implements VersionSyncService {
    protected scheduleBatch(uri: URI, batch: readonly RecoveryBuildRequest[]): Promise<void> {
       const deleted = batch.at(-1)?.deleted === true;
       const reason = batch.find(request => request.reason !== undefined)?.reason;
-      return this.services.workspace.DocumentBuilder.scheduleUpdate(deleted ? [] : [uri], deleted ? [uri] : [], reason);
+      // The loop runs outside the requester's read, which requestRecoveryBuild released.
+      return this.services.workspace.DocumentBuilder.scheduleUpdate(deleted ? [] : [uri], deleted ? [uri] : [], {
+         reason,
+         outsideReads: true
+      });
    }
 
    protected isDeferred(uri: URI): boolean {

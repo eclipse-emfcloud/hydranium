@@ -63,6 +63,9 @@ import {
    ResponseError,
    SemanticTokensRequest,
    type ServerCapabilities,
+   type TextDocumentContentParams,
+   TextDocumentContentRefreshRequest,
+   TextDocumentContentRequest,
    type WorkspaceEdit
 } from 'vscode-languageserver-protocol';
 import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient } from '../src/monaco';
@@ -135,6 +138,17 @@ function makeEnds(): Ends {
 
 function makeClient(ends: Ends, options: Partial<ConstructorParameters<typeof MonacoLspClient>[2]> = {}): MonacoLspClient {
    const client = new MonacoLspClient(ends.page, CAPABILITIES, { languages: LANGUAGES, ...options });
+   toDispose.push(client);
+   return client;
+}
+
+/** A client whose server holds the text of `virtual:` documents. */
+function makeContentClient(ends: Ends): MonacoLspClient {
+   const client = new MonacoLspClient(
+      ends.page,
+      { workspace: { textDocumentContent: { schemes: ['virtual'] } } },
+      { languages: LANGUAGES, clientCapabilities: MONACO_CLIENT_CAPABILITIES }
+   );
    toDispose.push(client);
    return client;
 }
@@ -424,6 +438,17 @@ describe('MonacoLspClient', () => {
          expect(monacoDouble.models.size).toBe(0);
          expect(monacoDouble.providers).toEqual([]);
          expect(monacoDouble.openers).toEqual([]);
+      });
+
+      it('refuses to open a document once disposed, sending nothing and creating no model', async () => {
+         const ends = makeEnds();
+         const client = makeClient(ends);
+         client.dispose();
+
+         expect(() => client.openDocument('file:///a.one', 'one')).toThrow('Cannot open file:///a.one: the client is disposed');
+         await ends.flush();
+
+         expect({ opens: ends.opens, models: monacoDouble.models.size }).toEqual({ opens: [], models: 0 });
       });
 
       it('dispose on a connection already closed still disposes every model and registration', () => {
@@ -1090,6 +1115,33 @@ describe('MonacoLspClient', () => {
          ]);
       });
 
+      it('reads the text of a document the server holds, and asks only for its schemes', async () => {
+         const ends = makeEnds();
+         const asked: string[] = [];
+         // By method, since the protocol's type has no null, which Langium sends for a document it does not hold.
+         ends.server.onRequest(TextDocumentContentRequest.method, (params: TextDocumentContentParams) => {
+            asked.push(params.uri);
+            return params.uri.endsWith('gone.one') ? null : { text: 'lib' };
+         });
+         const client = new MonacoLspClient(
+            ends.page,
+            { workspace: { textDocumentContent: { schemes: ['virtual'] } } },
+            { languages: LANGUAGES, clientCapabilities: MONACO_CLIENT_CAPABILITIES }
+         );
+         toDispose.push(client);
+
+         const held = await client.requestDocumentContent('virtual:lib/a.one');
+         const gone = await client.requestDocumentContent('virtual:lib/gone.one');
+         const notHeld = await client.requestDocumentContent('file:///a.one');
+
+         expect({ held, gone, notHeld, asked }).toEqual({
+            held: 'lib',
+            gone: null,
+            notHeld: undefined,
+            asked: ['virtual:lib/a.one', 'virtual:lib/gone.one']
+         });
+      });
+
       it('renders hover contents of every shape as markdown', async () => {
          const ends = makeEnds();
          let contents: Hover['contents'] = { kind: 'markdown', value: 'rich' };
@@ -1313,6 +1365,630 @@ describe('MonacoLspClient', () => {
          expect(answers).toEqual([null, { suggestions: [] }, null, null, null]);
       });
 
+      it('answers for a content model, which the server never hears opened or closed', async () => {
+         const ends = makeEnds();
+         ends.server.onRequest(TextDocumentContentRequest.type, () => ({ text: 'lib' }));
+         ends.server.onRequest(HoverRequest.type, () => ({ contents: 'served' }));
+         const client = makeContentClient(ends);
+
+         const model = await client.openContentDocument('virtual:lib/a.one');
+         const hover = await providerOf<monaco.languages.HoverProvider>('hover', 'type-one').provideHover(
+            model!,
+            position(1, 1),
+            {} as monaco.CancellationToken
+         );
+         const again = await client.openContentDocument('virtual:lib/a.one');
+         const text = model?.getValue();
+         const language = model?.getLanguageId();
+         client.closeDocument('virtual:lib/a.one');
+         await ends.flush();
+
+         expect({ text, language, hover: hover?.contents, same: again === model, disposed: model?.isDisposed() }).toEqual({
+            text: 'lib',
+            language: 'type-one',
+            hover: [{ value: 'served' }],
+            same: true,
+            disposed: true
+         });
+         expect({ opens: ends.opens, closes: ends.closes }).toEqual({ opens: [], closes: [] });
+      });
+
+      it('sends one request for opens of a content document that race, and creates no model once disposed', async () => {
+         const ends = makeEnds();
+         const answers: Array<() => void> = [];
+         ends.server.onRequest(
+            TextDocumentContentRequest.type,
+            () => new Promise<{ text: string }>(resolve => answers.push(() => resolve({ text: 'lib' })))
+         );
+         const client = makeContentClient(ends);
+
+         const first = client.openContentDocument('virtual:lib/a.one');
+         const second = client.openContentDocument('virtual:lib/a.one');
+         const late = client.openContentDocument('virtual:lib/b.one');
+         await expect.poll(() => answers.length).toBe(2);
+         answers[0]!();
+         const raced = await Promise.all([first, second]);
+         client.dispose();
+         answers[1]!();
+
+         expect({ same: raced[0] === raced[1], late: await late }).toEqual({ same: true, late: undefined });
+         expect(monacoDouble.models.has('virtual:lib/b.one')).toBe(false);
+      });
+
+      it('opens nothing for a content document closed before the server answered', async () => {
+         const ends = makeEnds();
+         const answers: Array<() => void> = [];
+         ends.server.onRequest(
+            TextDocumentContentRequest.type,
+            () => new Promise<{ text: string }>(resolve => answers.push(() => resolve({ text: 'lib' })))
+         );
+         const client = makeContentClient(ends);
+
+         const closed = client.openContentDocument('virtual:lib/a.one');
+         await expect.poll(() => answers.length).toBe(1);
+         client.closeDocument('virtual:lib/a.one');
+         answers[0]!();
+
+         expect(await closed).toBeUndefined();
+         expect(monacoDouble.models.has('virtual:lib/a.one')).toBe(false);
+      });
+
+      it('refuses to sync a document it holds as a content document, and the other way round, naming why', async () => {
+         const ends = makeEnds();
+         ends.server.onRequest(TextDocumentContentRequest.type, () => ({ text: 'lib' }));
+         const client = makeContentClient(ends);
+         await client.openContentDocument('virtual:lib/a.one');
+         client.openDocument('virtual:lib/b.one', 'synced');
+
+         expect(() => client.openDocument('virtual:lib/a.one', 'synced')).toThrow(
+            'virtual:lib/a.one is open in this client as a content document'
+         );
+         await expect(client.openContentDocument('virtual:lib/b.one')).rejects.toThrow(
+            'virtual:lib/b.one is open in this client as a document it syncs'
+         );
+      });
+
+      it('marks a content document with what the server published before and while its model is open, until it closes', async () => {
+         const ends = makeEnds();
+         ends.server.onRequest(TextDocumentContentRequest.type, () => ({ text: 'lib' }));
+         const client = makeContentClient(ends);
+         const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } };
+         const messages = (): string[] | undefined => monacoDouble.markers.get('lsp virtual:lib/a.one')?.map(marker => marker.message);
+
+         client.applyDiagnostics({ uri: 'virtual:lib/a.one', diagnostics: [{ range, message: 'before' }] });
+         await client.openContentDocument('virtual:lib/a.one');
+         const beforeOpen = messages();
+         client.applyDiagnostics({ uri: 'virtual:lib/a.one', diagnostics: [{ range, message: 'while' }] });
+         const whileOpen = messages();
+         client.closeDocument('virtual:lib/a.one');
+
+         expect({ beforeOpen, whileOpen, closed: messages() }).toEqual({ beforeOpen: ['before'], whileOpen: ['while'], closed: [] });
+      });
+
+      it('keeps the diagnostics of a closed content document for a reopen on the same text only', async () => {
+         const ends = makeEnds();
+         let text = 'lib';
+         ends.server.onRequest(TextDocumentContentRequest.type, () => ({ text }));
+         const client = makeContentClient(ends);
+         const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } };
+         const messages = (): string[] | undefined => monacoDouble.markers.get('lsp virtual:lib/a.one')?.map(marker => marker.message);
+
+         await client.openContentDocument('virtual:lib/a.one');
+         client.applyDiagnostics({ uri: 'virtual:lib/a.one', diagnostics: [{ range, message: 'kept' }] });
+         client.closeDocument('virtual:lib/a.one');
+         await client.openContentDocument('virtual:lib/a.one');
+         const sameText = messages();
+         client.closeDocument('virtual:lib/a.one');
+         text = 'changed';
+         await client.openContentDocument('virtual:lib/a.one');
+
+         expect({ sameText, changedText: messages() }).toEqual({ sameText: ['kept'], changedText: [] });
+      });
+
+      it('draws the diagnostics of a closed content document after a refresh only on the text they were for', async () => {
+         const ends = makeEnds();
+         let text = 'lib';
+         ends.server.onRequest(TextDocumentContentRequest.type, () => ({ text }));
+         const client = makeContentClient(ends);
+         const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } };
+         const messages = (): string[] | undefined => monacoDouble.markers.get('lsp virtual:lib/a.one')?.map(marker => marker.message);
+         await client.openContentDocument('virtual:lib/a.one');
+         client.applyDiagnostics({ uri: 'virtual:lib/a.one', diagnostics: [{ range, message: 'kept' }] });
+         client.closeDocument('virtual:lib/a.one');
+         text = 'changed';
+         await client.openContentDocument('virtual:lib/a.one');
+
+         text = 'newer';
+         await ends.server.sendRequest(TextDocumentContentRefreshRequest.type, { uri: 'virtual:lib/a.one' });
+         const otherText = messages();
+         text = 'lib';
+         await ends.server.sendRequest(TextDocumentContentRefreshRequest.type, { uri: 'virtual:lib/a.one' });
+
+         expect({ otherText, sameText: messages() }).toEqual({ otherText: [], sameText: ['kept'] });
+      });
+
+      it('keeps the diagnostics published during a refresh for a reopen on the refreshed text', async () => {
+         const ends = makeEnds();
+         const answers: Array<(text: string) => void> = [];
+         ends.server.onRequest(
+            TextDocumentContentRequest.type,
+            () => new Promise<{ text: string }>(resolve => answers.push(text => resolve({ text })))
+         );
+         const client = makeContentClient(ends);
+         const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } };
+         const opening = client.openContentDocument('virtual:lib/a.one');
+         await expect.poll(() => answers.length).toBe(1);
+         answers[0]!('lib');
+         await opening;
+         const refreshing = ends.server.sendRequest(TextDocumentContentRefreshRequest.type, { uri: 'virtual:lib/a.one' });
+         await expect.poll(() => answers.length).toBe(2);
+
+         client.applyDiagnostics({ uri: 'virtual:lib/a.one', diagnostics: [{ range, message: 'for the new text' }] });
+         client.closeDocument('virtual:lib/a.one');
+         answers[1]!('lib new');
+         await refreshing;
+         const reopening = client.openContentDocument('virtual:lib/a.one');
+         await expect.poll(() => answers.length).toBe(3);
+         answers[2]!('lib new');
+         await reopening;
+
+         expect(monacoDouble.markers.get('lsp virtual:lib/a.one')?.map(marker => marker.message)).toEqual(['for the new text']);
+      });
+
+      it('draws the diagnostics published for the refreshed text before it arrived, once the refresh puts it in the model', async () => {
+         const ends = makeEnds();
+         const answers: Array<(text: string) => void> = [];
+         ends.server.onRequest(
+            TextDocumentContentRequest.type,
+            () => new Promise<{ text: string }>(resolve => answers.push(text => resolve({ text })))
+         );
+         const client = makeContentClient(ends);
+         const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } };
+         const opening = client.openContentDocument('virtual:lib/a.one');
+         await expect.poll(() => answers.length).toBe(1);
+         answers[0]!('lib');
+         await opening;
+         const refreshing = ends.server.sendRequest(TextDocumentContentRefreshRequest.type, { uri: 'virtual:lib/a.one' });
+         await expect.poll(() => answers.length).toBe(2);
+
+         client.applyDiagnostics({ uri: 'virtual:lib/a.one', diagnostics: [{ range, message: 'for the new text' }] });
+         answers[1]!('lib new');
+         await refreshing;
+
+         const drawn = monacoDouble.models.get('virtual:lib/a.one')?.drawnMarkers.get('lsp');
+         expect(drawn?.map(marker => marker.message)).toEqual(['for the new text']);
+      });
+
+      it('opens no content document for a host that passed no capabilities, since it may have declared none', async () => {
+         const ends = makeEnds();
+         const asked: string[] = [];
+         ends.server.onRequest(TextDocumentContentRequest.type, params => {
+            asked.push(params.uri);
+            return { text: 'lib' };
+         });
+         const client = new MonacoLspClient(
+            ends.page,
+            { workspace: { textDocumentContent: { schemes: ['virtual'] } } },
+            { languages: LANGUAGES }
+         );
+         toDispose.push(client);
+
+         expect({ model: await client.openContentDocument('virtual:lib/a.one'), asked }).toEqual({ model: undefined, asked: [] });
+      });
+
+      it('opens no content document for a host that declared no content support, which the server would never refresh', async () => {
+         const ends = makeEnds();
+         const asked: string[] = [];
+         ends.server.onRequest(TextDocumentContentRequest.type, params => {
+            asked.push(params.uri);
+            return { text: 'lib' };
+         });
+         const client = new MonacoLspClient(
+            ends.page,
+            { workspace: { textDocumentContent: { schemes: ['virtual'] } } },
+            { languages: LANGUAGES, clientCapabilities: { workspace: { applyEdit: true } } }
+         );
+         toDispose.push(client);
+
+         expect({ model: await client.openContentDocument('virtual:lib/a.one'), asked }).toEqual({ model: undefined, asked: [] });
+      });
+
+      it('closes a content document the server no longer holds, on its refresh', async () => {
+         const ends = makeEnds();
+         let deleted = false;
+         ends.server.onRequest(TextDocumentContentRequest.method, () => (deleted ? null : { text: 'lib' }));
+         const client = makeContentClient(ends);
+         const model = await client.openContentDocument('virtual:lib/a.one');
+
+         deleted = true;
+         await ends.server.sendRequest(TextDocumentContentRefreshRequest.type, { uri: 'virtual:lib/a.one' });
+
+         expect({ disposed: model?.isDisposed(), reopened: await client.openContentDocument('virtual:lib/a.one') }).toEqual({
+            disposed: true,
+            reopened: undefined
+         });
+      });
+
+      it('drops the diagnostics of a content document closed after a failed refresh, for a reopen on changed text', async () => {
+         const ends = makeEnds();
+         let text: string | undefined = 'lib';
+         ends.server.onRequest(TextDocumentContentRequest.type, () => {
+            if (text === undefined) {
+               throw new Error('no text');
+            }
+            return { text };
+         });
+         const client = makeContentClient(ends);
+         const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } };
+         await client.openContentDocument('virtual:lib/a.one');
+         client.applyDiagnostics({ uri: 'virtual:lib/a.one', diagnostics: [{ range, message: 'for the old text' }] });
+         text = undefined;
+         await expect(ends.server.sendRequest(TextDocumentContentRefreshRequest.type, { uri: 'virtual:lib/a.one' })).rejects.toThrow(
+            'no text'
+         );
+
+         client.closeDocument('virtual:lib/a.one');
+         text = 'changed';
+         await client.openContentDocument('virtual:lib/a.one');
+
+         expect(monacoDouble.markers.get('lsp virtual:lib/a.one')?.map(marker => marker.message)).toEqual([]);
+      });
+
+      it.each([
+         ['a BOM', '\uFEFFlib'],
+         ['mixed line ends', 'a\r\nb\nc']
+      ])('keeps the diagnostics of a content document whose text has %s for a reopen on the same text', async (_shape, text) => {
+         const ends = makeEnds();
+         ends.server.onRequest(TextDocumentContentRequest.type, () => ({ text }));
+         const client = makeContentClient(ends);
+         const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } };
+
+         await client.openContentDocument('virtual:lib/a.one');
+         client.applyDiagnostics({ uri: 'virtual:lib/a.one', diagnostics: [{ range, message: 'kept' }] });
+         client.closeDocument('virtual:lib/a.one');
+         await client.openContentDocument('virtual:lib/a.one');
+
+         expect(monacoDouble.markers.get('lsp virtual:lib/a.one')?.map(marker => marker.message)).toEqual(['kept']);
+      });
+
+      it('keeps the diagnostics of a content document whose model the host disposed, for a reopen on the same text', async () => {
+         const ends = makeEnds();
+         ends.server.onRequest(TextDocumentContentRequest.type, () => ({ text: 'lib' }));
+         const client = makeContentClient(ends);
+         const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } };
+
+         const model = await client.openContentDocument('virtual:lib/a.one');
+         client.applyDiagnostics({ uri: 'virtual:lib/a.one', diagnostics: [{ range, message: 'kept' }] });
+         model!.dispose();
+         const afterDispose = monacoDouble.markers.get('lsp virtual:lib/a.one')?.map(marker => marker.message);
+         client.closeDocument('virtual:lib/a.one');
+         const reopened = await client.openContentDocument('virtual:lib/a.one');
+
+         expect({
+            afterDispose,
+            fresh: reopened !== model,
+            reopened: monacoDouble.markers.get('lsp virtual:lib/a.one')?.map(marker => marker.message)
+         }).toEqual({ afterDispose: [], fresh: true, reopened: ['kept'] });
+      });
+
+      it('forgets the diagnostics it kept for content documents once disposed', async () => {
+         class Exposed extends MonacoLspClient {
+            get kept(): number {
+               return this.contentDiagnostics.size;
+            }
+         }
+         const ends = makeEnds();
+         const client = new Exposed(
+            ends.page,
+            { workspace: { textDocumentContent: { schemes: ['virtual'] } } },
+            { languages: LANGUAGES, clientCapabilities: MONACO_CLIENT_CAPABILITIES }
+         );
+         const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } };
+         client.applyDiagnostics({ uri: 'virtual:lib/a.one', diagnostics: [{ range, message: 'kept' }] });
+         const before = client.kept;
+
+         client.dispose();
+
+         expect({ before, after: client.kept }).toEqual({ before: 1, after: 0 });
+      });
+
+      it('keeps no diagnostics a content document gets once disposed', () => {
+         class Exposed extends MonacoLspClient {
+            get kept(): number {
+               return this.contentDiagnostics.size;
+            }
+         }
+         const ends = makeEnds();
+         const client = new Exposed(
+            ends.page,
+            { workspace: { textDocumentContent: { schemes: ['virtual'] } } },
+            { languages: LANGUAGES, clientCapabilities: MONACO_CLIENT_CAPABILITIES }
+         );
+         client.dispose();
+         const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } };
+
+         client.applyDiagnostics({ uri: 'virtual:lib/a.one', diagnostics: [{ range, message: 'late' }] });
+
+         expect(client.kept).toBe(0);
+      });
+
+      it('puts the text the server holds after a refresh into the model, waiting for an open still under way', async () => {
+         const ends = makeEnds();
+         let text = 'first';
+         const answers: Array<() => void> = [];
+         ends.server.onRequest(
+            TextDocumentContentRequest.type,
+            () => new Promise<{ text: string }>(resolve => answers.push(() => resolve({ text })))
+         );
+         const client = makeContentClient(ends);
+
+         const opening = client.openContentDocument('virtual:lib/a.one');
+         await expect.poll(() => answers.length).toBe(1);
+         text = 'second';
+         const refreshing = ends.server.sendRequest(TextDocumentContentRefreshRequest.type, { uri: 'virtual:lib/a.one' });
+         answers[0]!();
+         const model = await opening;
+         await expect.poll(() => answers.length).toBe(2);
+         answers[1]!();
+         await refreshing;
+
+         expect(model?.getValue()).toBe('second');
+      });
+
+      it('leaves a content model alone on a refresh whose text has not changed, BOM and line ends included', async () => {
+         const ends = makeEnds();
+         ends.server.onRequest(TextDocumentContentRequest.type, () => ({ text: '﻿entity A\r\n' }));
+         const client = makeContentClient(ends);
+         const model = await client.openContentDocument('virtual:lib/a.one');
+         const before = model?.getVersionId();
+
+         await ends.server.sendRequest(TextDocumentContentRefreshRequest.type, { uri: 'virtual:lib/a.one' });
+
+         expect(model?.getVersionId()).toBe(before);
+      });
+
+      it('keeps the text of a content document whose refresh fails, and answers the refresh with the failure', async () => {
+         const ends = makeEnds();
+         let fail = false;
+         ends.server.onRequest(TextDocumentContentRequest.type, () => {
+            if (fail) {
+               throw new Error('no text');
+            }
+            return { text: 'lib' };
+         });
+         const client = makeContentClient(ends);
+         const model = await client.openContentDocument('virtual:lib/a.one');
+         fail = true;
+
+         const refreshing = ends.server.sendRequest(TextDocumentContentRefreshRequest.type, { uri: 'virtual:lib/a.one' });
+
+         await expect(refreshing).rejects.toThrow('no text');
+         expect(model?.getValue()).toBe('lib');
+      });
+
+      it('leaves a content document closed while its refresh waits for the server', async () => {
+         const ends = makeEnds();
+         const answers: Array<() => void> = [];
+         ends.server.onRequest(
+            TextDocumentContentRequest.type,
+            () => new Promise<{ text: string }>(resolve => answers.push(() => resolve({ text: `lib ${answers.length}` })))
+         );
+         const client = makeContentClient(ends);
+         const opening = client.openContentDocument('virtual:lib/a.one');
+         await expect.poll(() => answers.length).toBe(1);
+         answers[0]!();
+         const model = await opening;
+         const refreshing = ends.server.sendRequest(TextDocumentContentRefreshRequest.type, { uri: 'virtual:lib/a.one' });
+         await expect.poll(() => answers.length).toBe(2);
+
+         client.closeDocument('virtual:lib/a.one');
+         answers[1]!();
+
+         await expect(refreshing).resolves.toBeNull();
+         expect(model?.isDisposed()).toBe(true);
+      });
+
+      describe('with two refreshes under way', () => {
+         interface Answer {
+            readonly resolve: (text: string) => void;
+            readonly reject: (error: Error) => void;
+         }
+
+         async function setUp(): Promise<{
+            client: ReturnType<typeof makeContentClient>;
+            answers: Answer[];
+            model: monaco.editor.ITextModel | undefined;
+            refresh: () => Promise<unknown>;
+         }> {
+            const ends = makeEnds();
+            const answers: Answer[] = [];
+            ends.server.onRequest(
+               TextDocumentContentRequest.type,
+               () => new Promise<{ text: string }>((resolve, reject) => answers.push({ resolve: text => resolve({ text }), reject }))
+            );
+            const client = makeContentClient(ends);
+            const opening = client.openContentDocument('virtual:lib/a.one');
+            await expect.poll(() => answers.length).toBe(1);
+            answers[0]!.resolve('lib');
+            const model = await opening;
+            const refresh = (): Promise<unknown> =>
+               ends.server.sendRequest(TextDocumentContentRefreshRequest.type, { uri: 'virtual:lib/a.one' });
+            return { client, answers, model, refresh };
+         }
+
+         it('keeps the newer text when the older answer arrives last', async () => {
+            const { answers, model, refresh } = await setUp();
+            const older = refresh();
+            await expect.poll(() => answers.length).toBe(2);
+            const newer = refresh();
+            await expect.poll(() => answers.length).toBe(3);
+
+            answers[2]!.resolve('lib new');
+            await newer;
+            answers[1]!.resolve('lib old');
+            await older;
+
+            expect(model?.getValue()).toBe('lib new');
+         });
+
+         it('takes the older text when the newer request fails', async () => {
+            const { answers, model, refresh } = await setUp();
+            const older = refresh();
+            await expect.poll(() => answers.length).toBe(2);
+            const newer = refresh();
+            await expect.poll(() => answers.length).toBe(3);
+
+            answers[2]!.reject(new Error('no text'));
+            await expect(newer).rejects.toThrow('no text');
+            answers[1]!.resolve('lib old');
+            await older;
+
+            expect(model?.getValue()).toBe('lib old');
+         });
+
+         it('leaves a model reopened meanwhile to the answer of its own open', async () => {
+            const { client, answers, refresh } = await setUp();
+            const older = refresh();
+            await expect.poll(() => answers.length).toBe(2);
+            client.closeDocument('virtual:lib/a.one');
+            const reopening = client.openContentDocument('virtual:lib/a.one');
+            await expect.poll(() => answers.length).toBe(3);
+            answers[2]!.resolve('lib reopened');
+            const reopened = await reopening;
+
+            answers[1]!.resolve('lib old');
+            await older;
+
+            expect(reopened?.getValue()).toBe('lib reopened');
+         });
+      });
+
+      it('requests nothing for a refresh of a content document it has no model for', async () => {
+         const ends = makeEnds();
+         let requests = 0;
+         ends.server.onRequest(TextDocumentContentRequest.type, () => {
+            requests++;
+            return { text: 'lib' };
+         });
+         const client = makeContentClient(ends);
+         await client.openContentDocument('virtual:lib/a.one');
+         client.closeDocument('virtual:lib/a.one');
+
+         await ends.server.sendRequest(TextDocumentContentRefreshRequest.type, { uri: 'virtual:lib/a.one' });
+         await ends.server.sendRequest(TextDocumentContentRefreshRequest.type, { uri: 'virtual:lib/b.one' });
+
+         expect(requests).toBe(1);
+      });
+
+      it("leaves the host's refresh handler in place for a server that holds no content documents", async () => {
+         const ends = makeEnds();
+         const refreshed: string[] = [];
+         ends.page.onRequest(TextDocumentContentRefreshRequest.type, params => {
+            refreshed.push(params.uri);
+         });
+         makeClient(ends);
+
+         await ends.server.sendRequest(TextDocumentContentRefreshRequest.type, { uri: 'virtual:lib/a.one' });
+
+         expect(refreshed).toEqual(['virtual:lib/a.one']);
+      });
+
+      it('opens nothing, and rejects nothing, for a content request the server gave up', async () => {
+         const ends = makeEnds();
+         ends.server.onRequest(TextDocumentContentRequest.type, () => {
+            throw new ResponseError(LSPErrorCodes.ContentModified, 'changed meanwhile');
+         });
+         const client = makeContentClient(ends);
+
+         expect(await client.openContentDocument('virtual:lib/a.one')).toBeUndefined();
+      });
+
+      it('closes a synced document opened over a content model the host disposed', async () => {
+         const ends = makeEnds();
+         ends.server.onRequest(TextDocumentContentRequest.type, () => ({ text: 'lib' }));
+         const client = makeContentClient(ends);
+         (await client.openContentDocument('virtual:lib/a.one'))!.dispose();
+         const synced = client.openDocument('virtual:lib/a.one', 'synced');
+
+         client.closeDocument('virtual:lib/a.one');
+         await ends.flush();
+
+         expect({ closes: ends.closes.map(close => close.textDocument.uri), disposed: synced.isDisposed() }).toEqual({
+            closes: ['virtual:lib/a.one'],
+            disposed: true
+         });
+      });
+
+      it('asks the server for nothing once disposed, for an open or a request of the text', async () => {
+         const ends = makeEnds();
+         let requests = 0;
+         ends.server.onRequest(TextDocumentContentRequest.type, () => {
+            requests++;
+            return { text: 'lib' };
+         });
+         const client = makeContentClient(ends);
+         client.dispose();
+
+         const model = await client.openContentDocument('virtual:lib/a.one');
+         const text = await client.requestDocumentContent('virtual:lib/a.one');
+         await ends.flush();
+
+         expect({ model, text, requests }).toEqual({ model: undefined, text: undefined, requests: 0 });
+      });
+
+      it('opens a content document whose synced model the host disposed, closing it on the server first', async () => {
+         const ends = makeEnds();
+         ends.server.onRequest(TextDocumentContentRequest.type, () => ({ text: 'lib' }));
+         const client = makeContentClient(ends);
+         client.openDocument('virtual:lib/a.one', 'synced').dispose();
+
+         const model = await client.openContentDocument('virtual:lib/a.one');
+         await ends.flush();
+
+         expect({ text: model?.getValue(), closes: ends.closes.map(close => close.textDocument.uri) }).toEqual({
+            text: 'lib',
+            closes: ['virtual:lib/a.one']
+         });
+      });
+
+      it('opens a content document again after an open the server failed', async () => {
+         const ends = makeEnds();
+         let requests = 0;
+         ends.server.onRequest(TextDocumentContentRequest.type, () => {
+            requests++;
+            if (requests === 1) {
+               throw new Error('not yet');
+            }
+            return { text: 'lib' };
+         });
+         const client = makeContentClient(ends);
+
+         await expect(client.openContentDocument('virtual:lib/a.one')).rejects.toThrow('not yet');
+         const model = await client.openContentDocument('virtual:lib/a.one');
+
+         expect({ text: model?.getValue(), requests }).toEqual({ text: 'lib', requests: 2 });
+      });
+
+      it('opens a content document closed and opened again before the server answered on the second answer alone', async () => {
+         const ends = makeEnds();
+         const answers: Array<() => void> = [];
+         ends.server.onRequest(
+            TextDocumentContentRequest.type,
+            () => new Promise<{ text: string }>(resolve => answers.push(() => resolve({ text: `answer ${answers.length}` })))
+         );
+         const client = makeContentClient(ends);
+
+         const closed = client.openContentDocument('virtual:lib/a.one');
+         await expect.poll(() => answers.length).toBe(1);
+         client.closeDocument('virtual:lib/a.one');
+         const reopened = client.openContentDocument('virtual:lib/a.one');
+         await expect.poll(() => answers.length).toBe(2);
+         answers[0]!();
+         answers[1]!();
+
+         expect({ closed: await closed, text: (await reopened)?.getValue() }).toEqual({ closed: undefined, text: 'answer 2' });
+      });
+
       it("leaves a navigation from an editor on another client's model to the next opener", () => {
          const ends = makeEnds();
          const client = makeClient(ends);
@@ -1492,6 +2168,49 @@ describe('MonacoLspClient', () => {
    });
 
    describe('editors', () => {
+      it("stops listening to every editor's events once disposed", () => {
+         const ends = makeEnds();
+         const client = makeContentClient(ends);
+         monacoDouble.editor.create({} as HTMLElement, {});
+         const watched = monacoDouble.editors[0]!.listenerCount;
+
+         client.dispose();
+
+         expect({ watched, after: monacoDouble.editors[0]!.listenerCount }).toEqual({ watched: 2, after: 0 });
+      });
+
+      it('forgets an editor the host disposed', () => {
+         class Exposed extends MonacoLspClient {
+            get watched(): number {
+               return this.watchedEditors.size;
+            }
+         }
+         const client = new Exposed(
+            makeEnds().page,
+            { workspace: { textDocumentContent: { schemes: ['virtual'] } } },
+            { languages: LANGUAGES, clientCapabilities: MONACO_CLIENT_CAPABILITIES }
+         );
+         toDispose.push(client);
+         const created = monacoDouble.editor.create({} as HTMLElement, {});
+         const before = client.watched;
+
+         created.dispose();
+
+         expect({ before, after: client.watched }).toEqual({ before: 1, after: 0 });
+      });
+
+      it('leaves every editor alone in a client without content support, which shows no content model', () => {
+         const editor = monacoDouble.editor.create({} as HTMLElement, {});
+         const update = editor.updateOptions;
+         makeClient(makeEnds());
+         monacoDouble.editor.create({} as HTMLElement, {});
+
+         expect({
+            wrapped: editor.updateOptions !== update,
+            listeners: monacoDouble.editors.map(created => created.listenerCount)
+         }).toEqual({ wrapped: false, listeners: [0, 0] });
+      });
+
       it("creates an editor with the four correctness settings under the host's options", () => {
          const ends = makeEnds();
          const client = makeClient(ends);
@@ -1543,6 +2262,121 @@ describe('MonacoLspClient', () => {
             ['file:///c.two', { lineNumber: 2, column: 2 }],
             ['file:///d.two', { lineNumber: 1, column: 1 }]
          ]);
+      });
+
+      it('answers false for an opener that throws or rejects, so Monaco tries the next opener', async () => {
+         const ends = makeEnds();
+         const client = makeClient(ends);
+         const source = client.createEditor({} as HTMLElement, client.openDocument('file:///a.one', 'one'));
+         const failure = new Error('no editor');
+         const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+         try {
+            client.registerEditorOpener(uri => {
+               if (uri === 'file:///b.two') {
+                  throw failure;
+               }
+               return Promise.reject(failure);
+            });
+            const opener = monacoDouble.openers[0]!;
+
+            const thrown = opener.openCodeEditor(source, monacoDouble.Uri.parse('file:///b.two'), undefined);
+            const rejected = await opener.openCodeEditor(source, monacoDouble.Uri.parse('file:///c.two'), undefined);
+
+            expect({ thrown, rejected }).toEqual({ thrown: false, rejected: false });
+            expect(logged.mock.calls).toEqual([
+               ['Could not open file:///b.two', failure],
+               ['Could not open file:///c.two', failure]
+            ]);
+         } finally {
+            logged.mockRestore();
+         }
+      });
+
+      it("keeps an editor read-only across two clients' content models, and gives back its own setting after", async () => {
+         const first = makeEnds();
+         const second = makeEnds();
+         first.server.onRequest(TextDocumentContentRequest.type, () => ({ text: 'first' }));
+         second.server.onRequest(TextDocumentContentRequest.type, () => ({ text: 'second' }));
+         const firstClient = makeContentClient(first);
+         const secondClient = makeContentClient(second);
+         const firstModel = (await firstClient.openContentDocument('virtual:lib/a.one'))!;
+         const secondModel = (await secondClient.openContentDocument('virtual:lib/b.one'))!;
+         const own = firstClient.openDocument('file:///a.one', 'one');
+         const shared = monacoDouble.editor.create({} as HTMLElement, { model: secondModel });
+
+         shared.setModel(firstModel);
+         const onFirstAfterSecond = monacoDouble.editors[0]!.readOnly;
+         shared.setModel(own);
+
+         expect({ onFirstAfterSecond, onOwn: monacoDouble.editors[0]!.readOnly }).toEqual({ onFirstAfterSecond: true, onOwn: false });
+      });
+
+      it('keeps every editor read-only while it shows a content model, and gives back its own setting after', async () => {
+         const ends = makeEnds();
+         ends.server.onRequest(TextDocumentContentRequest.type, () => ({ text: 'lib' }));
+         const earlier = monacoDouble.editor.create({} as HTMLElement, {});
+         const client = makeContentClient(ends);
+         const own = client.openDocument('file:///a.one', 'one');
+         const model = (await client.openContentDocument('virtual:lib/a.one'))!;
+         const created = monacoDouble.editor.create({} as HTMLElement, { model });
+         const locked = monacoDouble.editor.create({} as HTMLElement, { readOnly: true });
+         earlier.setModel(model);
+         locked.setModel(model);
+         const [earlierDouble, createdDouble, lockedDouble] = monacoDouble.editors;
+         const whileShown = [earlierDouble!.readOnly, createdDouble!.readOnly, lockedDouble!.readOnly];
+
+         created.setModel(own);
+         locked.setModel(own);
+         client.closeDocument('virtual:lib/a.one');
+
+         expect({ whileShown, after: [earlierDouble!.readOnly, createdDouble!.readOnly, lockedDouble!.readOnly] }).toEqual({
+            whileShown: [true, true, true],
+            after: [false, false, true]
+         });
+      });
+
+      it('disposes a content model an editor shows when the client is disposed, and gives the editor its setting back', async () => {
+         const ends = makeEnds();
+         ends.server.onRequest(TextDocumentContentRequest.type, () => ({ text: 'lib' }));
+         const client = makeContentClient(ends);
+         const model = (await client.openContentDocument('virtual:lib/a.one'))!;
+         monacoDouble.editor.create({} as HTMLElement, { model });
+
+         client.dispose();
+
+         expect({ disposed: model.isDisposed(), readOnly: monacoDouble.editors[0]!.readOnly }).toEqual({ disposed: true, readOnly: false });
+      });
+
+      it("keeps an editor read-only when its host turns that off while it shows a content model, and gives the host's setting back after", async () => {
+         const first = makeEnds();
+         const second = makeEnds();
+         first.server.onRequest(TextDocumentContentRequest.type, () => ({ text: 'lib' }));
+         second.server.onRequest(TextDocumentContentRequest.type, () => ({ text: 'lib' }));
+         const client = makeContentClient(first);
+         makeContentClient(second);
+         const own = client.openDocument('file:///a.one', 'one');
+         const model = (await client.openContentDocument('virtual:lib/a.one'))!;
+         const editor = monacoDouble.editor.create({} as HTMLElement, { model, readOnly: true });
+
+         editor.updateOptions({ readOnly: false });
+         const whileShown = monacoDouble.editors[0]!.readOnly;
+         editor.setModel(own);
+
+         expect({ whileShown, after: monacoDouble.editors[0]!.readOnly }).toEqual({ whileShown: true, after: false });
+      });
+
+      it('gives back a readOnly the host turned on while the editor showed a content model', async () => {
+         const ends = makeEnds();
+         ends.server.onRequest(TextDocumentContentRequest.type, () => ({ text: 'lib' }));
+         const client = makeContentClient(ends);
+         const own = client.openDocument('file:///a.one', 'one');
+         const model = (await client.openContentDocument('virtual:lib/a.one'))!;
+         const editor = monacoDouble.editor.create({} as HTMLElement, { model });
+
+         editor.updateOptions({ readOnly: true });
+         editor.setModel(own);
+
+         expect(monacoDouble.editors[0]!.readOnly).toBe(true);
       });
    });
 });

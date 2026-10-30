@@ -60,8 +60,8 @@
 import { appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DefaultModelService, setWriteLockScope } from '@hydranium/core';
-import { NodeFileSystem, nodeWriteLockScope } from '@hydranium/core/node';
+import { DefaultModelService, setReadLockScope, setWriteLockScope } from '@hydranium/core';
+import { installNodeLockScopes, NodeFileSystem } from '@hydranium/core/node';
 import { makeLspHarness, makeScratchWorkspace, type LspHarness, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { type DeepPartial, URI, type Module } from '@hydranium/langium';
 import type { Diagnostic } from 'vscode-languageserver';
@@ -87,7 +87,7 @@ let workspace: ScratchWorkspace | undefined;
 let harness: LspHarness | undefined;
 
 afterEach(() => {
-   setWriteLockScope(nodeWriteLockScope);
+   installNodeLockScopes();
    harness?.dispose();
    harness = undefined;
    workspace?.dispose();
@@ -107,6 +107,7 @@ interface Booted {
 async function boot(locked: boolean): Promise<Booted> {
    if (!locked) {
       setWriteLockScope(undefined);
+      setReadLockScope(undefined);
    }
    workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-dedupe-' });
    let shared: OrderFlowSharedServices | undefined;

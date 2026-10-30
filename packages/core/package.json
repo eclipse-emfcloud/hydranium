@@ -94,19 +94,19 @@
     "fake-indexeddb": "^6.2.5",
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",
-    "vscode-jsonrpc": "9.0.0",
-    "vscode-languageserver": "10.0.1",
-    "vscode-languageserver-protocol": "3.18.1",
+    "vscode-jsonrpc": "9.0.3",
+    "vscode-languageserver": "10.1.2",
+    "vscode-languageserver-protocol": "3.18.4",
     "vscode-languageserver-textdocument": "^1.0.12",
-    "vscode-languageserver-types": "3.18.0"
+    "vscode-languageserver-types": "3.18.4"
   },
   "peerDependencies": {
     "@hydranium/langium": "^1.0.0-next",
     "@hydranium/protocol": "^1.0.0-next",
     "@playwright/test": "^1.40.0",
     "vscode-jsonrpc": "^9.0.0",
-    "vscode-languageserver": "~10.0.1",
-    "vscode-languageserver-protocol": "~3.18.1",
+    "vscode-languageserver": "~10.1.0",
+    "vscode-languageserver-protocol": ">=3.18.2 <3.18.5",
     "vscode-languageserver-textdocument": "^1.0.12",
     "vscode-languageserver-types": "^3.18.0"
   },
@@ -118,7 +118,7 @@
   "engines": {
     "node": ">=22.13"
   },
-  "//peerDependencies": "`vscode-jsonrpc` takes a caret, so the framework shares the transport the LSP connection resolves, which an `init` scaffold pins: each `vscode-languageserver-protocol` release pins its transport exactly, so an exact peer would name a copy a fresh install rarely holds. The caret excludes 8.x, so a tree whose top holds GLSP's copy fails the peer with a named ERESOLVE warning, an error under `--strict-peer-deps`, rather than resolving silently. No peer reaches a NESTED copy, such as GLSP's or one the LSP packages nest. The wire compares message types and `ResponseError`s by copy identity, so the framework sends typed messages by method name and recognises errors with `isResponseError` rather than `instanceof`. This manifest declares the two links ABOVE the transport as well, with `~`: each admits exactly what the pinned `langium` itself admits, and a range reaching back past the 3.18 stack admits a release on the 8.x transport. `vscode-languageserver-types` and `vscode-languageserver-textdocument` are deliberately NOT narrowed: both declare zero dependencies and expose structural APIs, so a duplicate of either drags no transport in and no identity check reads it.",
+  "//peerDependencies": "`vscode-jsonrpc` takes a caret, so the framework shares the transport the LSP connection resolves, which an `init` scaffold pins: each `vscode-languageserver-protocol` release pins its transport exactly, so an exact peer would name a copy a fresh install rarely holds. The caret excludes 8.x, so a tree whose top holds GLSP's copy fails the peer with a named ERESOLVE warning, an error under `--strict-peer-deps`, rather than resolving silently. No peer reaches a NESTED copy, such as GLSP's or one the LSP packages nest. The wire compares message types and `ResponseError`s by copy identity, so the framework sends typed messages by method name and recognises errors with `isResponseError` rather than `instanceof`. This manifest declares the two links ABOVE the transport as well. `vscode-languageserver` takes `~`, as the pinned `langium` does. `vscode-languageserver-protocol` stops below 3.18.5, which `langium`'s `~3.18.2` admits: 3.18.5 pins the 10.x transport, which the caret excludes, so a tree resolving it splits into two LSP chains. A range reaching back past the 3.18 stack admits a release on the 8.x transport. `vscode-languageserver-types` and `vscode-languageserver-textdocument` are deliberately NOT narrowed: both declare zero dependencies and expose structural APIs, so a duplicate of either drags no transport in and no identity check reads it.",
   "//prepack": "The publish guard, a `prepack` rather than a `prepare`: `prepack` runs only when a tarball is made (`npm pack`, `npm publish`) and never on install, so it cannot break the install it has no business touching. What it defends against: `files` lists `lib`, `lib` is gitignored, and a `files` entry matching nothing is skipped SILENTLY — so `npm publish` from an unbuilt tree emits a tarball of `src` and nothing else, with no error.",
-  "//sideEffects": "NOT `false`: two barrels do work at module load that their re-exports do not account for, and a bundler skips an unflagged re-export barrel outright. `node/index.js` calls `installNodeLogFileSink()`, `installNodeWriteLockScope()` and `startCpuProfileFromEnv()`, which is how a Node host gets the log file-tee, write-lock reentrancy detection and the `HYDRANIUM_CPU_PROFILE_FILE` profile merely by importing `@hydranium/core/node`. `util/index.js` carries a bare `import '@hydranium/langium'` so the `UriUtils` namespace augmentation stays loaded for anything importing from here. All three failures are runtime-only and silent — a missing log file, a missing profile, a `UriUtils.toUri` that is `undefined`."
+  "//sideEffects": "NOT `false`: two barrels do work at module load that their re-exports do not account for, and a bundler skips an unflagged re-export barrel outright. `node/index.js` calls `installNodeLogFileSink()`, `installNodeLockScopes()` and `startCpuProfileFromEnv()`, which is how a Node host gets the log file-tee, workspace lock reentrancy detection and the `HYDRANIUM_CPU_PROFILE_FILE` profile merely by importing `@hydranium/core/node`. `util/index.js` carries a bare `import '@hydranium/langium'` so the `UriUtils` namespace augmentation stays loaded for anything importing from here. All three failures are runtime-only and silent — a missing log file, a missing profile, a `UriUtils.toUri` that is `undefined`."
 }

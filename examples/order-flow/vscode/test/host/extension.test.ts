@@ -128,6 +128,34 @@ describe('order-flow extension in a VS Code host', () => {
       );
    });
 
+   it('opens a definition in the stdlib, whose text only the language server holds', async () => {
+      const domain = workspaceUri('orders/orders.domain');
+      await vscode.window.showTextDocument(domain);
+      // On `Number` in `quantity: Number`.
+      const [target] = await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+         'vscode.executeDefinitionProvider',
+         domain,
+         new vscode.Position(23, 16)
+      );
+      assert.ok(target, 'the definition provider answers');
+      const uri = 'targetUri' in target ? target.targetUri : target.uri;
+      assert.equal(uri.scheme, 'virtual');
+
+      const stdlib = await vscode.workspace.openTextDocument(uri);
+      assert.match(stdlib.getText(), /valuetype Number \{\}/);
+   });
+
+   it('opens no virtual document the language server does not hold', async () => {
+      const missing = vscode.Uri.from({ scheme: 'virtual', path: '/missing.domain' });
+
+      const outcome = await vscode.workspace.openTextDocument(missing).then(
+         () => 'opened',
+         (error: unknown) => (error instanceof Error ? error.message : String(error))
+      );
+
+      assert.match(outcome, /Unable to resolve text model content/);
+   });
+
    it('shows the properties panel from its command', async () => {
       await vscode.window.showTextDocument(workspaceUri('orders/fulfillment.process'), { preview: false });
       await vscode.commands.executeCommand('order-flow.properties.show');

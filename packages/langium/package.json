@@ -64,7 +64,7 @@
     "watch": "tsc -b -w --preserveWatchOutput"
   },
   "dependencies": {
-    "langium": "4.3.1"
+    "langium": "4.4.0"
   },
   "devDependencies": {
     "rimraf": "^5.0.0",

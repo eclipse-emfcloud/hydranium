@@ -12,7 +12,7 @@ import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
 import * as path from 'node:path';
 import { editingHeads, INIT_HOSTS, type InitHost, isInitHost, isTheiaHost } from './init-hosts.js';
-import { buildInitTemplates, readFrameworkVersion, SCAFFOLD_NODE_MAJOR, workspaceRootPins } from './init-templates.js';
+import { buildInitTemplates, readFrameworkVersion, workspaceRootPins } from './init-templates.js';
 import { kebab } from './kebab.js';
 import {
    createNodeWorkspaceProbe,
@@ -703,11 +703,6 @@ export function runInit(options: InitCommandOptions): void {
       if (spawnSync('git', ['check-ignore', '-q', targetDir], { cwd: targetDir }).status === 0) {
          write('  git init                 # an enclosing repository ignores this folder, so lint and format find no file until then\n');
       }
-      // A comment, so a pasted block runs without nvm. NVM for Windows ignores
-      // `.nvmrc` and its `install` does not switch, hence both commands.
-      write(
-         `  # on Node ${SCAFFOLD_NODE_MAJOR}, which .nvmrc names. With nvm: nvm install ${SCAFFOLD_NODE_MAJOR}, then nvm use ${SCAFFOLD_NODE_MAJOR}\n`
-      );
       write('  npm install\n');
       write('  npm run build            # langium generate + tsc, every package\n');
       write('  npm test                 # the server tests\n');

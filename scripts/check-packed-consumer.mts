@@ -159,20 +159,64 @@ function packExampleProtocol(): [string, string] {
    return [name, packDirectory(exampleProtocol)];
 }
 
+/** The bookstore server's declared dependencies. */
+function bookstoreDependencies(): Record<string, string> {
+   const sourcePackage = JSON.parse(readFileSync(join(example, 'package.json'), 'utf8')) as { dependencies?: Record<string, string> };
+   return sourcePackage.dependencies ?? {};
+}
+
 /** The bookstore server's declared version of `name`. */
 function bookstoreDependency(name: string): string {
-   const sourcePackage = JSON.parse(readFileSync(join(example, 'package.json'), 'utf8')) as { dependencies?: Record<string, string> };
-   const dependencySpec = sourcePackage.dependencies?.[name];
+   const dependencySpec = bookstoreDependencies()[name];
    if (dependencySpec === undefined) throw new Error(`the bookstore server declares no ${name}`);
    return dependencySpec;
 }
 
-/** The `vscode-jsonrpc` a published release peers, which a consumer installing it under `--strict-peer-deps` has to declare. */
-function publishedTransport(version: string): string {
-   return execFileSync('npm', ['view', `@hydranium/protocol@${version}`, 'peerDependencies.vscode-jsonrpc'], {
-      env,
-      encoding: 'utf8'
-   }).trim();
+/**
+ * The versions a published release was built with, for the packages the
+ * bookstore server also declares, such as Langium and the LSP chain. They are
+ * the exact pins of its CLI's devDependencies. A package the CLI pins no
+ * version of takes the range a release package declares, as a dependency or
+ * a peer. Ranges need not resolve to one copy of each, so the published mode
+ * asserts no single copy.
+ */
+function publishedRanges(version: string): Map<string, string> {
+   const declaredHere = bookstoreDependencies();
+   const ranges = new Map<string, string>();
+   for (const directory of packageDirs) {
+      const declared = viewPublished(`${packageName(directory)}@${version}`);
+      for (const [name, range] of [...Object.entries(declared.dependencies ?? {}), ...Object.entries(declared.peerDependencies ?? {})]) {
+         if (name.startsWith('@hydranium/') || declaredHere[name] === undefined) {
+            continue;
+         }
+         // An exact pin is what that package installs, so it wins over a range.
+         const known = ranges.get(name);
+         if (known !== undefined && isExactVersion(known) && isExactVersion(range) && known !== range) {
+            throw new Error(`${version} pins ${name} at both ${known} and ${range}`);
+         }
+         if (known === undefined || (!isExactVersion(known) && isExactVersion(range))) ranges.set(name, range);
+      }
+   }
+   const built = viewPublished(`@hydranium/cli@${version}`).devDependencies ?? {};
+   for (const name of Object.keys(declaredHere)) {
+      const pin = built[name];
+      if (!name.startsWith('@hydranium/') && pin !== undefined && isExactVersion(pin)) ranges.set(name, pin);
+   }
+   return ranges;
+}
+
+type PublishedManifest = {
+   dependencies?: Record<string, string>;
+   peerDependencies?: Record<string, string>;
+   devDependencies?: Record<string, string>;
+};
+
+function viewPublished(spec: string): PublishedManifest {
+   return JSON.parse(execFileSync('npm', ['view', spec, '--json'], { env, encoding: 'utf8' })) as PublishedManifest;
+}
+
+function isExactVersion(range: string): boolean {
+   return /^\d+\.\d+\.\d+(?:-[\w.]+)?$/.test(range);
 }
 
 /** Write the consumer project: the bookstore server's source and dependencies, with `packages` pinned. */
@@ -314,9 +358,9 @@ function workspaceArgs(workspace: string | undefined): string[] {
 }
 
 const WIRE_STACK_PINS: ReadonlyArray<readonly [string, string]> = [
-   ['langium', '4.3.1'],
-   ['vscode-jsonrpc', '9.0.0'],
-   ['vscode-languageserver-protocol', '3.18.1']
+   ['langium', '4.4.0'],
+   ['vscode-jsonrpc', '9.0.3'],
+   ['vscode-languageserver-protocol', '3.18.4']
 ];
 
 /**
@@ -479,7 +523,7 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
    if (shape.monorepo) {
       if (shape.yoRoot) {
          cpSync(join(root, 'packages/cli/test/fixtures/yo-langium-root'), installRoot, { recursive: true });
-         // The adopter's own install, so not held to this check's strict peers; it puts the root's other `langium` at the top.
+         // The adopter's own install, so not held to this check's strict peers.
          shapeInstall('root install before init', ['install', '--no-audit', '--no-fund']);
       } else {
          mkdirSync(installRoot);
@@ -538,14 +582,16 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
    }
    // GLSP's server and graph pin their protocol exactly, so a second copy means something declared another release.
    const glspSingles = shape.heads.split(',').includes('glsp') ? ['@eclipse-glsp/protocol'] : [];
+   // A generator-langium root is on the same Langium, so its members share the one chain too.
+   const singleCopyScope = shape.yoRoot ? undefined : member;
    assertSingleCopies(
       ['langium', 'vscode-languageserver-protocol', ...glspSingles],
-      [['langium', '4.3.1']],
+      [['langium', '4.4.0']],
       installRoot,
       installEnv,
-      member
+      singleCopyScope
    );
-   assertOneTransport(installRoot, installEnv, member);
+   assertOneTransport(installRoot, installEnv, singleCopyScope);
    // A standalone project builds and tests through the root scripts it emits,
    // which an adopter runs; a workspace member's project has no root of its own.
    const scriptsDir = shape.monorepo ? server : project;
@@ -657,8 +703,8 @@ function checkBookstoreConsumer(): void {
       packExampleProtocol()
    ]);
 
-   // A published release peers the transport it shipped with, which need not be the bookstore's.
-   writeConsumer(published ? new Map([...first, ['vscode-jsonrpc', publishedTransport(published)]]) : first);
+   const pinned = published ? publishedRanges(published) : new Map<string, string>();
+   writeConsumer(new Map([...first, ...pinned]));
    run(published ? `Prerelease resolution (${published})` : 'Candidate resolution', 'npm', install, consumer);
    if (negativeMissingPackageFile) {
       // Control mode: prove the package-file assertion is load-bearing by
@@ -669,7 +715,7 @@ function checkBookstoreConsumer(): void {
    assertInstalledFrom(first);
 
    if (upgradeFromPublished) {
-      repointConsumer(new Map([...candidates!, ['vscode-jsonrpc', bookstoreDependency('vscode-jsonrpc')]]));
+      repointConsumer(new Map([...candidates!, ...[...pinned.keys()].map(name => [name, bookstoreDependency(name)] as const)]));
       run('Candidate migration to tarballs', 'npm', install, consumer);
       assertInstalledFrom(candidates!);
    }

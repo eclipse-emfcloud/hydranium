@@ -28,7 +28,7 @@
     "@hydranium/client-vscode": "^1.0.0-next",
     "@hydranium/example-order-flow-protocol": "0.0.0",
     "@hydranium/example-order-flow-server": "0.0.0",
-    "vscode-languageclient": "^9.0.1"
+    "vscode-languageclient": "10.1.2"
   },
   "devDependencies": {
     "@types/vscode": "^1.101.0",

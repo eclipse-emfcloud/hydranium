@@ -50,8 +50,8 @@ import {
    makeTestServices,
    type StubHydraniumTextDocuments
 } from '../../../src/testing/index.js';
-import { ReentrantWriteLockError, setWriteLockScope } from '../../../src/langium/workspace/write-lock-scope.js';
-import { nodeWriteLockScope } from '../../../src/node/write-lock-scope-node.js';
+import { ReentrantWriteLockError, setWriteLockScope } from '../../../src/langium/workspace/lock-scope.js';
+import { nodeWriteLockScope } from '../../../src/node/lock-scope-node.js';
 
 interface FakeRoot extends AstNode {
    readonly $type: 'FakeRoot';

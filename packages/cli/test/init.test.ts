@@ -418,7 +418,6 @@ describe('planInitFiles', () => {
          [
             '.editorconfig',
             '.gitignore',
-            '.nvmrc',
             '.oxfmtrc.json',
             '.oxlintrc.json',
             'package.json',
@@ -775,19 +774,13 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      expect(captured?.files).toHaveLength(36);
+      expect(captured?.files).toHaveLength(35);
       // `path.join`, not a literal: the target is produced by `path.resolve`,
       // which emits the platform separator, so a hardcoded `/` asserts nothing
       // on Windows beyond the separator itself.
       expect(captured?.targetDir.endsWith(path.join('out', 'bookstore'))).toBe(true);
       const output = lines.join('');
-      expect(output).toContain('Scaffolded Bookstore (36 files, heads: lsp,data, 1 grammar(s): Bookstore)');
-      // The `.nvmrc` Node, before anything runs `langium generate`. A comment,
-      // not a command: a pasted block must run without nvm.
-      const nodeLine = '  # on Node 22, which .nvmrc names. With nvm: nvm install 22, then nvm use 22\n';
-      expect(output.indexOf(nodeLine)).toBeGreaterThan(-1);
-      expect(output.indexOf(nodeLine)).toBeLessThan(output.indexOf('  npm install'));
-      expect(output).not.toMatch(/^ {2}nvm /m);
+      expect(output).toContain('Scaffolded Bookstore (35 files, heads: lsp,data, 1 grammar(s): Bookstore)');
       expect(output).toContain('npm run build');
       expect(output).toContain('npm test');
       // `npx`, not a bare invocation: the scaffold installs `@hydranium/cli` as a
@@ -808,10 +801,10 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      // 36 single-grammar files + two further grammars, their serializers and checks,
+      // 35 single-grammar files + two further grammars, their serializers and checks,
       // the shared fragment and two starter files each.
-      expect(captured?.files).toHaveLength(47);
-      expect(lines.join('')).toContain('Scaffolded OrderFlow (47 files, heads: lsp,data, 3 grammar(s): Domain, Process, Layout)');
+      expect(captured?.files).toHaveLength(46);
+      expect(lines.join('')).toContain('Scaffolded OrderFlow (46 files, heads: lsp,data, 3 grammar(s): Domain, Process, Layout)');
    });
 
    it('names the diagram grammar and the head set for a three-head scaffold', () => {
@@ -827,11 +820,11 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      // 47 multi-grammar files + the ten for the one diagram: eight in the
+      // 46 multi-grammar files + the ten for the one diagram: eight in the
       // server, its test, and its ids in protocol; + the client package's six.
-      expect(captured?.files).toHaveLength(63);
+      expect(captured?.files).toHaveLength(62);
       expect(lines.join('')).toContain(
-         'Scaffolded OrderFlow (63 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
+         'Scaffolded OrderFlow (62 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
       );
    });
 });
@@ -876,14 +869,14 @@ describe('planInitFiles with hosts', () => {
       const root = JSON.parse(contentOf(filesFor(['lsp']), 'package.json') ?? '{}') as { devDependencies: Record<string, string> };
       expect(root.devDependencies).toEqual({
          concurrently: '^9.0.0',
-         langium: '4.3.1',
+         langium: '4.4.0',
          'monaco-editor-core': '0.56.0',
          oxfmt: '0.71.0',
          oxlint: '1.82.0',
-         'vscode-jsonrpc': '9.0.0',
-         'vscode-languageserver': '10.0.1',
-         'vscode-languageserver-protocol': '3.18.1',
-         'vscode-languageserver-types': '3.18.0'
+         'vscode-jsonrpc': '9.0.3',
+         'vscode-languageserver': '10.1.2',
+         'vscode-languageserver-protocol': '3.18.4',
+         'vscode-languageserver-types': '3.18.4'
       });
    });
 
@@ -1065,7 +1058,9 @@ describe('planInitFiles with hosts', () => {
       expect(host.contributes).not.toHaveProperty('customEditors');
       expect(contentOf(files, 'host-vscode/src/extension.ts')).not.toMatch(/Glsp|findPort/);
       const servers = JSON.parse(contentOf(files, 'vscode-servers/package.json') ?? '{}') as Record<string, Record<string, unknown>>;
-      expect(servers.dependencies).not.toHaveProperty('@hydranium/client-vscode');
+      // Still for the content middleware every language client takes.
+      expect(servers.dependencies).toHaveProperty('@hydranium/client-vscode');
+      expect(contentOf(files, 'vscode-servers/src/language-client.ts')).toContain('textDocumentContentMiddleware(() => client)');
       expect(contentOf(files, 'vscode-servers/src/extension.ts')).not.toContain('registerPortCommands');
    });
 
@@ -1509,11 +1504,11 @@ describe('runInit --monorepo into a yo langium root', () => {
    it('names the exact pins the root has to declare to keep the shared copies at the top', () => {
       expect(scaffold().output).toContain(
          "package.json, so another member's version of one cannot displace the copy these packages share with the framework:\n" +
-            '    "langium": "4.3.1",\n' +
-            '    "vscode-jsonrpc": "9.0.0",\n' +
-            '    "vscode-languageserver": "10.0.1",\n' +
-            '    "vscode-languageserver-protocol": "3.18.1",\n' +
-            '    "vscode-languageserver-types": "3.18.0"\n'
+            '    "langium": "4.4.0",\n' +
+            '    "vscode-jsonrpc": "9.0.3",\n' +
+            '    "vscode-languageserver": "10.1.2",\n' +
+            '    "vscode-languageserver-protocol": "3.18.4",\n' +
+            '    "vscode-languageserver-types": "3.18.4"\n'
       );
    });
 
@@ -1521,7 +1516,7 @@ describe('runInit --monorepo into a yo langium root', () => {
       const { output } = scaffold(['lsp', 'glsp']);
       expect(output).toContain(
          '    "@eclipse-glsp/client": "2.8.0",\n    "@eclipse-glsp/graph": "2.8.0",\n    "@eclipse-glsp/protocol": "2.8.0",\n' +
-            '    "@eclipse-glsp/server": "2.8.0",\n    "langium": "4.3.1",\n'
+            '    "@eclipse-glsp/server": "2.8.0",\n    "langium": "4.4.0",\n'
       );
       expect(output).not.toContain('inversify');
    });
@@ -1584,10 +1579,8 @@ describe('runInit --monorepo', () => {
       return files.find(file => file.path === filePath)?.content;
    }
 
-   it('emits no `.nvmrc`, prints no `nvm` step and starts each host by `--prefix`', () => {
-      const { files, output } = scaffold({ hosts: ['vscode', 'theia-browser', 'theia-electron'] });
-      expect(files.map(file => file.path)).not.toContain('.nvmrc');
-      expect(output).not.toContain('nvm ');
+   it('starts each host by `--prefix`', () => {
+      const { output } = scaffold({ hosts: ['vscode', 'theia-browser', 'theia-electron'] });
       for (const host of ['vscode', 'theia-browser', 'theia-electron']) {
          expect(output).toContain(`  npm --prefix packages/bookstore/host-${host} start   #`);
       }

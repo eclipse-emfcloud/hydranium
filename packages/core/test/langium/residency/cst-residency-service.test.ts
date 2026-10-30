@@ -8,7 +8,15 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { type CstNode, DocumentState, type LangiumDocument, URI } from '@hydranium/langium';
+import {
+   type AstNode,
+   CompositeCstNodeImpl,
+   type CstNode,
+   DocumentState,
+   type LangiumDocument,
+   RootCstNodeImpl,
+   URI
+} from '@hydranium/langium';
 import { asMutable, Disposable, type Tracer } from '@hydranium/protocol';
 import { DefaultModelLedger } from '../../../src/documents/model-ledger.js';
 import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
@@ -225,6 +233,46 @@ describe('CstResidencyService.rehydrateNode', () => {
    it('is a no-op for a node outside any document', () => {
       const { service } = makeService({ strategy: { kind: 'always-keep' } });
       expect(() => service.rehydrateNode({ $type: 'Element' })).not.toThrow();
+   });
+});
+
+describe('CstResidencyService.rehydrate', () => {
+   /** `Model { expr: Binary { left: Binary } }`, the shape an infix rule parses `a + b + c` into. */
+   function infixAst(): { model: AstNode; outer: AstNode; inner: AstNode } {
+      const inner = { $type: 'Binary' } as AstNode;
+      const outer = { $type: 'Binary', left: inner } as AstNode;
+      const model = { $type: 'Model', expr: outer } as AstNode;
+      return { model, outer, inner };
+   }
+
+   it('links each rebuilt CST node to the resident node the fresh parse linked it to', () => {
+      // Langium's parser gives every sub-expression of an infix rule the
+      // outermost one's CST node, and links that node to the outermost alone.
+      const fresh = infixAst();
+      const root = new RootCstNodeImpl('a + b + c');
+      const shared = new CompositeCstNodeImpl();
+      shared.container = root;
+      root.astNode = fresh.model;
+      shared.astNode = fresh.outer;
+      asMutable(fresh.model).$cstNode = root;
+      asMutable(fresh.outer).$cstNode = shared;
+      asMutable(fresh.inner).$cstNode = shared;
+      const resident = infixAst();
+      const document = {
+         uri: URI.parse('file:///infix.a'),
+         parseResult: { value: resident.model },
+         textDocument: { getText: () => 'a + b + c' }
+      } as unknown as LangiumDocument;
+      const services = makeNoopSharedServices({
+         workspace: {
+            LangiumDocumentFactory: { fromString: () => ({ parseResult: { value: fresh.model } }) },
+            BuildPhasePassService: { register: () => Disposable.EMPTY }
+         }
+      });
+
+      new DefaultCstResidencyService(services).rehydrate(document);
+
+      expect({ root: root.astNode === resident.model, shared: shared.astNode === resident.outer }).toEqual({ root: true, shared: true });
    });
 });
 

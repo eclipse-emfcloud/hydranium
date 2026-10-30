@@ -27,6 +27,7 @@ import type { LogNameOptions } from '../diagnostics/logger.js';
 import { HYDRANIUM_BUILD_REASONS, type HydraniumDocumentBuilder } from '../document-builder/document-builder.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { isVirtualUri } from '../workspace/virtual-document.js';
+import { releaseReadHolds, runOutsideReadLockScope } from '../workspace/lock-scope.js';
 import type {
    MemberRelinkFinishedEvent,
    MemberRelinkFinishedListener,
@@ -700,10 +701,13 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
       return Disposable.create(() => this.memberRelinkFinishedListeners.delete(listener));
    }
 
-   async memberRelinkSettled(): Promise<void> {
-      while (this.memberRelinks.size > 0) {
-         await Promise.all(this.memberRelinks);
-      }
+   memberRelinkSettled(): Promise<void> {
+      // The relink's write may be queued behind the caller's read.
+      return releaseReadHolds(this.workspaceLock, async () => {
+         while (this.memberRelinks.size > 0) {
+            await Promise.all(this.memberRelinks);
+         }
+      });
    }
 
    /**
@@ -728,7 +732,8 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
          return;
       }
       this.memberRelinkQueued = true;
-      const settled = this.runMemberRelink();
+      // Later queues feed it, so it must not run in, and release, a read it was queued from.
+      const settled = runOutsideReadLockScope(() => this.runMemberRelink());
       this.memberRelinks.add(settled);
       void settled.finally(() => this.memberRelinks.delete(settled));
    }
