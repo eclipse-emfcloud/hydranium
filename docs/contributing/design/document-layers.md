@@ -151,7 +151,7 @@ each wait's contract. Beyond it:
 
 ### Replacing the factory, registry, integrity or residency service
 
-A replacement has one obligation: report every model it produces to
+A replacement reports every model it produces to
 `VersionSyncService.modelProduced(document, origin)`. A factory passes
 `origin.version`, the store's version read before the parse; a producer whose
 CST does not hold the text the model describes, such as an in-place repair,
@@ -159,6 +159,11 @@ passes that text as `origin.text`; a registry reports each document it
 registers, with no `origin`. A residency service that sheds a CST produces no
 model: it records the root's text with `ModelLedger.record` before shedding,
 since reconciling would step a closed document's sequence.
+
+A factory that does not extend `HydraniumLangiumDocumentFactory` must also
+graft in `update`. A shed document the builder resets to `Changed` reaches
+only the factory, and a re-parse there gives its dependents' references
+nodes the document no longer holds.
 
 A model nobody reported reads `UNRECORDED_VERSION`. Waits count it as synced,
 so a read of it loses its freshness guarantee, and every write gated on its

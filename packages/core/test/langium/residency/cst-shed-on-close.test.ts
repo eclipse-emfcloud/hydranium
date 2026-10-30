@@ -32,7 +32,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
-import { type LangiumDocument, URI } from '@hydranium/langium';
+import { DocumentState, type LangiumDocument, URI } from '@hydranium/langium';
 import { Disposable } from '@hydranium/protocol';
 import { makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
 import { LANGUAGE_CLIENT_ID } from '../../../src/documents/client-ids.js';
@@ -115,6 +115,8 @@ function makeComposition(): Composition {
    }
 
    const document = makeDocument(DOC_URI);
+   // Recorded, as every root the framework's factory parses is.
+   services.workspace.ModelLedger.record(document.parseResult.value, 1);
    langiumDocs.set(document.uri.toString(), document);
 
    return {
@@ -132,10 +134,11 @@ function makeComposition(): Composition {
 /** A two-node AST document with CST attached to every node (same shape as the residency unit tests). */
 function makeDocument(uriText: string): LangiumDocument {
    const child: Record<string, unknown> = { $type: 'Child', $cstNode: {} };
-   const root: Record<string, unknown> = { $type: 'Root', $cstNode: {}, child };
+   const root: Record<string, unknown> = { $type: 'Root', $cstNode: { root: { fullText: 'root' } }, child };
    child.$container = root;
    return {
       uri: URI.parse(uriText),
+      state: DocumentState.Validated,
       parseResult: { value: root },
       references: []
    } as unknown as LangiumDocument;

@@ -276,13 +276,13 @@ export interface ServerAddedSharedServices<
       BuildPhasePassService: BuildPhasePassService;
       /**
        * CST residency policy: sheds the concrete syntax tree of closed
-       * documents (keeping the AST resident) to reclaim memory, re-parsing
-       * on demand when a shed document re-enters a build. Self-registers a
-       * `Validated` {@link BuildPhasePassService} pass in its constructor, so
-       * it is eagerly constructed via `DEFAULT_EAGER_SERVICES`. Framework
-       * default is `{ kind: 'always-keep' }` (a no-op — the pass runs but sheds
-       * nothing); adopters rebind the slot with a subclass or a different
-       * strategy (`shed-closed-when-idle`) to enable shedding.
+       * documents (keeping the AST resident) to reclaim memory, grafting it
+       * back on demand when a shed document is read or re-enters a build.
+       * Self-registers a `Validated` {@link BuildPhasePassService} pass in its
+       * constructor, so it is eagerly constructed via `DEFAULT_EAGER_SERVICES`.
+       * Framework default is `{ kind: 'always-keep' }` (a no-op — the pass runs
+       * but sheds nothing). Adopters rebind the slot with a subclass or a
+       * different strategy (`shed-closed-when-idle`) to enable shedding.
        */
       CstResidencyService: CstResidencyService;
       /** The version of the text each root was parsed from. */

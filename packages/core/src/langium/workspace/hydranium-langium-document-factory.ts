@@ -20,6 +20,7 @@ import { type CancellationToken } from 'vscode-languageserver-protocol';
 import { type TextDocument } from 'vscode-languageserver-textdocument';
 import { STALE_VERSION } from '@hydranium/protocol';
 import { type ModelLedger } from '../../documents/model-ledger.js';
+import { type CstResidencyService } from '../residency/cst-residency-service.js';
 import { type VersionSyncService } from '../../documents/version-sync-service.js';
 import { type ExtendedServiceRegistry } from '../service-registry.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
@@ -64,14 +65,18 @@ export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFacto
     */
    declare protected readonly serviceRegistry: ExtendedServiceRegistry;
 
-   /** Resolved per call: the sync service reaches the registry, which is built with this factory. */
+   /** A thunk: a version-sync service whose constructor reads this factory would otherwise be a cycle. */
    protected readonly versionSyncService: () => VersionSyncService;
+   /** A thunk: a ledger whose constructor reads this factory would otherwise be a cycle. */
    protected readonly modelLedger: () => ModelLedger;
+   /** A thunk: the residency service resolves `LangiumDocuments`, which is built with this factory. */
+   protected readonly cstResidency: () => CstResidencyService;
 
    constructor(services: ServerSharedServicesMinimal) {
       super(services);
       this.versionSyncService = () => services.workspace.VersionSyncService;
       this.modelLedger = () => services.workspace.ModelLedger;
+      this.cstResidency = () => services.workspace.CstResidencyService;
    }
 
    /**
@@ -156,6 +161,25 @@ export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFacto
       document: Mutable<LangiumDocument<T>>,
       cancellationToken: CancellationToken
    ): Promise<LangiumDocument<T>> {
+      // Langium keeps the AST when the CST's text equals the new text, but a
+      // shed document has no CST and would get new AST nodes, leaving its
+      // dependents on the old ones. Grafted only when the new text is the text
+      // the AST was parsed from, so an edit on disk or in the store is still
+      // re-parsed. Not `isCstShed`: the builder has already reset the document
+      // to `Changed`. A refused or diverged graft re-parses, and a build after
+      // this one relinks the dependents: this build has prepared its
+      // documents, and a reset now would drop their build state.
+      const root = document.parseResult.value;
+      const parsedFrom = root.$cstNode === undefined ? this.modelLedger().textOf(root) : undefined;
+      if (parsedFrom !== undefined) {
+         const text = this.textDocuments?.get(document.uri.toString())?.getText() ?? (await this.fileSystemProvider.readFile(document.uri));
+         if (text === parsedFrom) {
+            this.cstResidency().rehydrate(document);
+            if (root.$cstNode === undefined) {
+               this.versionSyncService().rebuildWhileCurrent(document);
+            }
+         }
+      }
       const stored = this.textDocuments?.get(document.uri.toString())?.version;
       const updated = await super.update(document, cancellationToken);
       const version =

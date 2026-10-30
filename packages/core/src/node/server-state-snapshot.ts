@@ -42,8 +42,7 @@ export interface ServerStateSnapshotOptions {
     * `HydraniumTextDocuments.openDocuments()`). When set, the snapshot lists
     * them — the observable for client-release bugs: a document that lingers
     * here after its editor closed names the client that failed to close it,
-    * and under a shedding policy it is exactly the set excluded from CST
-    * shedding.
+    * and under a shedding policy no shed starts for any of them.
     */
    readonly openDocuments?: readonly OpenDocumentEntry[];
    /**

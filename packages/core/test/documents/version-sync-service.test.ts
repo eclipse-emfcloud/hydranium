@@ -304,6 +304,39 @@ describe('DefaultVersionSyncService.syncTo', () => {
    });
 });
 
+describe('DefaultVersionSyncService.rebuildWhileCurrent', () => {
+   it('builds the document while it is still the one for its URI', async () => {
+      const rig = makeRig();
+      const document = register(rig, URI_A, 'a');
+
+      rig.sync.rebuildWhileCurrent(document);
+      await settle(rig);
+
+      expect(rig.builds.flatMap(build => build.changed)).toEqual([URI_A]);
+   });
+
+   it('builds nothing for a document replaced before the lock read ran', async () => {
+      const rig = makeRig();
+      const document = register(rig, URI_A, 'a');
+
+      rig.sync.rebuildWhileCurrent(document);
+      register(rig, URI_A, 'a');
+      await settle(rig);
+
+      expect(rig.builds).toEqual([]);
+   });
+
+   it('logs once that the build failed, since nothing waits on it', async () => {
+      const rig = makeRig();
+      rig.outcomes.push('fail', 'fail');
+
+      rig.sync.rebuildWhileCurrent(register(rig, URI_A, 'a'));
+      await settle(rig);
+
+      expect(rig.errors().map(error => error.split('\n')[0])).toEqual(['The rebuild of a current document failed. Error: build 2 failed']);
+   });
+});
+
 describe('DefaultVersionSyncService.requestRecoveryBuild', () => {
    const uri = URI.parse(URI_A);
    const needed = (overrides: Partial<RecoveryBuildRequest> = {}): RecoveryBuildRequest => ({ stillNeeded: () => true, ...overrides });
