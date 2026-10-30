@@ -67,8 +67,8 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
    /**
     * The layout AST for this process — the loaded `.layout` document's root,
     * or an empty in-memory one when that file does not exist yet — read
-    * through {@link workingRootOf}, so a handler edits the operation's copy of
-    * either and an edit the operation drops stays out of both.
+    * through {@link operationRootOf}, so a handler edits the operation's copy
+    * of either and an edit the operation drops stays out of both.
     *
     * **Never `undefined`, and that is load-bearing rather than convenience.** An
     * operation handler edits this root and the recording command derives
@@ -81,7 +81,7 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
     * {@link openForWrite} creates the file before that diff is written.
     */
    get layoutRoot(): LayoutModel {
-      const root = this.workingRootOf(this.layoutUri, () => this.builtLayoutRoot());
+      const root = this.operationRootOf(this.layoutUri, () => this.builtLayoutRoot());
       return isLayoutModel(root) ? root : this.builtLayoutRoot();
    }
 
@@ -114,7 +114,7 @@ export class OrderFlowGlspState extends ReconcilingMultiDocumentGlspState<Proces
     */
    protected override projectDocument(uri: string): TransferElement | undefined {
       return uri === this.layoutUri
-         ? this.projectRoot(this.existingWorkingRootOf(uri) ?? this.capturedRootOf(uri) ?? this.builtLayoutRoot())
+         ? this.projectRoot(this.existingOperationRootOf(uri) ?? this.capturedRootOf(uri) ?? this.builtLayoutRoot())
          : super.projectDocument(uri);
    }
 

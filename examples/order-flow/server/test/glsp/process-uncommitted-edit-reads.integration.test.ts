@@ -218,7 +218,7 @@ describe('the roots an operation copies', () => {
 
    it.each([
       ['tracked in createCommand', false],
-      ['first reached through workingRootOf, then tracked', true]
+      ['first reached through operationRootOf, then tracked', true]
    ])('undoes and redoes the edit of a document %s', async (_how, reachFirst) => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
@@ -228,7 +228,7 @@ describe('the roots an operation copies', () => {
       const createCommand = handler.createCommand.bind(handler);
       vi.spyOn(handler, 'createCommand').mockImplementationOnce((operation: Operation) => {
          if (reachFirst) {
-            diagram.state.workingRootOf(layoutUri);
+            diagram.state.operationRootOf(layoutUri);
          }
          diagram.state.trackSecondaryDocument(layoutUri);
          return createCommand(operation);
@@ -301,20 +301,20 @@ describe('the roots an operation copies', () => {
    });
 });
 
-describe('the working copies a handler edits', () => {
+describe('the operation copies a handler edits', () => {
    it('keeps ids added through indexSemanticElement across an operation, on the copies inside it', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
       const index = diagram.state.index;
       const builtPay = builtProcessRoot(opened).nodes.find(node => node.name === 'Pay')!;
-      const builtEntry = (diagram.state.workingRootOf(layoutUri) as LayoutModel).nodes.find(node => node.flowNode.$refText === 'Pay')!;
+      const builtEntry = (diagram.state.operationRootOf(layoutUri) as LayoutModel).nodes.find(node => node.flowNode.$refText === 'Pay')!;
       index.indexSemanticElement('alias-pay', builtPay);
       index.indexSemanticElement('alias-entry', builtEntry);
 
       const inside = await insideOperation(diagram, () => {
          const copyPay = diagram.state.sourceRoot.nodes.find(node => node.name === 'Pay');
          const entryBeforeCopy = index.findSemanticElement('alias-entry') === builtEntry;
-         const copyEntry = (diagram.state.workingRootOf(layoutUri) as LayoutModel).nodes.find(node => node.flowNode.$refText === 'Pay');
+         const copyEntry = (diagram.state.operationRootOf(layoutUri) as LayoutModel).nodes.find(node => node.flowNode.$refText === 'Pay');
          return {
             pay: index.findSemanticElement('alias-pay') === copyPay && copyPay !== builtPay,
             entryBeforeCopy,
@@ -340,7 +340,7 @@ describe('the working copies a handler edits', () => {
       const { diagram, layoutUri } = opened;
       // The built entry outside an operation, the copy of it inside one.
       const payEntry = (): DiagramNode =>
-         (diagram.state.workingRootOf(layoutUri) as LayoutModel).nodes.find(node => node.flowNode.$refText === 'Pay')!;
+         (diagram.state.operationRootOf(layoutUri) as LayoutModel).nodes.find(node => node.flowNode.$refText === 'Pay')!;
       const builtPay = builtProcessRoot(opened).nodes.find(node => node.name === 'Pay')!;
       const builder = diagram.state.languageServicesFor(payEntry())!.references.ReferenceBuilder;
       const expected = builder.getReferenceName(builtPay, payEntry());

@@ -204,7 +204,7 @@ describe('HydraniumScopeProvider.createScopeForNodes once per build', () => {
       expect(provider.built).toBe(1);
    });
 
-   it('builds a scope per call for a list outside the built root, such as an operation working copy', () => {
+   it('builds a scope per call for a list outside the built root, such as an operation copy', () => {
       const { container, document } = makeContainer();
       const provider = probe(ProbeScopeProvider);
       rebuild(document);

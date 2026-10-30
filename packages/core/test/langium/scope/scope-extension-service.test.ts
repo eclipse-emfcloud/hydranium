@@ -292,7 +292,7 @@ describe('ScopeExtensionService cache key', () => {
       expect(names(other.local)).toEqual(['TypeTwo']);
    });
 
-   it('runs for every reference outside a built document, such as a working copy', () => {
+   it('runs for every reference outside a built document, such as an operation copy', () => {
       const node = makeFakeAstNode({ $type: 'Container' });
       const { service, runs } = keyed(() => node);
 

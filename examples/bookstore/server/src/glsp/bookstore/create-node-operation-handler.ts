@@ -18,13 +18,13 @@
 // way: editable → read-only is a deletion the compiler checks, while read-only →
 // editable is authoring against a seam you have not used yet.
 //
-// **It edits the operation's working copy.** A handler runs inside an operation,
-// where `sourceRoot` is a copy of the built root: the recording command's
-// runnable appends to the copy, and the operation writes the copy's text through
-// the grammar's `Serializer` once, gated on the version the copy was made at,
-// with undo and redo applying that one change. A command that writes the
-// document itself instead reads no text off the copy, which has no `$document`,
-// and the operation's own write then overwrites it.
+// **It edits the operation's copy.** A handler runs inside an operation, where
+// `sourceRoot` is a copy of the built root: the recording command's runnable
+// appends to the copy, and the operation writes the copy's text through the
+// grammar's `Serializer` once, gated on the version the copy was made at, with
+// undo and redo applying that one change. A command that writes the document
+// itself instead reads no text off the copy, which has no `$document`, and the
+// operation's own write then overwrites it.
 //
 // **The drop location is discarded.** `needsClientLayout` is `true` and the
 // starter grammar persists no bounds, so there is nowhere to put a coordinate: the

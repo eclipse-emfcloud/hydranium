@@ -12,7 +12,7 @@ import { inject, injectable } from 'inversify';
 import { type AstNode, AstUtils } from '@hydranium/langium';
 import { type ElementKeyProvider, type ServerLanguageServices, type ServerSharedServices } from '@hydranium/core';
 import { randomUuid } from '@hydranium/protocol';
-import { workingUriOfCopy } from '../command/hydranium-glsp-operation-command.js';
+import { operationUriOfCopy } from '../command/hydranium-glsp-operation-command.js';
 import { HydraniumTypes } from './hydranium-shared-core-services.js';
 
 /**
@@ -142,10 +142,10 @@ export class HydraniumGlspIndex extends GModelIndex {
    }
 
    /**
-    * The language services owning `node`'s document, or a copy's working
-    * document. A per-language lookup an index subclass adds goes through this,
-    * so an operation's copy of a node from another document reaches that
-    * document's language, as its built node does.
+    * The language services owning `node`'s document, or the document a copy
+    * stands for. A per-language lookup an index subclass adds goes through
+    * this, so an operation's copy of a node from another document reaches
+    * that document's language, as its built node does.
     *
     * `undefined` for a node in neither: guessing the diagram's language would
     * key a node of another grammar under the wrong one. Attach a node before
@@ -155,8 +155,8 @@ export class HydraniumGlspIndex extends GModelIndex {
       if (node === undefined) {
          return undefined;
       }
-      // A copy node has no `$document`; it routes by its working root's URI.
-      const route = workingUriOfCopy(node);
+      // A copy node has no `$document`, so it routes by its operation root's URI.
+      const route = operationUriOfCopy(node);
       return this.sharedServices.ServiceRegistry.getServicesFor(route ?? node);
    }
 
@@ -202,7 +202,7 @@ export class HydraniumGlspIndex extends GModelIndex {
    /**
     * Index the nodes of `root` by id, keeping what {@link registerElementId}
     * and, outside the walk, {@link indexSemanticElement} recorded. For a root
-    * carrying the same ids as the one indexed, such as a working copy: those
+    * carrying the same ids as the one indexed, such as an operation copy: those
     * are made only when the GModel is built, and clearing them leaves
     * diagnostics with no marker and an alias resolving to nothing until the
     * next build. An alias still names its node; move it with
@@ -289,9 +289,9 @@ export class HydraniumGlspIndex extends GModelIndex {
       }
    }
 
-   /** The uri of `node`'s document, or of the document a working copy stands for; `undefined` for a detached node. */
+   /** The uri of `node`'s document, or of the document an operation copy stands for, or `undefined` for a detached node. */
    documentUriOf(node: AstNode): string | undefined {
-      return AstUtils.findRootNode(node).$document?.uri.toString() ?? workingUriOfCopy(node);
+      return AstUtils.findRootNode(node).$document?.uri.toString() ?? operationUriOfCopy(node);
    }
 
    /** The {@link elementToIds} key of `element`: its document uri and stable id. A uri holds no space. */

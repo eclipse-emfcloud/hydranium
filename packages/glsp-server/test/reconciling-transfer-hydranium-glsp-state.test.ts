@@ -763,7 +763,7 @@ describe('ReconcilingTransferHydraniumGlspState under an operation', () => {
       await expect(run).rejects.toThrow('setSourceRoot');
    });
 
-   it('gives two spellings of one document one working copy', async () => {
+   it('gives two spellings of one document one operation copy', async () => {
       const state = createState(makeHarness());
       const services = (state as unknown as { sharedServices: { workspace: { DocumentUriPolicy: unknown } } }).sharedServices;
       services.workspace.DocumentUriPolicy = { canonicalUri: (uri: string) => uri.toLowerCase() };
@@ -771,7 +771,7 @@ describe('ReconcilingTransferHydraniumGlspState under an operation', () => {
       let same: boolean | undefined;
 
       await runOperation(new HydraniumGlspOperationCommand<TestSourceModel>(state), () => {
-         same = state.workingRootOf('file:///A.A') === state.sourceRoot;
+         same = state.operationRootOf('file:///A.A') === state.sourceRoot;
          return undefined;
       });
 
@@ -1009,7 +1009,7 @@ describe('the copy nodes of an operation', () => {
 
       await runOperation(new HydraniumGlspOperationCommand<TestSourceModel>(state), () => {
          const primaryCopy = (state.sourceRoot as unknown as { members: AstNode[] }).members[0];
-         const foreignCopy = (state.workingRootOf(foreignUri) as unknown as { members: AstNode[] }).members[0];
+         const foreignCopy = (state.operationRootOf(foreignUri) as unknown as { members: AstNode[] }).members[0];
          copied = {
             copies: primaryCopy !== primaryItem && foreignCopy !== foreignItem,
             primary: seams(primaryCopy),

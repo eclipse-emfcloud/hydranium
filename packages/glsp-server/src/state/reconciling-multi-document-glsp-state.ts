@@ -431,7 +431,7 @@ export class ReconcilingMultiDocumentGlspState<
     */
    protected projectDocument(uri: string): TransferElement | undefined {
       const root =
-         this.existingWorkingRootOf(uri) ??
+         this.existingOperationRootOf(uri) ??
          this.capturedRootOf(uri) ??
          this.sharedServices.model.ModelService.getDocument(uri)?.parseResult?.value;
       return root ? this.projectRoot(root) : undefined;

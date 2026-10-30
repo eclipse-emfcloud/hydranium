@@ -65,7 +65,7 @@ export class AppDiagramModule extends AbstractHydraniumGlspDiagramModule {
    undo and redo apply that one change. The rules that keep it working:
    - Resolve nodes in `createCommand` or in the command: both run inside the
      operation, so a node of the diagram's document resolves to the copy.
-   - Edit another document through `modelState.workingRootOf(uri)`, never
+   - Edit another document through `modelState.operationRootOf(uri)`, never
      through a root read from the model service.
    - A node of the copy belongs to no document. Pass
      `modelState.builtNodeOf(node)` to anything that looks a document up: a
