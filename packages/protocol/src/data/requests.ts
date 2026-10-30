@@ -63,17 +63,25 @@ export interface TransferUpdateDocumentArgs<TTransfer> {
     * field. Nothing else here can see that, since the defect is an absence.
     */
    baseVersion: BaseVersion;
+   /**
+    * Set by a session's restore after a reconnect, which sends its last write
+    * again. A model the server took was written over text that parsed, so it
+    * is written even over text that does not, as it was before the
+    * reconnect. Any other model write over such text is refused with
+    * `DocumentSyntaxError`, a save's even when it sets this.
+    */
+   restore?: boolean;
 }
 
 /** Update a document the session `clientId` has open, then persist it to disk. */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- save names its own args; it adds no field to update's
-export interface TransferSaveDocumentArgs<TTransfer> extends TransferUpdateDocumentArgs<TTransfer> {}
+export interface TransferSaveDocumentArgs<TTransfer> extends Omit<TransferUpdateDocumentArgs<TTransfer>, 'restore'> {}
 
 /** Persist the text the server holds for a document the session `clientId` has open, without writing a model. */
-export type TransferPersistDocumentArgs = Omit<TransferUpdateDocumentArgs<never>, 'model'>;
+export type TransferPersistDocumentArgs = Omit<TransferUpdateDocumentArgs<never>, 'model' | 'restore'>;
 
 /** Delete a document the session `clientId` has open: its file, then the document. */
-export type TransferDeleteDocumentArgs = Omit<TransferUpdateDocumentArgs<never>, 'model'>;
+export type TransferDeleteDocumentArgs = Omit<TransferUpdateDocumentArgs<never>, 'model' | 'restore'>;
 
 /** Register a client session on the connection. */
 export interface CreateSessionArgs {

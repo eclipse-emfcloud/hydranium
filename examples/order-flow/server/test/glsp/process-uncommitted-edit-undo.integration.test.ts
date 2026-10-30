@@ -23,12 +23,14 @@ import {
    DIAGRAM_REDO_FAILED,
    DIAGRAM_REDO_PARTLY_SKIPPED,
    DIAGRAM_REDO_SKIPPED,
+   DIAGRAM_REDO_SYNTAX_ERROR,
    DIAGRAM_UNDO_ERROR,
    DIAGRAM_UNDO_FAILED,
    DIAGRAM_UNDO_PARTLY_SKIPPED,
-   DIAGRAM_UNDO_SKIPPED
+   DIAGRAM_UNDO_SKIPPED,
+   DIAGRAM_UNDO_SYNTAX_ERROR
 } from '@hydranium/glsp-server/messages';
-import { ConflictError, asModelVersion } from '@hydranium/protocol';
+import { ConflictError, DocumentSyntaxError, asModelVersion, isDocumentSyntaxError } from '@hydranium/protocol';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { DocumentState } from '@hydranium/langium';
 import { describe, expect, it, vi } from 'vitest';
@@ -45,6 +47,7 @@ import {
    changeTextUnbuilt,
    commandStackOf,
    createTask,
+   dispatcherOf,
    handlerOf,
    move,
    nestedCommand,
@@ -299,6 +302,100 @@ describe('undo and redo of an operation', () => {
       });
    });
 
+   it('refuses an undo and a redo while a document the diagram writes does not parse, and keeps the history', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await apply(diagram, move(diagram, 'Pay', 50, 110));
+      const fixed = textOf(opened, layoutUri);
+      const breakLayout = (): Promise<void> =>
+         changeTextBuilt(opened, layoutUri, text => text.replace('node Ship at 660, 200', 'node Ship at , 200'));
+      // Through the dispatcher, which resolves once the action is handled: a refused step sends only its warning.
+      const refuse = async (action: UndoAction | RedoAction): Promise<{ text: string; messages: unknown[] }> => {
+         const before = diagram.actions.length;
+         await dispatcherOf(diagram).dispatch(action);
+         const messages = diagram.actions.slice(before).filter(MessageAction.is);
+         return { text: textOf(opened, layoutUri), messages: messages.map(({ severity, message }) => ({ severity, message })) };
+      };
+
+      // No wait for the read-only status, which follows a debounce: the gate asks the document's parse.
+      await breakLayout();
+      const broken = textOf(opened, layoutUri);
+      const undo = await refuse(UndoAction.create());
+      await changeTextBuilt(opened, layoutUri, () => fixed);
+      await undoOrRedo(diagram, UndoAction.create());
+      const undone = textOf(opened, layoutUri);
+      await breakLayout();
+      const brokenUndone = textOf(opened, layoutUri);
+      const redo = await refuse(RedoAction.create());
+      await changeTextBuilt(opened, layoutUri, () => undone);
+      await undoOrRedo(diagram, RedoAction.create());
+
+      expect({ undo, redo }).toEqual({
+         undo: { text: broken, messages: [{ severity: 'WARNING', message: DIAGRAM_UNDO_SYNTAX_ERROR.text }] },
+         redo: { text: brokenUndone, messages: [{ severity: 'WARNING', message: DIAGRAM_REDO_SYNTAX_ERROR.text }] }
+      });
+      expect(undone).toContain('node Pay at 40, 100');
+      expect(textOf(opened, layoutUri)).toContain('node Pay at 50, 110');
+   });
+
+   it('refuses an undo of the element whose own line does not parse, rather than skipping it, and undoes once the text parses', async () => {
+      // The merge reads the recovered model, which lacks what the undo restores, so it conflicts.
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await apply(diagram, move(diagram, 'Pay', 50, 110));
+      const moved = textOf(opened, layoutUri);
+      await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 50, 110', 'node Pay at , 110'));
+      const broken = textOf(opened, layoutUri);
+      const before = diagram.actions.length;
+
+      await dispatcherOf(diagram).dispatch(UndoAction.create());
+      const refused = {
+         messages: diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ severity, message }) => ({ severity, message })),
+         text: textOf(opened, layoutUri)
+      };
+      await changeTextBuilt(opened, layoutUri, () => moved);
+      await undoOrRedo(diagram, UndoAction.create());
+
+      expect(refused).toEqual({ messages: [{ severity: 'WARNING', message: DIAGRAM_UNDO_SYNTAX_ERROR.text }], text: broken });
+      expect(textOf(opened, layoutUri)).toContain('node Pay at 40, 100');
+   });
+
+   it('undoes a move while its source document does not parse, since the undo writes only the layout', async () => {
+      const opened = await openDiagram();
+      const { diagram, processUri, layoutUri } = opened;
+      await apply(diagram, move(diagram, 'Pay', 50, 110));
+      await changeTextBuilt(opened, processUri, text => text.replace('   task Cancel', '   task'));
+      const broken = textOf(opened, processUri);
+      const before = diagram.actions.length;
+
+      await dispatcherOf(diagram).dispatch(UndoAction.create());
+
+      expect({
+         messages: diagram.actions.slice(before).filter(MessageAction.is),
+         process: textOf(opened, processUri),
+         payUndone: textOf(opened, layoutUri).includes('node Pay at 40, 100')
+      }).toEqual({ messages: [], process: broken, payUndone: true });
+   });
+
+   it('refuses an operation while a document the diagram writes does not parse, before the read-only status arrives', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await changeTextBuilt(opened, layoutUri, text => text.replace('node Ship at 660, 200', 'node Ship at , 200'));
+      const broken = textOf(opened, layoutUri);
+
+      const outcome = await dispatcherOf(diagram)
+         .dispatch(move(diagram, 'Pay', 50, 110))
+         .then(
+            () => undefined,
+            (error: unknown) => error
+         );
+
+      expect({ refused: isDocumentSyntaxError(outcome), text: textOf(opened, layoutUri) }).toEqual({ refused: true, text: broken });
+   });
+
    it('warns the client of an undo and a redo that a foreign edit of the same field skips', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
@@ -506,6 +603,39 @@ describe('undo and redo of an operation', () => {
       expect({ payReverted: layout.includes('node Pay at 40, 100'), foreign: layout.includes('node PaymentOk at 270, 95') }).toEqual({
          payReverted: true,
          foreign: true
+      });
+   });
+
+   it('refuses an undo whose layout stops parsing while it runs, leaves the text, and keeps the history', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      const fixed = textOf(opened, layoutUri);
+      let broken = '';
+      // Once, so the retry runs on text that parses again.
+      const counter = await applyUndoable(opened, async () => {
+         if (broken === '') {
+            await changeTextBuilt(opened, layoutUri, text => text.replace('node Ship at 660, 200', 'node Ship at , 200'));
+            broken = textOf(opened, layoutUri);
+         }
+      });
+
+      const before = diagram.actions.length;
+      await dispatcherOf(diagram).dispatch(UndoAction.create());
+      const refused = {
+         messages: diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ severity, message }) => ({ severity, message })),
+         text: textOf(opened, layoutUri),
+         count: counter.count
+      };
+      await changeTextBuilt(opened, layoutUri, () => fixed);
+      await undoOrRedo(diagram, UndoAction.create());
+
+      expect(refused).toEqual({ messages: [{ severity: 'WARNING', message: DIAGRAM_UNDO_SYNTAX_ERROR.text }], text: broken, count: 1 });
+      expect({ count: counter.count, payUndone: textOf(opened, layoutUri).includes('node Pay at 40, 100') }).toEqual({
+         count: 0,
+         payUndone: true
       });
    });
 
@@ -768,6 +898,132 @@ describe('undo and redo of an operation', () => {
             sourceRootIsBuilt: true,
             baseVersion: opened.services.shared.workspace.TextDocuments.version(processUri)
          });
+      });
+   });
+
+   /** Dispatch `action`, which resolves once handled, and answer what it left: the counter, the layout, its messages and the history. */
+   async function dispatchRefused(opened: Setup, counter: { count: number }, action: UndoAction | RedoAction): Promise<unknown> {
+      const { diagram, layoutUri } = opened;
+      const layoutBefore = textOf(opened, layoutUri);
+      const before = diagram.actions.length;
+      await dispatcherOf(diagram).dispatch(action);
+      return {
+         count: counter.count,
+         layout: textOf(opened, layoutUri) === layoutBefore,
+         messages: diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ severity, message }) => ({ severity, message })),
+         canUndo: commandStackOf(diagram).canUndo(),
+         canRedo: commandStackOf(diagram).canRedo()
+      };
+   }
+
+   it('keeps the history when an undo’s write is refused for a syntax error, and undoes once retried', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      const counter = await applyUndoable(opened, async () => undefined);
+      vi.spyOn(diagram.state, 'updateSourceModel').mockRejectedValueOnce(new DocumentSyntaxError(layoutUri));
+
+      const refused = await dispatchRefused(opened, counter, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
+
+      expect(refused).toEqual({
+         count: 1,
+         layout: true,
+         messages: [{ severity: 'WARNING', message: DIAGRAM_UNDO_SYNTAX_ERROR.text }],
+         canUndo: true,
+         canRedo: false
+      });
+      expect({ count: counter.count, payUndone: textOf(opened, layoutUri).includes('node Pay at 40, 100') }).toEqual({
+         count: 0,
+         payUndone: true
+      });
+   });
+
+   it('keeps the history when a redo’s write is refused for a syntax error, and redoes once retried', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      const counter = await applyUndoable(opened, async () => undefined);
+      await undoOrRedo(diagram, UndoAction.create());
+      vi.spyOn(diagram.state, 'updateSourceModel').mockRejectedValueOnce(new DocumentSyntaxError(layoutUri));
+
+      const refused = await dispatchRefused(opened, counter, RedoAction.create());
+      await undoOrRedo(diagram, RedoAction.create());
+
+      expect(refused).toEqual({
+         count: 0,
+         layout: true,
+         messages: [{ severity: 'WARNING', message: DIAGRAM_REDO_SYNTAX_ERROR.text }],
+         canUndo: false,
+         canRedo: true
+      });
+      expect({ count: counter.count, payRedone: textOf(opened, layoutUri).includes('node Pay at 50, 110') }).toEqual({
+         count: 1,
+         payRedone: true
+      });
+   });
+
+   it('says the history is gone when a step of an undo is refused for a syntax error, since it may have written before', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await applyUndoable(opened, () => Promise.reject(new DocumentSyntaxError(layoutUri)));
+
+      const failed = await applyFailing(diagram, UndoAction.create());
+
+      expect({ message: failed.message, canUndo: commandStackOf(diagram).canUndo(), canRedo: commandStackOf(diagram).canRedo() }).toEqual({
+         message: DIAGRAM_UNDO_ERROR.text,
+         canUndo: false,
+         canRedo: false
+      });
+   });
+
+   it('says the history is gone when an undo refused for a syntax error cannot redo a step it already ran', async () => {
+      // The step stays undone, so the history no longer matches the model.
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await applyUndoable(
+         opened,
+         async () => undefined,
+         () => Promise.reject(new Error('redo step failed'))
+      );
+      vi.spyOn(diagram.state, 'updateSourceModel').mockRejectedValueOnce(new DocumentSyntaxError(layoutUri));
+
+      const failed = await applyFailing(diagram, UndoAction.create());
+
+      expect({ message: failed.message, canUndo: commandStackOf(diagram).canUndo(), canRedo: commandStackOf(diagram).canRedo() }).toEqual({
+         message: DIAGRAM_UNDO_ERROR.text,
+         canUndo: false,
+         canRedo: false
+      });
+   });
+
+   it('says the history is gone when an undo refused for a syntax error ran a hook it has no redo hook to revert', async () => {
+      // A retry would run the hook a second time.
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      const create = createTask();
+      const counter = { count: 1 };
+      vi.spyOn(handlerOf(diagram, create), 'createCommand').mockImplementationOnce(
+         () =>
+            new OrderFlowCommand(
+               diagram.state,
+               'Move Pay',
+               () => place(diagram, 'Pay', 50, 110),
+               async () => void counter.count--
+            )
+      );
+      await apply(diagram, create);
+      vi.spyOn(diagram.state, 'updateSourceModel').mockRejectedValueOnce(new DocumentSyntaxError(layoutUri));
+
+      const refused = await dispatchRefused(opened, counter, UndoAction.create());
+
+      expect(refused).toEqual({
+         count: 0,
+         layout: true,
+         messages: [{ severity: 'ERROR', message: DIAGRAM_UNDO_ERROR.text }],
+         canUndo: false,
+         canRedo: false
       });
    });
 

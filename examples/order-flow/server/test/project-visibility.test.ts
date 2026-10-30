@@ -24,7 +24,17 @@
  */
 
 import { Deferred } from '@hydranium/protocol';
-import { AstUtils, DocumentState, type ReferenceInfo, URI, UriUtils } from '@hydranium/langium';
+import {
+   AstUtils,
+   DefaultLexer,
+   DocumentState,
+   type LexerResult,
+   type LexingDiagnostic,
+   type ReferenceInfo,
+   type TokenizeOptions,
+   URI,
+   UriUtils
+} from '@hydranium/langium';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { type DomainModel, type Entity, type Field, isEntity } from '../src/language-server/ast.js';
@@ -220,6 +230,33 @@ describe('order-flow visibility of public declarations across the project bounda
       expect(candidates).toContain('Money');
       // No transitive visibility the other way: commerce-core does not require orders.
       expect(candidates).not.toContain('Order');
+   });
+});
+
+describe('order-flow project descriptors that do not lex', () => {
+   /** Reports an error on the `orders` descriptor that only a token builder would, which leaves the parse clean. */
+   class DescriptorFlaggingLexer extends DefaultLexer {
+      override tokenize(text: string, options?: TokenizeOptions): LexerResult {
+         const result = super.tokenize(text, options);
+         if (!text.includes('project orders')) {
+            return result;
+         }
+         const diagnostic: LexingDiagnostic = { severity: 'error', message: 'Invalid dedent', offset: 0, length: 0, line: 1, column: 1 };
+         return { ...result, report: { diagnostics: [...(result.report?.diagnostics ?? []), diagnostic] } };
+      }
+   }
+
+   it('skips a descriptor whose lexer reports an error', async () => {
+      const { harness, workspace } = await makeScratchWorkspaceHarness(undefined, {
+         extraLanguageModules: [{ parser: { Lexer: services => new DescriptorFlaggingLexer(services) } }]
+      });
+      onTestFinished(() => workspace.dispose());
+      const projects = harness.shared.workspace.ProjectManager;
+
+      expect({ orders: projects.getProjectById('orders'), core: projects.getProjectById('commerce-core')?.id }).toEqual({
+         orders: undefined,
+         core: 'commerce-core'
+      });
    });
 });
 

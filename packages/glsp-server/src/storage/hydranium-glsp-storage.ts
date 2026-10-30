@@ -46,13 +46,14 @@ import {
    describeErrorWithStack
 } from '@hydranium/protocol';
 import { inject, injectable, optional, postConstruct } from 'inversify';
-import { type AstNode, type ParseResult } from '@hydranium/langium';
+import { type AstNode } from '@hydranium/langium';
 import { URI, UriUtils } from '@hydranium/langium';
 import {
    type AstDocument,
    type AstDocumentSavedEvent,
    type AstDocumentUpdatedEvent,
    type ClientSession as ModelClientSession,
+   hasSyntaxErrors,
    type ModelDirtyChangedEvent,
    type ServerSharedServices,
    type SessionEndCause
@@ -157,16 +158,6 @@ function isStructuralDiagnostic(diagnostic: unknown): boolean {
    const candidate = diagnostic as { severity?: number; data?: { code?: unknown } };
    const code = candidate.data?.code;
    return candidate.severity === DiagnosticSeverity.Error && (code === 'lexing-error' || code === 'parsing-error');
-}
-
-/** Whether `parseResult` holds what Langium's validator reports as an error-severity `lexing-error` or `parsing-error`. */
-function hasStructuralErrors(parseResult: ParseResult): boolean {
-   const lexing = parseResult.lexerReport?.diagnostics ?? [];
-   return (
-      parseResult.parserErrors.length > 0 ||
-      parseResult.lexerErrors.length > 0 ||
-      lexing.some(diagnostic => (diagnostic.severity ?? 'error') === 'error')
-   );
 }
 
 /**
@@ -773,8 +764,8 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     * write, which `root` predates.
     *
     * The parse-error status is the primary's as it stands now, which can be
-    * past `root`: a status taken from an older document would let an operation
-    * write into text that no longer parses.
+    * past `root`: a status taken from an older document would show the
+    * diagram as editable while its text no longer parses.
     */
    protected async captureAndSubmit(rootUri: string, root: TRoot): Promise<Action[]> {
       if (this.sharedServices.workspace.ModelLedger.versionOf(root) >= this.state.version) {
@@ -824,7 +815,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
     *
     * The secondaries count as much as the primary: an operation writes them from
     * the AST their parse recovered, which drops what the parser skipped, so a
-    * write into a broken secondary overwrites the user's text.
+    * write into a broken secondary is refused.
     */
    protected refreshParseErrorStatus(primary: AstDocument<AstNode>): AstDocument<AstNode>[] {
       const broken = [primary, ...this.secondaryDocuments(primary.uri)].filter(document => this.isStructurallyBroken(document));
@@ -856,7 +847,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    protected isStructurallyBroken(document: AstDocument<AstNode>): boolean {
       const parsed = document.root.$document?.parseResult;
       if (parsed?.value === document.root) {
-         return hasStructuralErrors(parsed);
+         return hasSyntaxErrors(parsed);
       }
       return document.diagnostics?.some(diagnostic => isStructuralDiagnostic(diagnostic)) ?? false;
    }

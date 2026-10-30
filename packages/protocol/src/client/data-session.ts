@@ -1307,6 +1307,9 @@ export class DataSession<
     * closed, saved or disposed meanwhile, and is left out: writing it would
     * put back text its caller discarded. A set in {@link brokenSets} is
     * not written again.
+    *
+    * Sent as a `restore`: a model the server took was written over text that
+    * parsed, so it is complete even where the reopened text does not parse.
     */
    protected async reapply(
       server: RpcProxy<TServer>,
@@ -1357,7 +1360,7 @@ export class DataSession<
          if ('update' in call) {
             documents = [
                await this.writesInFlight.track(
-                  server.updateModelDocument({ ...call.update, baseVersion: resend[0].baseVersion, clientId: this.clientId })
+                  server.updateModelDocument({ ...call.update, baseVersion: resend[0].baseVersion, restore: true, clientId: this.clientId })
                )
             ];
          } else {
@@ -1368,7 +1371,7 @@ export class DataSession<
                   clientId: this.clientId,
                   updates: call.updates.updates.flatMap((update, index) => {
                      const version = baseVersion.get(index);
-                     return version === undefined ? [] : [{ ...update, baseVersion: version }];
+                     return version === undefined ? [] : [{ ...update, baseVersion: version, restore: true }];
                   })
                })
             );

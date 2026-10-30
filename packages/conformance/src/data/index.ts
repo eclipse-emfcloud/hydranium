@@ -21,6 +21,7 @@ import {
    FRAMEWORK_CLIENT_IDS,
    isConflictError,
    isDocumentNotOpenError,
+   isDocumentSyntaxError,
    isDuplicateClientIdError,
    isReservedClientIdError,
    isResponseError,
@@ -400,7 +401,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
    });
 
    for (const language of options.languages) {
-      const { valid, invalid, edit, dependent } = language;
+      const { valid, invalid, edit, dependent, syntaxError } = language;
       const tag = `[${valid.languageId}]`;
 
       checks.push({
@@ -537,6 +538,58 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                driver.dispose();
             }
          }
+      });
+
+      checks.push({
+         title: `a session refuses a model write to text with a syntax error, unless it restores one, and applies a text write ${tag}`,
+         skipReason: syntaxError ? undefined : 'the fixture supplies no `syntaxError` model (text with a lexer or parser error)',
+         body: syntaxError
+            ? async () => {
+                 const driver = await connect();
+                 try {
+                    const model = resolveModel(syntaxError);
+                    const clientId = await seed(driver, model);
+                    const read = await driver.proxy.getModelDocument({ uri: model.uri });
+                    const recovered = read.model?.root;
+                    assert.ok(
+                       recovered,
+                       `getModelDocument(syntaxError) answered no model, which only a document that does not exist may do`
+                    );
+
+                    const refused = await rejectionOf(
+                       driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: recovered, baseVersion: 'any' })
+                    );
+                    assert.ok(
+                       isDocumentSyntaxError(refused),
+                       `a model was written over text with a syntax error: ${describeRefusal(refused)}`
+                    );
+                    const afterRefusal = await driver.proxy.getModelDocument({ uri: model.uri });
+                    assert.strictEqual(afterRefusal.text?.hash, read.text?.hash, `the refused write changed the text of ${model.uri}`);
+                    // A restore sends a model written before a reconnect, over text that parsed then.
+                    const restoreRefused = await rejectionOf(
+                       driver.proxy.updateModelDocument({ uri: model.uri, clientId, model: recovered, baseVersion: 'any', restore: true })
+                    );
+                    assert.strictEqual(
+                       restoreRefused,
+                       undefined,
+                       `a restore's model write over text with a syntax error was refused: ${describeRefusal(restoreRefused)}`
+                    );
+                    // The other half: a head refusing every write would pass the assertions above on its own.
+                    const written = await driver.proxy.updateModelDocument({
+                       uri: model.uri,
+                       clientId,
+                       model: resolveModel(valid).text,
+                       baseVersion: 'any'
+                    });
+                    const afterWrite = await driver.proxy.getModelDocument({ uri: model.uri });
+                    assert.notStrictEqual(written.text?.hash, read.text?.hash, `the text write left ${model.uri} as it was`);
+                    assert.strictEqual(afterWrite.text?.hash, written.text?.hash, `a read of ${model.uri} does not hold the text written`);
+                    await driver.proxy.closeSession({ clientId });
+                 } finally {
+                    driver.dispose();
+                 }
+              }
+            : undefined
       });
 
       checks.push({

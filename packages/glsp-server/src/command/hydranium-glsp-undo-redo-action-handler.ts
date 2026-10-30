@@ -10,7 +10,7 @@
 import { type Action, Logger, MessageAction, ModelState, RedoAction, UndoAction, UndoRedoActionHandler } from '@eclipse-glsp/server';
 import { type ServerSharedServices } from '@hydranium/core';
 import { type AstNode } from '@hydranium/langium';
-import { type MessageDefinition, defineMessage, describeError, isConflictError } from '@hydranium/protocol';
+import { type MessageDefinition, defineMessage, describeError, isConflictError, isDocumentSyntaxError } from '@hydranium/protocol';
 import { inject, injectable } from 'inversify';
 import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
@@ -78,6 +78,23 @@ export const DIAGRAM_REDO_ERROR = defineMessage(
 );
 
 /**
+ * An undo was refused because a document it reads or writes does not parse:
+ * the model lacks what the parser skipped. Nothing changed.
+ * `HydraniumGlspCommandStack` keeps the history, so the undo works once the
+ * text is fixed. Another command stack may clear it.
+ */
+export const DIAGRAM_UNDO_SYNTAX_ERROR = defineMessage(
+   'hydranium/glsp-server/diagram-undo-syntax-error',
+   'Nothing was undone: a document of this diagram has a syntax error. Fix it in the text first.'
+);
+
+/** A redo was refused as {@link DIAGRAM_UNDO_SYNTAX_ERROR} describes for an undo. */
+export const DIAGRAM_REDO_SYNTAX_ERROR = defineMessage(
+   'hydranium/glsp-server/diagram-redo-syntax-error',
+   'Nothing was redone: a document of this diagram has a syntax error. Fix it in the text first.'
+);
+
+/**
  * GLSP's undo and redo handler inside the state's `runExclusive`. GLSP's
  * command stack moves its position before it undoes or redoes the entry, so
  * the boundary covers the whole action: taken around the undo or redo alone,
@@ -111,7 +128,8 @@ export class HydraniumGlspUndoRedoActionHandler extends UndoRedoActionHandler {
    /**
     * Lifted from `@eclipse-glsp/server`'s `UndoRedoActionHandler.undo`
     * and `redo`, telling the client of a skip and ending a failure of the
-    * command stack's undo or redo, which flushes the history on any failure.
+    * command stack's undo or redo, which flushes the history unless the
+    * failure changed nothing.
     * A failed submit after it leaves the history whole and fails as upstream.
     * The accompanying test pins upstream's source.
     */
@@ -155,6 +173,10 @@ export class HydraniumGlspUndoRedoActionHandler extends UndoRedoActionHandler {
          return MessageAction.create(this.render(undo ? DIAGRAM_UNDO_FAILED : DIAGRAM_REDO_FAILED), { severity: 'ERROR' });
       }
       logActionFailure(this.logger, undo ? UndoAction.create() : RedoAction.create(), error);
+      if (isDocumentSyntaxError(error)) {
+         // `HydraniumGlspCommandStack` kept the history, since the refusal changed nothing.
+         return MessageAction.create(this.render(undo ? DIAGRAM_UNDO_SYNTAX_ERROR : DIAGRAM_REDO_SYNTAX_ERROR), { severity: 'WARNING' });
+      }
       if (isConflictError(error)) {
          // The conflict's own message names the document, which the details carry.
          return MessageAction.create(this.render(undo ? DIAGRAM_UNDO_FAILED : DIAGRAM_REDO_FAILED), {

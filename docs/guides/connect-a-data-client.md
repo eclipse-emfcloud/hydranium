@@ -51,7 +51,13 @@ await form.withOpenDocument({ uri }, opened =>
    `updateDocument` for each edit and `saveDocument` when the user saves, and
    `closeDocument` when it is done. Every write names the version it is based
    on, and fails with a `ConflictError` when someone else has changed the
-   document since; read it again and retry, or tell the user.
+   document since; read it again and retry, or tell the user. A write of a
+   model also fails, with `DocumentSyntaxError`, while the document's last
+   build has a syntax error, since the model would replace what the parser
+   skipped. A blank document takes the write. Write text to repair it. To
+   tell before writing, pass the document's diagnostics to
+   `TransferDiagnostic.hasSyntaxErrors`. It is a hint only, since the
+   diagnostics can lag the build or miss an error.
 
 4. Ignore your own echoes. Every change reaches you as an update event, your
    own included; `session.isOwnEcho(event.sourceClientId)` tells you which ones

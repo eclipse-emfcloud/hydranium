@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { type Action, type Logger, RequestAction } from '@eclipse-glsp/server';
-import { describeError, describeErrorWithStack, isConflictError } from '@hydranium/protocol';
+import { describeError, describeErrorWithStack, isConflictError, isDocumentSyntaxError } from '@hydranium/protocol';
 
 /**
  * Thrown when the reconcile of a diagram edit's write dropped it: a foreign
@@ -34,7 +34,8 @@ export function isDiagramEditDroppedError(error: unknown): error is DiagramEditD
 /**
  * Log an action that failed, once, at the level of what happened: a dropped
  * edit at `debug`, since its reconcile has logged it, a conflict at `warn`
- * naming its versions, since it was declined, and anything else at `error`.
+ * naming its versions and a write to a document that does not parse at
+ * `warn`, since both were declined, and anything else at `error`.
  * A request is named by its id too, which its client's reject carries.
  */
 export function logActionFailure(logger: Logger, action: Action, error: unknown): void {
@@ -45,6 +46,8 @@ export function logActionFailure(logger: Logger, action: Action, error: unknown)
       logger.warn(
          `Could not process action ${named}: ${describeError(error)} (model v${error.baseVersion} / text v${error.actualVersion})`
       );
+   } else if (isDocumentSyntaxError(error)) {
+      logger.warn(`Could not process action ${named}: ${describeError(error)}`);
    } else {
       logger.error(`Could not process action ${named}: ${describeErrorWithStack(error)}`);
    }

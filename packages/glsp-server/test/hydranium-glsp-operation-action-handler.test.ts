@@ -10,7 +10,7 @@
 import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
 import { type ActionMessage, type Operation } from '@eclipse-glsp/server';
-import { asModelVersion, ConflictError, SaveFailedError } from '@hydranium/protocol';
+import { asModelVersion, ConflictError, DocumentSyntaxError, SaveFailedError } from '@hydranium/protocol';
 import { HydraniumGlspOperationActionHandler } from '../src/command/hydranium-glsp-operation-action-handler.js';
 import { makeNoopGlspLogger } from '../src/testing/make-noop-glsp-logger.js';
 
@@ -69,6 +69,14 @@ describe('HydraniumGlspOperationActionHandler.reportFailure', () => {
       expect(handler.errors).toEqual([]);
       expect(handler.warnings).toHaveLength(1);
       expect(handler.warnings[0]).toContain('model v1 / text v2');
+   });
+
+   it('warns without a stack for a write to a document that does not parse, which is declined too', () => {
+      const handler = new RecordingHandler();
+      handler.fail(new DocumentSyntaxError('file:///a.x'));
+      expect(handler.errors).toEqual([]);
+      expect(handler.warnings).toHaveLength(1);
+      expect(handler.warnings[0]).not.toMatch(/\n\s+at /);
    });
 
    it('logs a queued operation that fails once its diagram has closed at debug, and tells no client', () => {

@@ -92,8 +92,9 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
    createModelDocument(args: CreateModelDocumentArgs): Promise<TransferCreatedDocument<TTransfer, TDiagnostic>>;
 
    /**
-    * Write several documents the session has open, all or none: a conflict or
-    * a document not open fails the whole set before any text applies.
+    * Write several documents the session has open, all or none: a conflict, a
+    * document not open, or a model for a document whose parse lacks some of
+    * its text fails the whole set before any text applies.
     * Resolves to the documents in the order given, once the language client
     * has answered the push of each, or the server-side bound on that wait
     * passes, as {@link updateModelDocument} does. Only for a session
@@ -144,7 +145,9 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
     * diagnostics; callers observe convergence via that response. It is sent
     * once the language client has answered the push of the text, or the
     * server-side bound on that wait passes, as {@link saveModelDocument}'s
-    * is, so an editor already shows the write when it arrives.
+    * is, so an editor already shows the write when it arrives. A model, not
+    * text, for a document whose parse lacks some of its text fails with a
+    * `DocumentSyntaxError` code, unless the write is a `restore`.
     */
    updateModelDocument(args: TransferUpdateDocumentArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>>;
 
@@ -156,7 +159,8 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
     * that wait passes; it does not wait again for a push that wait already
     * gave up on and the client has not answered since. Save semantics depend
     * on the filesystem-provider wiring; rejection paths surface as awaited
-    * promise rejections.
+    * promise rejections, as a model for a document whose parse lacks some of
+    * its text does with a `DocumentSyntaxError` code.
     */
    saveModelDocument(args: TransferSaveDocumentArgs<TTransfer>): Promise<TransferSavedDocument<TTransfer, TDiagnostic>>;
 

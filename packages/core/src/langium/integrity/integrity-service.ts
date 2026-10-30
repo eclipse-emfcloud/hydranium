@@ -26,6 +26,7 @@ import { type HydraniumTextDocuments } from '../../documents/hydranium-text-docu
 import { Registry } from '../../util/registry.js';
 import { type ServerLanguageServices } from '../language-module.js';
 import { type ServerSharedServices } from '../module.js';
+import { hasSkippedText } from '../workspace/syntax-errors.js';
 import { isVirtualUri } from '../workspace/virtual-document.js';
 import { type IntegrityRuleRegistry } from './integrity-contribution.js';
 import { IntegrityPhase, type IntegrityRule, type IntegritySyncMode } from './integrity-rule.js';
@@ -84,6 +85,9 @@ export namespace IntegrityService {
     * Do NOT use this when you need validation diagnostics — those are computed
     * at `DocumentState.Validated` and delivered separately via `publishDiagnostics`
     * or the `onModelUpdated` event.
+    *
+    * A document whose parse lacks some of its text reaches this state
+    * unrepaired: no rule runs on it until it parses.
     *
     * The AST is what this guarantees, not the text. For a closed document whose
     * repair was STAGED rather than written (`'editor'` sync mode),
@@ -213,8 +217,9 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       // nothing and the hot rule loop stays a single const-branch off `session`.
       const session = Logger.isLevelEnabled('debug') ? this.tracer.profile(`integrity ${DocumentState[phase]}`) : undefined;
       for (const document of documents) {
-         const changed = await this.enforceIntegrity(document, phase, cancelToken, session);
-         if (changed) {
+         if (this.isStructurallyBroken(document)) {
+            this.tracer.with(document.uri.toString()).debug('Parse errors: rules skipped until the document parses');
+         } else if (await this.enforceIntegrity(document, phase, cancelToken, session)) {
             mutatedCount++;
             // Not cancellable: see `resyncDocument`.
             await this.resyncDocument(document, CancellationToken.None);
@@ -269,6 +274,15 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          this.ruleLoggers.delete(id);
       }
       return removed;
+   }
+
+   /**
+    * Seam: does the parse of `document` lack some of its text? {@link enforceBatch}
+    * runs no rule on such a document, because a repair is written back by
+    * serializing the AST, and a recovered AST lacks what the parser skipped.
+    */
+   protected isStructurallyBroken(document: LangiumDocument): boolean {
+      return hasSkippedText(document);
    }
 
    /**

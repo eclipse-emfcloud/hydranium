@@ -34,7 +34,9 @@ export type HydraniumGlspRecordingState<TSourceModel extends AnyObject> = Abstra
  * `undoAction` / `redoAction` callbacks, run when the operation is undone or
  * redone and when a failed operation rolls back, to re-emit a side effect the
  * model does not carry. During an undo or redo they run against throwaway
- * copies, and a recording command executed there throws.
+ * copies, and a recording command executed there throws. Supply both: an undo
+ * or redo that fails after running one cannot revert it without the other, so
+ * the undo history is cleared.
  *
  * A command executed outside an operation opens one of its own through
  * `runExclusive`, so executing it from inside the boundary with no operation
@@ -88,7 +90,11 @@ export class HydraniumGlspRecordingCommand<TSourceModel extends AnyObject> exten
       const tracer = this.modelState.tracer.for('HydraniumGlspRecordingCommand');
       tracer.debug(`Executing '${this.label}' (base version v${this.modelState.version})`);
       await tracer.time(`Execute command '${this.label}'`, () => super.execute());
-      open.recordExecuted({ undo: () => this.undoAction?.(), redo: () => this.redoAction?.() });
+      // A hook left out stays out: a refused undo or redo reverts nothing it did not run, and cannot revert one it ran without the other.
+      open.recordExecuted({
+         undo: this.undoAction && (() => this.undoAction?.()),
+         redo: this.redoAction && (() => this.redoAction?.())
+      });
    }
 
    /** Writes nothing: the operation the command executes in writes once when it ends. */

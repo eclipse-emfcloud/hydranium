@@ -39,6 +39,7 @@ import {
    asModelVersion,
    ConflictError,
    DocumentNotOpenError,
+   DocumentSyntaxError,
    DuplicateClientIdError,
    FRAMEWORK_CLIENT_IDS,
    isDocumentSource,
@@ -101,6 +102,8 @@ export const INVALID_TEXT = 'element';
 export const EDITED_TEXT = 'element Two';
 /** The fixture's `breakingEdit`, the one text of `valid` the canary lets change its dependent. */
 export const BREAKING_TEXT = 'element Renamed';
+/** The fixture's `syntaxError`, the one text the canary treats as one a parse recovers from. */
+export const SYNTAX_ERROR_TEXT = 'element {';
 
 /**
  * The canary's whole "grammar": a model is invalid when it is exactly
@@ -228,6 +231,12 @@ export interface CanaryDefects {
    readonly saveOpensImplicitly?: boolean;
    /** A persist writes the text with its trailing whitespace trimmed, as a head re-serialising the model would. */
    readonly persistReformats?: boolean;
+   /** A model write lands over text with a syntax error, as a head serialising the recovered model would. */
+   readonly syntaxErrorsWritten?: boolean;
+   /** A model write over text with a syntax error lands, then is refused, as a head checking after the write would. */
+   readonly syntaxErrorsWrittenThenRefused?: boolean;
+   /** A restore's model write over text with a syntax error is refused, as a head that ignores `restore` would. */
+   readonly restoresRefused?: boolean;
    /** A persist ignores its base version. */
    readonly persistUngated?: boolean;
    /** A save or persist answers without the version it wrote. */
@@ -524,6 +533,14 @@ export class CanaryDataServer {
       const existing = this.documents.get(args.uri);
       // The conflict gate, which is the property the base-version check probes.
       this.assertBaseVersion(args.uri, args.baseVersion);
+      const checked = !args.restore || this.defects.restoresRefused;
+      if (typeof args.model !== 'string' && checked && existing?.text === SYNTAX_ERROR_TEXT && !this.defects.syntaxErrorsWritten) {
+         if (this.defects.syntaxErrorsWrittenThenRefused) {
+            // Serialized from the recovered model, which lacks what the parser skipped.
+            this.documents.set(args.uri, { text: 'element', version: existing.version + 1 });
+         }
+         throw this.refusal(new DocumentSyntaxError(args.uri));
+      }
       // An edit is any update that follows the first one for this URI, which is
       // the only notion of "edit" a fake with no grammar can hold.
       const isEdit = existing !== undefined;
@@ -701,6 +718,7 @@ export const CANARY_FIXTURE: LanguageFixture = {
    invalid: { uri: 'file:///two.x', languageId: 'x', text: INVALID_TEXT },
    dependent: { uri: CANARY_DEPENDENT_URI, languageId: 'x', text: VALID_TEXT },
    breakingEdit: BREAKING_TEXT,
+   syntaxError: { uri: 'file:///four.x', languageId: 'x', text: SYNTAX_ERROR_TEXT },
    edit: { to: EDITED_TEXT, expect: root => isCanaryRoot(root) && root.text === EDITED_TEXT },
    // An explicit folder rather than the derived default: this fixture's `valid`
    // sits at the URI root, so deriving a parent from it yields the degenerate

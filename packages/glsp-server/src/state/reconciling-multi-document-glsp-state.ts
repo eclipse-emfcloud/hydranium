@@ -253,6 +253,7 @@ export class ReconcilingMultiDocumentGlspState<
          logger: this.logger,
          onConflictDropped: () => this.writeDropped(),
          onAlreadyApplied: () => this.captureBuiltRoot(),
+         assertParses: () => [this._sourceUri, ...this.secondaryUris].forEach(uri => this.assertStoredTextParses(uri)),
          maxWrites: this.maxSourceModelWrites
       });
    }
@@ -405,7 +406,9 @@ export class ReconcilingMultiDocumentGlspState<
     * versions read alongside: theirs, which the conflict resolver replays the
     * user's intent onto. Returns `undefined` when the PRIMARY cannot be read,
     * since a reconcile without it has nothing to merge into; an unreadable
-    * secondary is omitted the same way {@link sourceModel} omits one.
+    * secondary is omitted the same way {@link sourceModel} omits one. Throws
+    * `DocumentSyntaxError` when any of them does not parse, even a secondary
+    * the merge would not write.
     */
    protected async refetch(): Promise<VersionedMultiDocumentSourceModel<TransferTypeFor<TRoot, TTransferMap>> | undefined> {
       const theirs = await this.readCurrentRoot(this._sourceUri);

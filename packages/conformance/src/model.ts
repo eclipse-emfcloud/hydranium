@@ -144,7 +144,8 @@ export interface ReferenceQuerySpec {
  * - `referenceQuery` — read by the **data slice only**, and only when the
  *   driver supplies `references` (the reference surface is opt-in on the head
  *   too, so both halves have to be present for the check to run).
- * - `dependent` and `breakingEdit` — read by the **data slice only**.
+ * - `dependent`, `breakingEdit` and `syntaxError` — read by the **data slice
+ *   only**.
  * - `renderedDiagnostic` — read by the **LSP slice only**.
  *
  * The opt-ins are optional and their checks report *skipped* when absent,
@@ -211,6 +212,12 @@ export interface LanguageFixture {
     * by the **LSP slice only**.
     */
    readonly renderedDiagnostic?: RenderedDiagnosticSpec;
+   /**
+    * Optional: a model whose text has a lexer or parser error. Read by the
+    * **data slice only**, which holds the head to refusing a model write to it
+    * with `DocumentSyntaxError` and to applying a text write.
+    */
+   readonly syntaxError?: ConformanceModel;
 }
 
 /**

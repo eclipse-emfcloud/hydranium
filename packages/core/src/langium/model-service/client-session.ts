@@ -23,11 +23,12 @@ import {
 import { type AstNode, isOperationCancelled, UriUtils } from '@hydranium/langium';
 import { type CancellationToken, type Disposable, Emitter, type Event } from 'vscode-languageserver';
 import { type SavedAstDocument, type WrittenAstDocument } from '../../documents/ast-document-manager.js';
-import { DocumentNotOpenError, SessionClosedError } from '../../documents/client-session-errors.js';
+import { DocumentNotOpenError, DocumentSyntaxError, SessionClosedError } from '../../documents/client-session-errors.js';
 import { type OpenOptions, type SessionEndCause } from '../../documents/client-session-registry.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerSharedServices } from '../module.js';
 import { type AstDiagnostic } from '../validation/document-validator.js';
+import { hasSkippedText } from '../workspace/syntax-errors.js';
 import { type ModelService } from './model-service.js';
 
 /** What a session's `update` and `save` write into one document; the session supplies its own client id. */
@@ -41,13 +42,19 @@ export interface ClientSessionWriteArgs<TTransfer> {
     * makes rather than a field it forgot.
     */
    baseVersion: BaseVersion;
+   /**
+    * Set when the write restores one the session made before a reconnect. Its
+    * model was written over text that parsed, so it is not refused when the
+    * text no longer does.
+    */
+   restore?: boolean;
 }
 
 /** What a session's `persist` writes: the text the store holds for `uri`. */
-export type ClientSessionPersistArgs = Omit<ClientSessionWriteArgs<never>, 'model'>;
+export type ClientSessionPersistArgs = Omit<ClientSessionWriteArgs<never>, 'model' | 'restore'>;
 
 /** What a session's `delete` removes: the document at `uri`, at the version it was based on. */
-export type ClientSessionDeleteArgs = Omit<ClientSessionWriteArgs<never>, 'model'>;
+export type ClientSessionDeleteArgs = Omit<ClientSessionWriteArgs<never>, 'model' | 'restore'>;
 
 /** What a session's `updateAll` writes, all or none. */
 export interface ClientSessionUpdateAllArgs<TTransfer> {
@@ -117,20 +124,29 @@ export interface ClientSession<
     * write, so the answer holds every diagnostic its update event does: that
     * event names this session, and a client dropping its own echo would
     * otherwise never see them. `written` names the version the text took.
+    * A model, not text, written to a document whose last build lacks some of
+    * its text, see `hasSkippedText`, fails with `DocumentSyntaxError`, unless
+    * the write is a `restore`.
     */
    update(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<WrittenAstDocument<TAst, TDiagnostic>>;
    /**
     * Write several documents this session has open, all or none: a
-    * `ConflictError` or `DocumentNotOpenError` for any of them is thrown before
-    * any text applies. Resolves to the rebuilt documents, in the order given,
-    * each validated as {@link update}'s is.
+    * `ConflictError`, `DocumentNotOpenError` or `DocumentSyntaxError` for any
+    * of them is thrown before any text applies. Resolves to the rebuilt
+    * documents, in the order given, each validated as {@link update}'s is.
     */
    updateAll(
       args: ClientSessionUpdateAllArgs<TTransfer>,
       cancelToken?: CancellationToken
    ): Promise<WrittenAstDocument<TAst, TDiagnostic>[]>;
-   /** Write `args.model` as {@link update} does, then persist the document. */
-   save(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<SavedAstDocument<TAst, TDiagnostic>>;
+   /**
+    * Write `args.model` as {@link update} does, then persist the document. A
+    * save is never a `restore`, so its model is always checked.
+    */
+   save(
+      args: Omit<ClientSessionWriteArgs<TTransfer>, 'restore'>,
+      cancelToken?: CancellationToken
+   ): Promise<SavedAstDocument<TAst, TDiagnostic>>;
    /**
     * Persist the text the store holds for `args.uri` as it is, with no update
     * and no serialisation. Resolves with the version of the text written, once
@@ -277,7 +293,10 @@ export class DefaultClientSession<
       return this.updateDocuments(args, cancelToken);
    }
 
-   save(args: ClientSessionWriteArgs<TTransfer>, cancelToken?: CancellationToken): Promise<SavedAstDocument<TAst, TDiagnostic>> {
+   save(
+      args: Omit<ClientSessionWriteArgs<TTransfer>, 'restore'>,
+      cancelToken?: CancellationToken
+   ): Promise<SavedAstDocument<TAst, TDiagnostic>> {
       this.assertLive();
       return this.saveDocument(args, cancelToken);
    }
@@ -354,15 +373,28 @@ export class DefaultClientSession<
    }
 
    /**
+    * Throw `DocumentSyntaxError` when the parse of `uri`'s last build lacks
+    * some of its text, see `hasSkippedText`. A write of a model calls it beside
+    * {@link assertBaseVersion}: the model is serialized over the whole text,
+    * and one read from such a document lacks what the parser skipped.
+    */
+   protected assertParses(uri: string): void {
+      const document = this.modelService.getDocument(uri);
+      if (document && hasSkippedText(document)) {
+         throw new DocumentSyntaxError(uri);
+      }
+   }
+
+   /**
     * Serialise `args.model`, apply it to the store under this session's id,
     * rebuild, and resolve to the rebuilt document.
     *
-    * The open check and the `baseVersion` gate run at the door, so a write that
-    * cannot land is refused before any adopter serialiser runs, and again in
-    * the synchronous step that applies the text: made only before the
-    * serialiser's await, a close during it lets the write land on a document
-    * this session no longer has open, and two writes based on one version
-    * both apply.
+    * The open check, the `baseVersion` gate and, for a model, the parse check
+    * run at the door, so a write that cannot land is refused before any
+    * adopter serialiser runs, and again in the synchronous step that applies
+    * the text: made only before the serialiser's await, a close during it
+    * lets the write land on a document this session no longer has open, and
+    * two writes based on one version both apply.
     *
     * Resolves with the latest build of the document, which may already carry
     * a newer write; that is logged at debug, and a slow update at warn when
@@ -381,13 +413,18 @@ export class DefaultClientSession<
       const profile = Logger.isLevelEnabled('debug') ? this.tracer.profile(`model-update ${uri}`) : undefined;
       const run = async <T>(stage: string, fn: () => MaybePromise<T>): Promise<T> => (profile ? profile.scope(stage, fn) : fn());
       const textDocuments = this.services.workspace.TextDocuments;
-      this.assertOpen(uri);
-      this.assertBaseVersion(uri, args.baseVersion, textDocuments.version(uri));
+      const check = (): void => {
+         this.assertOpen(uri);
+         this.assertBaseVersion(uri, args.baseVersion, textDocuments.version(uri));
+         if (typeof args.model !== 'string' && !args.restore) {
+            this.assertParses(uri);
+         }
+      };
+      check();
       service.assertCanBuild(uri);
       const text = await run('serialize', () => service.modelToText(uri, args.model, cancelToken));
       const appliedVersion = await run('apply', () => {
-         this.assertOpen(uri);
-         this.assertBaseVersion(uri, args.baseVersion, textDocuments.version(uri));
+         check();
          return this.services.workspace.AstDocumentManager.update(uri, text, this.clientId);
       });
       // Through the public `rebuild`, so an override of it stays in the path.
@@ -414,9 +451,10 @@ export class DefaultClientSession<
 
    /**
     * Write every document of `args.updates`, all or none: every model is
-    * serialised first, then every open check and `baseVersion` gate runs and every
-    * text is applied in one synchronous step. Checked at the door as well, so
-    * a stale set is refused before any adopter serialiser runs.
+    * serialised first, then every open check, `baseVersion` gate and parse
+    * check runs and every text is applied in one synchronous step. Checked at
+    * the door as well, so a stale set is refused before any adopter serialiser
+    * runs.
     *
     * The apply step relies on `AstDocumentManager.update` applying its text
     * before its first await, as the default does: an override that awaits first
@@ -437,6 +475,9 @@ export class DefaultClientSession<
          updates.forEach((update, i) => {
             this.assertOpen(uris[i]);
             this.assertBaseVersion(uris[i], update.baseVersion, textDocuments.version(uris[i]));
+            if (typeof update.model !== 'string' && !update.restore) {
+               this.assertParses(uris[i]);
+            }
             service.assertCanBuild(uris[i]);
          });
       check();
@@ -479,12 +520,14 @@ export class DefaultClientSession<
     * Fails with `DocumentNotOpenError` and writes nothing when this session
     * closes the URI while the text is being built. Persisted at `'any'`: the
     * update already gated on `args.baseVersion` and moved the text past it.
+    * A `restore` in `args` is dropped: a save puts the model on disk, so
+    * it is always checked.
     */
    protected async saveDocument(
       args: ClientSessionWriteArgs<TTransfer>,
       cancelToken?: CancellationToken
    ): Promise<SavedAstDocument<TAst, TDiagnostic>> {
-      const doc = await this.updateDocument(args, cancelToken);
+      const doc = await this.updateDocument({ ...args, restore: undefined }, cancelToken);
       const version = await this.persistDocument({ uri: args.uri, baseVersion: 'any' });
       return { ...doc, persisted: { version } };
    }

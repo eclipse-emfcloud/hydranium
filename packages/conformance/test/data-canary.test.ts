@@ -60,6 +60,7 @@ const DELETE_GATE = 'a delete on a stale base version conflicts and deletes noth
 const DELETE_OPEN = 'a session deletes only a document it has open';
 const DELETE_OTHERS = "a delete closes another session's open and names the deleting session";
 const DELETE_UNSAVED = 'a delete removes a created document never saved';
+const SYNTAX_ERROR = 'a session refuses a model write to text with a syntax error, unless it restores one, and applies a text write';
 
 /**
  * Build the battery over a canary server. One server instance per battery
@@ -136,12 +137,12 @@ describe('the /data battery discriminates', () => {
       }
    });
 
-   it('plans exactly the thirty-four checks the must-fail cases below name', () => {
+   it('plans exactly the thirty-five checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(34);
+      expect(titles).toHaveLength(35);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -176,9 +177,10 @@ describe('the /data battery discriminates', () => {
          DELETE_GATE,
          DELETE_OPEN,
          DELETE_OTHERS,
-         DELETE_UNSAVED
+         DELETE_UNSAVED,
+         SYNTAX_ERROR
       ];
-      expect(matching(titles, covered)).toHaveLength(34);
+      expect(matching(titles, covered)).toHaveLength(35);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -218,8 +220,15 @@ describe('the /data battery discriminates', () => {
          // text is an edit.
          label: 'an edit acknowledged but not stored',
          defects: { ignoreEdits: true },
-         expected: [EDIT_REFLECTED, CONFLICT_GATE, SET, DIRTY, PERSIST, TEXT_HASH, LAST_CLOSE, DELETE_GATE]
+         expected: [EDIT_REFLECTED, CONFLICT_GATE, SET, DIRTY, PERSIST, TEXT_HASH, LAST_CLOSE, DELETE_GATE, SYNTAX_ERROR]
       },
+      { label: 'a model written over text with a syntax error', defects: { syntaxErrorsWritten: true }, expected: [SYNTAX_ERROR] },
+      {
+         label: 'a model written over text with a syntax error, then refused',
+         defects: { syntaxErrorsWrittenThenRefused: true },
+         expected: [SYNTAX_ERROR]
+      },
+      { label: 'a restore refused over text with a syntax error', defects: { restoresRefused: true }, expected: [SYNTAX_ERROR] },
       {
          label: 'a write accepted whatever version it claims',
          defects: { ungatedWrites: true },
@@ -242,7 +251,8 @@ describe('the /data battery discriminates', () => {
             DELETE_OTHERS,
             PERSIST,
             CONFLICT_GATE,
-            SET
+            SET,
+            SYNTAX_ERROR
          ]
       },
       {

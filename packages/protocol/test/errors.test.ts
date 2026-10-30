@@ -28,6 +28,9 @@ import {
    STALE_BASE_VERSION_UPDATE,
    SaveFailedError,
    SessionClosedError,
+   DOCUMENT_SYNTAX_ERROR,
+   DOCUMENT_SYNTAX_ERROR_CODE,
+   DocumentSyntaxError,
    isConflictError,
    isDocumentNotOpenError,
    isDuplicateClientIdError,
@@ -35,6 +38,7 @@ import {
    isResponseError,
    isSaveFailedError,
    isSessionClosedError,
+   isDocumentSyntaxError,
    reviveProtocolError,
    reviveProtocolErrorJson
 } from '../src/errors';
@@ -175,7 +179,8 @@ describe('HYDRANIUM_ERROR_CODES', () => {
          DOCUMENT_NOT_OPEN_ERROR_CODE,
          DUPLICATE_CLIENT_ID_ERROR_CODE,
          RESERVED_CLIENT_ID_ERROR_CODE,
-         SAVE_FAILED_ERROR_CODE
+         SAVE_FAILED_ERROR_CODE,
+         DOCUMENT_SYNTAX_ERROR_CODE
       ];
       expect(defined.filter(code => !codes.includes(code))).toEqual([]);
    });
@@ -222,6 +227,13 @@ describe('client session errors', () => {
          code: SAVE_FAILED_ERROR_CODE,
          guard: isSaveFailedError,
          data: { failures: FAILURES }
+      },
+      {
+         name: 'DocumentSyntaxError',
+         make: () => new DocumentSyntaxError('file:///a.x'),
+         code: DOCUMENT_SYNTAX_ERROR_CODE,
+         guard: isDocumentSyntaxError,
+         data: { uri: 'file:///a.x' }
       }
    ] as const;
 
@@ -318,6 +330,15 @@ describe('ReservedClientIdError', () => {
       const error = new ReservedClientIdError('integrity');
       expect(hasMessageIdentity(error.data)).toBe(false);
       expect(error.message).toContain('integrity');
+   });
+});
+
+describe('DocumentSyntaxError', () => {
+   it('carries the message identity, naming the uri', () => {
+      const error = new DocumentSyntaxError('file:///a.x');
+      expect(resolvedFromResponseError(error)?.code).toBe(DOCUMENT_SYNTAX_ERROR.code);
+      expect(resolvedFromResponseError(error)?.params).toEqual({ uri: 'file:///a.x' });
+      expect(error.message).toBe(DOCUMENT_SYNTAX_ERROR.format({ uri: 'file:///a.x' }));
    });
 });
 

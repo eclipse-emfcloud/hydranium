@@ -11,7 +11,8 @@ import { type JsonModelState } from '@eclipse-glsp/server';
 import { injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
-import { type BaseVersion, isConflictError, isPromiseLike, type MaybePromise } from '@hydranium/protocol';
+import { hasSkippedText } from '@hydranium/core';
+import { type BaseVersion, DocumentSyntaxError, isConflictError, isPromiseLike, type MaybePromise } from '@hydranium/protocol';
 import { AbstractHydraniumGlspState } from './abstract-hydranium-glsp-state.js';
 
 /** Whole-document-text source model: the serialised text of the source root. */
@@ -71,8 +72,20 @@ export class FullTextHydraniumGlspState<TRoot extends AstNode>
     * A write that conflicts while the store already holds `model.text`, as
     * when an undo's side effect brought the text to the undo's result, is
     * taken as applied; any other conflict is thrown.
+    *
+    * The session writes text without the parse check a model write gets.
+    * Once a source that does not parse is built, {@link sourceModel}
+    * serializes the recovered root, and writing it deletes what the parser
+    * skipped. So this throws `DocumentSyntaxError` while the parse of the
+    * source's last build lacks some of its text. Until that build lands, the
+    * state holds the last clean root at its version, so a write from it
+    * conflicts.
     */
    async updateSourceModel(model: FullTextSourceModel, baseVersion: BaseVersion = this.baseVersion): Promise<void> {
+      const built = this.sharedServices.model.ModelService.getDocument(this._sourceUri);
+      if (built !== undefined && hasSkippedText(built)) {
+         throw new DocumentSyntaxError(this._sourceUri);
+      }
       let document: { root: AstNode };
       try {
          document = await this.requireModelSession().update({ uri: this._sourceUri, model: model.text, baseVersion });

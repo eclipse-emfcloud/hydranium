@@ -92,6 +92,18 @@ export namespace TransferDiagnostic {
    }
 
    /**
+    * Whether `diagnostic` is a lexer or parser error, the condition a session
+    * refuses a model write over with `DocumentSyntaxError`. A hint only: the
+    * server decides on the parse itself, and the diagnostics can lag it or miss
+    * an error, as when Langium has no position for a parser error or the
+    * validation skipped its built-in checks. A blank document takes the write,
+    * since it has no text to lose.
+    */
+   export function isSyntaxError(diagnostic: TransferDiagnostic): boolean {
+      return diagnostic.type === 'lexing-error' || diagnostic.type === 'parsing-error';
+   }
+
+   /**
     * The diagnostic as a renderable message, for a surface that translates.
     * `undefined` when it carries no framework identity — a syntactic error, an
     * adopter's own check, a linker failure — which is the case a caller must
@@ -128,5 +140,10 @@ export namespace TransferDiagnostic {
 
    export function hasParseErrors(diagnostics: TransferDiagnostic[]): boolean {
       return diagnostics.some(isParseError);
+   }
+
+   /** Whether any of `diagnostics` is a syntax error, with the limits {@link isSyntaxError} names. */
+   export function hasSyntaxErrors(diagnostics: TransferDiagnostic[]): boolean {
+      return diagnostics.some(isSyntaxError);
    }
 }

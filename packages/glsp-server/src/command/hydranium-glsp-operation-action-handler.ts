@@ -138,6 +138,8 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
       } else if (isResponseError(error)) {
          message = this.sharedServices.MessageRenderer.renderError(error);
       }
+      // An error even for a write the log calls declined, a conflict or a syntax refusal, since the gesture is lost.
+      // A refused undo is a warning instead: it keeps its history and works once the text parses.
       this.sendToClient(MessageAction.create(message, { severity: 'ERROR', details }));
    }
 

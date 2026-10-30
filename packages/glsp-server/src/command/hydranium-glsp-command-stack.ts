@@ -9,16 +9,18 @@
 
 import { type Command, CompoundCommand, DefaultCommandStack, ModelState } from '@eclipse-glsp/server';
 import { type ServerSharedServices } from '@hydranium/core';
+import { isDocumentSyntaxError } from '@hydranium/protocol';
 import { inject, injectable } from 'inversify';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
-import { isCommandArray } from './hydranium-glsp-operation-command.js';
+import { HydraniumGlspOperationCommand, isCommandArray } from './hydranium-glsp-operation-command.js';
 import { HydraniumGlspRecordingCommand } from './hydranium-glsp-recording-command.js';
 
 /**
  * GLSP's command stack with the diagram's dirty state read from the text store:
  * dirty while any document the diagram's client session has open differs from
- * its file, as the store last knew the file. Undo and redo are GLSP's; a
- * command whose every write was dropped is not pushed.
+ * its file, as the store last knew the file. Undo and redo are GLSP's, except
+ * that a refusal which left nothing behind keeps the history. A command whose
+ * every write was dropped is not pushed.
  *
  * GLSP's own answer counts the diagram's commands since its last save, so it
  * misses every change the diagram did not make: another client's unsaved edit
@@ -72,6 +74,69 @@ export class HydraniumGlspCommandStack extends DefaultCommandStack {
       if (this.saveIndex >= this.top) {
          this.saveIndex = -2;
       }
+   }
+
+   /**
+    * Lifted from `@eclipse-glsp/server`'s `DefaultCommandStack.undo`, keeping
+    * the history and its place when {@link leftNothingBehind} says the failure
+    * changed nothing, so the user can undo again once the text parses. The
+    * accompanying test pins upstream's source.
+    */
+   override async undo(): Promise<void> {
+      if (this.canUndo()) {
+         const command = this.commands[this.top--];
+         try {
+            await command.undo();
+         } catch (error: unknown) {
+            if (this.leftNothingBehind(command, error)) {
+               this.top++;
+               throw error;
+            }
+            this.handleError(this.flushedFailure(error));
+         }
+      }
+   }
+
+   /** Lifted from `DefaultCommandStack.redo` as {@link undo} is. */
+   override async redo(): Promise<void> {
+      if (this.canRedo()) {
+         const command = this.commands[++this.top];
+         try {
+            await command.redo();
+         } catch (error: unknown) {
+            if (this.leftNothingBehind(command, error)) {
+               this.top--;
+               throw error;
+            }
+            this.handleError(this.flushedFailure(error));
+         }
+      }
+   }
+
+   /**
+    * Whether `command` failed with `error` without changing anything. An
+    * operation's undo or redo lets a `DocumentSyntaxError` out only when it
+    * collides before running a step, or when its own write was refused and it
+    * reverted every step it ran. A `CompoundCommand` runs its other children
+    * back on its own, and a failure there is not reported, so it never
+    * qualifies.
+    */
+   protected leftNothingBehind(command: Command, error: unknown): boolean {
+      return (
+         isDocumentSyntaxError(error) &&
+         (command instanceof HydraniumGlspOperationCommand || command instanceof HydraniumGlspRecordingCommand)
+      );
+   }
+
+   /**
+    * `error` as the stack flushes on it. A `DocumentSyntaxError` says nothing
+    * changed, which is no longer known here, so it becomes the `cause` of a
+    * plain error.
+    */
+   protected flushedFailure(error: unknown): unknown {
+      return isDocumentSyntaxError(error)
+         ? new Error('A command was refused for a syntax error after it may have changed the model', { cause: error })
+         : error;
    }
 
    /**

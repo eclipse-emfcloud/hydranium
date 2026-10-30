@@ -52,17 +52,26 @@
  */
 
 import 'reflect-metadata';
-import { type Action, CreateNodeOperation, DeleteElementOperation, ServerModule, SetDirtyStateAction } from '@eclipse-glsp/server';
+import {
+   type Action,
+   CreateNodeOperation,
+   DeleteElementOperation,
+   MessageAction,
+   ServerModule,
+   SetDirtyStateAction
+} from '@eclipse-glsp/server';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
+import { DOCUMENT_SYNTAX_ERROR, Deferred, asModelVersion } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import { URI } from '@hydranium/langium';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
 import { type ProcessModel, isRead, isTask } from '../../src/language-server/ast.js';
+import { type OrderFlowSharedServices } from '../../src/language-server/order-flow-module.js';
 import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
@@ -83,6 +92,7 @@ interface OpenDiagram {
     * conflict gate armed.
     */
    readonly foreignWrite: (text: string) => Promise<void>;
+   readonly shared: OrderFlowSharedServices;
    /**
     * Dispatch an operation and wait for the submission THIS operation produced.
     *
@@ -129,6 +139,7 @@ async function openDiagram(): Promise<OpenDiagram> {
       text: () => processDocument().textDocument.getText(),
       layoutText: () => documents.getDocument(URI.parse(harness.state.layoutUri))?.textDocument.getText(),
       documentVersion: () => processDocument().textDocument.version,
+      shared: services.shared,
       foreignWrite: async text => {
          // A repeat open changes nothing, so every write can open first.
          const models = services.shared.model.ModelService;
@@ -265,5 +276,131 @@ describe('order-flow .process glsp state with a foreign write between base and s
          audit: diagram.text().includes('task Audit'),
          created: diagram.text().includes('task NewTask')
       }).toEqual({ refund: true, audit: true, created: true });
+   });
+
+   it('refuses the diagram edit as a syntax error when the text stops parsing after the refetch waited and before it read', async () => {
+      const diagram = await openDiagram();
+      const { workspace, model } = diagram.shared;
+      await diagram.foreignWrite(
+         diagram.text().replace('   transition Pay -> PaymentOk', '   task Refund reads Order.id\n   transition Pay -> PaymentOk')
+      );
+      const broken = diagram.text().replace('   transition Pay -> PaymentOk', '   task Broken reads\n   transition Pay -> PaymentOk');
+      // The build of the broken text waits until the edit has been written or
+      // refused, so the session's check still sees the clean build.
+      const released = new Deferred<void>();
+      const factory = workspace.LangiumDocumentFactory;
+      const update = factory.update.bind(factory);
+      vi.spyOn(factory, 'update').mockImplementation(async (document, cancelToken) => {
+         if (workspace.TextDocuments.get(document.uri.toString())?.getText() === broken) {
+            await released.promise;
+         }
+         return update(document, cancelToken);
+      });
+      const state = diagram.harness.state as unknown as { refetch(): Promise<unknown> };
+      const refetch = state.refetch.bind(state);
+      let armed = false;
+      vi.spyOn(state, 'refetch').mockImplementationOnce(() => {
+         armed = true;
+         return refetch();
+      });
+      const validated = model.ModelService.validated.bind(model.ModelService);
+      let brokenWrite: Promise<void> | undefined;
+      vi.spyOn(model.ModelService, 'validated').mockImplementation(async uri => {
+         const result = await validated(uri);
+         if (armed && brokenWrite === undefined) {
+            const changed = new Deferred<void>();
+            const subscription = workspace.TextDocuments.onDidChangeContent(() => changed.resolve());
+            brokenWrite = diagram.foreignWrite(broken);
+            await changed.promise;
+            subscription.dispose();
+         }
+         return result;
+      });
+      const written = workspace.TextDocuments.onDidChangeContent(event => {
+         if (event.document.getText().includes('NewTask')) {
+            released.resolve();
+         }
+      });
+      onTestFinished(() => written.dispose());
+
+      const before = diagram.harness.actions.length;
+      diagram.harness.dispatch(CreateNodeOperation.create(PROCESS_TASK_NODE_TYPE, { location: { x: 320, y: 480 } }));
+      await waitFor(
+         () =>
+            diagram.harness.actions
+               .slice(before)
+               .some(action => MessageAction.is(action) || (SetDirtyStateAction.is(action) && action.reason === 'operation')),
+         { message: 'the operation neither failed nor completed' }
+      );
+      released.resolve();
+      await brokenWrite;
+
+      expect({
+         text: diagram.text(),
+         layout: diagram.layoutText()?.includes('NewTask'),
+         messages: diagram.harness.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(action => action.message)
+      }).toEqual({ text: broken, layout: false, messages: [DOCUMENT_SYNTAX_ERROR.format({ uri: diagram.harness.state.sourceUri })] });
+   });
+
+   it('refuses the diagram edit as a syntax error when an overridden refetch merges into text that does not parse', async () => {
+      const diagram = await openDiagram();
+      const { workspace } = diagram.shared;
+      await diagram.foreignWrite(
+         diagram.text().replace('   transition Pay -> PaymentOk', '   task Refund reads Order.id\n   transition Pay -> PaymentOk')
+      );
+      const broken = diagram.text().replace('   transition Pay -> PaymentOk', '   task Broken reads\n   transition Pay -> PaymentOk');
+      // The build of the broken text waits until the edit has been written or
+      // refused, so the session's check still sees the clean build.
+      const released = new Deferred<void>();
+      const factory = workspace.LangiumDocumentFactory;
+      const update = factory.update.bind(factory);
+      vi.spyOn(factory, 'update').mockImplementation(async (document, cancelToken) => {
+         if (workspace.TextDocuments.get(document.uri.toString())?.getText() === broken) {
+            await released.promise;
+         }
+         return update(document, cancelToken);
+      });
+      const changed = new Deferred<void>();
+      const subscription = workspace.TextDocuments.onDidChangeContent(() => changed.resolve());
+      const brokenWrite = diagram.foreignWrite(broken);
+      await changed.promise;
+      subscription.dispose();
+      // An override that reads the stored text without the check.
+      const state = diagram.harness.state as unknown as { refetch(): Promise<unknown>; projectRoot(root: unknown): unknown };
+      const uri = diagram.harness.state.sourceUri;
+      vi.spyOn(state, 'refetch').mockImplementation(async () => ({
+         model: { primary: state.projectRoot(factory.fromString(broken, URI.parse(uri)).parseResult.value), secondaries: {} },
+         baseVersion: asModelVersion(workspace.TextDocuments.version(uri)),
+         secondaryVersions: {}
+      }));
+      const written = workspace.TextDocuments.onDidChangeContent(event => {
+         if (event.document.getText().includes('NewTask')) {
+            released.resolve();
+         }
+      });
+      onTestFinished(() => written.dispose());
+
+      const before = diagram.harness.actions.length;
+      diagram.harness.dispatch(CreateNodeOperation.create(PROCESS_TASK_NODE_TYPE, { location: { x: 320, y: 480 } }));
+      await waitFor(
+         () =>
+            diagram.harness.actions
+               .slice(before)
+               .some(action => MessageAction.is(action) || (SetDirtyStateAction.is(action) && action.reason === 'operation')),
+         { message: 'the operation neither failed nor completed' }
+      );
+      released.resolve();
+      await brokenWrite;
+
+      expect({
+         text: diagram.text(),
+         messages: diagram.harness.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(action => action.message)
+      }).toEqual({ text: broken, messages: [DOCUMENT_SYNTAX_ERROR.format({ uri })] });
    });
 });

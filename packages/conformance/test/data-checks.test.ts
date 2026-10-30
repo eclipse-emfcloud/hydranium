@@ -18,6 +18,7 @@ const fixture: LanguageFixture = {
    edit: { to: 'edited', expect: () => true },
    dependent: { uri: 'file:///c.x', languageId: 'x', text: 'depends on a' },
    breakingEdit: 'breaks c',
+   syntaxError: { uri: 'file:///d.x', languageId: 'x', text: 'broken' },
    referenceQuery: { type: 'Source', property: 'target', folderUri: 'file:///folder', expectCandidate: 'Target' }
 };
 
@@ -37,9 +38,9 @@ describe('buildDataChecks', () => {
       expect(skipped[0].skipReason).toContain('`attach`');
    });
 
-   it('plans five server-level checks plus twenty-nine grammar-bearing checks per language', () => {
-      expect(buildDataChecks({ connect, attach, languages: [fixture] })).toHaveLength(34);
-      expect(buildDataChecks({ connect, attach, languages: [fixture, fixture] })).toHaveLength(63);
+   it('plans five server-level checks plus thirty grammar-bearing checks per language', () => {
+      expect(buildDataChecks({ connect, attach, languages: [fixture] })).toHaveLength(35);
+      expect(buildDataChecks({ connect, attach, languages: [fixture, fixture] })).toHaveLength(65);
    });
 
    it('runs every data check when the fixture supplies an edit and the options expect projects', () => {
@@ -54,7 +55,7 @@ describe('buildDataChecks', () => {
       const { edit: _edit, ...withoutEdit } = fixture;
       const checks = buildDataChecks({ connect, attach, languages: [withoutEdit], expectsProjects: true });
 
-      expect(checks).toHaveLength(34);
+      expect(checks).toHaveLength(35);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('updateModelDocument applies an edit'),
@@ -74,7 +75,7 @@ describe('buildDataChecks', () => {
       const { referenceQuery: _query, ...withoutQuery } = fixture;
       const checks = buildDataChecks({ connect, attach, languages: [withoutQuery], expectsProjects: true });
 
-      expect(checks).toHaveLength(34);
+      expect(checks).toHaveLength(35);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('findReferenceCandidates answers for a synthetic source')
@@ -86,10 +87,20 @@ describe('buildDataChecks', () => {
       const { breakingEdit: _breakingEdit, ...withoutBreakingEdit } = fixture;
       const checks = buildDataChecks({ connect, attach, languages: [withoutBreakingEdit], expectsProjects: true });
 
-      expect(checks).toHaveLength(34);
+      expect(checks).toHaveLength(35);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([expect.stringContaining('credits the dependent')]);
       expect(skipped[0].skipReason).toContain('`breakingEdit`');
+   });
+
+   it('plans the syntax-error refusal but skips it, with a named reason, without a syntaxError', () => {
+      const { syntaxError: _syntaxError, ...withoutSyntaxError } = fixture;
+      const checks = buildDataChecks({ connect, attach, languages: [withoutSyntaxError], expectsProjects: true });
+
+      expect(checks).toHaveLength(35);
+      const skipped = checks.filter(check => check.body === undefined);
+      expect(skipped.map(check => check.title)).toEqual([expect.stringContaining('refuses a model write to text with a syntax error')]);
+      expect(skipped[0].skipReason).toContain('`syntaxError`');
    });
 
    it('skips the project-emptiness check, with a named reason, when the options do not expect projects', () => {
@@ -115,10 +126,11 @@ describe('buildDataChecks', () => {
       // created-version checks, the write's answer, the unsaved create's last
       // close, the dirty, persist, text-hash and watch-answer checks, the five
       // delete checks, the folder-URI reference query and the dependent's
-      // credit, which writes `breakingEdit` instead — none of which needs an
-      // edit. The cascade and set checks need one, so they are not among them
-      // even though this fixture supplies a `dependent`.
-      expect(runnable).toHaveLength(28);
+      // credit, which writes `breakingEdit` instead, and the syntax-error
+      // refusal — none of which needs an edit. The cascade and set checks
+      // need one, so they are not among them even though this fixture
+      // supplies a `dependent`.
+      expect(runnable).toHaveLength(29);
    });
 
    it('includes each server-level check exactly once regardless of the language count', () => {

@@ -58,6 +58,16 @@ a document the session closed meanwhile, and two writes based on one version
 both apply. So a write either lands while the document is open or fails, and a
 document is never reopened behind a write.
 
+A write of a model also fails, with `DocumentSyntaxError`, when the last
+build of its document has lexer or parser errors, checked in the same steps.
+The model is serialized over the whole text, and a model read from such a build
+lacks what the parser skipped. Blank text has nothing to lose and takes the
+write. `hasSkippedText` decides this for every write check, the diagram's
+too, where an undo's collision also refuses a root replaced since it was
+read. The check reads the last build, not the text, so text an editor
+changed since that build is judged by the build before it. A write marked
+`restore` is not checked, see below. A save is never a `restore`.
+
 A write answers with the document once it is validated, in whichever build
 carried it: its update event names the writer, so a client that drops its own
 echo gets the diagnostics only from the answer. `written.version` names the
@@ -215,7 +225,10 @@ was based on, and its last write with that write's answer. After the re-open:
 - A document back at the text the first unsaved write was based on, reverted
   after the grace or by a restart, gets the last write again, based on the
   re-opened version. It is an ordinary write, so an edit that lands between
-  the re-open and the write makes it conflict.
+  the re-open and the write makes it conflict. It is marked `restore`, so the
+  server writes a model even over text that does not parse: the server took
+  that model over text that parsed, so it lacks nothing, while the text it
+  was based on may be lost with the restart.
 - Any other document was changed by another client, and nothing is written.
 
 Documents last written by one `updateDocuments` are written again by one, and

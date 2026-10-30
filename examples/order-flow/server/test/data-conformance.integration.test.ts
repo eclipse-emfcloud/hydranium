@@ -158,7 +158,13 @@ const domainFixture: LanguageFixture = {
       text: 'process Packing for Shipment {\n   task Label reads Shipment.tracking\n}\n'
    },
    // Renames the entity the dependent names, so every reference it makes breaks.
-   breakingEdit: 'entity Parcel {\n   tracking: ID\n   carrier: String\n}\n'
+   breakingEdit: 'entity Parcel {\n   tracking: ID\n   carrier: String\n}\n',
+   syntaxError: {
+      uri: uri('orders/conformance-syntax-error.domain'),
+      languageId: DOMAIN_LANGUAGE_ID,
+      // A field without its type: recovery keeps `tracking` and skips the rest.
+      text: 'entity Box {\n   tracking: ID\n   carrier:\n}\n'
+   }
 };
 
 /**
@@ -194,7 +200,13 @@ const processFixture: LanguageFixture = {
     * a project-tier entity there, so a head that resolves the folder's project
     * offers it and one that cannot answers nothing.
     */
-   referenceQuery: { type: 'ProcessModel', property: 'subject', expectCandidate: 'Order' }
+   referenceQuery: { type: 'ProcessModel', property: 'subject', expectCandidate: 'Order' },
+   syntaxError: {
+      uri: uri('orders/conformance-syntax-error.process'),
+      languageId: PROCESS_LANGUAGE_ID,
+      // An effect without its target.
+      text: 'process Boxing for Order {\n   task Pack reads\n}\n'
+   }
 };
 
 /**
@@ -231,6 +243,12 @@ const layoutFixture: LanguageFixture = {
       // and a Langium reference object in the AST — asserting on the string is
       // what pins that the transfer roots, not the AST ones, reached the client.
       expect: root => (root as LayoutModel).nodes?.some(node => node.flowNode === 'Restock') ?? false
+   },
+   syntaxError: {
+      uri: uri('orders/conformance-syntax-error.layout'),
+      languageId: LAYOUT_LANGUAGE_ID,
+      // A position without its x.
+      text: 'layout {\n   node Receive at , 40\n}\n'
    }
 };
 

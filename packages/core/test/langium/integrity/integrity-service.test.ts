@@ -912,6 +912,51 @@ describe('IntegrityService.enforceBatch', () => {
       expect(lines.some(line => /mutated=1/.test(line.message))).toBe(true);
    });
 
+   it('runs no rule on a document with lexer or parser errors, so a recovered AST is never written back', async () => {
+      const { logger } = makeCapturingLogger();
+      const probe = makeBatchProbe(logger);
+      const visited: string[] = [];
+      probe.register({
+         id: 'always',
+         nodeType: 'Foo',
+         phase: DocumentState.Parsed,
+         enforce: node => {
+            visited.push((node as FakeNode).id ?? '');
+            return true;
+         }
+      });
+      const { token } = makeCancelToken();
+      const withParseResult = (uri: string, parseResult: Partial<LangiumDocument['parseResult']>): LangiumDocument => {
+         const root = makeFakeAstNode<FakeNode>({ $type: 'Root' });
+         const node = makeFakeAstNode<FakeNode>({ $type: 'Foo', id: uri });
+         asMutable(node).$container = root;
+         root._children = [node];
+         return makeFakeDocument(uri, root, { parseResult });
+      };
+      const documents = [
+         withParseResult('file:///parser.fake', {
+            parserErrors: [{ message: 'Expecting token of type ID' }] as LangiumDocument['parseResult']['parserErrors']
+         }),
+         withParseResult('file:///lexer.fake', {
+            lexerReport: { diagnostics: [{ message: 'unexpected character', offset: 0, line: 1, column: 1, length: 1, severity: 'error' }] }
+         }),
+         withParseResult('file:///lexer-unrated.fake', {
+            lexerReport: { diagnostics: [{ message: 'unexpected character', offset: 0, line: 1, column: 1, length: 1 }] }
+         }),
+         withParseResult('file:///lexer-errors.fake', {
+            lexerErrors: [{ message: 'unexpected character', offset: 0, line: 1, column: 1, length: 1 }]
+         }),
+         withParseResult('file:///warning.fake', {
+            lexerReport: { diagnostics: [{ message: 'odd character', offset: 0, line: 1, column: 1, length: 1, severity: 'warning' }] }
+         })
+      ];
+
+      await probe.enforceBatch(documents, DocumentState.Parsed, token);
+
+      expect(visited).toEqual(['file:///warning.fake']);
+      expect(probe.resyncedUris).toEqual(['file:///warning.fake']);
+   });
+
    it('resyncs a mutated document before honouring a cancellation that arrived during its sweep', async () => {
       const { logger } = makeCapturingLogger();
       const probe = makeBatchProbe(logger);

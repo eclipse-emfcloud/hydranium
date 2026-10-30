@@ -14,10 +14,12 @@
  */
 export {
    DocumentNotOpenError,
+   DocumentSyntaxError,
    DuplicateClientIdError,
    ReservedClientIdError,
    SessionClosedError,
    isDocumentNotOpenError,
+   isDocumentSyntaxError,
    isDuplicateClientIdError,
    isReservedClientIdError,
    isSessionClosedError

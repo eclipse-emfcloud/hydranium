@@ -33,7 +33,8 @@ not left to DI construction order.
 What the framework's negative band holds is decided by a rule rather than by a
 list: a pass belongs in it when the rest of its phase reads what that pass
 produced. Integrity qualifies because it cleans the AST every derived-state
-pass then walks.
+pass then walks. It skips a document whose parse lacks some of its text, so
+passes see that AST unrepaired.
 
 The band is load-bearing: an adopter pass registered with no explicit priority
 is `0`, and adopter contributions register _before_ the framework's own passes
