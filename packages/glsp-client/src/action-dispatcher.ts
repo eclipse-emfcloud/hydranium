@@ -9,12 +9,16 @@
 
 import {
    type Action,
+   CenterCommand,
    CheckEdgeResultAction,
    ComputedBoundsAction,
+   FitToScreenCommand,
+   FocusStateChangedAction,
    GLSPActionDispatcher,
    GLSPModelSource,
    LocalComputedBoundsAction,
    MessageAction,
+   MoveCommand,
    Operation,
    RedoAction,
    RejectAction,
@@ -23,6 +27,7 @@ import {
    RequestCheckEdgeAction,
    RequestContextActions,
    RequestModelAction,
+   RequestPopupModelAction,
    RequestTypeHintsAction,
    ResponseAction,
    ServerAction,
@@ -30,7 +35,9 @@ import {
    SetEditModeAction,
    SetMarkersAction,
    SetModelAction,
+   SetPopupModelAction,
    SetTypeHintsAction,
+   SetViewportCommand,
    StatusAction,
    UndoAction,
    UpdateModelAction
@@ -142,6 +149,18 @@ export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
    protected readonly settleEditsMs: number = 30_000;
    /** The postponed actions a lifted block is dispatching a second time, counted when first sent. */
    protected redispatched: ReadonlySet<Action> | undefined;
+   /** The popup request whose answer may still show, until {@link trackPopupRequest} ends it. */
+   protected popupRequestId: string | undefined;
+   /** Starts the id given to a popup request, so only answers to those can be dropped as stale. */
+   protected readonly popupRequestPrefix: string = 'popup_';
+   /** What closes a shown popup in GLSP's hover module, so it ends a pending popup request too. */
+   protected readonly popupClosingKinds: ReadonlySet<string> = new Set([
+      FitToScreenCommand.KIND,
+      CenterCommand.KIND,
+      SetViewportCommand.KIND,
+      MoveCommand.KIND,
+      FocusStateChangedAction.KIND
+   ]);
 
    protected pairCounter = 0;
    /** Pending requests keyed by requestId (for actions that carry one). */
@@ -207,6 +226,7 @@ export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
    }
 
    override dispatch(action: Action): Promise<void> {
+      this.trackPopupRequest(action);
       if (this.loggedKinds.has(action.kind)) {
          this.logAction(action);
       }
@@ -222,9 +242,17 @@ export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
     * reject's message alone, so a caller could not read what failed. The
     * accompanying test pins GLSP's body, whose timeout and request handling
     * this repeats.
+    *
+    * It also drops an answer {@link isStalePopupAnswer} calls stale. The check
+    * sits here because GLSP clears the `responseId` of an answer nobody awaits
+    * before any hover class sees it.
     */
    protected override async handleResponseAction(action: ResponseAction): Promise<void> {
       const request = this.requests.get(action.responseId);
+      if (!request && this.isStalePopupAnswer(action)) {
+         this.logger.log(this, 'Dropping a popup answer to a request that was replaced or closed', action);
+         return;
+      }
       if (!request || !RejectAction.is(action) || action.detail === undefined) {
          return super.handleResponseAction(action);
       }
@@ -258,6 +286,45 @@ export class HydraniumGlspActionDispatcher extends GLSPActionDispatcher {
    /** Whether `action` changes the model on the server: an operation, an undo or a redo. Widen it for an edit kind of your own. */
    protected isEdit(action: Action): boolean {
       return Operation.is(action) || UndoAction.is(action) || RedoAction.is(action);
+   }
+
+   /**
+    * Whether `action` answers a popup request {@link trackPopupRequest} gave an
+    * id, once that request is no longer {@link popupRequestId}. GLSP's hover
+    * shows any answer, even one that comes after the pointer left, and the
+    * popup then stays open. Remove it once GLSP's hover pairs the answer
+    * itself. A test pins the hover, so a GLSP update that changes it fails.
+    */
+   protected isStalePopupAnswer(action: ResponseAction): boolean {
+      return (
+         SetPopupModelAction.is(action) &&
+         action.responseId.startsWith(this.popupRequestPrefix) &&
+         action.responseId !== this.popupRequestId
+      );
+   }
+
+   /**
+    * GLSP's hover sends a popup request without an id, and the server answers
+    * with one of its own that the client cannot match. So the id is given here,
+    * as `request` gives one, and the answer echoes it. A popup request replaces
+    * the one before, even one a `request` caller sends. A popup the client
+    * shows itself ends it, so a closed popup does: the close timer and Escape
+    * dispatch an empty popup, and GLSP's close handler does once one shows. An
+    * issue marker's popup ends it too, since it comes from the hover that would
+    * have sent the next request. The {@link popupClosingKinds} end it too,
+    * since they would have closed the popup had it shown, and its answer would
+    * show where the node no longer is.
+    */
+   protected trackPopupRequest(action: Action): void {
+      if (RequestPopupModelAction.is(action)) {
+         action.requestId ||= this.popupRequestPrefix + RequestAction.generateRequestId();
+         this.popupRequestId = action.requestId;
+      } else if ((SetPopupModelAction.is(action) && !action.responseId) || this.popupClosingKinds.has(action.kind)) {
+         // With a close delay longer than the open delay, the close of the node the pointer left ends
+         // the next node's request and drops its answer. Telling the two apart needs a rebound hover
+         // listener that tags its own close, a second seam to keep in step with GLSP's hover.
+         this.popupRequestId = undefined;
+      }
    }
 
    /**

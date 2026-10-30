@@ -11,31 +11,45 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import {
    type Action,
+   type GModelRootSchema,
    type RequestAction,
    type ResponseAction,
    CheckEdgeResultAction,
+   ClosePopupActionHandler,
    ComputedBoundsAction,
+   createDiagramOptionsModule,
    Deferred as GlspDeferred,
+   EMPTY_ROOT,
    GLSPActionDispatcher,
+   GlspHoverMouseListener,
+   HoverKeyListener,
+   HoverMouseListener,
+   initializeDiagramContainer,
    LogLevel,
    MessageAction,
+   PopupHoverMouseListener,
    RedoAction,
    RejectAction,
    RequestBoundsAction,
    RequestCheckEdgeAction,
    RequestContextActions,
    RequestModelAction,
+   RequestPopupModelAction,
    RequestTypeHintsAction,
    SetDirtyStateAction,
    SetEditModeAction,
    SetMarkersAction,
    SetModelAction,
+   SetPopupModelAction,
+   SetPopupModelCommand,
    SetTypeHintsAction,
    StatusAction,
+   TYPES,
    UndoAction
 } from '@eclipse-glsp/client';
 import { Deferred, EditsSettledAction, RequestEditsSettledAction, SaveFailedError, isSaveFailedError } from '@hydranium/protocol';
 import { makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
+import { Container } from 'inversify';
 import { HYDRANIUM_DEFAULT_KIND_PAIRS, HYDRANIUM_DEFAULT_LOGGED_KINDS, HydraniumGlspActionDispatcher } from '../src/action-dispatcher';
 
 // Test subclass exposes protected members for assertion + skips the inherited
@@ -611,6 +625,155 @@ describe('HydraniumGlspActionDispatcher rejected requests', () => {
       const { dispatcher, response } = dispatcherWithRequest();
       await dispatcher.respond(RejectAction.create('Failed to handle request', { responseId: 'save-1', detail: 'Error: plain failure' }));
       await expect(response).rejects.toThrow('Failed to handle request');
+   });
+});
+
+/** Runs what it dispatches through GLSP's routing at once, past the queue that waits for initialisation. */
+class PopupDispatcher extends AnsweringDispatcher {
+   route(action: Action): Promise<void> {
+      return this.handleAction(action);
+   }
+
+   exposePopupClosingKinds(): ReadonlySet<string> {
+      return this.popupClosingKinds;
+   }
+}
+
+describe('HydraniumGlspActionDispatcher popup answers', () => {
+   let dispatcher: PopupDispatcher;
+   /** The root id of each popup that reached the popup handlers, in order, `EMPTY` for a closed one. */
+   let shown: string[];
+
+   const popup = (id: string): GModelRootSchema => ({ type: 'html', id, children: [] });
+
+   /** Dispatch a popup request as GLSP's hover sends it, without an id, and return the id it went out with. */
+   async function requestPopup(): Promise<string> {
+      const request = RequestPopupModelAction.create({ elementId: 'one', bounds: { x: 0, y: 0, width: 0, height: 0 } });
+      await dispatcher.dispatch(request);
+      return request.requestId;
+   }
+
+   function answer(responseId: string, id: string): Promise<void> {
+      return dispatcher.dispatch(SetPopupModelAction.create(popup(id), { responseId }));
+   }
+
+   beforeEach(() => {
+      shown = [];
+      dispatcher = new PopupDispatcher();
+      dispatcher.setLogger({ trace: vi.fn() });
+      const handler = {
+         handle: (action: Action) => {
+            if (SetPopupModelAction.is(action)) {
+               shown.push(action.newRoot.id);
+            }
+         }
+      };
+      dispatcher.setActionHandlerRegistry({ get: () => [handler] });
+      vi.spyOn(GLSPActionDispatcher.prototype, 'dispatch').mockImplementation(function (this: PopupDispatcher, action: Action) {
+         return this.route(action);
+      });
+   });
+
+   afterEach(() => {
+      vi.restoreAllMocks();
+   });
+
+   it('shows the answer to the latest popup request', async () => {
+      const requestId = await requestPopup();
+      expect(requestId).not.toBe('');
+      await answer(requestId, 'answer');
+      expect(shown).toEqual(['answer']);
+   });
+
+   it('drops an answer that arrives after the popup was closed', async () => {
+      const requestId = await requestPopup();
+      await dispatcher.dispatch(SetPopupModelAction.create(EMPTY_ROOT));
+      await answer(requestId, 'late');
+      expect(shown).toEqual([EMPTY_ROOT.id]);
+   });
+
+   it.each([...new PopupDispatcher().exposePopupClosingKinds()])(
+      "drops an answer that arrives after a '%s', which would have closed a shown popup",
+      async kind => {
+         const requestId = await requestPopup();
+         await dispatcher.dispatch(asAction({ kind }));
+         await answer(requestId, 'late');
+         expect(shown).toEqual([]);
+      }
+   );
+
+   it('drops an answer that arrives after a popup the client built itself, such as an issue marker one', async () => {
+      const requestId = await requestPopup();
+      await dispatcher.dispatch(SetPopupModelAction.create(popup('marker')));
+      await answer(requestId, 'late');
+      expect(shown).toEqual(['marker']);
+   });
+
+   it('hands an empty answer to the latest popup request to the popup handlers', async () => {
+      const requestId = await requestPopup();
+      await dispatcher.dispatch(SetPopupModelAction.create(EMPTY_ROOT, { responseId: requestId }));
+      expect(shown).toEqual([EMPTY_ROOT.id]);
+   });
+
+   it('drops the answer to a request a newer one replaced and shows the newer one', async () => {
+      const older = await requestPopup();
+      const newer = await requestPopup();
+      await answer(older, 'older');
+      await answer(newer, 'newer');
+      expect(shown).toEqual(['newer']);
+   });
+
+   it('shows a popup answering a request the dispatcher gave no popup id', async () => {
+      await requestPopup();
+      await answer('client_7', 'other');
+      expect(shown).toEqual(['other']);
+   });
+
+   it('hands an awaited popup answer to its caller even when a newer request replaced it', async () => {
+      const older = await requestPopup();
+      const awaited = dispatcher.awaitResponse(older);
+      await requestPopup();
+      await answer(older, 'older');
+      await expect(awaited).resolves.toMatchObject({ newRoot: { id: 'older' } });
+      expect(shown).toEqual([]);
+   });
+});
+
+// GLSP's hover shows any popup answer, which the popup drop in
+// HydraniumGlspActionDispatcher works around. A GLSP release that changes the
+// hover may pair the answers itself, and the drop could then go.
+describe("GLSP's popup hover", () => {
+   it('still matches the hover the popup drop works around', () => {
+      const bodies = [
+         GlspHoverMouseListener.prototype['startMouseOverTimer'],
+         HoverMouseListener.prototype['startMouseOutTimer'],
+         HoverMouseListener.prototype.mouseOver,
+         HoverMouseListener.prototype.mouseOut,
+         HoverMouseListener.prototype.mouseMove,
+         HoverKeyListener.prototype.keyDown,
+         PopupHoverMouseListener.prototype.mouseOver,
+         PopupHoverMouseListener.prototype.mouseOut,
+         GlspHoverMouseListener.prototype.handle,
+         SetPopupModelCommand.prototype.execute,
+         ClosePopupActionHandler.prototype.handle
+      ].map(method => method.toString().replace(/\s+/g, ' ').trim());
+      expect(
+         createHash('sha256').update(bodies.join('\n')).digest('hex'),
+         "@eclipse-glsp/client changed its popup hover: check whether it pairs popup answers now, remove HydraniumGlspActionDispatcher's popup drop if so, and update this digest"
+      ).toBe('583c8b80060365b6abf088fa832004a82ffee1fdc2f213dafd5b92ce73cff85e');
+   });
+
+   it('closes a shown popup on the kinds that end a pending popup request', () => {
+      const container = initializeDiagramContainer(
+         new Container(),
+         createDiagramOptionsModule({ clientId: 'one', diagramType: 'diagram-one', glspClientProvider: async () => ({}) as never })
+      );
+      const closing = container
+         .getAll<{ actionKind: string; factory: () => unknown }>(TYPES.ActionHandlerRegistration)
+         .filter(registration => registration.factory() instanceof ClosePopupActionHandler)
+         .map(registration => registration.actionKind)
+         .filter(kind => kind !== SetPopupModelAction.KIND);
+      expect(new Set(closing)).toEqual(new PopupDispatcher().exposePopupClosingKinds());
    });
 });
 
