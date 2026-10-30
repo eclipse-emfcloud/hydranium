@@ -493,7 +493,7 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * Whether `node` belongs to the root its document is built to now, or to no
     * document; a root a rebuild replaced holds only stale nodes.
     */
-   protected isCurrentBuiltNode(node: AstNode): boolean {
+   isCurrentBuiltNode(node: AstNode): boolean {
       const root = AstUtils.findRootNode(node);
       const document = root.$document;
       return (

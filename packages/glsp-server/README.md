@@ -15,6 +15,8 @@ and writes their edits back to it. Install it in the server that composes
   You write the GModel factory and the operation handlers.
 - The language's diagnostics as markers on the diagram, when you bind
   `HydraniumGlspModelValidator` as the diagram's model validator.
+- The language's hover as a diagram node's popup, with nothing to bind:
+  hovering a node shows what an editor shows on the node's name.
 
 ## Install
 

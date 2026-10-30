@@ -20,6 +20,7 @@ import {
    OperationActionHandler,
    RequestMarkersHandler,
    RequestModelActionHandler,
+   RequestPopupModelActionHandler,
    SetEditModeActionHandler,
    UndoRedoActionHandler
 } from '@eclipse-glsp/server';
@@ -30,6 +31,7 @@ import { HydraniumGlspRequestSaveModelActionHandler } from '../storage/hydranium
 import { HydraniumGlspCommandStack } from '../command/hydranium-glsp-command-stack.js';
 import { HydraniumGlspOperationActionHandler } from '../command/hydranium-glsp-operation-action-handler.js';
 import { HydraniumGlspUndoRedoActionHandler } from '../command/hydranium-glsp-undo-redo-action-handler.js';
+import { HydraniumGlspRequestPopupModelActionHandler } from '../popup/hydranium-glsp-request-popup-model-action-handler.js';
 import { DefaultDiagramStatusReporter, DiagramStatusReporter } from '../status/diagram-status-reporter.js';
 import { HydraniumGlspRequestModelActionHandler } from '../status/hydranium-glsp-request-model-action-handler.js';
 import { HydraniumGlspSetEditModeActionHandler } from '../status/hydranium-glsp-set-edit-mode-action-handler.js';
@@ -37,8 +39,8 @@ import { HydraniumGlspRequestMarkersHandler } from '../validation/hydranium-glsp
 
 /**
  * GLSP {@link DiagramModule} base that wires the framework's diagram status,
- * dispatch timing, command stack, save, and transactional operation, undo and
- * redo handlers.
+ * dispatch timing, command stack, save, popup, and transactional operation,
+ * undo and redo handlers.
  *
  * A diagram module declares no grammar: a session's language is the one its
  * loaded document routes to, so one diagram type can serve several grammars.
@@ -98,7 +100,8 @@ export abstract class AbstractHydraniumGlspDiagramModule extends DiagramModule {
     * sends the live markers with it. Runs operations, undo and redo through
     * {@link HydraniumGlspOperationActionHandler} and
     * {@link HydraniumGlspUndoRedoActionHandler}, without which handlers edit
-    * the built root every reader shares.
+    * the built root every reader shares. Answers a hover with the language's
+    * hover through {@link HydraniumGlspRequestPopupModelActionHandler}.
     */
    protected override configureActionHandlers(binding: InstanceMultiBinding<ActionHandlerConstructor>): void {
       super.configureActionHandlers(binding);
@@ -109,5 +112,6 @@ export abstract class AbstractHydraniumGlspDiagramModule extends DiagramModule {
       binding.rebind(RequestMarkersHandler, HydraniumGlspRequestMarkersHandler);
       binding.rebind(OperationActionHandler, HydraniumGlspOperationActionHandler);
       binding.rebind(UndoRedoActionHandler, HydraniumGlspUndoRedoActionHandler);
+      binding.rebind(RequestPopupModelActionHandler, HydraniumGlspRequestPopupModelActionHandler);
    }
 }

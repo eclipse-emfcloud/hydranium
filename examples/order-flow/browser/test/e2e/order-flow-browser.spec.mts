@@ -1010,6 +1010,37 @@ test.describe('order-flow in a web worker', () => {
       await expect(hover).toContainText('id, status, total, shipTo, lines');
    });
 
+   test('hovering a diagram node shows the hover its name shows in the editor', async ({ page }) => {
+      await page.goto('/');
+      await expectFramedDiagram(page);
+      await expect
+         .poll(async () => (await tokenSpansOnLine(page, PROCESS_EDITOR, EFFECT_LINE)).map(span => span.text.trim()))
+         .toContain('Pay');
+      await page
+         .locator(`${PROCESS_EDITOR} .view-line`)
+         .filter({ hasText: EFFECT_LINE.trim() })
+         .locator('span[class^="mtk"]', { hasText: 'Pay' })
+         .first()
+         .hover();
+      const editorHover = page.locator('.monaco-hover').filter({ hasText: 'task Pay' });
+      await expect(editorHover).toHaveCount(1);
+      const editorText = (await editorHover.innerText()).trim();
+
+      await pointAt(page, 'Pay');
+
+      await expect(page.locator('.sprotty-popup')).toHaveText(editorText);
+
+      // After an edit the document holds a reparsed root, which the diagram has
+      // to pick up before its popup answers again.
+      await page.mouse.move(0, 0);
+      await requestCompletion(page, LITERAL_COLUMN);
+      await suggestions(page).filter({ hasText: 'SHIPPED' }).click();
+      await expect(nodeLocator('Pay')(page)).toContainText('SHIPPED');
+      await pointAt(page, 'Pay');
+
+      await expect(page.locator('.sprotty-popup')).toContainText('status=SHIPPED');
+   });
+
    test('Ctrl+click follows a cross-grammar reference to the document that declares it', async ({ page }) => {
       await page.goto('/');
 
