@@ -68,12 +68,6 @@ interface OrderFlowFixtures extends ServerLogFixtures {
    serverLogCapture: void;
 }
 
-/** The `Warn` lines every order-flow spec expects, by reason; a spec that expects more extends this. */
-export const ORDER_FLOW_SERVER_LOG_ALLOWLIST: Readonly<Record<string, RegExp>> = {
-   'GLSP warns on every hover when no popup is bound, and the example binds none':
-      /\[RequestPopupModelActionHandler\] Could not process `RequestPopupModelAction`\. No `PopupModelFactory` is bound/
-};
-
 /**
  * Use this in place of `@playwright/test`'s `test`.
  *
@@ -98,8 +92,7 @@ export const test = base.extend<OrderFlowFixtures>({
    serverLogWorkspace: async ({}, use) => {
       await use(activeWorkspacePath);
    },
-   serverLogClean: [true, { option: true }],
-   serverLogAllowlist: [ORDER_FLOW_SERVER_LOG_ALLOWLIST, { option: true }]
+   serverLogClean: [true, { option: true }]
 });
 
 /**

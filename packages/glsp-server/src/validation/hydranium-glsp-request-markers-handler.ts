@@ -25,10 +25,7 @@ import { injectable } from 'inversify';
  * from GLSP's handler. A validator that answers both reasons with the same
  * markers still lists each issue twice after Validate.
  *
- * `AbstractHydraniumGlspDiagramModule` registers it in place of GLSP's. A
- * diagram module that does not extend that base rebinds it in
- * `configureActionHandlers`. Without it Validate shows no markers and repairs
- * nothing.
+ * `AbstractHydraniumGlspDiagramModule` registers it in place of GLSP's.
  */
 @injectable()
 export class HydraniumGlspRequestMarkersHandler extends RequestMarkersHandler {

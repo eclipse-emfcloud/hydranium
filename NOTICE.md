@@ -12,8 +12,9 @@ orientation only.
 
 ## Runtime dependency licences
 
-The hard runtime closure is 50 packages: 40 MIT, 6 Apache-2.0, 3 ISC, 1
-BSD-3-Clause. It contains **no** GPL, AGPL, LGPL, SSPL or BUSL code.
+The hard runtime closure is 58 packages: 46 MIT, 6 Apache-2.0, 3 ISC, 1
+BSD-3-Clause, 1 BSD-2-Clause, 1 PSF-2.0. It contains **no** GPL, AGPL,
+LGPL, SSPL or BUSL code.
 
 ### Apache-2.0
 
@@ -43,14 +44,27 @@ so there is no notice text to propagate and this section is the disclosure.
   of contributors may be used to endorse products derived from this software
   without specific prior written permission.
 
+### BSD-2-Clause
+
+- `entities`, reached through `markdown-it` — Copyright (c) Felix Böhm.
+  Redistribution in binary form must reproduce the copyright notice, this list
+  of conditions and the disclaimer.
+
+### PSF-2.0
+
+- `argparse`, reached through `markdown-it` — Copyright (c) 2001-2019 Python
+  Software Foundation; All Rights Reserved. The licence requires keeping the
+  PSF licence agreement and this copyright notice with the software, which npm
+  satisfies by installing the package with its own `LICENSE` file.
+
 ### MIT and ISC
 
-The remaining 43 packages are MIT or ISC. Both require the copyright notice and
+The remaining 49 packages are MIT or ISC. Both require the copyright notice and
 permission notice to accompany the software, which npm satisfies by installing
 each package with its own `LICENSE` file. Notable direct dependencies:
 `langium`, `vscode-jsonrpc`, `vscode-languageserver`,
 `vscode-languageserver-protocol`, `vscode-uri`, `commander`, `@clack/prompts`,
-`ts-morph`, `fast-json-patch`.
+`ts-morph`, `fast-json-patch`, `markdown-it`.
 
 ## Vendored source
 
