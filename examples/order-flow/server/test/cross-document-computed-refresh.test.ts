@@ -47,7 +47,7 @@ import { URI } from '@hydranium/langium';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
-import { WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
+import { settleServer, WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
 
 /** What the cascade either refreshed or left behind, for one `refreshCrossDocumentComputedScopes` setting. */
 interface CascadeOutcome {
@@ -77,8 +77,9 @@ function taskNamed(model: ProcessModel, name: string): Task {
  */
 async function cascadeAfterDomainEdit(refreshCrossDocumentComputedScopes: boolean): Promise<CascadeOutcome> {
    const workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-cross-doc-refresh-' });
+   let shared: OrderFlowSharedServices | undefined;
    try {
-      const { shared } = createOrderFlowServices(
+      shared = createOrderFlowServices(
          { ...NodeFileSystem },
          {
             extraSharedModules: [
@@ -90,7 +91,7 @@ async function cascadeAfterDomainEdit(refreshCrossDocumentComputedScopes: boolea
                }
             ]
          }
-      );
+      ).shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
 
       const processUri = URI.file(workspace.resolve(WORKSPACE_FILES.fulfillmentProcess));
@@ -117,7 +118,13 @@ async function cascadeAfterDomainEdit(refreshCrossDocumentComputedScopes: boolea
       const pay = taskNamed(processDocument.parseResult.value as ProcessModel, 'Pay');
       return { projected: pay._writtenFields?.[0], linked: pay.effects[0].field.ref };
    } finally {
-      workspace.dispose();
+      try {
+         if (shared) {
+            await settleServer(shared);
+         }
+      } finally {
+         workspace.dispose();
+      }
    }
 }
 

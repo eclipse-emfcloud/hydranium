@@ -67,7 +67,7 @@ import { type DeepPartial, URI, type Module } from '@hydranium/langium';
 import type { Diagnostic } from 'vscode-languageserver';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
-import { WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
+import { settleServer, WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
 
 /**
  * Rebind `ModelService` with `allowReentrantBuilds`. This is the whole
@@ -85,13 +85,21 @@ function withReentrantBuilds(allowReentrantBuilds: boolean): Module<OrderFlowSha
 
 let workspace: ScratchWorkspace | undefined;
 let harness: LspHarness | undefined;
+let harnessShared: OrderFlowSharedServices | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    setWriteLockScope(nodeWriteLockScope);
    harness?.dispose();
    harness = undefined;
-   workspace?.dispose();
-   workspace = undefined;
+   try {
+      if (harnessShared) {
+         await settleServer(harnessShared);
+      }
+   } finally {
+      harnessShared = undefined;
+      workspace?.dispose();
+      workspace = undefined;
+   }
 });
 
 interface Booted {
@@ -113,6 +121,7 @@ async function boot(locked: boolean): Promise<Booted> {
    const booted = makeLspHarness({
       createServices: connection => {
          shared = createOrderFlowServices({ connection, ...NodeFileSystem }, { extraSharedModules: [withReentrantBuilds(!locked)] }).shared;
+         harnessShared = shared;
          return shared;
       }
    });

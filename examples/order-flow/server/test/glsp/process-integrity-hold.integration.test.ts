@@ -27,30 +27,29 @@ import 'reflect-metadata';
 import { ServerModule } from '@eclipse-glsp/server';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { DocumentState, URI } from '@hydranium/langium';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
-import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from '../order-flow-harness.js';
+import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
 
 let harness: GlspHarness<OrderFlowGlspState> | undefined;
-let scratch: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    harness?.dispose();
    harness = undefined;
-   scratch?.dispose();
+   await scratch?.dispose();
    scratch = undefined;
 });
 
 describe('order-flow .process integrity repair under an open diagram', () => {
    it('keeps the repair of an unsaved write in the store, not on disk, while only the diagram holds the document', async () => {
-      const { harness: services, workspace } = await makeScratchWorkspaceHarness();
-      scratch = workspace;
+      scratch = await makeScratchWorkspaceHarness();
+      const { harness: services, workspace } = scratch;
       const sourcePath = workspace.resolve(WORKSPACE_FILES.fulfillmentProcess);
       const uri = URI.file(sourcePath);
       const uriString = uri.toString();

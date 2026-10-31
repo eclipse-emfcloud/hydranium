@@ -33,20 +33,19 @@ import { waitFor } from '@hydranium/protocol/testing';
 import { DataServer, type DataServerOptions } from '@hydranium/data-server';
 import { RealpathDocumentUriPolicy, type ServerSharedServices } from '@hydranium/core';
 import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-server/testing';
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { DocumentState, URI } from '@hydranium/langium';
 import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DomainModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
 import { isProcessModel, isTask } from '@hydranium/example-order-flow-protocol';
-import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type OrderFlowHarness } from './order-flow-harness.js';
+import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type OrderFlowHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
 
 type OrderFlowTransfer = DomainModel | ProcessModel;
 
 const CLIENT_ID = 'data-server-test';
 const OTHER_ID = 'data-server-other';
 
-let workspace: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 let harness: DataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer> | undefined;
 
 interface DrivenHead {
@@ -77,7 +76,7 @@ class InspectingDataServer extends DataServer<OrderFlowTransfer> {
  * spellings by the target while it exists.
  */
 async function driveSymlinkedHead(): Promise<{ server: InspectingDataServer; link: string; target: string }> {
-   const scratch = await makeScratchWorkspaceHarness(
+   const symlinked = await makeScratchWorkspaceHarness(
       prepared => {
          prepared.write('linked.domain', 'entity Solo {\n   a : string\n}\n');
          symlinkSync(prepared.resolve('linked.domain'), prepared.resolve('link.domain'), 'file');
@@ -86,15 +85,15 @@ async function driveSymlinkedHead(): Promise<{ server: InspectingDataServer; lin
          extraSharedModules: [{ workspace: { DocumentUriPolicy: (shared: ServerSharedServices) => new RealpathDocumentUriPolicy(shared) } }]
       }
    );
-   workspace = scratch.workspace;
+   scratch = symlinked;
    const head = makeDataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer>({
-      server: channel => new InspectingDataServer(channel, scratch.harness.shared)
+      server: channel => new InspectingDataServer(channel, symlinked.harness.shared)
    });
    harness = head;
    if (!(head.server instanceof InspectingDataServer)) {
       throw new Error('not an InspectingDataServer');
    }
-   return { server: head.server, link: scratch.workspace.uri('link.domain'), target: scratch.workspace.uri('linked.domain') };
+   return { server: head.server, link: symlinked.workspace.uri('link.domain'), target: symlinked.workspace.uri('linked.domain') };
 }
 
 /** The clients `head`'s server, an {@link InspectingDataServer}, has watching `uri`. */
@@ -108,8 +107,8 @@ function watchersOf(head: DrivenHead, uri: string): string[] {
 
 /** Boot both languages over a scratch workspace, put a real DataServer on a duplex pair, and register the client's session on it. */
 async function driveDataHead(options?: DataServerOptions, Server: typeof DataServer<OrderFlowTransfer> = DataServer): Promise<DrivenHead> {
-   const { harness: services, workspace: scratch } = await makeScratchWorkspaceHarness();
-   workspace = scratch;
+   scratch = await makeScratchWorkspaceHarness();
+   const { harness: services, workspace } = scratch;
    harness = makeDataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer>({
       server: channel => new Server(channel, services.shared, options)
    });
@@ -117,18 +116,18 @@ async function driveDataHead(options?: DataServerOptions, Server: typeof DataSer
    await harness.proxy.createSession({ clientId: CLIENT_ID });
    return {
       harness,
-      uri: relativePath => scratch.uri(relativePath),
-      diskText: relativePath => readFileSync(scratch.resolve(relativePath), 'utf8'),
+      uri: relativePath => workspace.uri(relativePath),
+      diskText: relativePath => readFileSync(workspace.resolve(relativePath), 'utf8'),
       services
    };
 }
 
 describe('order-flow data head', () => {
-   afterEach(() => {
+   afterEach(async () => {
       harness?.dispose();
       harness = undefined;
-      workspace?.dispose();
-      workspace = undefined;
+      await scratch?.dispose();
+      scratch = undefined;
    });
 
    it('serves both grammars over one connection, each as its own transfer root', async () => {
@@ -384,7 +383,7 @@ describe('order-flow data head', () => {
    it('answers that a document exists for a watch of a file no build has loaded yet', async () => {
       const head = await driveDataHead();
       // Written behind the server's back, so no build has seen it.
-      writeFileSync(workspace!.resolve('unloaded.domain'), 'entity Late {\n   a : string\n}\n');
+      writeFileSync(scratch!.workspace.resolve('unloaded.domain'), 'entity Late {\n   a : string\n}\n');
       const uri = head.uri('unloaded.domain');
       expect(head.services.shared.model.ModelService.getDocument(uri)).toBeUndefined();
 
@@ -400,7 +399,7 @@ describe('order-flow data head', () => {
 
    it('answers that a document exists for a watch of a file whose load fails for another reason than its absence', async () => {
       const head = await driveDataHead();
-      writeFileSync(workspace!.resolve('unreadable.domain'), 'entity Late {\n   a : string\n}\n');
+      writeFileSync(scratch!.workspace.resolve('unreadable.domain'), 'entity Late {\n   a : string\n}\n');
       const uri = head.uri('unreadable.domain');
       const files = head.services.shared.workspace.FileSystemProvider;
       const readFile = files.readFile.bind(files);

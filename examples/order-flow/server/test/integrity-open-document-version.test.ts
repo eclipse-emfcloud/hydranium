@@ -55,8 +55,8 @@ function declarationNames(harness: ScratchOrderFlowHarness['harness'], uri: URI)
    return root !== undefined && isDomainModel(root) ? root.declarations.map(declaration => declaration.name) : [];
 }
 
-afterEach(() => {
-   scratch?.workspace.dispose();
+afterEach(async () => {
+   await scratch?.dispose();
    scratch = undefined;
 });
 

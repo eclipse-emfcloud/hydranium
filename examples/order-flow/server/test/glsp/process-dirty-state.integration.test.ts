@@ -17,7 +17,6 @@ import 'reflect-metadata';
 import { type Action, ChangeBoundsOperation, SaveModelAction, ServerModule, SetDirtyStateAction } from '@eclipse-glsp/server';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { URI } from '@hydranium/langium';
 import { waitFor } from '@hydranium/protocol/testing';
 import { readFileSync } from 'node:fs';
@@ -25,23 +24,28 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { type ProcessModel } from '../../src/language-server/ast.js';
-import { type OrderFlowHarness, WORKSPACE_FILES, makeScratchWorkspaceHarness } from '../order-flow-harness.js';
+import {
+   type OrderFlowHarness,
+   WORKSPACE_FILES,
+   makeScratchWorkspaceHarness,
+   type ScratchOrderFlowHarness
+} from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
 
 let diagram: GlspHarness<OrderFlowGlspState> | undefined;
-let scratch: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    diagram?.dispose();
    diagram = undefined;
-   scratch?.dispose();
+   await scratch?.dispose();
    scratch = undefined;
 });
 
 async function bootServices(): Promise<OrderFlowHarness> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness();
-   scratch = workspace;
+   scratch = await makeScratchWorkspaceHarness();
+   const services = scratch.harness;
    return services;
 }
 
@@ -54,7 +58,7 @@ async function openDiagram(services: OrderFlowHarness): Promise<GlspHarness<Orde
    });
    diagram = opened;
    await opened.start();
-   await opened.openDocument(scratch!.resolve(WORKSPACE_FILES.fulfillmentProcess));
+   await opened.openDocument(scratch!.workspace.resolve(WORKSPACE_FILES.fulfillmentProcess));
    return opened;
 }
 
@@ -69,7 +73,7 @@ function dirtyStates(harness: GlspHarness<OrderFlowGlspState>, from = 0): string
 describe('order-flow .process dirty state', () => {
    it('opens dirty on a document another client has edited and not saved', async () => {
       const services = await bootServices();
-      const processPath = scratch!.resolve(WORKSPACE_FILES.fulfillmentProcess);
+      const processPath = scratch!.workspace.resolve(WORKSPACE_FILES.fulfillmentProcess);
       const processUri = URI.file(processPath).toString();
       const form = services.shared.model.ModelService.createSession('form');
       await form.open(processUri);
@@ -84,7 +88,7 @@ describe('order-flow .process dirty state', () => {
 
    it('hears another client edit and save its document, with no operation of its own', async () => {
       const services = await bootServices();
-      const processPath = scratch!.resolve(WORKSPACE_FILES.fulfillmentProcess);
+      const processPath = scratch!.workspace.resolve(WORKSPACE_FILES.fulfillmentProcess);
       const processUri = URI.file(processPath).toString();
       const opened = await openDiagram(services);
       await waitFor(() => dirtyStates(opened).length > 0);
@@ -119,13 +123,15 @@ describe('order-flow .process dirty state', () => {
 
       await waitFor(() => dirtyStates(opened, before).includes('false save'));
       expect(
-         services.shared.workspace.TextDocuments.isDirty(URI.file(scratch!.resolve(WORKSPACE_FILES.fulfillmentDiagram)).toString())
+         services.shared.workspace.TextDocuments.isDirty(
+            URI.file(scratch!.workspace.resolve(WORKSPACE_FILES.fulfillmentDiagram)).toString()
+         )
       ).toBe(false);
    });
 
    it('answers its own save dirty when another client edits its document during that save', async () => {
       const services = await bootServices();
-      const processPath = scratch!.resolve(WORKSPACE_FILES.fulfillmentProcess);
+      const processPath = scratch!.workspace.resolve(WORKSPACE_FILES.fulfillmentProcess);
       const processUri = URI.file(processPath).toString();
       const opened = await openDiagram(services);
       const form = services.shared.model.ModelService.createSession('form');

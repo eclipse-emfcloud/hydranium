@@ -75,9 +75,9 @@ type Event = AstDocumentUpdatedEvent<AstNode>;
 let scratch: ScratchOrderFlowHarness | undefined;
 const disposables: { dispose(): void }[] = [];
 
-afterEach(() => {
+afterEach(async () => {
    disposables.splice(0).forEach(disposable => disposable.dispose());
-   scratch?.workspace.dispose();
+   await scratch?.dispose();
    scratch = undefined;
 });
 

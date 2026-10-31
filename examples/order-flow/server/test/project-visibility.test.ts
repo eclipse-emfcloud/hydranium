@@ -247,10 +247,10 @@ describe('order-flow project descriptors that do not lex', () => {
    }
 
    it('skips a descriptor whose lexer reports an error', async () => {
-      const { harness, workspace } = await makeScratchWorkspaceHarness(undefined, {
+      const { harness, dispose } = await makeScratchWorkspaceHarness(undefined, {
          extraLanguageModules: [{ parser: { Lexer: services => new DescriptorFlaggingLexer(services) } }]
       });
-      onTestFinished(() => workspace.dispose());
+      onTestFinished(() => dispose());
       const projects = harness.shared.workspace.ProjectManager;
 
       expect({ orders: projects.getProjectById('orders'), core: projects.getProjectById('commerce-core')?.id }).toEqual({
@@ -262,8 +262,8 @@ describe('order-flow project descriptors that do not lex', () => {
 
 describe('order-flow projects after a descriptor change', () => {
    it('takes effect in the build the edit starts', async () => {
-      const { harness, workspace } = await makeScratchWorkspaceHarness();
-      onTestFinished(() => workspace.dispose());
+      const { harness, workspace, dispose } = await makeScratchWorkspaceHarness();
+      onTestFinished(() => dispose());
       const projects = harness.shared.workspace.ProjectManager;
       const builder = harness.shared.workspace.DocumentBuilder;
       const ordersPath = workspace.resolve(WORKSPACE_FILES.ordersDomain);
@@ -286,8 +286,8 @@ describe('order-flow projects after a descriptor change', () => {
    });
 
    it('registers a descriptor created by an update in that update', async () => {
-      const { harness, workspace } = await makeScratchWorkspaceHarness();
-      onTestFinished(() => workspace.dispose());
+      const { harness, workspace, dispose } = await makeScratchWorkspaceHarness();
+      onTestFinished(() => dispose());
       const projects = harness.shared.workspace.ProjectManager;
       const refundsUri = URI.file(
          workspace.write('refunds/refunds.domain', 'project refunds requires commerce-core\n\nentity Refund {\n   amount: Money\n}\n')
@@ -361,7 +361,7 @@ describe('order-flow projects with a deferred member relink', () => {
    /** Drop `orders`' dependency, as a save does, and record each build's end. */
    async function dropDependency(options: DropOptions): Promise<DropResult> {
       const { deferMemberRelink } = options;
-      const { harness, workspace } = await makeScratchWorkspaceHarness(
+      const { harness, workspace, dispose } = await makeScratchWorkspaceHarness(
          scratch => scratch.write(REFUND, 'entity Refund {\n   amount: Money\n}\n'),
          {
             extraSharedModules: [
@@ -379,7 +379,7 @@ describe('order-flow projects with a deferred member relink', () => {
       }
       onTestFinished(async () => {
          await projects.memberRelinkSettled();
-         workspace.dispose();
+         await dispose();
       });
       const builder = harness.shared.workspace.DocumentBuilder;
       if (options.withoutValidation) {
@@ -434,6 +434,8 @@ describe('order-flow projects with a deferred member relink', () => {
          const linkedHeld = new Deferred<void>();
          const linkedGate = new Deferred<void>();
          const descriptorGate = new Deferred<void>();
+         // Runs before the earlier-registered teardown, so a failed assertion cannot hold the build, and the settle with it.
+         onTestFinished(() => [linkGate, linkedGate, descriptorGate].forEach(gate => gate.resolve()));
          let holdLink = true;
          let holdLinked = false;
          const linker = harness.domain.references.Linker;
@@ -530,7 +532,7 @@ describe('order-flow projects with a deferred member relink', () => {
    });
 
    it('relinks in the build of the change, once, a member that resolves only once the change adds the dependency', async () => {
-      const { harness, workspace } = await makeScratchWorkspaceHarness(
+      const { harness, workspace, dispose } = await makeScratchWorkspaceHarness(
          scratch => {
             scratch.write(REFUND, 'entity Refund {\n   amount: Money\n}\n');
             const ordersPath = scratch.resolve(WORKSPACE_FILES.ordersDomain);
@@ -553,7 +555,7 @@ describe('order-flow projects with a deferred member relink', () => {
       const projects = harness.shared.workspace.ProjectManager;
       onTestFinished(async () => {
          await projects.memberRelinkSettled();
-         workspace.dispose();
+         await dispose();
       });
       const builder = harness.shared.workspace.DocumentBuilder;
       const refundUri = URI.file(workspace.resolve(REFUND));

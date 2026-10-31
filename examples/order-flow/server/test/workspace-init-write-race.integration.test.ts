@@ -63,7 +63,7 @@ import { Deferred, DocumentState, URI } from '@hydranium/langium';
 import * as path from 'node:path';
 import { Diagnostic } from 'vscode-languageserver-protocol';
 import { describe, expect, it } from 'vitest';
-import { WORKSPACE_FILES, WORKSPACE_ROOT, makeServices } from './order-flow-harness.js';
+import { WORKSPACE_FILES, WORKSPACE_ROOT, makeServices, settleServer } from './order-flow-harness.js';
 
 /**
  * `orders.domain` with `Order.status` REMOVED, matching the edit the cross-head
@@ -137,8 +137,9 @@ const BARRIERS_BY_NAME = BARRIER_PHASES.map(barrier => [barrier.name, barrier] a
 describe.each(BARRIERS_BY_NAME)('a write that lands during workspace initialization and is cancelled at %s', (_name, { phase }) => {
    it('still validates cross-grammar dependents, and leaves the readiness gate resolvable', async () => {
       const workspace: ScratchWorkspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-init-race-' });
+      const harness = makeServices();
+      const releaseInit = new Deferred<void>();
       try {
-         const harness = makeServices();
          const documents = harness.shared.workspace.LangiumDocuments;
          const modelService = harness.shared.model.ModelService;
 
@@ -147,7 +148,6 @@ describe.each(BARRIERS_BY_NAME)('a write that lands during workspace initializat
          // the write's OWN build reaches `Linked` too, and blocking that one would
          // deadlock the test rather than measure it.
          const reachedBarrier = new Deferred<void>();
-         const releaseInit = new Deferred<void>();
          let barrierArmed = true;
          harness.shared.workspace.DocumentBuilder.onBuildPhase(phase, async () => {
             if (!barrierArmed) {
@@ -200,7 +200,13 @@ describe.each(BARRIERS_BY_NAME)('a write that lands during workspace initializat
             EXPECTED_DEPENDENT_ERROR
          );
       } finally {
-         workspace.dispose();
+         // A failed assertion before the release would otherwise hold the build, and the settle with it.
+         releaseInit.resolve();
+         try {
+            await settleServer(harness.shared);
+         } finally {
+            workspace.dispose();
+         }
       }
    }, 60_000);
 });

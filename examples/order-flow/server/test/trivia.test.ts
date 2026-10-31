@@ -1015,8 +1015,8 @@ describe('trivia preservation', () => {
       // The wiring, not the service: `modelToText` serializes the transfer model
       // and reattaches. Without it this file comes back with its explanatory
       // header gone and `task Pay writes …` split across two lines.
-      const { harness, workspace } = await makeScratchWorkspaceHarness();
-      onTestFinished(() => workspace.dispose());
+      const { harness, workspace, dispose } = await makeScratchWorkspaceHarness();
+      onTestFinished(() => dispose());
       const uri = workspace.uri('orders/fulfillment.process');
 
       const before = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri));
@@ -1037,10 +1037,10 @@ describe('trivia preservation', () => {
       // through a client session's `update` is what puts a built document on
       // the source side; every other rename case here parses its document from
       // a string and so cannot see the difference.
-      const { harness, workspace } = await makeScratchWorkspaceHarness(scratch =>
+      const { harness, workspace, dispose } = await makeScratchWorkspaceHarness(scratch =>
          scratch.write('orders/rename.process', ['process Renamable for Order {', '   // about Pay', '   task Pay', '}', ''].join('\n'))
       );
-      onTestFinished(() => workspace.dispose());
+      onTestFinished(() => dispose());
       const uri = workspace.uri('orders/rename.process');
 
       const before = harness.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri));
@@ -1056,8 +1056,8 @@ describe('trivia preservation', () => {
    });
 
    it('preserves comments when saving an existing file that has not been loaded', async () => {
-      const { harness, workspace } = await makeScratchWorkspaceHarness();
-      onTestFinished(() => workspace.dispose());
+      const { harness, workspace, dispose } = await makeScratchWorkspaceHarness();
+      onTestFinished(() => dispose());
       const source = '// cold file header\nprocess Cold for Order {\n   task Pay\n}\n\n';
       workspace.write('orders/cold.process', source);
       const uri = workspace.uri('orders/cold.process');
@@ -1074,13 +1074,13 @@ describe('trivia preservation', () => {
       // The sharpest path: a closed document repaired during an ordinary build,
       // persisted by the default `silent` sync mode with no user gesture. The
       // assertion is on the FILE, because that is where the loss lands.
-      const { harness, workspace } = await makeScratchWorkspaceHarness(scratch =>
+      const { harness, workspace, dispose } = await makeScratchWorkspaceHarness(scratch =>
          scratch.write(
             'orders/duplicated.process',
             ['// explains why this process exists', 'process Duplicated for Order {', '   task Pay', '   task Pay', '}', ''].join('\n')
          )
       );
-      onTestFinished(() => workspace.dispose());
+      onTestFinished(() => dispose());
 
       const onDisk = readFileSync(workspace.resolve('orders/duplicated.process'), 'utf8');
       // The repair ran — otherwise this test would pass without exercising it.

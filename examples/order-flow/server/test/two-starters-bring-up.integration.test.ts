@@ -20,23 +20,32 @@ import { DocumentState } from '@hydranium/langium';
 import { startSocketServer } from '@hydranium/core/node';
 import { makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { afterEach, describe, expect, it } from 'vitest';
-import { WORKSPACE_ROOT, makeServices } from './order-flow-harness.js';
+import { type OrderFlowHarness, WORKSPACE_ROOT, makeServices, settleServer } from './order-flow-harness.js';
 
 let workspace: ScratchWorkspace | undefined;
+let services: OrderFlowHarness | undefined;
 const closers: Array<() => void> = [];
 
-afterEach(() => {
+afterEach(async () => {
    for (const close of closers.splice(0)) {
       close();
    }
-   workspace?.dispose();
-   workspace = undefined;
+   try {
+      if (services) {
+         await settleServer(services.shared);
+      }
+   } finally {
+      services = undefined;
+      workspace?.dispose();
+      workspace = undefined;
+   }
 });
 
 describe('two socket starters without an LSP head', () => {
    it('bring the workspace up once and index every document', async () => {
       workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-two-starters-' });
-      const { shared } = makeServices();
+      services = makeServices();
+      const { shared } = services;
       const servers = ['one', 'two'].map(logTag =>
          startSocketServer({ shared, workspace: workspace?.root, port: 0, logTag }, () => ({ dispose: () => undefined }))
       );

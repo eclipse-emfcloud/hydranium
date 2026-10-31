@@ -46,8 +46,8 @@ import {
    WillSaveTextDocumentWaitUntilRequest
 } from 'vscode-languageserver-protocol';
 import type { DomainModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
-import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
-import { WORKSPACE_ROOT } from './order-flow-harness.js';
+import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
+import { settleServer, WORKSPACE_ROOT } from './order-flow-harness.js';
 
 const FILE = 'editor-save.domain';
 const CLEAN = `entity Solo {
@@ -69,9 +69,10 @@ type OrderFlowTransfer = DomainModel | ProcessModel;
 
 let workspace: ScratchWorkspace | undefined;
 let lsp: LspHarness | undefined;
+let lspShared: OrderFlowSharedServices | undefined;
 let dataHead: DataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer> | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    // A test that failed before releasing would leave every later write held.
    GatedFileSystemProvider.gate?.resolve();
    GatedFileSystemProvider.gate = undefined;
@@ -80,8 +81,15 @@ afterEach(() => {
    dataHead = undefined;
    lsp?.dispose();
    lsp = undefined;
-   workspace?.dispose();
-   workspace = undefined;
+   try {
+      if (lspShared) {
+         await settleServer(lspShared);
+      }
+   } finally {
+      lspShared = undefined;
+      workspace?.dispose();
+      workspace = undefined;
+   }
 });
 
 /**
@@ -129,6 +137,7 @@ async function boot(options: { editorText?: string; withForm?: boolean } = {}): 
    });
    const harness = makeLspHarness({ connection: wire, services: services.shared });
    lsp = harness;
+   lspShared = services.shared;
    const initialized = await harness.initialize({ workspaceFolders: [{ uri: workspace.uri(), name: 'order-flow' }] });
    const uri = workspace.uri(FILE);
    harness.openDocument(uri, options.editorText ?? CLEAN, 'order-flow-domain', 1);
@@ -386,6 +395,7 @@ describe('an editor save right after a keystroke', () => {
       );
       const harness = makeLspHarness({ connection: wire, services: services.shared });
       lsp = harness;
+      lspShared = services.shared;
       await harness.initialize({ workspaceFolders: [{ uri: workspace.uri(), name: 'order-flow' }] });
       const uri = workspace.uri(FILE);
       harness.openDocument(uri, CLEAN, 'order-flow-domain', 1);

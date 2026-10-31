@@ -81,6 +81,11 @@ export interface VersionSyncService {
     */
    registerDeferredBuilds(isDeferred: (uri: URI) => boolean): Disposable;
    /**
+    * Resolves once no {@link requestRecoveryBuild} request is pending,
+    * including those made while waiting.
+    */
+   recoveryBuildsSettled(): Promise<void>;
+   /**
     * Fires for every reconciled root. A cancel cannot skip it, unlike a
     * `Parsed` phase listener. It can fire inside a build's write lock, so a
     * listener that requests a build must not await it.
@@ -112,6 +117,8 @@ export class DefaultVersionSyncService implements VersionSyncService {
    protected readonly recordedEmitter = new Emitter<LangiumDocument>();
    protected readonly deferredBuildChecks = new Set<(uri: URI) => boolean>();
    protected readonly pendingBuilds = new Map<string, PendingRecoveryBuilds>();
+   /** The {@link runBuilds} loop of each entry in {@link pendingBuilds}. */
+   protected readonly buildRuns = new Set<Promise<void>>();
    /** Retries of each request after a failed build before it is rejected. */
    protected readonly maxBuildRetries: number = 1;
 
@@ -184,8 +191,16 @@ export class DefaultVersionSyncService implements VersionSyncService {
          }
          const entry: PendingRecoveryBuilds = { queued: [queued] };
          this.pendingBuilds.set(key, entry);
-         void this.runBuilds(key, uri, entry);
+         const run = this.runBuilds(key, uri, entry);
+         this.buildRuns.add(run);
+         void run.finally(() => this.buildRuns.delete(run));
       });
+   }
+
+   async recoveryBuildsSettled(): Promise<void> {
+      while (this.buildRuns.size > 0) {
+         await Promise.allSettled(this.buildRuns);
+      }
    }
 
    registerDeferredBuilds(isDeferred: (uri: URI) => boolean): Disposable {

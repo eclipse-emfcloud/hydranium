@@ -35,6 +35,7 @@ import {
    type OrderFlowServices,
    type OrderFlowSharedServices
 } from '../src/language-server/order-flow-module.js';
+import { settleServer } from './order-flow-harness.js';
 
 const PROCESS_URI = 'file:///edit-requests-push.process';
 const DOMAIN_URI = 'file:///edit-requests-push.domain';
@@ -67,15 +68,23 @@ const WRITTEN = `process Handling for Crate {
 const ANSWER_TIMEOUT_MS = 3_000;
 
 let transport: LspServerConnection | undefined;
+let transportShared: OrderFlowSharedServices | undefined;
 let workspace: ScratchWorkspace | undefined;
 let describeDocuments: () => string = () => 'no server';
 
-afterEach(() => {
+afterEach(async () => {
    transport?.dispose();
    transport = undefined;
    describeDocuments = () => 'no server';
-   workspace?.dispose();
-   workspace = undefined;
+   try {
+      if (transportShared) {
+         await settleServer(transportShared);
+      }
+   } finally {
+      transportShared = undefined;
+      workspace?.dispose();
+      workspace = undefined;
+   }
 });
 
 async function composeServer(
@@ -97,6 +106,7 @@ async function composeServer(
          : { connection: composed.serverConnection },
       options
    );
+   transportShared = services.shared;
    startLanguageServer(services.shared);
    describeDocuments = () => {
       const store = services.shared.workspace.TextDocuments;

@@ -35,17 +35,23 @@ import { Logger } from '@hydranium/protocol';
 import { ConfigurationRequest, DidChangeConfigurationNotification, RegistrationRequest } from 'vscode-languageserver';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DomainLanguageMetaData, ProcessLanguageMetaData } from '../src/language-server/generated/module.js';
-import { createOrderFlowServices, ORDER_FLOW_CONFIGURATION_ROOT, type OrderFlowOptions } from '../src/language-server/order-flow-module.js';
-import { WORKSPACE_ROOT } from './order-flow-harness.js';
+import {
+   createOrderFlowServices,
+   ORDER_FLOW_CONFIGURATION_ROOT,
+   type OrderFlowOptions,
+   type OrderFlowSharedServices
+} from '../src/language-server/order-flow-module.js';
+import { settleServer, WORKSPACE_ROOT } from './order-flow-harness.js';
 
 let harness: LspHarness | undefined;
 let workspace: ScratchWorkspace | undefined;
+let shared: OrderFlowSharedServices | undefined;
 
 /** Boot the LSP head over a scratch copy of the sample workspace, settled. */
 async function openWorkspace(options: OrderFlowOptions = {}): Promise<{ harness: LspHarness; uri: (relativePath: string) => string }> {
    workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-lsp-' });
    harness = makeLspHarness({
-      createServices: connection => createOrderFlowServices({ connection, ...NodeFileSystem }, options).shared
+      createServices: connection => (shared = createOrderFlowServices({ connection, ...NodeFileSystem }, options).shared)
    });
    await harness.initialize({ workspaceFolders: [{ uri: workspace.uri(), name: 'order-flow' }] });
    return { harness, uri: relativePath => workspace!.uri(relativePath) };
@@ -110,11 +116,18 @@ function decodeSemanticTokens(data: readonly number[]): DecodedToken[] {
 }
 
 describe('order-flow LSP head over the wire', () => {
-   afterEach(() => {
+   afterEach(async () => {
       harness?.dispose();
       harness = undefined;
-      workspace?.dispose();
-      workspace = undefined;
+      try {
+         if (shared) {
+            await settleServer(shared);
+         }
+      } finally {
+         shared = undefined;
+         workspace?.dispose();
+         workspace = undefined;
+      }
    });
 
    it('settles the workspace before initialize resolves', async () => {
@@ -266,8 +279,9 @@ describe('order-flow LSP head over the wire', () => {
          asked: string[];
       }> {
          const scratch = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-config-' });
+         let headShared: OrderFlowSharedServices | undefined;
          const head = makeLspHarness({
-            createServices: connection => createOrderFlowServices({ connection, ...NodeFileSystem }).shared
+            createServices: connection => (headShared = createOrderFlowServices({ connection, ...NodeFileSystem }).shared)
          });
          const registered: string[] = [];
          const asked: string[] = [];
@@ -285,7 +299,13 @@ describe('order-flow LSP head over the wire', () => {
             return { registered, asked };
          } finally {
             head.dispose();
-            scratch.dispose();
+            try {
+               if (headShared) {
+                  await settleServer(headShared);
+               }
+            } finally {
+               scratch.dispose();
+            }
          }
       }
 
@@ -306,7 +326,7 @@ describe('order-flow LSP head over the wire', () => {
       it('advertises the capability, because the slot is bound', async () => {
          workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-lsp-' });
          harness = makeLspHarness({
-            createServices: connection => createOrderFlowServices({ connection, ...NodeFileSystem }).shared
+            createServices: connection => (shared = createOrderFlowServices({ connection, ...NodeFileSystem }).shared)
          });
 
          const result = await harness.initialize({ workspaceFolders: [{ uri: workspace.uri(), name: 'order-flow' }] });

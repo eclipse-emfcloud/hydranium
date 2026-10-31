@@ -71,7 +71,7 @@ import { type OrderFlowGlspState } from '../src/glsp/order-flow-glsp-state.js';
 import { OrderFlowProcessDiagramModule } from '../src/glsp/order-flow-process-diagram-module.js';
 import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
 import type { DomainModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
-import { REBUILD_TIMEOUT_MS, WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
+import { REBUILD_TIMEOUT_MS, settleServer, WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
 
@@ -269,27 +269,27 @@ async function bootHeads(): Promise<Heads> {
 
 describe('order-flow cross-head coherence of the LSP, data and GLSP heads on one shared tree', () => {
    afterEach(async () => {
-      if (heads) {
-         // Quiesce before tearing the shared LSP wire down: a head's edit can
-         // leave a build settling to `Validated` after that head's own wait
-         // returned, and that build fires the diagnostics handler — a publish
-         // nobody awaited. Draining first is what keeps dispose from surfacing
-         // as "Connection is disposed".
-         const shared = heads.shared;
-         await shared.model.ModelService.waitForBuilderState(DocumentState.Validated);
-         await tick();
-         await tick();
-         heads.glsp.dispose();
-         heads.data.dispose();
-         heads.lsp.dispose();
-         // Closing a client can enqueue a last-close rebuild after dispose.
-         // Drain that second boundary before deleting the scratch workspace.
-         await shared.model.ModelService.waitForBuilderState(DocumentState.Validated);
-         await tick();
+      try {
+         if (heads) {
+            // Quiesce before tearing the shared LSP wire down: a head's edit can
+            // leave a build settling to `Validated` after that head's own wait
+            // returned, and that build fires the diagnostics handler — a publish
+            // nobody awaited. Draining first is what keeps dispose from surfacing
+            // as "Connection is disposed".
+            const shared = heads.shared;
+            await settleServer(shared);
+            heads.glsp.dispose();
+            heads.data.dispose();
+            heads.lsp.dispose();
+            // Closing a client can enqueue a last-close rebuild after dispose.
+            // Drain that second boundary before deleting the scratch workspace.
+            await settleServer(shared);
+         }
+      } finally {
          heads = undefined;
+         scratch?.dispose();
+         scratch = undefined;
       }
-      scratch?.dispose();
-      scratch = undefined;
    });
 
    it('crosses a data-head edit of .process to the GLSP head and re-diagnoses on the LSP head', async () => {

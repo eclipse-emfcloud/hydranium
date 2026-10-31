@@ -7,26 +7,25 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { URI } from '@hydranium/langium';
 import { readFileSync } from 'node:fs';
 import { DiagnosticSeverity } from 'vscode-languageserver';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OVERRIDDEN_LAYOUT_ENTRY } from '../src/messages/index.js';
-import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from './order-flow-harness.js';
+import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
 
-let scratch: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 
 /** Validate `fulfillment.layout` after appending `extra` entries to its body. */
 async function validateLayoutWith(
    extra: string[]
 ): Promise<{ text: string; diagnostics: { line: number; severity?: number; code?: unknown; message: unknown }[] }> {
-   const { harness, workspace } = await makeScratchWorkspaceHarness(prepared => {
+   scratch = await makeScratchWorkspaceHarness(prepared => {
       const path = prepared.resolve(WORKSPACE_FILES.fulfillmentDiagram);
       const body = extra.map(entry => `   ${entry}\n`).join('');
       prepared.write(WORKSPACE_FILES.fulfillmentDiagram, readFileSync(path, 'utf8').replace(/\n\}\s*$/, `\n${body}}\n`));
    });
-   scratch = workspace;
+   const { harness, workspace } = scratch;
    const document = await harness.shared.workspace.LangiumDocuments.getOrCreateDocument(
       URI.file(workspace.resolve(WORKSPACE_FILES.fulfillmentDiagram))
    );
@@ -43,8 +42,8 @@ async function validateLayoutWith(
 }
 
 describe('order-flow .layout validation', () => {
-   afterEach(() => {
-      scratch?.dispose();
+   afterEach(async () => {
+      await scratch?.dispose();
       scratch = undefined;
    });
 

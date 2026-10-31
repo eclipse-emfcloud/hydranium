@@ -74,7 +74,6 @@
 import type { LanguageFixture } from '@hydranium/conformance';
 import { type DataConformanceDriver, runDataConformance } from '@hydranium/conformance/vitest';
 import { RealpathDocumentUriPolicy, type ServerSharedServices } from '@hydranium/core';
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { REFERENCE_SERVER_PROTOCOL_METHODS, type ReferenceServerProtocol } from '@hydranium/protocol/data';
 import { DataServer } from '@hydranium/data-server';
 import { makeDataServerHarness } from '@hydranium/data-server/testing';
@@ -82,7 +81,7 @@ import { afterAll } from 'vitest';
 import { DomainLanguageMetaData, LayoutLanguageMetaData, ProcessLanguageMetaData } from '../src/language-server/generated/module.js';
 import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
 import type { OrderFlowOptions } from '../src/language-server/order-flow-module.js';
-import { makeScratchWorkspaceHarness, type OrderFlowHarness } from './order-flow-harness.js';
+import { makeScratchWorkspaceHarness, type OrderFlowHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
 
 /** The wire root type: one server, three grammars, so the root is a union. */
 type OrderFlowTransfer = DomainModel | LayoutModel | ProcessModel;
@@ -101,11 +100,11 @@ const PROCESS_LANGUAGE_ID = ProcessLanguageMetaData.languageId;
  * read by the fixture thunks below, so every check gets pristine input and at
  * most one temp directory is alive.
  */
-let workspace: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 
-afterAll(() => {
-   workspace?.dispose();
-   workspace = undefined;
+afterAll(async () => {
+   await scratch?.dispose();
+   scratch = undefined;
 });
 
 /**
@@ -118,10 +117,10 @@ afterAll(() => {
 const uri =
    (relativePath: string): (() => string) =>
    () => {
-      if (!workspace) {
+      if (!scratch) {
          throw new Error(`fixture URI for ${relativePath} read before connect booted a workspace`);
       }
-      return workspace.uri(relativePath);
+      return scratch.workspace.uri(relativePath);
    };
 
 /**
@@ -307,9 +306,9 @@ const policies: ReadonlyArray<{ readonly title: string; readonly options: OrderF
 for (const policy of policies) {
    runDataConformance<OrderFlowTransfer>({
       connect: async () => {
-         workspace?.dispose();
-         const { harness: services, workspace: fresh } = await makeScratchWorkspaceHarness(undefined, policy.options);
-         workspace = fresh;
+         await scratch?.dispose();
+         scratch = await makeScratchWorkspaceHarness(undefined, policy.options);
+         const services = scratch.harness;
          const driver = driveConnection(services);
          servicesOf.set(driver, services);
          return driver;

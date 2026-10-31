@@ -26,6 +26,7 @@ import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/tes
 import { NodeFileSystem } from '@hydranium/core/node';
 import type { AstNode, LangiumDocument } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
+import type { AsyncHarness } from '@hydranium/protocol/testing';
 import { copyFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
@@ -138,14 +139,63 @@ export async function makeWorkspaceHarness(): Promise<OrderFlowHarness> {
 /**
  * A booted harness together with the throwaway directory it runs over. Named
  * rather than inline because the two have a **coupled lifetime**: the caller
- * owns `workspace.dispose()`, and a test that destructures only `harness` leaks
+ * owns the awaited `dispose()`, which deletes the directory only once the
+ * server reads none of it, and a test that destructures only `harness` leaks
  * a temp directory per run. Holding it as one value is what makes that
  * obligation visible.
  */
-export interface ScratchOrderFlowHarness {
+export interface ScratchOrderFlowHarness extends AsyncHarness {
    readonly harness: OrderFlowHarness;
-   /** The scratch root the harness was initialized over; the caller disposes it. */
-   readonly workspace: ScratchWorkspace;
+   /** The scratch root the harness was initialized over. Only {@link dispose} deletes it. */
+   readonly workspace: Omit<ScratchWorkspace, 'dispose'>;
+   /**
+    * Wait for the server to {@link settleServer settle}, then delete the scratch
+    * root. `settle: false` is for a test that leaves a write deadlocked on
+    * purpose: the settle would only wait out its bound, and a deadlocked write
+    * reads no file.
+    */
+   dispose(options?: { settle?: boolean }): Promise<void>;
+}
+
+/**
+ * Resolve once the server reads no file for work a test started: no debounced
+ * change, release or recovery build is pending and no build runs. Repeats
+ * while a pass saw a build or release start, since each can start the others.
+ *
+ * Gives up after `timeoutMs` without throwing, so a write a failed test left
+ * stuck still lets the teardown delete and the test report its own error.
+ */
+export async function settleServer(shared: OrderFlowSharedServices, timeoutMs = 5_000): Promise<void> {
+   const workspace = shared.workspace;
+   let started = 0;
+   const start = (): void => {
+      started++;
+   };
+   const builds = workspace.DocumentBuilder.onUpdate(start);
+   const releases = workspace.TextDocuments.onDidReleaseDocument(start);
+   const settle = async (): Promise<void> => {
+      for (let seen = -1; seen !== started;) {
+         seen = started;
+         shared.lsp.DocumentUpdateHandler.flushPending();
+         // The initialization holds the lock write it queues, so this read waits for it.
+         await workspace.TextDocuments.releasesSettled();
+         await workspace.VersionSyncService.recoveryBuildsSettled();
+         await workspace.WorkspaceLock.read(() => undefined);
+      }
+   };
+   let timer: ReturnType<typeof setTimeout> | undefined;
+   const expired = new Promise<'expired'>(resolve => {
+      timer = setTimeout(() => resolve('expired'), timeoutMs);
+   });
+   try {
+      if ((await Promise.race([settle(), expired])) === 'expired') {
+         process.stderr.write(`[order-flow] the server did not settle within ${timeoutMs} ms\n`);
+      }
+   } finally {
+      clearTimeout(timer);
+      builds.dispose();
+      releases.dispose();
+   }
 }
 
 /**
@@ -155,9 +205,9 @@ export interface ScratchOrderFlowHarness {
  * {@link makeWorkspaceHarness} — the framework helper's own docs carry the
  * reason (a rebuild runs the integrity rules, whose default silent mode
  * persists repairs to every file no client holds, so a write test aimed at the
- * committed workspace rewrites it). This wrapper exists only to bind the seed
- * and boot the languages over the result; the caller must `dispose()` the
- * workspace.
+ * committed workspace rewrites it). This wrapper binds the seed, boots the
+ * languages over the result, and settles the server before deleting the copy.
+ * The caller must await the returned `dispose()`.
  *
  * `prepare` runs against the copy BEFORE the workspace is initialized, which is
  * the only point at which a test can author content the initial build then sees.
@@ -172,7 +222,20 @@ export async function makeScratchWorkspaceHarness(
 ): Promise<ScratchOrderFlowHarness> {
    const workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-workspace-' });
    prepare?.(workspace);
-   return { harness: await makeHarnessOver(workspace.root, options), workspace };
+   const harness = await makeHarnessOver(workspace.root, options);
+   return {
+      harness,
+      workspace,
+      async dispose({ settle = true } = {}) {
+         try {
+            if (settle) {
+               await settleServer(harness.shared);
+            }
+         } finally {
+            workspace.dispose();
+         }
+      }
+   };
 }
 
 /** URI of a workspace file, given its path relative to the workspace root. */
@@ -220,11 +283,12 @@ export async function loadFixture<TRoot extends AstNode>(harness: OrderFlowHarne
    // unconditionally would trade a disk leak for a harder diagnosis. The path
    // goes to stderr because vitest drops `console` output written from a
    // continuation that runs after the test body.
-   onTestFinished(context => {
+   onTestFinished(async context => {
       if (context.task.result?.state === 'fail') {
          process.stderr.write(`[order-flow] kept the repaired fixture copy at ${scratch}\n`);
          return;
       }
+      await settleServer(harness.shared);
       rmSync(scratch, { recursive: true, force: true });
    });
    const copy = path.join(scratch, fileName);

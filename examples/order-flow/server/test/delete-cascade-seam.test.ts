@@ -36,7 +36,7 @@ import { URI } from '@hydranium/langium';
 import { rmSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
-import { WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
+import { settleServer, WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
 
 /** The document the deleted directory does not contain, standing in for an adopter's out-of-tree descriptor. */
 const OUTSIDE_DOCUMENT = WORKSPACE_FILES.commerceCoreInternal;
@@ -63,8 +63,9 @@ class OutOfTreeCascadeBuilder extends HydraniumDocumentBuilder {
 describe('order-flow delete cascade through the collectDeletedURIs seam', () => {
    it('honours a URI the override adds from outside the deleted directory', async () => {
       const workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-delete-cascade-' });
+      let shared: OrderFlowSharedServices | undefined;
       try {
-         const { shared } = createOrderFlowServices(
+         shared = createOrderFlowServices(
             { ...NodeFileSystem },
             {
                extraSharedModules: [
@@ -75,7 +76,7 @@ describe('order-flow delete cascade through the collectDeletedURIs seam', () => 
                   }
                ]
             }
-         );
+         ).shared;
          await initializeWorkspaceProgrammatically(shared, workspace.root);
 
          const documents = shared.workspace.LangiumDocuments;
@@ -102,7 +103,13 @@ describe('order-flow delete cascade through the collectDeletedURIs seam', () => 
          // show the override widened the cascade rather than replacing it.
          expect(documents.getDocument(insideUri)).toBeUndefined();
       } finally {
-         workspace.dispose();
+         try {
+            if (shared) {
+               await settleServer(shared);
+            }
+         } finally {
+            workspace.dispose();
+         }
       }
    });
 });
