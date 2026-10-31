@@ -10,6 +10,7 @@
 import { DiagramLoader } from '@eclipse-glsp/client';
 import { type GLSPDiagramWidget } from '@eclipse-glsp/theia-integration/lib/browser';
 import { type GLSPDiagramLanguage } from '@eclipse-glsp/theia-integration/lib/common';
+import { captureUnhandledRejections } from '@hydranium/protocol/testing/node';
 import { HydraniumDiagramLoader } from '@hydranium/glsp-client';
 import { type WidgetOpenerOptions } from '@theia/core/lib/browser';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -231,6 +232,31 @@ describe('AbstractHydraniumGlspDiagramManager.reopen', () => {
       ]);
    });
 
+   it('resumes the caller of a reopen before the next reopen starts', async () => {
+      const log: string[] = [];
+      const second = new HydraniumGlspDiagramWidget();
+      Object.defineProperties(second, {
+         title: { value: title('second') },
+         uri: { value: 'file:///orders/returns.process' },
+         options: { value: { editMode: 'editable' } }
+      });
+      Object.assign(manager, {
+         open: async (uri: string) => {
+            log.push(`open ${uri}`);
+         }
+      });
+      placeIn([widget.title, second.title]);
+
+      const first = (async () => {
+         await manager.reopen(widget);
+         log.push('first caller resumed');
+      })();
+      await manager.reopen(second);
+      await first;
+
+      expect(log).toEqual(['open file:///orders/fulfillment.process', 'first caller resumed', 'open file:///orders/returns.process']);
+   });
+
    /** A Retry can land while a batch still holds the same diagram. */
    it('skips a diagram that a queued reopen already replaced', async () => {
       let disposed = false;
@@ -249,6 +275,24 @@ describe('AbstractHydraniumGlspDiagramManager.reopen', () => {
       await manager.reopen(widget);
 
       expect(manager.opened[0].options?.widgetOptions).toBeUndefined();
+   });
+
+   it('reports a failed reopen that its caller dropped', async () => {
+      const failure = new Error('open failed');
+      Object.assign(manager, {
+         open: async () => {
+            throw failure;
+         }
+      });
+      placeIn([widget.title]);
+
+      const unhandled = await captureUnhandledRejections(async rejections => {
+         void manager.reopen(widget);
+         await vi.waitFor(() => expect(rejections).toHaveLength(1));
+         return rejections;
+      });
+
+      expect(unhandled).toEqual([failure]);
    });
 });
 

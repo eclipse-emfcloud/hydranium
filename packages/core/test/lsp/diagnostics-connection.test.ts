@@ -15,7 +15,7 @@ import type { Connection } from 'vscode-languageserver';
 import { createConnection, ProposedFeatures } from 'vscode-languageserver/node';
 import { withHydraniumLspFeatures } from '../../src/lsp/connection-features.js';
 import { guardDiagnosticsConnection } from '../../src/lsp/diagnostics-connection.js';
-import { captureUnhandledRejections } from '../../src/testing/node/unhandled-rejections.js';
+import { captureUnhandledRejections } from '@hydranium/protocol/testing/node';
 
 function makeConnection(sendDiagnostics: Connection['sendDiagnostics']): Connection {
    return { sendDiagnostics } as unknown as Connection;

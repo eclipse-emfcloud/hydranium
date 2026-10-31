@@ -55,6 +55,8 @@ export class DefaultFileSystemTaskQueue implements FileSystemTaskQueue {
    enqueue<T>(uri: string, task: () => Promise<T>): Promise<T> {
       const key = this.uriPolicy.canonicalUri(uri);
       const result = (this.queues.get(key) ?? Promise.resolve()).then(task);
+      // Derived, so a dropped failure is reported, and before `settled`, so the caller resumes before the next task starts.
+      const handed = result.then(value => value);
       const settled = result.then(
          () => undefined,
          () => undefined
@@ -65,7 +67,7 @@ export class DefaultFileSystemTaskQueue implements FileSystemTaskQueue {
             this.queues.delete(key);
          }
       });
-      return result;
+      return handed;
    }
 
    isIdle(uri: string): boolean {
