@@ -89,6 +89,8 @@ export interface StubDocumentBuilder
          | 'finalBuildState'
          | 'onBuildEnded'
          | 'isInsideBuildUpdate'
+         | 'overlapsRunningBuild'
+         | 'shouldRelink'
          | 'activeBuild'
          | 'markNextReason'
          | 'shouldValidateDocument'
@@ -193,6 +195,9 @@ export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocu
       shouldValidateDocument: () => Boolean(stub.updateBuildOptions.validation),
       // The stub never runs a build of its own.
       isInsideBuildUpdate: () => false,
+      overlapsRunningBuild: () => false,
+      // It builds no document, so a change relinks none.
+      shouldRelink: () => false,
       activeBuild: undefined,
       markNextReason: () => undefined,
       get updateCalls() {
