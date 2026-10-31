@@ -18,6 +18,7 @@ import {
    asModelVersion,
    ConflictError,
    type ConflictResolver,
+   isConflictError,
    isDocumentSyntaxError,
    type ModelVersion,
    type ReconcileOutcome,
@@ -29,6 +30,8 @@ import { ReconcilingTransferHydraniumGlspState } from '../src/state/reconciling-
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { HydraniumGlspOperationCommand, runOperation, takeUndoRedoTally } from '../src/command/hydranium-glsp-operation-command.js';
 import { HydraniumGlspRecordingCommand } from '../src/command/hydranium-glsp-recording-command.js';
+import { isDiagramTextUnreadableError, isDiagramWriteRanOutError } from '../src/command/diagram-edit-dropped-error.js';
+import { DIAGRAM_EDIT_RAN_OUT, DIAGRAM_EDIT_UNREADABLE } from '../src/state/reconcile-source-model-write.js';
 
 interface TestRoot extends AstNode {
    readonly $type: 'TestRoot';
@@ -70,6 +73,12 @@ interface UpdateCall {
    model: TestSourceModel;
    clientId: string;
    baseVersion: BaseVersion;
+}
+
+/** The members of the state's services a test swaps out. */
+interface StateServices {
+   model: { ModelService: { validated: () => Promise<unknown> } };
+   workspace: { TextDocuments: { get: (uri: string) => unknown } };
 }
 
 interface Harness {
@@ -152,6 +161,7 @@ function createState(harness: Harness, stateClass: new () => TestReconcilingStat
       }
    };
    const sharedServices = {
+      MessageRenderer: { renderMessage: (message: { text: string }) => message.text },
       // `ServiceRegistry` is a required slot on a real shared tree, and the
       // state resolves per-target languages through it.
       ServiceRegistry: makeStubServiceRegistry([{ languageId: 'test', fileExtensions: ['.a'] }]),
@@ -358,33 +368,42 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          expect(harness.updateCalls.map(call => call.baseVersion)).toEqual([5, 9]);
       });
 
-      it('drops the edit with a warning once the merged writes keep conflicting', async () => {
+      it('fails the edit as run out, carrying the last conflict, once the merged writes keep conflicting', async () => {
          const harness = makeHarness();
          harness.alwaysConflict = true;
          harness.resolve = async (_base, ours, refetch) => {
             await refetch();
             return { status: 'merged', merged: ours };
          };
-         const refreshed = makeRoot('refreshed');
-         harness.documents.set('file:///a.a', {
-            uri: { toString: () => 'file:///a.a' },
-            state: DocumentState.Validated,
-            parseResult: { value: refreshed },
-            textDocument: { version: 2, getText: () => 'stored' }
-         });
          const state = createState(harness);
-         state.setSourceRoot('file:///a.a', makeRoot('before'));
+         const before = makeRoot('before');
+         state.setSourceRoot('file:///a.a', before);
 
-         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(1));
+         const failure = await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(1)).then(
+            () => undefined,
+            (error: unknown) => error
+         );
 
-         expect(harness.updateCalls).toHaveLength(3);
-         expect(state.sourceRoot).toBe(refreshed);
-         expect(harness.warns.filter(msg => msg.includes('still conflicting'))).toEqual([
-            'updateSourceModel still conflicting after 3 writes (model v1 / text v2); dropping the diagram edit'
-         ]);
+         expect({
+            ranOut: isDiagramWriteRanOutError(failure),
+            conflict: isConflictError(failure),
+            message: failure instanceof Error ? failure.message : undefined,
+            versions: isDiagramWriteRanOutError(failure) ? [failure.conflict.baseVersion, failure.conflict.actualVersion] : undefined,
+            writes: harness.updateCalls.length,
+            sourceRootKept: state.sourceRoot === before,
+            warns: harness.warns
+         }).toEqual({
+            ranOut: true,
+            conflict: false,
+            message: DIAGRAM_EDIT_RAN_OUT.text,
+            versions: [1, 2],
+            writes: 3,
+            sourceRootKept: true,
+            warns: []
+         });
       });
 
-      it('drops the edit after as many writes as the subclass allows', async () => {
+      it('fails the edit as run out after as many writes as the subclass allows', async () => {
          const harness = makeHarness();
          harness.alwaysConflict = true;
          harness.resolve = async (_base, ours, refetch) => {
@@ -394,10 +413,12 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          const state = createState(harness, SingleWriteState);
          state.setSourceRoot('file:///a.a', makeRoot('before'));
 
-         await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(1));
+         const failure = await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(1)).then(
+            () => undefined,
+            (error: unknown) => error
+         );
 
-         expect(harness.updateCalls).toHaveLength(1);
-         expect(harness.warns.filter(msg => msg.includes('still conflicting after 1 write '))).toHaveLength(1);
+         expect({ ranOut: isDiagramWriteRanOutError(failure), writes: harness.updateCalls.length }).toEqual({ ranOut: true, writes: 1 });
       });
 
       it('on a no-op outcome, does not persist again and leaves the source root', async () => {
@@ -459,7 +480,7 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          expect(harness.warns.some(msg => msg.includes('conflict'))).toBe(true);
       });
 
-      it('on an unavailable outcome, writes nothing more and throws the conflict, leaving the log to whoever ends it', async () => {
+      it('on an unavailable outcome, writes nothing more and fails as unreadable, carrying the conflict and leaving the log to whoever ends it', async () => {
          const harness = makeHarness();
          harness.throwConflictOnNextUpdate = true;
          harness.resolve = async () => ({ status: 'unavailable' });
@@ -467,13 +488,28 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          const before = makeRoot('before');
          state.setSourceRoot('file:///a.a', before);
 
-         await expect(state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(5))).rejects.toBeInstanceOf(
-            ConflictError
+         const failure = await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(5)).then(
+            () => undefined,
+            (error: unknown) => error
          );
 
-         expect(harness.updateCalls).toHaveLength(1);
-         expect(state.sourceRoot).toBe(before);
-         expect(harness.warns).toEqual([]);
+         expect({
+            unreadable: isDiagramTextUnreadableError(failure),
+            conflict: isConflictError(failure),
+            message: failure instanceof Error ? failure.message : undefined,
+            carried: isDiagramTextUnreadableError(failure) && isConflictError(failure.conflict),
+            writes: harness.updateCalls.length,
+            sourceRootKept: state.sourceRoot === before,
+            warns: harness.warns
+         }).toEqual({
+            unreadable: true,
+            conflict: false,
+            message: DIAGRAM_EDIT_UNREADABLE.text,
+            carried: true,
+            writes: 1,
+            sourceRootKept: true,
+            warns: []
+         });
       });
 
       it('re-throws a non-conflict error from persist', async () => {
@@ -512,6 +548,46 @@ describe('ReconcilingTransferHydraniumGlspState', () => {
          expect(seenBase).toEqual({ $type: 'TestRoot', label: 'base-label' });
          expect(seenRefetch).toEqual({ $type: 'TestRoot', label: 'server-current' });
       });
+
+      it.each([
+         [
+            'its build failed',
+            'build failed',
+            (services: StateServices): void => {
+               services.model.ModelService.validated = () => Promise.reject(new Error('build failed'));
+            }
+         ],
+         [
+            'no text is found for it',
+            'no text',
+            (services: StateServices): void => {
+               services.workspace.TextDocuments.get = () => undefined;
+            }
+         ]
+      ])(
+         'warns why the current text cannot be read, as %s, when the refetch of a conflicted write reads nothing',
+         async (_why, reason, unread) => {
+            const harness = makeHarness();
+            harness.throwConflictOnNextUpdate = true;
+            harness.resolve = async (_base, ours, refetch) =>
+               (await refetch()) ? { status: 'merged', merged: ours } : { status: 'unavailable' };
+            const state = createState(harness);
+            state.setSourceRoot('file:///a.a', makeRoot('base-label'));
+            unread((state as unknown as { sharedServices: StateServices }).sharedServices);
+
+            const failure = await state.updateSourceModel({ $type: 'TestRoot', label: 'edited' }, asModelVersion(5)).then(
+               () => undefined,
+               (error: unknown) => error
+            );
+
+            expect({ unreadable: isDiagramTextUnreadableError(failure), warns: harness.warns.length }).toEqual({
+               unreadable: true,
+               warns: 1
+            });
+            expect(harness.warns[0]).toContain('file:///a.a');
+            expect(harness.warns[0]).toContain(reason);
+         }
+      );
 
       it('refuses the write as a syntax error when the stored text the refetch reads does not parse', async () => {
          const harness = makeHarness();

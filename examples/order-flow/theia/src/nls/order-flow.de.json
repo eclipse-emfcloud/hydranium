@@ -43,6 +43,7 @@
       "disconnected": "Die Verbindung zum Datenserver wurde geschlossen. Öffnen Sie den Bereich erneut, um sich wieder zu verbinden.",
       "write-merged": "Gespeichert. Jemand anderes hatte ein anderes Feld bearbeitet; beide Änderungen wurden übernommen.",
       "write-conflict": "Nicht gespeichert — jemand anderes hat dieses Feld zuerst geändert. Angezeigt wird dessen Wert.",
+      "write-ran-out": "Nicht gespeichert — das Dokument hat sich beim Schreiben ständig geändert. Versuchen Sie es erneut.",
       "write-unavailable": "Nicht gespeichert — das Dokument konnte nicht erneut gelesen werden, um den Konflikt aufzulösen."
     }
   }

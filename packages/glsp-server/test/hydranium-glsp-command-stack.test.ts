@@ -15,6 +15,7 @@ import { type Command, CompoundCommand, DefaultCommandStack, Logger as GlspLogge
 import { ConflictError, DocumentSyntaxError, asModelVersion } from '@hydranium/protocol';
 import type { ServerSharedServices } from '@hydranium/core';
 import { makeNoopSharedServices } from '@hydranium/core/testing';
+import { DiagramTextUnreadableError, DiagramWriteRanOutError } from '../src/command/diagram-edit-dropped-error.js';
 import { HydraniumGlspCommandStack } from '../src/command/hydranium-glsp-command-stack.js';
 import { HydraniumGlspOperationCommand } from '../src/command/hydranium-glsp-operation-command.js';
 import { HydraniumGlspRecordingCommand } from '../src/command/hydranium-glsp-recording-command.js';
@@ -60,6 +61,9 @@ function operationFailingWith(fail: () => Promise<void>): HydraniumGlspOperation
 
 const refused = (): Promise<void> => Promise.reject(new DocumentSyntaxError(OWN));
 const conflicted = (): Promise<void> => Promise.reject(new ConflictError(OWN, asModelVersion(1), 2));
+const ranOut = (): DiagramWriteRanOutError => new DiagramWriteRanOutError('ran out', new ConflictError(OWN, asModelVersion(1), 2));
+const unreadable = (): DiagramTextUnreadableError =>
+   new DiagramTextUnreadableError('unreadable', new ConflictError(OWN, asModelVersion(1), 2));
 
 describe('HydraniumGlspCommandStack', () => {
    it('is dirty when any document the diagram has open is, the secondaries included', () => {
@@ -99,6 +103,38 @@ describe('HydraniumGlspCommandStack', () => {
 
       expect(stack.canUndo()).toBe(false);
       expect(errors).toEqual([]);
+   });
+
+   it.each([
+      ['a syntax error', (): unknown => new DocumentSyntaxError(OWN)],
+      ['a conflict', (): unknown => new ConflictError(OWN, asModelVersion(1), 2)],
+      ['its writes running out', ranOut],
+      ['the text not being readable', unreadable]
+   ])(
+      'keeps the history when a recording command executed on its own is refused for %s, as its operation rolled it back',
+      async (_why, make) => {
+         const stack = makeStack({}, new Set());
+         await stack.execute(noopCommand);
+         const refusal = make();
+         const command = Object.create(HydraniumGlspRecordingCommand.prototype) as HydraniumGlspRecordingCommand<object>;
+         Object.assign(command, { execute: () => Promise.reject(refusal), undo: async () => undefined, canUndo: () => true });
+
+         await expect(stack.execute(command)).rejects.toBe(refusal);
+
+         expect({ undo: stack.canUndo(), redo: stack.canRedo(), top: stack['top'] }).toEqual({ undo: true, redo: false, top: 0 });
+      }
+   );
+
+   it('flushes the history when a compound executed on its own has a recording command whose writes ran out, as for any refusal of a compound', async () => {
+      // Its other children wrote, so nothing is left as it was.
+      const stack = makeStack({}, new Set());
+      await stack.execute(noopCommand);
+      const command = Object.create(HydraniumGlspRecordingCommand.prototype) as HydraniumGlspRecordingCommand<object>;
+      Object.assign(command, { execute: () => Promise.reject(ranOut()), undo: async () => undefined, canUndo: () => true });
+
+      await expect(stack.execute(new CompoundCommand([noopCommand, command]))).rejects.toThrow();
+
+      expect({ undo: stack.canUndo(), redo: stack.canRedo() }).toEqual({ undo: false, redo: false });
    });
 });
 
@@ -157,6 +193,41 @@ describe('HydraniumGlspCommandStack after a refused undo or redo', () => {
       await expect(stack.undo()).rejects.toBeInstanceOf(ConflictError);
 
       expect({ undo: stack.canUndo(), redo: stack.canRedo(), top: stack['top'] }).toEqual({ undo: true, redo: false, top: 1 });
+   });
+
+   it.each([
+      ['its writes ran out', ranOut],
+      ['the text cannot be read', unreadable]
+   ])('keeps the history and its place when an operation’s undo is refused because %s', async (_why, make) => {
+      const refusal = make();
+      const stack = makeStack({}, new Set());
+      await stack.execute(noopCommand);
+      await stack.execute(operationFailingWith(() => Promise.reject(refusal)));
+
+      await expect(stack.undo()).rejects.toBe(refusal);
+
+      expect({ undo: stack.canUndo(), redo: stack.canRedo(), top: stack['top'] }).toEqual({ undo: true, redo: false, top: 1 });
+   });
+
+   it.each([
+      ['its writes ran out', ranOut],
+      ['the text cannot be read', unreadable]
+   ])('flushes when a compound is refused because %s, and fails as a plain error carrying the refusal', async (_why, make) => {
+      const refusal = make();
+      const stack = makeStack({}, new Set());
+      await stack.execute(new CompoundCommand([noopCommand, operationFailingWith(() => Promise.reject(refusal))]));
+
+      const failure = await stack.undo().then(
+         () => undefined,
+         (error: unknown) => error
+      );
+
+      expect({
+         refusal: failure === refusal,
+         cause: failure instanceof Error && failure.cause === refusal,
+         tellsTheRefusal: failure instanceof Error && failure.message.includes(refusal.message),
+         canUndo: stack.canUndo()
+      }).toEqual({ refusal: false, cause: true, tellsTheRefusal: true, canUndo: false });
    });
 
    it('flushes when a compound is refused for a conflict, and fails as a plain error carrying the refusal', async () => {
