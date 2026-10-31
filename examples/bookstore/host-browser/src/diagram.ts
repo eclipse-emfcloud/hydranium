@@ -92,8 +92,10 @@ export async function mountDiagram(
    let switching: Promise<void> = Promise.resolve();
    const follow = (uri: string): Promise<void> => {
       const shown = switching.then(() => show(uri));
+      // Derived, so a dropped failure is reported, and before the catch below, so the caller resumes before the next switch starts.
+      const handed = shown.then(() => undefined);
       switching = shown.catch(() => undefined);
-      return shown;
+      return handed;
    };
    // Before the first mount, since the page can switch while it loads.
    shownFile.onDidChange(uri => {

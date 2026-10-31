@@ -147,8 +147,10 @@ export abstract class AbstractHydraniumGlspDiagramManager extends GLSPDiagramMan
     */
    reopen(widget: GLSPDiagramWidget): Promise<void> {
       const reopened = this.reopening.then(() => this.replaceWidget(widget));
+      // Derived, so a dropped failure is reported, and before the queue's catch, so the caller resumes before the next reopen starts.
+      const handed = reopened.then(() => undefined);
       this.reopening = reopened.catch(() => undefined);
-      return reopened;
+      return handed;
    }
 
    /** Taken down as a close does, but without its save prompt, since a dirty

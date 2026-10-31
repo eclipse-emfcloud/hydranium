@@ -20,6 +20,7 @@ import { describe, expect, it } from 'vitest';
 import type { MessageConnection } from 'vscode-jsonrpc';
 import { DataConnection } from '../../src/client/data-connection';
 import { DataEvents } from '../../src/client/data-events';
+import { DataSession } from '../../src/client/data-session';
 import { DATA_SERVER_WIRE_PREFIX, type DataServerProtocol, type DiagnosticOf, type TransferSaveDocumentArgs } from '../../src/data';
 import type { CloseModelArgs, OpenModelArgs } from '../../src/model-server';
 import { bindRpcMethods } from '../../src/rpc/bind-rpc-methods';
@@ -27,6 +28,8 @@ import { makeFakeDataPort } from '../../src/testing/data-doubles';
 import { makeDuplexConnectionPair } from '../../src/testing/node';
 import type { TransferDocument, TransferSavedDocument } from '../../src/transfer-document';
 import type { TransferElement } from '../../src/transfer-element';
+import { captureUnhandledRejections } from '../../src/testing/node/unhandled-rejections';
+import { tick, waitFor } from '../../src/testing/wait-for';
 
 interface ProbeElement extends TransferElement {
    $type: 'TypeOne';
@@ -151,6 +154,100 @@ describe('DataSession over a widened server', () => {
          await panel.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: 'any' });
 
          expect(received.update).toEqual([{ uri: URI_A, clientId: 'panel', model: { $type: 'TypeOne' }, baseVersion: 'any' }]);
+      } finally {
+         dispose();
+      }
+   });
+});
+
+/** Run `callback` and resolve to the rejections no one handled meanwhile. */
+function unhandledDuring(callback: () => Promise<void>): Promise<unknown[]> {
+   return captureUnhandledRejections(async rejections => {
+      await callback();
+      await waitFor(() => rejections.length > 0);
+      await tick();
+      return rejections;
+   });
+}
+
+/** A session whose subclass reaches `trackEnding` and `trackOpen` directly. */
+class EndingSession extends DataSession<ProbeElement, DataServerProtocol<ProbeElement>> {
+   dropEnding(uri: string, end: () => Promise<void>): void {
+      void this.trackEnding(uri, end);
+   }
+
+   end(uri: string, end: () => Promise<void>): Promise<void> {
+      return this.trackEnding(uri, end);
+   }
+
+   open(uri: string, call: () => Promise<void>): Promise<void> {
+      return this.trackOpen(uri, undefined, call);
+   }
+}
+
+describe('DataSession tracking work a caller drops', () => {
+   it('reports a failed write of several documents once', async () => {
+      const { connection, dispose } = harness<DataServerProtocol<ProbeElement>>();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const unhandled = await unhandledDuring(async () => {
+            // The echoing server binds no updateModelDocuments, so the write fails.
+            void panel.updateDocuments({
+               updates: [
+                  { uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: 'any' },
+                  { uri: 'file:///b.x', model: { $type: 'TypeOne' }, baseVersion: 'any' }
+               ]
+            });
+            await panel.whenWritesSettled();
+         });
+
+         expect(unhandled).toHaveLength(1);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports a failed close or delete once', async () => {
+      const session = new EndingSession('panel', { connected: () => new Promise(() => undefined) }, 'panel');
+      const failure = new Error('close failed');
+
+      const unhandled = await unhandledDuring(async () => {
+         session.dropEnding(URI_A, async () => {
+            throw failure;
+         });
+      });
+
+      expect(unhandled).toEqual([failure]);
+   });
+
+   it('resumes the caller of a close before an open waiting on it starts', async () => {
+      const session = new EndingSession('panel', { connected: () => new Promise(() => undefined) }, 'panel');
+      const order: string[] = [];
+
+      const closing = (async () => {
+         await session.end(URI_A, async () => {
+            order.push('closed');
+         });
+         order.push('close caller resumed');
+      })();
+      await session.open(URI_A, async () => {
+         order.push('opened');
+      });
+      await closing;
+
+      expect(order).toEqual(['closed', 'close caller resumed', 'opened']);
+   });
+
+   it('reports a failed open once', async () => {
+      const { connection, dispose } = harness<DataServerProtocol<ProbeElement>>();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         panel.dispose();
+         const unhandled = await unhandledDuring(async () => {
+            void panel.openDocument({ uri: URI_A });
+         });
+
+         expect(unhandled).toHaveLength(1);
       } finally {
          dispose();
       }

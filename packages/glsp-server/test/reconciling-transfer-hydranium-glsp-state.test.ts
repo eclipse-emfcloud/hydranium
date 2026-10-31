@@ -24,6 +24,8 @@ import {
    SyntheticStep
 } from '@hydranium/protocol';
 import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
+import { captureUnhandledRejections } from '@hydranium/protocol/testing/node';
+import { tick, waitFor } from '@hydranium/protocol/testing';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { ReconcilingTransferHydraniumGlspState } from '../src/state/reconciling-transfer-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
@@ -951,6 +953,37 @@ describe('ReconcilingTransferHydraniumGlspState under an operation', () => {
 
       await expect(failed).rejects.toThrow('run failed');
       await expect(next).resolves.toBe('ran');
+   });
+
+   it('resumes the caller of an exclusive call before the next one starts', async () => {
+      const state = createState(makeHarness());
+      const order: string[] = [];
+
+      const first = (async () => {
+         await state.runExclusive(() => order.push('first'));
+         order.push('first caller resumed');
+      })();
+      await state.runExclusive(() => order.push('second'));
+      await first;
+
+      expect(order).toEqual(['first', 'first caller resumed', 'second']);
+   });
+
+   it('reports a failed exclusive call whose caller dropped it', async () => {
+      const state = createState(makeHarness());
+      const failure = new Error('run failed');
+
+      const unhandled = await captureUnhandledRejections(async rejections => {
+         void state.runExclusive(() => {
+            throw failure;
+         });
+         await state.runExclusive(() => undefined);
+         await waitFor(() => rejections.length > 0);
+         await tick();
+         return rejections;
+      });
+
+      expect(unhandled).toEqual([failure]);
    });
 
    it('gives a copied multi-reference targets in the copy, not shared with the built root', async () => {

@@ -268,8 +268,10 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     */
    runExclusive<T>(run: () => MaybePromise<T>): Promise<T> {
       const result = this.exclusiveTail.then(() => run());
+      // Derived, so a dropped failure is reported, and before the tail, so the caller resumes before the next run starts.
+      const handed = result.then(value => value);
       this.exclusiveTail = result.catch(() => undefined);
-      return result;
+      return handed;
    }
 
    /**

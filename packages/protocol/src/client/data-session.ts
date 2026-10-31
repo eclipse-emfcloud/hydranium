@@ -1490,14 +1490,15 @@ export class DataSession<
 
    /** Run `call`, counted as in flight on each of `uris` until it settles. */
    protected track<T>(uris: readonly string[], call: () => Promise<T>): Promise<T> {
-      const running = call();
+      // Chained so only the promise handed back can report a failure.
+      let running = call();
       for (const uri of uris) {
          let tracker = this.inFlight.get(uri);
          if (tracker === undefined) {
             tracker = new PendingWorkTracker();
             this.inFlight.set(uri, tracker);
          }
-         tracker.track(running);
+         running = tracker.track(running);
       }
       return running;
    }
@@ -1527,9 +1528,7 @@ export class DataSession<
          }
       };
       const ending = this.endings.get(uri);
-      const running = this.track([uri], () => (ending ? ending.then(() => call(opening)) : call(opening)));
-      running.then(done, done);
-      return running;
+      return this.track([uri], () => (ending ? ending.then(() => call(opening)) : call(opening))).finally(done);
    }
 
    /**
@@ -1538,6 +1537,8 @@ export class DataSession<
     */
    protected trackEnding(uri: string, end: () => Promise<void>): Promise<void> {
       const ending = end();
+      // Derived, so a dropped failure is reported, and before `allSettled`, so the caller resumes before an open waiting on it starts.
+      const handed = ending.then(() => undefined);
       const settled = Promise.allSettled([this.endings.get(uri), ending]);
       this.endings.set(uri, settled);
       void settled.then(() => {
@@ -1545,7 +1546,7 @@ export class DataSession<
             this.endings.delete(uri);
          }
       });
-      return ending;
+      return handed;
    }
 
    /** Wait until the work `trackers` hold now has settled, or {@link settleBeforeCloseMs} has passed. */

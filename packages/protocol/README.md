@@ -49,15 +49,15 @@ The options both ends must agree on, and a worked example, are in
 
 ## Entry points
 
-| Subpath          | Use it for                                                  | Runs in         |
-| ---------------- | ----------------------------------------------------------- | --------------- |
-| `.`              | The production surface, `./data` and `./client` included    | browser-neutral |
-| `./data`         | The data-head protocol types alone                          | browser-neutral |
-| `./client`       | The client tier alone                                       | browser-neutral |
-| `./messages`     | The message codes this package raises                       | browser-neutral |
-| `./node`         | Process-memory and heap-snapshot diagnostics                | Node-only       |
-| `./testing`      | Test doubles, waiters and the translation-catalogue audit   | browser-neutral |
-| `./testing/node` | In-memory stream and port pairs for tests                   | Node-only       |
+| Subpath          | Use it for                                                | Runs in         |
+| ---------------- | --------------------------------------------------------- | --------------- |
+| `.`              | The production surface, `./data` and `./client` included  | browser-neutral |
+| `./data`         | The data-head protocol types alone                        | browser-neutral |
+| `./client`       | The client tier alone                                     | browser-neutral |
+| `./messages`     | The message codes this package raises                     | browser-neutral |
+| `./node`         | Process-memory and heap-snapshot diagnostics              | Node-only       |
+| `./testing`      | Test doubles, waiters and the translation-catalogue audit | browser-neutral |
+| `./testing/node` | In-memory transports and rejection capture for tests      | Node-only       |
 
 The subpaths need a TypeScript `moduleResolution` that reads `exports`
 (`NodeNext` or `Bundler`); see *Requirements* in
