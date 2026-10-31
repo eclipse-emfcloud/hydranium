@@ -45,7 +45,9 @@ class NodeProfileCapture implements DataServerProfileCapture {
 class NodeDataServerDiagnostics implements DataServerDiagnosticsProvider {
    async dumpServerState(services: ServerSharedServices, args: DumpServerStateArgs): Promise<string> {
       const openDocuments = services.workspace.TextDocuments.openDocuments();
-      return formatServerState(services.workspace.LangiumDocuments, args.label, { openDocuments });
+      return formatServerState(services.workspace, args.label, {
+         openDocuments
+      });
    }
 
    async writeHeapSnapshot(args: WriteServerHeapSnapshotArgs): Promise<string> {

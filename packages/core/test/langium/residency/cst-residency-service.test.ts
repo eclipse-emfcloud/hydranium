@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { type CstNode, DocumentState, type LangiumDocument, type LinkingError, URI } from '@hydranium/langium';
+import { type AstNode, type CstNode, DocumentState, type LangiumDocument, type LinkingError, URI } from '@hydranium/langium';
 import { asMutable, Disposable, type Tracer } from '@hydranium/protocol';
 import { DefaultModelLedger } from '../../../src/documents/model-ledger.js';
 import { type FakeClock, makeFakeClock } from '@hydranium/protocol/testing';
@@ -18,7 +18,7 @@ import {
    type CstResidencyOptions,
    isCstShed
 } from '../../../src/langium/residency/cst-residency-service.js';
-import { makeFakeReflection, makeNoopSharedServices } from '../../../src/testing/index.js';
+import { makeFakeAstNode, makeFakeReflection, makeNoopSharedServices } from '../../../src/testing/index.js';
 
 /** A build-phase pass captured at registration time so the test can drive its `run`. */
 interface CapturedPass {
@@ -389,16 +389,30 @@ describe('isCstShed', () => {
       return { uri: URI.parse('file:///a.a'), state, parseResult: { value: root } } as unknown as LangiumDocument;
    }
 
+   /** A ledger that recorded `root`'s text, as a shed does. */
+   function shedLedger(root: AstNode): DefaultModelLedger {
+      const ledger = new DefaultModelLedger();
+      ledger.record(root, 1, 'text');
+      return ledger;
+   }
+
    it('is true for a built document whose CST was shed', () => {
-      expect(isCstShed(doc(DocumentState.Validated, { $type: 'Model' }))).toBe(true);
+      const root = { $type: 'Model' };
+      expect(isCstShed(doc(DocumentState.Validated, root), shedLedger(root))).toBe(true);
    });
 
    it('is false when the CST is still present', () => {
-      expect(isCstShed(doc(DocumentState.Validated, { $type: 'Model', $cstNode: {} }))).toBe(false);
+      const root = makeFakeAstNode({ $type: 'Model', $cstNode: {} });
+      expect(isCstShed(doc(DocumentState.Validated, root), shedLedger(root))).toBe(false);
+   });
+
+   it('is false for a document without a CST and with no text to graft one from', () => {
+      expect(isCstShed(doc(DocumentState.Validated, { $type: 'Model' }), new DefaultModelLedger())).toBe(false);
    });
 
    it('is false for the unparsed INVALID placeholder (still at Changed)', () => {
-      expect(isCstShed(doc(DocumentState.Changed, { $type: 'INVALID' }))).toBe(false);
+      const root = { $type: 'INVALID' };
+      expect(isCstShed(doc(DocumentState.Changed, root), shedLedger(root))).toBe(false);
    });
 
    it('CST_REHYDRATION_RESET_STATE forces a full re-parse (is below Parsed)', () => {

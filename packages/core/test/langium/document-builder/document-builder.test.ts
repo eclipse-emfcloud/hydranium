@@ -703,24 +703,30 @@ describe('HydraniumDocumentBuilder', () => {
       // `graft` stands in for the residency service: `true` reattaches a CST,
       // `false` leaves the document shed as a diverged graft does. `rebuilds`
       // collects the follow-up builds asked of the version sync service.
+      // `parsedFromText` has the ledger hold a text for every root, as a shed records it.
+      // `unlinked` collects the documents the linker unlinks.
       function rehydrateBuilder({
          refreshCrossDocumentComputedScopes = false,
          graft = true,
+         parsedFromText = true,
          documents = [],
          rebuilds = [],
+         unlinked = [],
          onGraft = () => undefined
       }: {
          refreshCrossDocumentComputedScopes?: boolean;
          graft?: boolean;
+         parsedFromText?: boolean;
          documents?: LangiumDocument[];
          rebuilds?: LangiumDocument[];
+         unlinked?: LangiumDocument[];
          onGraft?: () => void;
       } = {}): HydraniumDocumentBuilder {
          const services = makeNoopSharedServices({
             Logger: makeNoopLogger(),
             ServiceRegistry: {
                getServices: () => ({
-                  references: { Linker: { unlink: () => undefined } },
+                  references: { Linker: { unlink: (document: LangiumDocument) => unlinked.push(document) } },
                   validation: { ValidationRegistry: { getAllValidationCategories: () => new Set(['fast', 'slow']) } }
                })
             },
@@ -736,6 +742,7 @@ describe('HydraniumDocumentBuilder', () => {
                      rebuilds.push(document);
                   }
                },
+               ModelLedger: { textOf: () => (parsedFromText ? 'text' : undefined) },
                IndexManager: {
                   removeContent: () => undefined,
                   removeReferences: () => undefined,
@@ -809,6 +816,35 @@ describe('HydraniumDocumentBuilder', () => {
          expect(shed.state).toBe(DocumentState.Changed);
          // The build after this one relinks the dependents, as a changed document's.
          expect(rebuilds).toEqual([shed]);
+      });
+
+      it('a build unlinks a document below Linked that lists references, as a code-built one does before its first build', async () => {
+         const codeBuilt = doc(DocumentState.Parsed, { $type: 'Model' }, '/code-built.a');
+         codeBuilt.references.push({ $refText: 'Target', ref: undefined });
+         const parsed = doc(DocumentState.Parsed, { $type: 'Model' });
+         const linked = doc(DocumentState.Linked, { $type: 'Model' }, '/linked.a');
+         linked.references.push({ $refText: 'Target', ref: undefined });
+         const unlinked: LangiumDocument[] = [];
+         const builder = rehydrateBuilder({ documents: [codeBuilt, parsed, linked], unlinked });
+         await buildWithoutPhases(() => builder.build([codeBuilt, parsed, linked], {}));
+         expect(unlinked).toEqual([codeBuilt]);
+      });
+
+      it('a build leaves a document without a CST and with no text to graft one from as it is', async () => {
+         const grafts: LangiumDocument[] = [];
+         const textless = doc(DocumentState.Validated, { $type: 'Model' });
+         const rebuilds: LangiumDocument[] = [];
+         const builder = rehydrateBuilder({
+            parsedFromText: false,
+            documents: [textless],
+            rebuilds,
+            onGraft: () => grafts.push(textless)
+         });
+         builder.resetToState(textless, DocumentState.ComputedScopes);
+         await buildWithoutPhases(() => builder.build([textless], {}));
+         expect(grafts).toEqual([]);
+         expect(textless.state).toBe(DocumentState.ComputedScopes);
+         expect(rebuilds).toEqual([]);
       });
 
       it('a cancelled build stops grafting between shed documents', async () => {
