@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 // Subpath barrel for `@hydranium/protocol/testing/node` — the test transports
-// that need a Node runtime.
+// that need a Node runtime, and the capture of `process`'s unhandled rejections.
 //
 // Separate from `./testing` because a `PassThrough` is in `DuplexStreamPair`'s
 // exported type and `StreamMessageReader` comes from `vscode-jsonrpc/node`, so
@@ -20,3 +20,4 @@
 export * from './duplex-connection';
 export * from './duplex-stream';
 export * from './message-port-pair';
+export * from './unhandled-rejections';

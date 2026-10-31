@@ -1254,6 +1254,8 @@ describe('DataSession after a dropped connection', () => {
                      { uri: URI_B, model: MODEL, baseVersion: kept }
                   ]
                });
+               // Handled at once, since the refusal can land before the test awaits it.
+               sent.catch(() => undefined);
             }
          });
          const before = calls.length;

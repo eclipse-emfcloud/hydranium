@@ -11,6 +11,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type Clock, SystemClock, TIMED_OUT } from '../src/clock';
 import { makeFakeClock } from '../src/testing/fake-clock';
 import { Deferred, type Disposable } from '../src/util';
+import { captureUnhandledRejections } from '../src/testing/node/unhandled-rejections';
+import { tick } from '../src/testing/wait-for';
 
 /**
  * Feed the stopwatch a scripted monotonic source, one reading per
@@ -217,29 +219,23 @@ describe.each<[string, () => RaceHarness]>([
 
 describe('SystemClock subclassed with its own setTimer', () => {
    it('rejects the race when its setTimer throws, and still handles a later rejection of the promise', async () => {
-      const unhandled: unknown[] = [];
-      const onUnhandled = (reason: unknown): void => {
-         unhandled.push(reason);
-      };
-      process.on('unhandledRejection', onUnhandled);
-      try {
-         const failure = new Error('no timer');
-         class NoTimerClock extends SystemClock {
-            override setTimer(): Disposable {
-               throw failure;
-            }
+      const failure = new Error('no timer');
+      class NoTimerClock extends SystemClock {
+         override setTimer(): Disposable {
+            throw failure;
          }
+      }
+      const unhandled = await captureUnhandledRejections(async rejections => {
          const gate = new Deferred<string>();
          const race = new NoTimerClock().raceTimer(gate.promise, 100);
          await expect(race).rejects.toBe(failure);
 
          gate.reject(new Error('rejected after the race'));
-         await new Promise(resolve => setTimeout(resolve, 0));
+         await tick();
+         return rejections;
+      });
 
-         expect(unhandled).toEqual([]);
-      } finally {
-         process.off('unhandledRejection', onUnhandled);
-      }
+      expect(unhandled).toEqual([]);
    });
 });
 

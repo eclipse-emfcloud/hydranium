@@ -10,13 +10,15 @@
 import { describe, expect, it } from 'vitest';
 import { PendingWorkTracker } from '../src/pending-work-tracker.js';
 import { Deferred } from '../src/util.js';
+import { captureUnhandledRejections } from '../src/testing/node/unhandled-rejections.js';
+import { tick, waitFor } from '../src/testing/wait-for.js';
 
 describe('PendingWorkTracker', () => {
    it('counts work from its tracking until it resolves or rejects', async () => {
       const tracker = new PendingWorkTracker();
       const resolving = new Deferred<string>();
       const rejecting = new Deferred<string>();
-      expect(tracker.track(resolving.promise)).toBe(resolving.promise);
+      const resolved = tracker.track(resolving.promise);
       tracker.track(rejecting.promise).catch(() => undefined);
       expect(tracker.size).toBe(2);
       expect(tracker.isIdle).toBe(false);
@@ -24,6 +26,7 @@ describe('PendingWorkTracker', () => {
       resolving.resolve('done');
       rejecting.reject(new Error('failed'));
       await tracker.whenSettled();
+      await expect(resolved).resolves.toBe('done');
       expect(tracker.size).toBe(0);
       expect(tracker.isIdle).toBe(true);
    });
@@ -53,5 +56,18 @@ describe('PendingWorkTracker', () => {
       tracker.track(failing.promise).catch(() => undefined);
       failing.reject(new Error('failed'));
       await expect(tracker.whenSettled()).resolves.toBeUndefined();
+   });
+
+   it('reports the failure of work whose caller dropped the promise it handed back', async () => {
+      const failure = new Error('dropped');
+      const unhandled = await captureUnhandledRejections(async rejections => {
+         const failing = new Deferred();
+         void new PendingWorkTracker().track(failing.promise);
+         failing.reject(failure);
+         await waitFor(() => rejections.length > 0);
+         await tick();
+         return rejections;
+      });
+      expect(unhandled).toEqual([failure]);
    });
 });

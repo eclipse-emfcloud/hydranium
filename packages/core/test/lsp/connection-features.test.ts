@@ -14,7 +14,7 @@ import { LogMessageNotification, MessageType, type Connection, type Features, ty
 import { createConnection, ProposedFeatures } from 'vscode-languageserver/node';
 import { describe, expect, it, vi } from 'vitest';
 import { withHydraniumLspFeatures } from '../../src/lsp/connection-features.js';
-import { captureUnhandledRejections } from '../../src/testing/node/unhandled-rejections.js';
+import { captureUnhandledRejections } from '@hydranium/protocol/testing/node';
 
 function makeConsole(sendNotification: Connection['sendNotification']): RemoteConsole {
    class BaseConsole {

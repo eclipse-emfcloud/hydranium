@@ -9,7 +9,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { asCanonicalUri, Deferred } from '@hydranium/protocol';
-import { tick } from '@hydranium/protocol/testing';
+import { tick, waitFor } from '@hydranium/protocol/testing';
+import { captureUnhandledRejections } from '@hydranium/protocol/testing/node';
 import { DefaultFileSystemTaskQueue } from '../../src/documents/file-system-task-queue.js';
 import { DefaultDocumentUriPolicy, type DocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 
@@ -78,5 +79,39 @@ describe('DefaultFileSystemTaskQueue', () => {
 
       await expect(failed).rejects.toThrow('write failed');
       await expect(next).resolves.toBe('next');
+   });
+
+   it('resumes the caller of a task before the next task of its file starts', async () => {
+      const queue = makeQueue();
+      const order: string[] = [];
+
+      const first = (async () => {
+         await queue.enqueue('file:///ws/a.x', async () => {
+            order.push('first');
+         });
+         order.push('first caller resumed');
+      })();
+      await queue.enqueue('file:///ws/a.x', async () => {
+         order.push('second');
+      });
+      await first;
+
+      expect(order).toEqual(['first', 'first caller resumed', 'second']);
+   });
+
+   it('reports a failed task whose caller dropped it', async () => {
+      const queue = makeQueue();
+      const failure = new Error('write failed');
+
+      const unhandled = await captureUnhandledRejections(async rejections => {
+         void queue.enqueue('file:///ws/a.x', async () => {
+            throw failure;
+         });
+         await waitFor(() => rejections.length > 0);
+         await tick();
+         return rejections;
+      });
+
+      expect(unhandled).toEqual([failure]);
    });
 });
