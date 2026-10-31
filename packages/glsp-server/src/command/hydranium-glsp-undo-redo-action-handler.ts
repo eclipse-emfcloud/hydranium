@@ -14,7 +14,13 @@ import { type MessageDefinition, defineMessage, describeError, isConflictError, 
 import { inject, injectable } from 'inversify';
 import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
-import { isDiagramEditDroppedError, logActionFailure } from './diagram-edit-dropped-error.js';
+import {
+   DiagramWriteUnsettledError,
+   isDiagramEditDroppedError,
+   isDiagramWriteRanOutError,
+   isDiagramWriteUnsettledError,
+   logActionFailure
+} from './diagram-write-errors.js';
 import { type UndoRedoDirection, takeUndoRedoTally } from './hydranium-glsp-operation-command.js';
 
 /**
@@ -59,8 +65,9 @@ export const DIAGRAM_REDO_PARTLY_SKIPPED = defineMessage(
  * an entry that is a `CompoundCommand`. GLSP clears the undo history on every
  * failed undo or redo, so the message says so: the next undo otherwise does
  * nothing, unexplained. Any other undo that reverted every step is skipped or
- * refused instead, see {@link DIAGRAM_UNDO_SKIPPED} and
- * {@link DIAGRAM_UNDO_CONFLICT}.
+ * refused instead, see {@link DIAGRAM_UNDO_SKIPPED},
+ * {@link DIAGRAM_UNDO_CONFLICT}, {@link DIAGRAM_UNDO_RAN_OUT} and
+ * {@link DIAGRAM_UNDO_UNREADABLE}.
  */
 export const DIAGRAM_UNDO_FAILED = defineMessage(
    'hydranium/glsp-server/diagram-undo-failed',
@@ -123,6 +130,44 @@ export const DIAGRAM_REDO_CONFLICT = defineMessage(
    'hydranium/glsp-server/diagram-redo-conflict',
    'Nothing was redone: another editor changed this diagram meanwhile. Try again.'
 );
+
+/**
+ * An undo was refused because its writes ran out: each one conflicted, as
+ * another writer kept changing the document. Nothing changed, and
+ * `HydraniumGlspCommandStack` keeps the history, so a retry may undo.
+ */
+export const DIAGRAM_UNDO_RAN_OUT = defineMessage(
+   'hydranium/glsp-server/diagram-undo-ran-out',
+   'Nothing was undone: the document kept changing meanwhile. Try again.'
+);
+
+/** A redo was refused as {@link DIAGRAM_UNDO_RAN_OUT} describes for an undo. */
+export const DIAGRAM_REDO_RAN_OUT = defineMessage(
+   'hydranium/glsp-server/diagram-redo-ran-out',
+   'Nothing was redone: the document kept changing meanwhile. Try again.'
+);
+
+/**
+ * An undo was refused because its write conflicted and the current text could
+ * not be read to reconcile it against. Nothing changed, and
+ * `HydraniumGlspCommandStack` keeps the history, so a retry may undo later.
+ */
+export const DIAGRAM_UNDO_UNREADABLE = defineMessage(
+   'hydranium/glsp-server/diagram-undo-unreadable',
+   'Nothing was undone: the document cannot be read right now. Try again later.'
+);
+
+/** A redo was refused as {@link DIAGRAM_UNDO_UNREADABLE} describes for an undo. */
+export const DIAGRAM_REDO_UNREADABLE = defineMessage(
+   'hydranium/glsp-server/diagram-redo-unreadable',
+   'Nothing was redone: the document cannot be read right now. Try again later.'
+);
+
+/** The warning for an unsettled undo or redo, by whether its writes ran out. */
+const UNSETTLED_MESSAGES = {
+   undo: { ranOut: DIAGRAM_UNDO_RAN_OUT, unreadable: DIAGRAM_UNDO_UNREADABLE },
+   redo: { ranOut: DIAGRAM_REDO_RAN_OUT, unreadable: DIAGRAM_REDO_UNREADABLE }
+} as const;
 
 /**
  * GLSP's undo and redo handler inside the state's `runExclusive`. GLSP's
@@ -195,9 +240,12 @@ export class HydraniumGlspUndoRedoActionHandler extends UndoRedoActionHandler {
 
    /**
     * The message for an undo or redo that failed, logging a failure its
-    * reconcile has not. A conflict its own write threw kept the history, as a
-    * syntax error does. One a step threw, or the command stack flushed on, is
-    * the same foreign edit as a dropped write and is told as one.
+    * reconcile has not. A refusal its own write threw kept the history: a
+    * syntax error, a conflict, writes that ran out or a text that could not be
+    * read, each told with its reason. A conflict a step threw, or one the
+    * command stack flushed on, is the same foreign edit as a dropped write and
+    * is told as one. Any other refusal it flushed on is told as an error, an
+    * unsettled write of an adopter's own subclass included.
     */
    protected failure(direction: UndoRedoDirection, error: unknown): MessageAction {
       const undo = direction === 'undo';
@@ -216,11 +264,31 @@ export class HydraniumGlspUndoRedoActionHandler extends UndoRedoActionHandler {
             details: describeError(error)
          });
       }
+      if (isDiagramWriteUnsettledError(error)) {
+         // `HydraniumGlspCommandStack` kept the history, since the refusal changed nothing. The conflict's message names the document.
+         const messages = UNSETTLED_MESSAGES[undo ? 'undo' : 'redo'];
+         const message = isDiagramWriteRanOutError(error) ? messages.ranOut : messages.unreadable;
+         return MessageAction.create(this.render(message), { severity: 'WARNING', details: describeError(error.conflict) });
+      }
+      if (error instanceof DiagramWriteUnsettledError) {
+         // A subclass of an adopter's own. Its cause is a conflict, but no foreign edit is known to have won.
+         return MessageAction.create(this.render(undo ? DIAGRAM_UNDO_ERROR : DIAGRAM_REDO_ERROR), {
+            severity: 'ERROR',
+            details: describeError(error.conflict)
+         });
+      }
       if (error instanceof Error && isConflictError(error.cause)) {
          // The conflict's own message names the document, which the details carry.
          return MessageAction.create(this.render(undo ? DIAGRAM_UNDO_FAILED : DIAGRAM_REDO_FAILED), {
             severity: 'ERROR',
             details: describeError(error.cause)
+         });
+      }
+      if (error instanceof Error && isDiagramWriteUnsettledError(error.cause)) {
+         // The refusal's message is worded for an edit, so the details name its conflict instead.
+         return MessageAction.create(this.render(undo ? DIAGRAM_UNDO_ERROR : DIAGRAM_REDO_ERROR), {
+            severity: 'ERROR',
+            details: describeError(error.cause.conflict)
          });
       }
       return MessageAction.create(this.render(undo ? DIAGRAM_UNDO_ERROR : DIAGRAM_REDO_ERROR), {

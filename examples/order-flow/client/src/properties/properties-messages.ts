@@ -90,6 +90,11 @@ export const PROPERTIES_WRITE_CONFLICT = defineMessage(
    'Not saved — someone else changed this field first. The value shown is theirs.'
 );
 
+export const PROPERTIES_WRITE_RAN_OUT = defineMessage(
+   'order-flow/properties/write-ran-out',
+   'Not saved — the document kept changing while this was written. Try again.'
+);
+
 export const PROPERTIES_WRITE_UNAVAILABLE = defineMessage(
    'order-flow/properties/write-unavailable',
    'Not saved — the document was no longer open when the change was to be written.'
@@ -99,6 +104,11 @@ export const PROPERTIES_WRITE_UNAVAILABLE = defineMessage(
 export const PROPERTIES_PREVIOUS_WRITE_CONFLICT = defineMessage(
    'order-flow/properties/previous-write-conflict',
    "Order Flow properties: '{field}' of {uri} was not saved. Someone else changed it first."
+);
+
+export const PROPERTIES_PREVIOUS_WRITE_RAN_OUT = defineMessage(
+   'order-flow/properties/previous-write-ran-out',
+   "Order Flow properties: '{field}' of {uri} was not saved. The document kept changing while it was written."
 );
 
 export const PROPERTIES_PREVIOUS_WRITE_UNAVAILABLE = defineMessage(

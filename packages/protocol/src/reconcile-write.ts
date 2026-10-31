@@ -37,15 +37,22 @@ export interface ReconcileWriteHooks<TModel> {
    readonly base: TModel;
    /** Asked for each conflict while writes remain. Its refetch callback runs {@link refetch} only when called. */
    readonly conflictResolver: ConflictResolver;
-   /** Writes, the first included, after which a still-conflicting edit is dropped; 3 when absent. */
+   /** Writes, the first included, after which a conflict that would still merge is dropped. 3 when absent. */
    readonly maxWrites?: number;
+   /**
+    * Whether the write that raised `conflict` reached the server. One that
+    * did not, refused by {@link persist} before it was sent, is not counted
+    * against {@link maxWrites}, up to as many as it allows. Every write counts
+    * when absent.
+    */
+   sent?(conflict: ConflictError): boolean;
    /** Runs when the refetch is unavailable; absent, the edit is left unwritten. */
    onUnavailable?(model: TModel, conflict: ConflictError): Promise<void>;
 }
 
 /**
  * What {@link reconcileWrite} did. Every status but `persisted` follows a
- * conflict, and carries the last one and the writes made, the first included.
+ * conflict, and carries the last one and the writes counted.
  */
 export type ReconcileWriteOutcome =
    /** The first write landed. */
@@ -55,22 +62,29 @@ export type ReconcileWriteOutcome =
          * `merged`: a merged write landed. `already-applied`: the refetch
          * already held the edit, so nothing more was written. `unchanged`: the
          * edit was empty, so the caller is behind the server. `conflict`: the
-         * resolver found a same-path collision. `dropped`: the writes ran out.
+         * resolver found a same-path collision. `dropped`: the writes ran out
+         * with a merge left to write.
          * `unavailable`: the refetch produced nothing and
          * {@link ReconcileWriteHooks.onUnavailable} ran.
          */
         readonly status: 'merged' | 'already-applied' | 'unchanged' | 'conflict' | 'dropped' | 'unavailable';
         /** The last conflict a write raised, which on `merged` is the one before the write that landed. */
         readonly conflict: ConflictError;
-        /** Writes made, the first included. `dropped` is reported once they reach {@link ReconcileWriteHooks.maxWrites}. */
+        /**
+         * Writes counted against {@link ReconcileWriteHooks.maxWrites}, the
+         * first included. A write refused before it was sent is not counted,
+         * up to as many as the cap, so 0 when every write was refused that
+         * way. `dropped` is reported once they reach the cap.
+         */
         readonly writes: number;
      };
 
 /**
  * Persist `model`, and on a `ConflictError` reconcile the user's `base → model`
  * intent onto the refetched server model and write the merge, gated on the
- * refetch's version, again on each conflict up to `maxWrites` writes. A
- * non-conflict error is re-thrown.
+ * refetch's version, again on each conflict up to `maxWrites` writes. The
+ * conflict of the last write is resolved too, and only one that would merge
+ * is dropped. A non-conflict error is re-thrown.
  */
 export async function reconcileWrite<TModel extends object>(
    model: TModel,
@@ -81,15 +95,20 @@ export async function reconcileWrite<TModel extends object>(
    let candidateBaseVersion = baseVersion;
    let previous: ConflictError | undefined;
    const maxWrites = hooks.maxWrites ?? DEFAULT_MAX_WRITES;
-   for (let writes = 1; ; writes++) {
+   let writes = 0;
+   let unsent = 0;
+   for (;;) {
       const conflict = await persistOrConflict(hooks, candidate, candidateBaseVersion);
+      if (conflict && unsent < maxWrites && hooks.sent?.(conflict) === false) {
+         unsent++;
+      } else {
+         writes++;
+      }
       if (!conflict) {
          return previous ? { status: 'merged', conflict: previous, writes } : { status: 'persisted' };
       }
       previous = conflict;
-      if (writes >= maxWrites) {
-         return { status: 'dropped', conflict, writes };
-      }
+      // Asked after the last write too, so only a merge it may not write is dropped.
       let refetched: VersionedModel<TModel> | undefined;
       const outcome = await hooks.conflictResolver.resolve(hooks.base, model, async () => {
          refetched = await hooks.refetch();
@@ -97,6 +116,9 @@ export async function reconcileWrite<TModel extends object>(
       });
       switch (outcome.status) {
          case 'merged':
+            if (writes >= maxWrites) {
+               return { status: 'dropped', conflict, writes };
+            }
             candidate = outcome.merged;
             candidateBaseVersion = refetched?.baseVersion ?? 'any';
             continue;

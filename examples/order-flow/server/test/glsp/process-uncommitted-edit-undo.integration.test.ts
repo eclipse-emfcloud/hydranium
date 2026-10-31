@@ -10,6 +10,7 @@
 /** Undo and redo of an operation, and the order of its side effects. */
 
 import {
+   type Action,
    type Command,
    CompoundCommand,
    CompoundOperation,
@@ -32,7 +33,8 @@ import {
    DIAGRAM_UNDO_SKIPPED,
    DIAGRAM_UNDO_SYNTAX_ERROR
 } from '@hydranium/glsp-server/messages';
-import { ConflictError, DocumentSyntaxError, asModelVersion, isDocumentSyntaxError } from '@hydranium/protocol';
+import { DiagramTextUnreadableError, DiagramWriteRanOutError, DiagramWriteUnsettledError } from '@hydranium/glsp-server';
+import { ConflictError, DocumentSyntaxError, RequestEditsSettledAction, asModelVersion, isDocumentSyntaxError } from '@hydranium/protocol';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { DocumentState } from '@hydranium/langium';
 import { describe, expect, it, vi } from 'vitest';
@@ -382,11 +384,12 @@ describe('undo and redo of an operation', () => {
       }).toEqual({ messages: [], process: broken, payUndone: true });
    });
 
-   it('refuses an operation while a document the diagram writes does not parse, before the read-only status arrives', async () => {
+   it('refuses an operation while a document the diagram writes does not parse, before the read-only status arrives, and sends no model from the broken parse', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
       await changeTextBuilt(opened, layoutUri, text => text.replace('node Ship at 660, 200', 'node Ship at , 200'));
       const broken = textOf(opened, layoutUri);
+      const submissions = vi.spyOn(diagram.sessionContainer.get<ModelSubmissionHandler>(ModelSubmissionHandler), 'submitModel');
 
       const outcome = await dispatcherOf(diagram)
          .dispatch(move(diagram, 'Pay', 50, 110))
@@ -395,7 +398,17 @@ describe('undo and redo of an operation', () => {
             (error: unknown) => error
          );
 
-      expect({ refused: isDocumentSyntaxError(outcome), text: textOf(opened, layoutUri) }).toEqual({ refused: true, text: broken });
+      // A settle waits for any resync the refusal started.
+      await dispatcherOf(diagram).dispatch(RequestEditsSettledAction.create());
+
+      const sent = await Promise.all(submissions.mock.results.map(result => result.value as Promise<Action[]>));
+      const models = sent.flat().filter(action => ['setModel', 'updateModel', 'requestBounds'].includes(action.kind));
+      expect({ refused: isDocumentSyntaxError(outcome), text: textOf(opened, layoutUri), resyncs: sent.length, models }).toEqual({
+         refused: true,
+         text: broken,
+         resyncs: 1,
+         models: []
+      });
    });
 
    it('warns the client of an undo that a foreign edit of the same field skips, and of nothing on the redo after it', async () => {
@@ -1339,6 +1352,29 @@ describe('undo and redo of an operation', () => {
       });
    });
 
+   it('tells an undo refused by an unsettled-write error of an adopter’s own as an error, not as another editor’s change', async () => {
+      class OwnUnsettledError extends DiagramWriteUnsettledError {}
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await applyUndoable(opened, async () => undefined);
+      const conflict = new ConflictError(layoutUri, asModelVersion(1), 2);
+      vi.spyOn(diagram.state, 'updateSourceModel').mockRejectedValueOnce(new OwnUnsettledError('the write gave up', conflict));
+
+      const failed = await applyFailing(diagram, UndoAction.create());
+
+      expect({
+         message: failed.message,
+         namesTheConflict: failed.details?.includes(conflict.message),
+         canUndo: commandStackOf(diagram).canUndo(),
+         canRedo: commandStackOf(diagram).canRedo()
+      }).toEqual({
+         message: DIAGRAM_UNDO_ERROR.text,
+         namesTheConflict: true,
+         canUndo: false,
+         canRedo: false
+      });
+   });
+
    it('says the history is gone when an undo refused for a syntax error cannot redo a step it already ran', async () => {
       // The step stays undone, so the history no longer matches the model.
       const opened = await openDiagram();
@@ -1378,6 +1414,35 @@ describe('undo and redo of an operation', () => {
          canRedo: false
       });
    });
+
+   it.each([
+      ['its writes ran out', (conflict: ConflictError) => new DiagramWriteRanOutError('Your diagram change was not applied', conflict)],
+      [
+         'it could not read the text',
+         (conflict: ConflictError) => new DiagramTextUnreadableError('Your diagram change was not applied', conflict)
+      ]
+   ])(
+      'says the history is gone, naming the conflict, when an undo refused because %s cannot redo a step it already ran',
+      async (_why, make) => {
+         const opened = await openDiagram();
+         const { diagram, layoutUri } = opened;
+         await applyUndoable(
+            opened,
+            async () => undefined,
+            () => Promise.reject(new Error('redo step failed'))
+         );
+         const conflict = new ConflictError(layoutUri, asModelVersion(1), 2);
+         vi.spyOn(diagram.state, 'updateSourceModel').mockRejectedValueOnce(make(conflict));
+
+         const failed = await applyFailing(diagram, UndoAction.create());
+
+         expect({ message: failed.message, details: failed.details, canUndo: commandStackOf(diagram).canUndo() }).toEqual({
+            message: DIAGRAM_UNDO_ERROR.text,
+            details: conflict.message,
+            canUndo: false
+         });
+      }
+   );
 
    it('says the history is gone when an undo refused for a syntax error ran a hook it has no redo hook to revert', async () => {
       // A retry would run the hook a second time.

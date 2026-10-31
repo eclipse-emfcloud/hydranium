@@ -899,7 +899,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
    });
 
    describe('refetch', () => {
-      it('returns undefined when the primary cannot be read, since there is nothing to merge into', async () => {
+      it('returns undefined when the primary cannot be read, since there is nothing to merge into, and warns why', async () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          harness.conflictOn = DIAGRAM_URI;
@@ -914,6 +914,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
 
          await state.updateSourceModel({ primary: { $type: 'TestRoot', label: 'x' }, secondaries: {} }, asModelVersion(1));
          expect(refetched).toBeUndefined();
+         expect(harness.warns.filter(message => message.includes(`The current text of ${DIAGRAM_URI} cannot be read`))).toHaveLength(1);
       });
 
       it('reconciles against the stored text, not a built root an operation handler edited in place', async () => {
@@ -947,7 +948,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
          ]);
       });
 
-      it('includes settled secondaries and omits unreadable ones', async () => {
+      it('includes settled secondaries and omits unreadable ones without a warning', async () => {
          const harness = makeHarness();
          seed(harness, DIAGRAM_URI, 'diagram', 1);
          seed(harness, SEMANTIC_URI, 'semantic', 1);
@@ -972,6 +973,7 @@ describe('ReconcilingMultiDocumentGlspState', () => {
 
          expect(refetched?.primary).toEqual({ $type: 'TestRoot', label: 'theirs-primary' });
          expect(refetched?.secondaries).toEqual({ [SEMANTIC_URI]: { $type: 'TestRoot', label: 'theirs-semantic' } });
+         expect(harness.warns.filter(message => message.includes(OTHER_URI))).toEqual([]);
       });
 
       it('refuses the write as a syntax error when a secondary it would not write does not parse', async () => {

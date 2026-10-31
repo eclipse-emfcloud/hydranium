@@ -90,10 +90,49 @@ describe('reconcileWrite', () => {
    });
 
    test('drops the edit once maxWrites writes have conflicted', async () => {
-      const recorder = record({ conflicts: Infinity, refetches: [theirs('first', 7)], maxWrites: 2 });
+      const recorder = record({ conflicts: Infinity, refetches: [theirs('first', 7), theirs('second', 9)], maxWrites: 2 });
 
       expect(await reconcileWrite(OURS, asModelVersion(5), recorder.hooks)).toMatchObject({ status: 'dropped', writes: 2 });
       expect(recorder.writes).toHaveLength(2);
+   });
+
+   test.each([
+      [
+         'a same-path collision as a conflict',
+         OURS,
+         { model: { name: 'theirs', note: 'base' }, baseVersion: asModelVersion(7) },
+         'conflict'
+      ],
+      ['a refetch that found nothing as unavailable', OURS, undefined, 'unavailable'],
+      ['a foreign edit it could merge as dropped', OURS, theirs('first', 7), 'dropped'],
+      [
+         'a refetch that already holds the edit as already applied',
+         OURS,
+         { model: OURS, baseVersion: asModelVersion(7) },
+         'already-applied'
+      ],
+      ['an empty edit as unchanged', BASE, theirs('first', 7), 'unchanged']
+   ] as const)('reports %s when the last write maxWrites allows conflicted', async (_why, ours, refetched, status) => {
+      const recorder = record({ conflicts: Infinity, refetches: [refetched], maxWrites: 1 });
+
+      expect(await reconcileWrite(ours, asModelVersion(5), recorder.hooks)).toMatchObject({ status, writes: 1 });
+      expect(recorder.writes).toHaveLength(1);
+   });
+
+   test.each([
+      ['does not count a first write refused unsent against maxWrites', 1, 'dropped', 3],
+      ['counts writes refused unsent once as many as maxWrites were not counted', Infinity, 'dropped', 4]
+   ] as const)('%s, and reports the writes counted', async (_what, unsent, status, attempts) => {
+      const recorder = record({
+         conflicts: Infinity,
+         refetches: [theirs('first', 7), theirs('second', 9), theirs('third', 11), theirs('fourth', 13)],
+         maxWrites: 2
+      });
+      const sent = (conflict: ConflictError): boolean => conflict.baseVersion > unsent;
+
+      const outcome = await reconcileWrite(OURS, asModelVersion(5), { ...recorder.hooks, sent });
+
+      expect({ outcome, attempts: recorder.writes.length }).toMatchObject({ outcome: { status, writes: 2 }, attempts });
    });
 
    test('drops the edit after three conflicting writes when maxWrites is absent', async () => {

@@ -106,8 +106,9 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
 
    /**
     * Writes of one diagram edit, the first included, that may conflict before
-    * the edit is dropped with a warning; each further write reconciles again.
-    * Absent, `reconcileWrite`'s default applies.
+    * the edit fails as run out, see `DiagramWriteRanOutError`. A last write
+    * that collides with a foreign edit of the same field is dropped as a
+    * conflict instead. Each further write reconciles again. Absent, `reconcileWrite`'s default applies.
     */
    protected readonly maxSourceModelWrites?: number;
 
@@ -833,8 +834,10 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
 
    /**
     * The root that `uri`'s text parses to, see {@link parseStoredText}, and
-    * the store's version of that text, read once the document has validated; `undefined` when it cannot be
-    * read. The version is read in the tick the text is, so a write based on it
+    * the store's version of that text, read once the document has validated.
+    * `undefined` when it cannot be read, logging why at `level`: `warn` where
+    * that refuses the caller's write, `debug` where the caller can do without
+    * it. The version is read in the tick the text is, so a write based on it
     * conflicts with any edit made after. Throws `DocumentSyntaxError` when the
     * parse lacks some of the text: a merge written from a recovered root
     * deletes what the parser skipped, and the session's own check reads the
@@ -845,11 +848,18 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * drop the edits it lacks. The root is parsed, not linked: an encoder hook
     * reading a reference's `ref` sees `undefined` on it.
     */
-   protected async readCurrentRoot(uri: string): Promise<{ root: AstNode; version: ModelVersion } | undefined> {
+   protected async readCurrentRoot(
+      uri: string,
+      level: 'warn' | 'debug' = 'warn'
+   ): Promise<{ root: AstNode; version: ModelVersion } | undefined> {
       const modelService = this.sharedServices.model.ModelService;
-      // Unreadable here is the conflict the caller then raises, which is logged where it ends; the reason is diagnosis.
+      // A refused write's own log line names no reason, so the reason is logged
+      // here, at debug once the diagram closed, as the refusal is then.
+      const log = (reason: string): void => {
+         this.logger[this.modelSession === undefined ? 'debug' : level](`The current text of ${uri} cannot be read: ${reason}`);
+      };
       const validated = await modelService.validated(uri).catch((error: unknown) => {
-         this.logger.debug(`The current text of ${uri} cannot be read: ${describeError(error)}`);
+         log(describeError(error));
          return undefined;
       });
       if (!validated) {
@@ -857,6 +867,7 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
       }
       const parsed = this.parseStoredText(uri);
       if (parsed === undefined) {
+         log('no text is found for it');
          return undefined;
       }
       const version = asModelVersion(this.sharedServices.workspace.TextDocuments.version(uri));
@@ -1011,6 +1022,10 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * what keeps that from costing anything — an operation handler calling
     * `updateSourceModel(model)` gets the gate, and skipping it has to be typed
     * out as `'any'`.
+    *
+    * A write the reconcile cannot settle rejects with a
+    * `DiagramWriteUnsettledError`. Outside an operation, whose handler sends
+    * the model again, the caller reports it and resyncs the client.
     */
    abstract updateSourceModel(model: TSourceModel, baseVersion?: BaseVersion): MaybePromise<void>;
 

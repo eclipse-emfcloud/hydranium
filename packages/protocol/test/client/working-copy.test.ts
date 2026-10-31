@@ -339,6 +339,11 @@ class ForceCopy extends HeldCopy {
    protected override readonly conflictResolver = new ForceConflictResolver();
 }
 
+/** A {@link ForceCopy} that gives up after the first conflicting write. */
+class ForceOneWriteCopy extends ForceCopy {
+   protected override readonly maxWrites = 1;
+}
+
 /** A copy whose resolver is a {@link HeldResolver}. */
 class HeldResolverCopy extends HeldCopy {
    readonly resolver: HeldResolver;
@@ -785,8 +790,77 @@ describe('WorkingCopy', () => {
       server.updateGate = undefined;
       answered.resolve();
 
-      expect([await first, await second]).toEqual([{ status: 'conflict' }, { status: 'applied' }]);
+      expect([await first, await second]).toEqual([{ status: 'ran-out' }, { status: 'applied' }]);
       expect(server.root.name).toBe('initial');
+   });
+
+   it("reports a conflict for a write another client's edit of its field beat on the only write allowed, and for an edit of that field made during it", async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new OneWriteCopy(session, events, URI_A);
+      await copy.open();
+      const answered = new Deferred<void>();
+      server.updateGate = answered.promise;
+      const name = copy.edit(root => ({ ...root, name: 'ours' }));
+      await waitFor(() => server.updates === 1);
+      await server.foreignWrite({ name: 'theirs' });
+
+      const retyped = copy.edit(root => ({ ...root, name: 'retyped' }));
+      server.updateGate = undefined;
+      answered.resolve();
+
+      expect([await name, await retyped]).toEqual([{ status: 'conflict' }, { status: 'conflict' }]);
+      expect(server.root.name).toBe('theirs');
+   });
+
+   it.each([
+      [
+         'the field it wrote, which conflicts',
+         { name: 'theirs' },
+         ['conflict', 'merged'],
+         { $type: 'TypeOne', name: 'theirs', note: 'mine' }
+      ],
+      ['another field, which runs out', { note: 'theirs' }, ['ran-out', 'conflict'], { $type: 'TypeOne', name: 'initial', note: 'theirs' }]
+   ] as const)(
+      'reconciles an edit queued behind a write a foreign edit dropped, of %s, though it may send one write',
+      async (_raced, foreign, statuses, root) => {
+         const { server, session, events } = makeCopyHarness();
+         const copy = new OneWriteCopy(session, events, URI_A);
+         await copy.open();
+         const answered = new Deferred<void>();
+         server.updateGate = answered.promise;
+         const name = copy.edit(current => ({ ...current, name: 'ours' }));
+         await waitFor(() => server.updates === 1);
+         await server.foreignWrite(foreign);
+
+         const note = copy.edit(current => ({ ...current, note: 'mine' }));
+         server.updateGate = undefined;
+         answered.resolve();
+
+         expect({ outcomes: [await name, await note], root: server.root }).toEqual({
+            outcomes: statuses.map(status => ({ status })),
+            root
+         });
+      }
+   );
+
+   it('writes an edit of a field whose write ran out, made during that write, when no other client changed that field', async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new OneWriteCopy(session, events, URI_A);
+      await copy.open();
+      const answered = new Deferred<void>();
+      server.updateGate = answered.promise;
+      const name = copy.edit(root => ({ ...root, name: 'ours' }));
+      await waitFor(() => server.updates === 1);
+      await server.foreignWrite({ note: 'theirs' });
+
+      const retyped = copy.edit(root => ({ ...root, name: 'retyped' }));
+      server.updateGate = undefined;
+      answered.resolve();
+
+      expect({ outcomes: [await name, await retyped], root: server.root }).toEqual({
+         outcomes: [{ status: 'ran-out' }, { status: 'merged' }],
+         root: { $type: 'TypeOne', name: 'retyped', note: 'theirs' }
+      });
    });
 
    it("reports a conflict for an edit of a dropped field made during the split write, keeping another client's value", async () => {
@@ -1080,23 +1154,25 @@ describe('WorkingCopy', () => {
    });
 
    it.each([
-      ['a same-field conflict', HeldCopy],
-      ['running out of writes', OneWriteCopy]
-   ])("shows the server's diagnostics once %s dropped the edit", async (_case, Copy) => {
+      ['a same-field conflict', HeldCopy, { name: 'theirs' }, 'conflict'],
+      ['running out of writes', OneWriteCopy, { note: 'theirs' }, 'ran-out'],
+      ['running out of writes under a resolver that reads nothing', ForceOneWriteCopy, { note: 'theirs' }, 'ran-out']
+   ] as const)("shows the server's diagnostics once %s dropped the edit, read once", async (_case, Copy, foreign, status) => {
       const { server, session, events } = makeCopyHarness();
       const copy = new Copy(session, events, URI_A);
       await copy.open();
+      const readsBefore = server.reads;
       const answered = new Deferred<void>();
       server.updateGate = answered.promise;
       const written = copy.edit(root => ({ ...root, name: 'ours' }));
       await waitFor(() => server.updates === 1);
-      await server.foreignWrite({ name: 'theirs' });
+      await server.foreignWrite(foreign);
       // Only the read after the conflict carries them.
       server.problems = [PROBLEM];
       answered.resolve();
 
-      expect(await written).toEqual({ status: 'conflict' });
-      expect(copy.diagnostics).toEqual([PROBLEM]);
+      expect(await written).toEqual({ status });
+      expect({ diagnostics: copy.diagnostics, reads: server.reads - readsBefore }).toEqual({ diagnostics: [PROBLEM], reads: 1 });
    });
 
    it('stays without a document when a write answers after its file was deleted', async () => {
@@ -1857,9 +1933,12 @@ describe('WorkingCopy', () => {
       expect(copy.root?.note).toBe('theirs');
    });
 
-   it('reports a conflict when it ran out of writes and could not read the document again', async () => {
+   it.each([
+      ['', OneWriteCopy],
+      [' under a resolver that reads nothing', ForceOneWriteCopy]
+   ] as const)('rejects an edit whose only write conflicted when it could not read the document again%s', async (_case, Copy) => {
       const { server, session, events } = makeCopyHarness();
-      const copy = new OneWriteCopy(session, events, URI_A);
+      const copy = new Copy(session, events, URI_A);
       await copy.open();
       const answered = new Deferred<void>();
       server.updateGate = answered.promise;
@@ -1872,7 +1951,7 @@ describe('WorkingCopy', () => {
 
       answered.resolve();
 
-      expect(await written).toEqual({ status: 'conflict' });
+      await expect(written).rejects.toThrow('read failed');
    });
 
    it('writes an edit made while its close waits once the write out answers in time', async () => {
@@ -2158,7 +2237,7 @@ describe('WorkingCopy', () => {
       await waitFor(() => copy.root?.note === 'theirs');
    });
 
-   it('drops the document when the read after a dropped write finds it gone', async () => {
+   it('reports unavailable and drops the document when the read after its only write conflicted finds it gone', async () => {
       const { server, session, events } = makeCopyHarness();
       const copy = new OneWriteCopy(session, events, URI_A);
       await copy.open();
@@ -2171,7 +2250,7 @@ describe('WorkingCopy', () => {
 
       answered.resolve();
 
-      expect(await written).toEqual({ status: 'conflict' });
+      expect(await written).toEqual({ status: 'unavailable' });
       expect(copy.snapshot).toBeUndefined();
       await waitFor(() => server.opens.size === 0);
    });
@@ -2714,6 +2793,40 @@ describe('WorkingCopy', () => {
       // The failed write, then the typed edit's refused write and its reconciled one.
       expect(restarted.updates).toBe(3);
       expect(restarted.root.name).toBe('typed');
+   });
+
+   it("shows the server's diagnostics once its writes ran out under a resolver that read only before an earlier write", async () => {
+      const { server, session, events } = makeCopyHarness();
+      // Reads on its first conflict only, then another writer lands before the next write.
+      class ReadsFirst extends ReconcilingConflictResolver {
+         calls = 0;
+         override async resolve<T extends object>(base: T, ours: T, refetch: () => Promise<T | undefined>): Promise<ReconcileOutcome<T>> {
+            this.calls++;
+            if (this.calls > 1) {
+               // Only a read after this conflict carries them.
+               server.problems = [PROBLEM];
+               return { status: 'merged', merged: ours };
+            }
+            const outcome = await super.resolve(base, ours, refetch);
+            await server.foreignWrite({ note: 'second' });
+            return outcome;
+         }
+      }
+      class ReadsFirstCopy extends HeldCopy {
+         protected override readonly conflictResolver = new ReadsFirst();
+         protected override readonly maxWrites = 2;
+      }
+      const copy = new ReadsFirstCopy(session, events, URI_A);
+      await copy.open();
+      const answered = new Deferred<void>();
+      server.updateGate = answered.promise;
+      const written = copy.edit(root => ({ ...root, name: 'ours' }));
+      await waitFor(() => server.updates === 1);
+      await server.foreignWrite({ note: 'first' });
+      answered.resolve();
+
+      expect(await written).toEqual({ status: 'ran-out' });
+      expect(copy.diagnostics).toEqual([PROBLEM]);
    });
 
    it('reports merged for an edit whose write landed past a foreign edit after a reread that found its text unchanged', async () => {

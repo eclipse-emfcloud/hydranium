@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
    type BaseVersion,
    asModelVersion,
@@ -18,6 +18,7 @@ import {
    ReconcilingConflictResolver
 } from '@hydranium/protocol';
 import 'reflect-metadata';
+import { HydraniumGlspOperationCommand, openOperationOf } from '../src/command/hydranium-glsp-operation-command.js';
 import { HydraniumGlspRecordingCommand, type HydraniumGlspRecordingState } from '../src/command/hydranium-glsp-recording-command.js';
 
 interface TestSourceModel {
@@ -119,6 +120,27 @@ function makeFakeState(
       }
    };
    return state;
+}
+
+type SideEffectHooks = 'an undo hook' | 'a failing undo hook' | 'only a redo hook' | 'no hook';
+
+/** The undo and redo hooks of a command whose side effect has `hooks`. */
+function hooksOf(hooks: SideEffectHooks): [undo?: () => void, redo?: () => void] {
+   switch (hooks) {
+      case 'an undo hook':
+         return [() => undefined, () => undefined];
+      case 'a failing undo hook':
+         return [
+            () => {
+               throw new Error('undo hook failed');
+            },
+            () => undefined
+         ];
+      case 'only a redo hook':
+         return [undefined, () => undefined];
+      case 'no hook':
+         return [];
+   }
 }
 
 function makeCommand(
@@ -368,6 +390,132 @@ describe('HydraniumGlspRecordingCommand', () => {
          history === 'kept'
             ? { bare: true, cause: false, reverted: true, errors: [] }
             : { bare: false, cause: true, reverted: false, errors: [] }
+      );
+   });
+
+   it.each([
+      ['an undo hook', 'bare'],
+      ['no hook', 'bare'],
+      ['a failing undo hook', 'wrapped'],
+      ['only a redo hook', 'wrapped']
+   ] as const)('executed on its own and refused, with %s for its side effect, throws the refusal %s', async (hooks, form) => {
+      const log = makeLog();
+      const state = makeFakeState(log);
+      state.sourceModel = { nodes: [{ id: 'N1', label: 'first' }] };
+      state.updateSourceModel = async () => {
+         throw new DocumentSyntaxError('file:///test.a');
+      };
+      const command = makeCommand(
+         state,
+         'Relabel node',
+         () => {
+            state.sourceModel.nodes[0].label = 'edited';
+         },
+         ...hooksOf(hooks)
+      );
+
+      const error = await command.execute().then(
+         () => undefined,
+         (thrown: unknown) => thrown
+      );
+
+      // A bare refusal tells the stack nothing changed, which keeps the history.
+      expect({
+         bare: error instanceof DocumentSyntaxError,
+         cause: error instanceof Error && error.cause instanceof DocumentSyntaxError
+      }).toEqual(form === 'bare' ? { bare: true, cause: false } : { bare: false, cause: true });
+   });
+
+   it('executed on its own, throws a refusal raised after it ran cleanly bare, once its side effect is rolled back', async () => {
+      const log = makeLog();
+      const state = makeFakeState(log);
+      state.sourceModel = { nodes: [{ id: 'N1', label: 'first' }] };
+      let emitted = 0;
+      const command = makeCommand(
+         state,
+         'Relabel node',
+         () => void emitted++,
+         () => void emitted--
+      );
+      const prototype = HydraniumGlspOperationCommand.prototype as unknown as { checkpoint(point: string): Promise<void> };
+      const checkpoint = vi.spyOn(prototype, 'checkpoint').mockImplementation(async point => {
+         if (point === 'project') {
+            throw new DocumentSyntaxError('file:///test.a');
+         }
+      });
+
+      const error = await command
+         .execute()
+         .then(
+            () => undefined,
+            (thrown: unknown) => thrown
+         )
+         .finally(() => checkpoint.mockRestore());
+
+      expect({ bare: error instanceof DocumentSyntaxError, emitted, writes: state.updateCalls.length }).toEqual({
+         bare: true,
+         emitted: 0,
+         writes: 0
+      });
+   });
+
+   it('executed on its own, throws a refusal its own code raised as the cause of a plain error, as a side effect it ran is not rolled back', async () => {
+      const log = makeLog();
+      const state = makeFakeState(log);
+      state.sourceModel = { nodes: [{ id: 'N1', label: 'first' }] };
+      let emitted = 0;
+      const command = makeCommand(
+         state,
+         'Relabel node',
+         () => {
+            emitted++;
+            throw new DocumentSyntaxError('file:///test.a');
+         },
+         () => void emitted--
+      );
+
+      const error = await command.execute().then(
+         () => undefined,
+         (thrown: unknown) => thrown
+      );
+
+      expect({
+         bare: error instanceof DocumentSyntaxError,
+         cause: error instanceof Error && error.cause instanceof DocumentSyntaxError,
+         emitted,
+         writes: state.updateCalls.length
+      }).toEqual({ bare: false, cause: true, emitted: 1, writes: 0 });
+   });
+
+   it.each([
+      ['an undo hook', 'reports it dropped', false],
+      ['no hook', 'reports it dropped', false],
+      ['a failing undo hook', 'throws', true],
+      ['only a redo hook', 'throws', true]
+   ] as const)('executed on its own with its write dropped and %s for its side effect, %s', async (hooks, _outcome, leftBehind) => {
+      const log = makeLog();
+      const state = makeFakeState(log);
+      state.sourceModel = { nodes: [{ id: 'N1', label: 'first' }] };
+      state.updateSourceModel = async () => {
+         openOperationOf(state)?.recordDropped(undefined);
+      };
+      const command = makeCommand(
+         state,
+         'Relabel node',
+         () => {
+            state.sourceModel.nodes[0].label = 'edited';
+         },
+         ...hooksOf(hooks)
+      );
+
+      const error = await command.execute().then(
+         () => undefined,
+         (thrown: unknown) => thrown
+      );
+
+      // Not pushed while dropped. A plain error makes the stack flush.
+      expect({ dropped: command.dropped, threw: error instanceof Error }).toEqual(
+         leftBehind ? { dropped: false, threw: true } : { dropped: true, threw: false }
       );
    });
 

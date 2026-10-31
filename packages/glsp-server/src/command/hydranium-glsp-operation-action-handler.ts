@@ -23,7 +23,7 @@ import { type ServerSharedServices } from '@hydranium/core';
 import { describeErrorWithStack, isResponseError } from '@hydranium/protocol';
 import { inject, injectable } from 'inversify';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
-import { logActionFailure } from './diagram-edit-dropped-error.js';
+import { logActionFailure } from './diagram-write-errors.js';
 import { HydraniumGlspOperationCommand, openOperationOf, runOperation } from './hydranium-glsp-operation-command.js';
 import { type HydraniumGlspRecordingState } from './hydranium-glsp-recording-command.js';
 import { trackQueuedDelivery } from './queued-deliveries.js';
@@ -58,23 +58,51 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
 
    /**
     * Runs `operation`, or queues it behind the open one and tracks its delivery,
-    * which a settle request waits for. An override must call this one, or a
-    * settle answers before what the queued operation sends.
+    * which a settle request waits for. The resync after a failed operation is
+    * tracked either way. An override must call this one, or a settle answers
+    * before what the queued operation or the resync sends.
     */
    protected override executeHandler(operation: Operation, handler: OperationHandler): Promise<Action[]> {
       const queued = openOperationOf(this.modelState) !== undefined;
       const run = this.modelState.runExclusive(() => this.runOperation(operation, handler));
       if (!queued) {
-         return run;
+         return run.catch((error: unknown) => {
+            trackQueuedDelivery(this.modelState, this.resyncAfterFailure());
+            throw error;
+         });
       }
       trackQueuedDelivery(
          this.modelState,
          run.then(
             actions => this.deliverQueued(actions),
-            (error: unknown) => this.reportFailure(operation, error)
+            (error: unknown) => {
+               this.reportFailure(operation, error);
+               return this.resyncAfterFailure();
+            }
          )
       );
       return Promise.resolve([]);
+   }
+
+   /**
+    * Resync the client after an operation failed, as it still shows the
+    * rolled-back gesture. After a syntax error too: while the text stays
+    * broken, the submission handler sends the dirty state and no model.
+    * Never rejects.
+    */
+   protected async resyncAfterFailure(): Promise<void> {
+      if (this.modelState.modelSession === undefined) {
+         return;
+      }
+      let actions: Action[];
+      try {
+         // A section of its own, as the submit waits for a build the operation's section holds.
+         actions = await this.modelState.runExclusive(async () => this.submitModel());
+      } catch (submitError: unknown) {
+         this.logger.warn(`Could not resync the client after a failed operation: ${describeErrorWithStack(submitError)}`);
+         return;
+      }
+      await this.deliverQueued(actions);
    }
 
    /**
@@ -100,10 +128,10 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
    }
 
    /**
-    * Deliver what a queued operation answered: a message straight to the
-    * client, as {@link reportFailure} sends one, the rest through the
-    * dispatcher. A failure to deliver is logged, not reported as the
-    * operation's. Resolves once delivered, and never rejects.
+    * Deliver what a queued operation answered, or a refused one's resync: a
+    * message straight to the client, as {@link reportFailure} sends one, the
+    * rest through the dispatcher. A failure to deliver is logged, not reported
+    * as the operation's. Resolves once delivered, and never rejects.
     */
    protected deliverQueued(actions: Action[]): Promise<void> {
       const messages = actions.filter(action => MessageAction.is(action));
@@ -111,7 +139,7 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
       return this.actionDispatcher
          .dispatchAll(actions.filter(action => !MessageAction.is(action)))
          .catch((error: unknown) =>
-            this.logger.warn(`Could not deliver the result of a queued operation: ${describeErrorWithStack(error)}`)
+            this.logger.warn(`Could not deliver the result of an operation or its resync: ${describeErrorWithStack(error)}`)
          );
    }
 
@@ -138,7 +166,7 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
       } else if (isResponseError(error)) {
          message = this.sharedServices.MessageRenderer.renderError(error);
       }
-      // An error even for a write the log calls declined, a conflict or a syntax refusal, since the gesture is lost.
+      // An error even for a write the log calls declined, any refusal, since the gesture is lost.
       // A refused undo is a warning instead: it keeps its history and works once the text parses.
       this.sendToClient(MessageAction.create(message, { severity: 'ERROR', details }));
    }

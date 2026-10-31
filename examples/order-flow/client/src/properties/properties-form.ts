@@ -34,11 +34,13 @@ import {
    PROPERTIES_NO_DOCUMENT,
    PROPERTIES_NO_FIELDS,
    PROPERTIES_PREVIOUS_WRITE_CONFLICT,
+   PROPERTIES_PREVIOUS_WRITE_RAN_OUT,
    PROPERTIES_PREVIOUS_WRITE_UNAVAILABLE,
    PROPERTIES_UNSAVED,
    PROPERTIES_WRITE_CONFLICT,
    PROPERTIES_WRITE_FAILED,
    PROPERTIES_WRITE_MERGED,
+   PROPERTIES_WRITE_RAN_OUT,
    PROPERTIES_WRITE_UNAVAILABLE
 } from './properties-messages';
 import type { ResponseError } from 'vscode-jsonrpc';
@@ -103,22 +105,24 @@ export interface PropertiesFormOptions {
 const OUTCOME_MESSAGES: Partial<Record<SetFieldOutcome['status'], MessageDefinition<string>>> = {
    merged: PROPERTIES_WRITE_MERGED,
    conflict: PROPERTIES_WRITE_CONFLICT,
+   'ran-out': PROPERTIES_WRITE_RAN_OUT,
    unavailable: PROPERTIES_WRITE_UNAVAILABLE
 };
 
 /** How a lost edit of the document shown before a switch reads, the field and the document named. */
 const PREVIOUS_OUTCOME_MESSAGES: Partial<Record<SetFieldOutcome['status'], (field: string, uri: string) => ResolvedMessage>> = {
    conflict: (field, uri) => resolve(PROPERTIES_PREVIOUS_WRITE_CONFLICT, { field, uri }),
+   'ran-out': (field, uri) => resolve(PROPERTIES_PREVIOUS_WRITE_RAN_OUT, { field, uri }),
    unavailable: (field, uri) => resolve(PROPERTIES_PREVIOUS_WRITE_UNAVAILABLE, { field, uri })
 };
 
 /**
  * Outcomes after which the server holds the value that was written.
  *
- * `conflict` and `unavailable` are absent deliberately: the edit was dropped,
- * so the box still shows something the server does not have and the field stays
- * marked. `merged` belongs here — a merge keeps both intents, so this field's
- * value did land.
+ * `conflict`, `ran-out` and `unavailable` are absent deliberately: the write
+ * was dropped, so the box still shows something the server does not have and
+ * the field stays marked. `merged` belongs here — a merge keeps both intents,
+ * so this field's value did land.
  */
 const SETTLED_ON_THE_WRITTEN_VALUE = new Set<SetFieldOutcome['status']>(['applied', 'unchanged', 'merged']);
 
@@ -126,6 +130,7 @@ const SETTLED_ON_THE_WRITTEN_VALUE = new Set<SetFieldOutcome['status']>(['applie
 const OUTCOME_KINDS: Partial<Record<SetFieldOutcome['status'], string>> = {
    merged: 'merged',
    conflict: 'conflict',
+   'ran-out': 'conflict',
    unavailable: 'error'
 };
 

@@ -299,6 +299,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       this.resubmitDebouncer = new Debouncer(this.sharedServices.Clock, () => this.flushResubmit(), {
          delayMs: EXTERNAL_SUBMIT_DEBOUNCE_MS
       });
+      this.submissionHandler.isWriteSetBroken = () => this.refreshWriteSetStatus().length > 0;
       if (this.state.clientId === TEMPORARY_CLIENT_ID) {
          return;
       }
@@ -771,12 +772,7 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
       if (this.sharedServices.workspace.ModelLedger.versionOf(root) >= this.state.version) {
          this.state.setSourceRoot(rootUri, root);
       }
-      const primary = this.currentPrimaryDocument();
-      if (!primary) {
-         // A primary deleted since the settle leaves nothing to be broken.
-         this.state.setStatus(DiagramStatus.PARSE_ERROR, undefined);
-      }
-      const broken = primary ? this.refreshParseErrorStatus(primary) : [];
+      const broken = this.refreshWriteSetStatus();
 
       // Skip the external submit until the initial requestModel completes; submitting too
       // early bumps root.revision and the client's stale first computedBounds is dropped,
@@ -809,6 +805,19 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
    }
 
    /**
+    * {@link refreshParseErrorStatus} for the current primary. Answers the
+    * documents that are broken, none for a primary deleted since the settle.
+    */
+   protected refreshWriteSetStatus(): AstDocument<AstNode>[] {
+      const primary = this.currentPrimaryDocument();
+      if (!primary) {
+         this.state.setStatus(DiagramStatus.PARSE_ERROR, undefined);
+         return [];
+      }
+      return this.refreshParseErrorStatus(primary);
+   }
+
+   /**
     * Set {@link DiagramStatus.PARSE_ERROR} to {@link parseErrorStatus} while any
     * document the diagram writes is structurally broken, and withdraw it once
     * they all parse. Answers the documents that are broken.
@@ -835,8 +844,10 @@ export class HydraniumGlspStorage<TRoot extends AstNode, TSourceModel = string>
 
    /**
     * Seam: is the AST structurally broken (lexing/parsing errors)? Drives both
-    * the {@link DiagramStatus.PARSE_ERROR} status and the GModel resubmit
-    * skip — keeping the last valid canvas instead of blanking it mid-typing.
+    * the {@link DiagramStatus.PARSE_ERROR} status and the skip of every GModel
+    * submit but the initial one, through the submission handler's
+    * `isWriteSetBroken` — keeping the last valid canvas instead of blanking it
+    * mid-typing.
     * Default: the lexer and parser errors of
     * the root's own parse, which exist from the parse on, so the answer does
     * not wait for validation; for a root its document has since replaced, any

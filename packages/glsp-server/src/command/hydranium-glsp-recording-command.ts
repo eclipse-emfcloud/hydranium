@@ -34,9 +34,10 @@ export type HydraniumGlspRecordingState<TSourceModel extends AnyObject> = Abstra
  * `undoAction` / `redoAction` callbacks, run when the operation is undone or
  * redone and when a failed operation rolls back, to re-emit a side effect the
  * model does not carry. During an undo or redo they run against throwaway
- * copies, and a recording command executed there throws. Supply both: an undo
- * or redo that fails after running one cannot revert it without the other, so
- * the undo history is cleared.
+ * copies, and a recording command executed there throws. Supply both: a
+ * failed operation cannot roll back a side effect with no undo hook, and an
+ * undo or redo that fails after running one cannot revert it without the
+ * other, so the undo history is cleared.
  *
  * A command executed outside an operation opens one of its own through
  * `runExclusive`, so executing it from inside the boundary with no operation

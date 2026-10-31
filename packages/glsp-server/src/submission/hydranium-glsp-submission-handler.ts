@@ -72,6 +72,14 @@ export class HydraniumGlspSubmissionHandler<TRoot extends AstNode, TSourceModel 
    protected readyEvent: DocumentState | undefined = IntegrityService.SettledState;
 
    /**
+    * Whether a document the diagram writes is structurally broken, asked once
+    * {@link readyEvent} is reached. While it is, every submit but the initial
+    * one sends the dirty state and no model. A thunk the storage installs, as
+    * the storage injects this handler and so cannot be injected into it.
+    */
+   isWriteSetBroken: () => boolean = () => false;
+
+   /**
     * True when a `RequestModelAction` has been accepted but the
     * corresponding {@link SetModelAction} response has not yet been
     * dispatched. Adopter storage uses this to suppress the "external
@@ -95,6 +103,12 @@ export class HydraniumGlspSubmissionHandler<TRoot extends AstNode, TSourceModel 
          // via onReadyRefreshed.
          await this.modelState.ready(this.readyEvent);
       }
+      if (reason !== undefined && this.isWriteSetBroken()) {
+         // The client keeps the model it has, as a model built from broken text drops what the parser skipped.
+         // Its canvas may show a gesture past that model, so the next rebuild is never a duplicate.
+         this._lastSubmittedSignature = undefined;
+         return [SetDirtyStateAction.create(this.commandStack.isDirty, { reason })];
+      }
       const submitted = super.submitModel(reason, layout);
       // Read before awaiting: GLSP bumps the revision synchronously, and another
       // submission may run once this one yields.
@@ -115,7 +129,8 @@ export class HydraniumGlspSubmissionHandler<TRoot extends AstNode, TSourceModel 
     * An operation submit and a later external rebuild that produce the same
     * graph are the same delivery as far as the canvas is concerned, so a
     * comparison scoped to one reason reports "changed" for a model the client
-    * already has. `undefined` until the first submit.
+    * already has. `undefined` until the first submit, and after a submit
+    * {@link isWriteSetBroken} held the model back from.
     */
    get lastSubmittedSignature(): string | undefined {
       return this._lastSubmittedSignature;

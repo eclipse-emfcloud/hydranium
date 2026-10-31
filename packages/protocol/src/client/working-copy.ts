@@ -29,12 +29,18 @@ export type WorkingCopyEditOutcome =
    /** The write raced a foreign edit to other paths, and both landed. */
    | { readonly status: 'merged' }
    /**
-    * The edit raced a foreign edit of the same path, or kept racing foreign
-    * edits, and was dropped, or wrote a path an edit before it lost that way.
-    * The copy shows the server's value, unless the read after the last race
-    * failed.
+    * The edit raced a foreign edit of the same path and was dropped, or wrote a
+    * path an edit before it lost. The copy shows the server's value. When the
+    * read after the last race fails, the edit rejects instead.
     */
    | { readonly status: 'conflict' }
+   /**
+    * Each write conflicted, as other clients kept changing the document, until
+    * the writes ran out, and the edit was dropped. A retry may land. The copy
+    * shows the server's value. When the read after the last write fails, the
+    * edit rejects instead.
+    */
+   | { readonly status: 'ran-out' }
    /** Nothing was written: the server already held the edit, or it changed nothing. */
    | { readonly status: 'unchanged' }
    /**
@@ -136,19 +142,28 @@ function writesDropped<TTransfer extends TransferElement>(
 }
 
 /**
- * `base` with the edits of `batch` its `outcomes` did not drop, or `base`
- * alone when one of those throws on it.
+ * `base` with the edits of `batch` whose `outcomes` `left` does not match, or
+ * `base` alone when one of those throws on it.
  */
 function keptOf<TTransfer>(
    batch: readonly { readonly change: (root: TTransfer) => TTransfer }[],
    outcomes: readonly (WorkingCopyEditOutcome | Promise<never>)[],
-   base: TTransfer
+   base: TTransfer,
+   left: (outcome: WorkingCopyEditOutcome | Promise<never>) => boolean = isDropped
 ): TTransfer {
-   return rootOrUndefined(() => batch.reduce((root, edit, index) => (isDropped(outcomes[index]) ? root : edit.change(root)), base)) ?? base;
+   return rootOrUndefined(() => batch.reduce((root, edit, index) => (left(outcomes[index]) ? root : edit.change(root)), base)) ?? base;
 }
 
-/** Whether a batch's edit did not reach the server: a conflict dropped it, or its write failed. */
+/** Whether a batch's edit did not reach the server: a conflict dropped it, its writes ran out, or its write failed. */
 function isDropped(outcome: WorkingCopyEditOutcome | Promise<never>): boolean {
+   return isLost(outcome) || ('status' in outcome && outcome.status === 'ran-out');
+}
+
+/**
+ * Whether a batch's edit was dropped with a value the server may keep: a
+ * conflict's, or one a failed write left unknown. A run-out sets no value.
+ */
+function isLost(outcome: WorkingCopyEditOutcome | Promise<never>): boolean {
    return !('status' in outcome) || outcome.status === 'conflict';
 }
 
@@ -210,11 +225,11 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    /** Asked for each conflicting write, see {@link reconcile}. */
    protected readonly conflictResolver: ConflictResolver = new ReconcilingConflictResolver();
    /**
-    * Writes of one reconcile, the first included, before a still-conflicting
-    * one is dropped. A first write the copy refuses unsent, on a base a
-    * conflict dropped edits from, counts too. A split batch reconciles twice,
-    * so one batch makes at most twice the cap less one writes. Absent,
-    * `reconcileWrite`'s default applies.
+    * Writes of one reconcile, the first included, after which a conflict that
+    * would still merge is dropped. A write the copy refuses unsent, on a base
+    * a conflict dropped edits from, does not count, up to as many as the cap.
+    * A split batch reconciles twice, so one batch makes at most twice the cap
+    * of writes. Absent, `reconcileWrite`'s default applies.
     */
    protected readonly maxWrites?: number;
    /**
@@ -601,8 +616,8 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       open.snapshotRequests++;
       if (base) {
          try {
-            // The server keeps the other client's value of a field a dropped
-            // edit wrote, so an edit of it conflicts, a revert included.
+            // The server keeps the other client's value of a field a lost edit
+            // wrote, so an edit of it conflicts, a revert included.
             const lost = writesDropped(batch, base.dropped);
             const written = batch.filter((_, index) => !lost[index]);
             const roots = written.reduce((made, edit) => [...made, edit.change(made[made.length - 1])], [base.model]);
@@ -639,10 +654,11 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          } else if (base && outcomes.some(isDropped)) {
             // Dropped in part over a foreign edit, so reconciled against it,
             // and measured with only the edits that were not dropped, so an
-            // edit restating a dropped value conflicts too and one over a
-            // merged value does not.
+            // edit restating a lost value conflicts too and one over a merged
+            // or run-out value does not.
             const kept = keptOf(batch, outcomes, base.model);
-            const dropped = seen && { seen, paths: compare(kept, seen).map(operation => operation.path) };
+            const lost = keptOf(batch, outcomes, base.model, isLost);
+            const dropped = seen && { seen, paths: compare(lost, seen).map(operation => operation.path) };
             open.base = { ...open.base, model: kept, unconfirmed: true, dropped };
          }
       }
@@ -729,24 +745,34 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    }> {
       let written: TransferDocument<TTransfer> | undefined;
       let theirs: TransferDocument<TTransfer> | undefined;
+      // Whether theirs was read after the last write's conflict.
+      let readAfterWrite = false;
       // The version the write that landed was gated on.
       let landedOn: BaseVersion | undefined;
       let first = true;
       let went = false;
       // The epoch of the version written next.
       let epoch = base.epoch;
+      const unsent = new Set<ConflictError>();
       const outcome = await reconcileWrite(ours, base.baseVersion, {
          persist: async (model, baseVersion) => {
             const onBase = first;
             first = false;
+            readAfterWrite = false;
             // Refused, not sent, on an unconfirmed base or once the document
             // went. The reread after a document went reports the edit
             // unavailable.
             const unconfirmed = onBase && base.unconfirmed;
             if (open !== this.current || unconfirmed) {
                went = open !== this.current;
-               const refused = isModelVersion(baseVersion) ? baseVersion : base.baseVersion;
-               throw new ConflictError(this.uri, refused, UNRECORDED_VERSION, STALE_BASE_VERSION_UPDATE);
+               const refused = new ConflictError(
+                  this.uri,
+                  isModelVersion(baseVersion) ? baseVersion : base.baseVersion,
+                  UNRECORDED_VERSION,
+                  STALE_BASE_VERSION_UPDATE
+               );
+               unsent.add(refused);
+               throw refused;
             }
             const gate = isModelVersion(baseVersion) ? { baseVersion, baseEpoch: epoch } : { baseVersion };
             const answer = await this.session.updateDocument({ uri: this.uri, model, ...gate });
@@ -776,27 +802,32 @@ export class WorkingCopy<TTransfer extends TransferElement> {
             }
             theirs = read;
             epoch = read.epoch;
+            readAfterWrite = true;
             // Gone, the edit is not written, so a deleted file is not written back.
             return theirs.model && { model: theirs.model.root, baseVersion: theirs.model.version };
          },
          base: base.model,
          conflictResolver: this.conflictResolver,
-         maxWrites: this.maxWrites
+         maxWrites: this.maxWrites,
+         sent: conflict => !unsent.has(conflict)
       });
       // A resolver that refetches nothing would retry a write refused this way until it ran out.
       if (went && outcome.status !== 'persisted') {
          return { outcome: { ...outcome, status: 'unavailable' }, answer: theirs };
       }
-      if (outcome.status === 'dropped') {
-         // The last refetch is older than the write that conflicted after it.
-         // A failed reread leaves the snapshot as it is, the edits still lost.
-         const reread = await this.session
-            .connected()
-            .then(server => server.getModelDocument({ uri: this.uri, includeDiagnostics: true }))
-            .catch(() => undefined);
+      // A resolver that read nothing after the last write leaves the copy without the server's value.
+      // A failed reread rejects, as a failed read after the last write does.
+      if (outcome.status === 'dropped' && !readAfterWrite) {
+         const reread = await (await this.session.connected()).getModelDocument({ uri: this.uri, includeDiagnostics: true });
          return { outcome, answer: reread };
       }
-      if (outcome.status === 'conflict' || outcome.status === 'already-applied' || outcome.status === 'unavailable') {
+      // A dropped write too was resolved against a read after its conflict.
+      if (
+         outcome.status === 'dropped' ||
+         outcome.status === 'conflict' ||
+         outcome.status === 'already-applied' ||
+         outcome.status === 'unavailable'
+      ) {
          return { outcome, answer: theirs };
       }
       // Gated on a reread that equals the root the edit was made on, the write
@@ -820,8 +851,9 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          case 'merged':
             return { status: 'merged' };
          case 'conflict':
-         case 'dropped':
             return { status: 'conflict' };
+         case 'dropped':
+            return { status: 'ran-out' };
          case 'already-applied':
          case 'unchanged':
             return { status: 'unchanged' };

@@ -13,9 +13,11 @@ import type { SetFieldOutcome } from '../src/data/order-flow-properties-model';
 import { PropertiesForm } from '../src/properties/properties-form';
 import {
    PROPERTIES_PREVIOUS_WRITE_CONFLICT,
+   PROPERTIES_PREVIOUS_WRITE_RAN_OUT,
    PROPERTIES_PREVIOUS_WRITE_UNAVAILABLE,
    PROPERTIES_UNSAVED,
-   PROPERTIES_WRITE_FAILED
+   PROPERTIES_WRITE_FAILED,
+   PROPERTIES_WRITE_RAN_OUT
 } from '../src/properties/properties-messages';
 
 /**
@@ -128,6 +130,10 @@ class TestableForm extends PropertiesForm {
       return this.status.textContent;
    }
 
+   statusKind(): string | undefined {
+      return this.status.dataset.kind;
+   }
+
    unsaved(): StubElement {
       return this.unsavedNote as unknown as StubElement;
    }
@@ -227,6 +233,13 @@ describe('PropertiesForm document switch', () => {
          'conflicts',
          () => Promise.resolve({ status: 'conflict' } as SetFieldOutcome),
          PROPERTIES_PREVIOUS_WRITE_CONFLICT.code,
+         undefined,
+         { field: 'customerName', uri: 'file:///before.process' }
+      ],
+      [
+         'ran out of writes',
+         () => Promise.resolve({ status: 'ran-out' } as SetFieldOutcome),
+         PROPERTIES_PREVIOUS_WRITE_RAN_OUT.code,
          undefined,
          { field: 'customerName', uri: 'file:///before.process' }
       ],
@@ -399,6 +412,18 @@ describe('PropertiesForm.write failures', () => {
       await form.write('customerName', 'Ada');
 
       expect(form.statusLine()).toBe('the data server went away');
+   });
+
+   it('says a write whose writes ran out was not saved and can be tried again, coloured as a conflict', async () => {
+      const { form, reported } = makeForm(() => Promise.resolve({ status: 'ran-out' } as SetFieldOutcome));
+
+      await form.write('customerName', 'Ada');
+
+      expect({ status: form.statusLine(), kind: form.statusKind(), reported }).toEqual({
+         status: PROPERTIES_WRITE_RAN_OUT.text,
+         kind: 'conflict',
+         reported: []
+      });
    });
 
    it('reports nothing when the write succeeds', async () => {

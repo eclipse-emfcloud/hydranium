@@ -39,7 +39,12 @@ import {
    UndoAction
 } from '@eclipse-glsp/server';
 import { HydraniumGlspAppModule, HydraniumGlspOperationCommand, type HydraniumGlspSubmissionHandler } from '@hydranium/glsp-server';
-import { DIAGRAM_REDO_CONFLICT, DIAGRAM_REDO_SKIPPED, DIAGRAM_UNDO_CONFLICT, DIAGRAM_UNDO_SKIPPED } from '@hydranium/glsp-server/messages';
+import {
+   DIAGRAM_REDO_SKIPPED,
+   DIAGRAM_REDO_UNREADABLE,
+   DIAGRAM_UNDO_SKIPPED,
+   DIAGRAM_UNDO_UNREADABLE
+} from '@hydranium/glsp-server/messages';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import { type AstNode, URI } from '@hydranium/langium';
 import { waitFor } from '@hydranium/protocol/testing';
@@ -274,7 +279,7 @@ async function changeTextBuilt({ services }: Opened, uri: string, edit: (text: s
 }
 
 /** The messages of an undo or redo refused with its place kept, which submits nothing. */
-const REFUSALS: readonly string[] = [DIAGRAM_UNDO_CONFLICT.text, DIAGRAM_REDO_CONFLICT.text];
+const REFUSALS: readonly string[] = [DIAGRAM_UNDO_UNREADABLE.text, DIAGRAM_REDO_UNREADABLE.text];
 
 /** Dispatch `action` and wait until it has submitted, failed or been refused. */
 async function perform(diagram: Diagram, action: Action, reason: string): Promise<void> {
@@ -596,7 +601,7 @@ function refusedCleanly(
    sent: readonly Action[]
 ): string[] {
    const violations: string[] = [];
-   const refusal = phase === 'undo' ? DIAGRAM_UNDO_CONFLICT.text : DIAGRAM_REDO_CONFLICT.text;
+   const refusal = phase === 'undo' ? DIAGRAM_UNDO_UNREADABLE.text : DIAGRAM_REDO_UNREADABLE.text;
    const messages = sent.filter(MessageAction.is);
    if (messages.length !== 1 || messages[0].message !== refusal || messages[0].severity !== 'WARNING') {
       violations.push(`the ${phase} was not told as refused alone: ${told(sent).join('; ')}`);
