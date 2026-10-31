@@ -32,7 +32,7 @@ export interface SourceModelWriteHooks<TModel> extends Omit<ReconcileWriteHooks<
  * A conflict whose refetch is unavailable, the current text not readable to
  * reconcile against, throws the `ConflictError` the write raised: forcing the
  * edit would overwrite text the diagram never saw. An operation then rolls
- * back and an undo or redo fails, as for any write that throws.
+ * back, and an undo or redo is refused with the command stack's place kept.
  */
 export async function reconcileSourceModelWrite<TModel extends object>(
    model: TModel,

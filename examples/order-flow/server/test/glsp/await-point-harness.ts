@@ -40,6 +40,7 @@ import {
 } from '@eclipse-glsp/server';
 import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { HydraniumGlspAppModule, HydraniumGlspOperationCommand, type HydraniumGlspSubmissionHandler } from '@hydranium/glsp-server';
+import { DIAGRAM_REDO_CONFLICT, DIAGRAM_REDO_SKIPPED, DIAGRAM_UNDO_CONFLICT, DIAGRAM_UNDO_SKIPPED } from '@hydranium/glsp-server/messages';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import { type AstNode, URI } from '@hydranium/langium';
 import { waitFor } from '@hydranium/protocol/testing';
@@ -99,6 +100,8 @@ export interface RunResult {
    readonly points: string[];
    readonly violations: string[];
    readonly count: number;
+   /** Whether an undo or redo was skipped, or refused with its place kept. */
+   readonly outcome: 'skipped' | 'refused' | 'other';
 }
 
 const UNRELATED = {
@@ -265,7 +268,10 @@ async function changeTextBuilt({ services }: Opened, uri: string, edit: (text: s
    await editor.update({ uri, model: edited, baseVersion: 'any' });
 }
 
-/** Dispatch `action` and wait until it has submitted or failed. */
+/** The messages of an undo or redo refused with its place kept, which submits nothing. */
+const REFUSALS: readonly string[] = [DIAGRAM_UNDO_CONFLICT.text, DIAGRAM_REDO_CONFLICT.text];
+
+/** Dispatch `action` and wait until it has submitted, failed or been refused. */
 async function perform(diagram: Diagram, action: Action, reason: string): Promise<void> {
    const before = diagram.actions.length;
    diagram.dispatch(action);
@@ -274,7 +280,9 @@ async function perform(diagram: Diagram, action: Action, reason: string): Promis
          diagram.actions
             .slice(before)
             .some(
-               sent => (SetDirtyStateAction.is(sent) && sent.reason === reason) || (MessageAction.is(sent) && sent.severity === 'ERROR')
+               sent =>
+                  (SetDirtyStateAction.is(sent) && sent.reason === reason) ||
+                  (MessageAction.is(sent) && (sent.severity === 'ERROR' || REFUSALS.includes(sent.message)))
             ),
       { timeoutMs: 3000 }
    ).catch(() => undefined);
@@ -320,6 +328,8 @@ export async function runOnce(
       const points: string[] = [];
       const seen = new Map<string, number>();
       let landedForeign = false;
+      /** The texts as the foreign edit left them, which a skipped or refused phase keeps. */
+      let foreignTexts: Texts | undefined;
       const hit = async (name: string): Promise<void> => {
          const occurrence = (seen.get(name) ?? 0) + 1;
          seen.set(name, occurrence);
@@ -341,6 +351,7 @@ export async function runOnce(
                gesture.sameField.edit
             );
          }
+         foreignTexts = textsOf(opened);
       };
       const prototype = HydraniumGlspOperationCommand.prototype as unknown as { checkpoint(point: string): Promise<void> };
       restore.push(vi.spyOn(prototype, 'checkpoint').mockImplementation(point => hit(point)));
@@ -390,8 +401,10 @@ export async function runOnce(
       restore.splice(0).forEach(spy => spy.mockRestore());
 
       const violations: string[] = [];
+      let outcome: RunResult['outcome'] = 'other';
       const texts = textsOf(opened);
       const stack = diagram.sessionContainer.get<CommandStack>(CommandStack);
+      const sent = diagram.actions.slice(before);
       if (!released) {
          violations.push('the boundary was not released');
       }
@@ -403,10 +416,24 @@ export async function runOnce(
       }
       if (failWrite) {
          const failed = { texts: startTexts, reported: WRITE_FAILURE, tolerance: 1 };
-         violations.push(...failedCleanly(gesture, phase, texts, failed, stack, counter.count, diagram.actions.slice(before)));
-      } else if (refetchedNothing) {
+         violations.push(...failedCleanly(gesture, phase, texts, failed, stack, counter.count, sent));
+      } else if (refetchedNothing && phase === 'do') {
          const failed = { texts: { ...startTexts, layout: UNRELATED.edit(startTexts.layout) }, reported: 'was not applied', tolerance: 0 };
-         violations.push(...failedCleanly(gesture, phase, texts, failed, stack, counter.count, diagram.actions.slice(before)));
+         violations.push(...failedCleanly(gesture, phase, texts, failed, stack, counter.count, sent));
+      } else if (refetchedNothing) {
+         outcome = 'refused';
+         violations.push(...refusedCleanly(gesture, phase, texts, foreignTexts ?? startTexts, stack, counter.count, sent));
+         // Read again, the unrelated foreign edit merges.
+         const retried = diagram.actions.length;
+         await perform(diagram, phaseAction, phase);
+         violations.push(
+            ...told(diagram.actions.slice(retried)).map(message => `the retried ${phase} warned: ${message}`),
+            ...consistency(gesture, phase, 'unrelated', textsOf(opened), stack, counter.count).map(violation => `retried: ${violation}`)
+         );
+      } else if (isSkip(phase, sent)) {
+         outcome = 'skipped';
+         violations.push(...skippedCleanly(gesture, phase, texts, foreignTexts ?? startTexts, stack, counter.count, sent));
+         violations.push(...(await reversedSkip(opened, phase, stack, counter)));
       } else {
          violations.push(...consistency(gesture, phase, target?.variant, texts, stack, counter.count));
       }
@@ -426,7 +453,7 @@ export async function runOnce(
       if (unhandled.length > 0) {
          violations.push(`unhandled rejection: ${unhandled.map(String).join('; ')}`);
       }
-      return { points, violations, count: counter.count };
+      return { points, violations, count: counter.count, outcome };
    } finally {
       restore.forEach(spy => spy.mockRestore());
       process.off('unhandledRejection', onUnhandled);
@@ -459,6 +486,10 @@ function consistency(
       violations.push(`the ${phase} neither landed nor failed: canUndo=${canUndo} canRedo=${canRedo}`);
       return violations;
    }
+   // Every step of a gesture can be reverted, so a foreign edit fails no undo or redo: it lands or is skipped.
+   if (failed && phase !== 'do' && variant === 'same-field') {
+      violations.push(`a same-field foreign edit failed the ${phase} and cleared the history instead of skipping it`);
+   }
    const expectApplied = landed === forward;
    if (variant !== 'same-field' && applied !== expectApplied) {
       violations.push(
@@ -470,6 +501,111 @@ function consistency(
       violations.push(
          `the stack says the ${phase} ${landed ? 'landed' : 'failed'}, but ${count} of ${gesture.sideEffects} side effects are applied`
       );
+   }
+   return violations;
+}
+
+/** Whether an undo or redo was told to the client as skipped whole. */
+function isSkip(phase: Phase, sent: readonly Action[]): boolean {
+   const skipped = phase === 'undo' ? DIAGRAM_UNDO_SKIPPED.text : DIAGRAM_REDO_SKIPPED.text;
+   return phase !== 'do' && sent.some(action => MessageAction.is(action) && action.message === skipped);
+}
+
+/** The messages in `sent`, as severity and text. */
+function told(sent: readonly Action[]): string[] {
+   return sent.filter(MessageAction.is).map(({ severity, message }) => `${severity} ${message}`);
+}
+
+/**
+ * An undo or redo a foreign edit skipped: told as a warning and as no error,
+ * nothing written past the foreign edit, `expected`, the stack moved past the
+ * entry with the rest of the history kept, and every side effect left as the
+ * phase found it.
+ */
+function skippedCleanly(
+   gesture: Gesture,
+   phase: Phase,
+   texts: Texts,
+   expected: Texts,
+   stack: CommandStack,
+   count: number,
+   sent: readonly Action[]
+): string[] {
+   const violations: string[] = [];
+   if (!isSkip(phase, sent) || sent.some(action => MessageAction.is(action) && action.severity === 'ERROR')) {
+      violations.push(`the ${phase} was not told as skipped alone: ${told(sent).join('; ')}`);
+   }
+   if (texts.process !== expected.process || texts.layout !== expected.layout) {
+      violations.push(`the skipped ${phase} wrote`);
+   }
+   const moved = phase === 'undo' ? stack.canRedo() && !stack.canUndo() : stack.canUndo() && !stack.canRedo();
+   if (!moved) {
+      violations.push(`the skipped ${phase} left the stack canUndo=${stack.canUndo()} canRedo=${stack.canRedo()}`);
+   }
+   const expectedCount = phase === 'undo' ? gesture.sideEffects : 0;
+   if (count !== expectedCount) {
+      violations.push(`the skipped ${phase} moved side effects: ${count}, expected ${expectedCount}`);
+   }
+   return violations;
+}
+
+/**
+ * The run the other way after a skip: it does nothing, since the skip left
+ * the model and the side effects where it leads, and tells nothing.
+ */
+async function reversedSkip(opened: Opened, phase: Phase, stack: CommandStack, counter: Counter): Promise<string[]> {
+   const { diagram } = opened;
+   const texts = textsOf(opened);
+   const count = counter.count;
+   const before = diagram.actions.length;
+   const back = phase === 'undo' ? 'redo' : 'undo';
+   await perform(diagram, back === 'undo' ? UndoAction.create() : RedoAction.create(), back);
+   const violations = told(diagram.actions.slice(before)).map(message => `the ${back} after the skip warned: ${message}`);
+   const after = textsOf(opened);
+   if (after.process !== texts.process || after.layout !== texts.layout) {
+      violations.push(`the ${back} after the skip wrote`);
+   }
+   if (counter.count !== count) {
+      violations.push(`the ${back} after the skip moved side effects: ${counter.count}, expected ${count}`);
+   }
+   const moved = back === 'undo' ? stack.canRedo() && !stack.canUndo() : stack.canUndo() && !stack.canRedo();
+   if (!moved) {
+      violations.push(`the ${back} after the skip left the stack canUndo=${stack.canUndo()} canRedo=${stack.canRedo()}`);
+   }
+   return violations;
+}
+
+/**
+ * An undo or redo whose write conflicted and could not read the text: told as
+ * a refusal and as no error, nothing written past the foreign edit,
+ * `expected`, the stack's place kept, and every side effect left as the phase
+ * found it.
+ */
+function refusedCleanly(
+   gesture: Gesture,
+   phase: Phase,
+   texts: Texts,
+   expected: Texts,
+   stack: CommandStack,
+   count: number,
+   sent: readonly Action[]
+): string[] {
+   const violations: string[] = [];
+   const refusal = phase === 'undo' ? DIAGRAM_UNDO_CONFLICT.text : DIAGRAM_REDO_CONFLICT.text;
+   const messages = sent.filter(MessageAction.is);
+   if (messages.length !== 1 || messages[0].message !== refusal || messages[0].severity !== 'WARNING') {
+      violations.push(`the ${phase} was not told as refused alone: ${told(sent).join('; ')}`);
+   }
+   if (texts.process !== expected.process || texts.layout !== expected.layout) {
+      violations.push(`the refused ${phase} wrote`);
+   }
+   const kept = phase === 'undo' ? stack.canUndo() && !stack.canRedo() : stack.canRedo() && !stack.canUndo();
+   if (!kept) {
+      violations.push(`the refused ${phase} left the stack canUndo=${stack.canUndo()} canRedo=${stack.canRedo()}`);
+   }
+   const expectedCount = phase === 'undo' ? gesture.sideEffects : 0;
+   if (count !== expectedCount) {
+      violations.push(`the refused ${phase} moved side effects: ${count}, expected ${expectedCount}`);
    }
    return violations;
 }
@@ -547,14 +683,27 @@ export function describeAwaitPoints(name: string): void {
             const enumeration = await runOnce(gesture, phase);
             expect(enumeration.violations).toEqual([]);
             const failures: Record<string, string[]> = {};
+            const outcomes = new Set<RunResult['outcome']>();
             for (const point of enumeration.points) {
-               const { violations } = await runOnce(gesture, phase, { point, variant });
+               const { violations, outcome } = await runOnce(gesture, phase, { point, variant });
+               outcomes.add(outcome);
                if (violations.length > 0) {
                   failures[point] = violations;
                }
             }
+            // Some point of an undo skips it for a same-field edit, and some of an undo or redo refuses it for an unreadable
+            // conflict. A same-field edit can bring a redo's own result, as a created node's twin does.
+            const expected =
+               phase === 'do'
+                  ? undefined
+                  : variant === 'unavailable'
+                    ? 'refused'
+                    : variant === 'same-field' && phase === 'undo'
+                      ? 'skipped'
+                      : undefined;
+            const reached = expected === undefined || outcomes.has(expected);
 
-            expect({ points: enumeration.points.length > 0, failures }).toEqual({ points: true, failures: {} });
+            expect({ points: enumeration.points.length > 0, reached, failures }).toEqual({ points: true, reached: true, failures: {} });
          },
          120_000
       );

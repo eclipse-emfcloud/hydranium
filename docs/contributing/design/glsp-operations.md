@@ -73,24 +73,43 @@ edit, whether an operation or a recording command executed outside one wrote
 it. An undo or redo that a foreign edit of the same field skips, wholly or in
 part, is told as skipped.
 
-An undo or redo that fails clears the undo and redo history, as GLSP does, and
-its message says so. A write dropped or conflicting while it runs is told as a
-foreign edit; any other failure as an error.
+An undo or redo whose own write is dropped, because a foreign edit of the same
+field lands while it runs, reverts the steps it ran and writes nothing. It is
+then skipped and told as one that collides before it runs: the command stack
+moves past the entry and keeps the rest of the history. A retry would collide
+with the same foreign edit, so keeping the place would leave every step before
+it unreachable. The entry's effect and its side effects stay as they were, so
+the next undo or redo of that entry the other way does nothing. That one tells
+the client nothing, since the diagram already shows its result. Only that one
+run does nothing: when a `CompoundCommand` rolls it back after a later child
+fails, the entry's undo runs in full, its write and its hooks, as any undo
+does.
 
-The exception is an undo or redo whose own write is refused with
-`DocumentSyntaxError` because a document it reads or writes does not parse. It
-reverts the steps it ran and writes nothing, so the command stack keeps the
-history and its place, and the refusal is told as a warning. The undo works
-once the text parses again. An undo that collides while a document the model is
-read from does not parse is refused the same way rather than skipped, since the
-parser's recovery, not a foreign edit, may have changed the field. A refusal a
-step threw, a step that cannot be reverted, or an entry that is a
-`CompoundCommand`, whose revert of its children reports no failure, clears the
-history as any other failure does. A recording command with only one of
-`undoAction` and `redoAction` has a step that cannot be reverted once that hook
-ran, and nothing to revert when it did not. The full-text state refuses its own
-write while its source does not parse, since the session accepts text without
-that check.
+An undo or redo whose own write throws `ConflictError`, as when the reconcile
+cannot read the current text, also reverts the steps it ran and writes nothing.
+The conflict tells only that the text moved, so the command stack keeps the
+history and its place, and the refusal is told as a warning. A retry reads the
+model again: an edit of another field merges, one of the same field skips the
+entry. Both cases rely on the state's write applying none of its documents
+when it throws, as `updateAll` does.
+
+An undo or redo whose own write is refused with `DocumentSyntaxError`, because
+a document it reads or writes does not parse, is refused as a conflict is. The
+undo works once the text parses again. An undo that collides while a document
+the model is read from does not parse is refused the same way rather than
+skipped, since the parser's recovery, not a foreign edit, may have changed the
+field. The full-text state refuses its own write while its source does not
+parse, since the session accepts text without that check.
+
+Any other undo or redo that fails clears the undo and redo history, as GLSP
+does, and its message says so. That includes a dropped, conflicting or
+unparsable write after a step that cannot be reverted, and a conflict or syntax
+error a step threw, since that step may have written. It also includes any
+refusal of an entry that is a `CompoundCommand`, whose revert of its children
+reports no failure. A recording command with only one of `undoAction` and
+`redoAction` has a step that cannot be reverted once that hook ran, and nothing
+to revert when it did not. A dropped write or a conflict is told as a foreign
+edit, any other failure as an error.
 
 A recording command executed outside an operation whose write is dropped pushes
 no undo step. In a compound whose other commands wrote, the step is pushed

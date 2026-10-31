@@ -19,11 +19,13 @@ import {
    UndoAction
 } from '@eclipse-glsp/server';
 import {
+   DIAGRAM_REDO_CONFLICT,
    DIAGRAM_REDO_ERROR,
    DIAGRAM_REDO_FAILED,
    DIAGRAM_REDO_PARTLY_SKIPPED,
    DIAGRAM_REDO_SKIPPED,
    DIAGRAM_REDO_SYNTAX_ERROR,
+   DIAGRAM_UNDO_CONFLICT,
    DIAGRAM_UNDO_ERROR,
    DIAGRAM_UNDO_FAILED,
    DIAGRAM_UNDO_PARTLY_SKIPPED,
@@ -396,7 +398,7 @@ describe('undo and redo of an operation', () => {
       expect({ refused: isDocumentSyntaxError(outcome), text: textOf(opened, layoutUri) }).toEqual({ refused: true, text: broken });
    });
 
-   it('warns the client of an undo and a redo that a foreign edit of the same field skips', async () => {
+   it('warns the client of an undo that a foreign edit of the same field skips, and of nothing on the redo after it', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
       await apply(diagram, move(diagram, 'Pay', 50, 110));
@@ -412,12 +414,31 @@ describe('undo and redo of an operation', () => {
 
       expect({ undo: await messagesOf(UndoAction.create()), redo: await messagesOf(RedoAction.create()) }).toEqual({
          undo: [{ severity: 'WARNING', message: DIAGRAM_UNDO_SKIPPED.text }],
-         redo: [{ severity: 'WARNING', message: DIAGRAM_REDO_SKIPPED.text }]
+         redo: []
       });
       expect(textOf(opened, layoutUri)).toContain('node Pay at 55, 115');
    });
 
-   it('warns that only part of an undo and a redo applied when a foreign edit skips one operation of the step', async () => {
+   it('warns the client of a redo that a foreign edit of the same field skips', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await apply(diagram, move(diagram, 'Pay', 50, 110));
+      await undoOrRedo(diagram, UndoAction.create());
+      await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 40, 100', 'node Pay at 45, 105'));
+      const before = diagram.actions.length;
+
+      await undoOrRedo(diagram, RedoAction.create());
+
+      expect(
+         diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ severity, message }) => ({ severity, message }))
+      ).toEqual([{ severity: 'WARNING', message: DIAGRAM_REDO_SKIPPED.text }]);
+      expect(textOf(opened, layoutUri)).toContain('node Pay at 45, 105');
+   });
+
+   it('warns that only part of an undo applied when a foreign edit skips one operation of the step, and of nothing on the redo after it', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
       await commandStackOf(diagram).execute(
@@ -449,10 +470,35 @@ describe('undo and redo of an operation', () => {
       }).toEqual({
          undo: [DIAGRAM_UNDO_PARTLY_SKIPPED.text],
          shipUndone: true,
-         redo: [DIAGRAM_REDO_PARTLY_SKIPPED.text],
+         redo: [],
          shipRedone: true,
          payForeign: true
       });
+   });
+
+   it('warns that only part of a redo applied when a foreign edit skips one operation of the step', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await commandStackOf(diagram).execute(
+         new CompoundCommand([
+            new OrderFlowCommand(diagram.state, 'Pay', () => place(diagram, 'Pay', 50, 110)),
+            new OrderFlowCommand(diagram.state, 'Ship', () => place(diagram, 'Ship', 700, 220))
+         ])
+      );
+      await undoOrRedo(diagram, UndoAction.create());
+      await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 40, 100', 'node Pay at 45, 105'));
+      const before = diagram.actions.length;
+
+      await undoOrRedo(diagram, RedoAction.create());
+
+      expect({
+         messages: diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ message }) => message),
+         shipRedone: textOf(opened, layoutUri).includes('node Ship at 700, 220'),
+         payForeign: textOf(opened, layoutUri).includes('node Pay at 45, 105')
+      }).toEqual({ messages: [DIAGRAM_REDO_PARTLY_SKIPPED.text], shipRedone: true, payForeign: true });
    });
 
    it('does not warn of a skip on an undo after a skipped one whose submit failed', async () => {
@@ -658,49 +704,358 @@ describe('undo and redo of an operation', () => {
       });
    });
 
-   it('fails an undo whose revert collides with a foreign edit that lands meanwhile, and redoes its side effects', async () => {
+   it('skips an undo whose write collides with a foreign edit that lands meanwhile, redoes its side effects, and keeps the steps before it', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
+      await apply(diagram, move(diagram, 'Ship', 700, 220));
       const counter = await applyUndoable(opened, () =>
          changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 50, 110', 'node Pay at 55, 115'))
       );
 
-      const before = diagram.actions.length;
+      const skipped = await dispatchRefused(opened, counter, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
 
-      await applyFailing(diagram, UndoAction.create());
-
-      expect({
-         count: counter.count,
-         foreign: textOf(opened, layoutUri).includes('node Pay at 55, 115'),
-         messages: diagram.actions
-            .slice(before)
-            .filter(MessageAction.is)
-            .map(({ message }) => message),
-         canRedo: commandStackOf(diagram).canRedo()
-      }).toEqual({ count: 1, foreign: true, messages: [DIAGRAM_UNDO_FAILED.text], canRedo: false });
+      expect(skipped).toEqual({
+         count: 1,
+         layout: false,
+         messages: [{ severity: 'WARNING', message: DIAGRAM_UNDO_SKIPPED.text }],
+         canUndo: true,
+         canRedo: true
+      });
+      const layout = textOf(opened, layoutUri);
+      expect({ foreign: layout.includes('node Pay at 55, 115'), shipUndone: layout.includes('node Ship at 660, 200') }).toEqual({
+         foreign: true,
+         shipUndone: true
+      });
    });
 
-   it('fails a redo whose write collides with a foreign edit that lands meanwhile, and says the history is gone', async () => {
+   it('skips a redo whose write collides with a foreign edit that lands meanwhile, undoes its side effects, and keeps the history', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
-      await applyUndoable(
+      const counter = await applyUndoable(
          opened,
          async () => undefined,
          () => changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 40, 100', 'node Pay at 45, 105'))
       );
       await undoOrRedo(diagram, UndoAction.create());
 
-      const before = diagram.actions.length;
+      const skipped = await dispatchRefused(opened, counter, RedoAction.create());
 
-      await applyFailing(diagram, RedoAction.create());
+      expect(skipped).toEqual({
+         count: 0,
+         layout: false,
+         messages: [{ severity: 'WARNING', message: DIAGRAM_REDO_SKIPPED.text }],
+         canUndo: true,
+         canRedo: false
+      });
+      expect(textOf(opened, layoutUri)).toContain('node Pay at 45, 105');
+   });
 
-      expect({
-         messages: diagram.actions
-            .slice(before)
-            .filter(MessageAction.is)
-            .map(({ message }) => message),
-         canUndo: commandStackOf(diagram).canUndo()
-      }).toEqual({ messages: [DIAGRAM_REDO_FAILED.text], canUndo: false });
+   it('runs no side effect again on the redo of an undo its write skipped, once a foreign edit restores what the redo applies', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      const counter = await applyUndoable(opened, () =>
+         changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 50, 110', 'node Pay at 55, 115'))
+      );
+      await undoOrRedo(diagram, UndoAction.create());
+      await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 55, 115', 'node Pay at 50, 110'));
+
+      const redone = await dispatchRefused(opened, counter, RedoAction.create());
+
+      expect(redone).toEqual({ count: 1, layout: true, messages: [], canUndo: true, canRedo: false });
+   });
+
+   it('undoes again after the redo of an undo its write skipped did nothing, once a foreign edit restores what the redo applies', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      let foreignEdit = true;
+      const counter = await applyUndoable(opened, async () => {
+         if (foreignEdit) {
+            foreignEdit = false;
+            await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 50, 110', 'node Pay at 55, 115'));
+         }
+      });
+      await undoOrRedo(diagram, UndoAction.create());
+      await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 55, 115', 'node Pay at 50, 110'));
+      await undoOrRedo(diagram, RedoAction.create());
+
+      const undone = await dispatchRefused(opened, counter, UndoAction.create());
+
+      expect({ undone, payUndone: textOf(opened, layoutUri).includes('node Pay at 40, 100') }).toEqual({
+         undone: { count: 0, layout: false, messages: [], canUndo: false, canRedo: true },
+         payUndone: true
+      });
+   });
+
+   it('runs no side effect again on the redo of an undo a foreign edit skipped before it ran, once that edit is changed back', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      const counter = await applyUndoable(opened, async () => undefined);
+      await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 50, 110', 'node Pay at 55, 115'));
+      await undoOrRedo(diagram, UndoAction.create());
+      await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 55, 115', 'node Pay at 50, 110'));
+
+      const redone = await dispatchRefused(opened, counter, RedoAction.create());
+
+      expect(redone).toEqual({ count: 1, layout: true, messages: [], canUndo: true, canRedo: false });
+   });
+
+   it('runs no side effect again when a compound executed outside an operation redoes a child it skipped after a later child fails', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      const counter = { count: 0 };
+      await commandStackOf(diagram).execute(
+         new CompoundCommand([
+            new OrderFlowCommand(
+               diagram.state,
+               'Pay',
+               () => place(diagram, 'Pay', 50, 110),
+               async () => {
+                  // Restores what the skipped child's redo applies, so that redo would apply nothing and run its hooks.
+                  await changeTextBuilt(opened, layoutUri, text => text.replace('node Ship at 705, 225', 'node Ship at 700, 220'));
+                  throw new Error('pay undo failed');
+               },
+               async () => undefined
+            ),
+            new OrderFlowCommand(
+               diagram.state,
+               'Ship',
+               () => {
+                  counter.count++;
+                  place(diagram, 'Ship', 700, 220);
+               },
+               async () => {
+                  await changeTextBuilt(opened, layoutUri, text => text.replace('node Ship at 700, 220', 'node Ship at 705, 225'));
+                  counter.count--;
+               },
+               async () => void counter.count++
+            )
+         ])
+      );
+
+      const failed = await dispatchRefused(opened, counter, UndoAction.create());
+
+      expect(failed).toMatchObject({
+         count: 1,
+         messages: [{ severity: 'ERROR', message: DIAGRAM_UNDO_ERROR.text }],
+         canUndo: false,
+         canRedo: false
+      });
+   });
+
+   it('runs the undo hooks of a child whose redo did nothing after a skip when a compound executed outside an operation rolls back a failed redo', async () => {
+      // The no-op is the one run after a skip, so the rollback's undo is an ordinary one.
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      const counter = { count: 0 };
+      let foreignEdit = true;
+      let failRedo = false;
+      await commandStackOf(diagram).execute(
+         new CompoundCommand([
+            new OrderFlowCommand(
+               diagram.state,
+               'Pay',
+               () => {
+                  counter.count++;
+                  place(diagram, 'Pay', 50, 110);
+               },
+               async () => {
+                  if (foreignEdit) {
+                     foreignEdit = false;
+                     await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 50, 110', 'node Pay at 55, 115'));
+                  }
+                  counter.count--;
+               },
+               async () => void counter.count++
+            ),
+            new OrderFlowCommand(
+               diagram.state,
+               'Ship',
+               () => place(diagram, 'Ship', 700, 220),
+               async () => undefined,
+               async () => {
+                  if (failRedo) {
+                     throw new Error('ship redo failed');
+                  }
+               }
+            )
+         ])
+      );
+      await undoOrRedo(diagram, UndoAction.create());
+      const skipped = counter.count;
+      await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 55, 115', 'node Pay at 40, 100'));
+      failRedo = true;
+
+      const failed = await dispatchRefused(opened, counter, RedoAction.create());
+
+      expect({ skipped, failed }).toMatchObject({
+         skipped: 1,
+         failed: { count: 0, messages: [{ severity: 'ERROR', message: DIAGRAM_REDO_ERROR.text }], canUndo: false, canRedo: false }
+      });
+   });
+
+   it('skips the undo of a recording command executed on its own whose write collides, and keeps the history', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      const counter = { count: 0 };
+      await apply(diagram, move(diagram, 'Ship', 700, 220));
+      await commandStackOf(diagram).execute(
+         new OrderFlowCommand(
+            diagram.state,
+            'Move Pay',
+            () => {
+               counter.count++;
+               place(diagram, 'Pay', 50, 110);
+            },
+            async () => {
+               await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 50, 110', 'node Pay at 55, 115'));
+               counter.count--;
+            },
+            async () => void counter.count++
+         )
+      );
+
+      const skipped = await dispatchRefused(opened, counter, UndoAction.create());
+
+      expect(skipped).toEqual({
+         count: 1,
+         layout: false,
+         messages: [{ severity: 'WARNING', message: DIAGRAM_UNDO_SKIPPED.text }],
+         canUndo: true,
+         canRedo: true
+      });
+   });
+
+   it('skips the redo of a recording command executed on its own whose write collides, and runs no side effect on the undo after it', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      const counter = { count: 0 };
+      await commandStackOf(diagram).execute(
+         new OrderFlowCommand(
+            diagram.state,
+            'Move Pay',
+            () => {
+               counter.count++;
+               place(diagram, 'Pay', 50, 110);
+            },
+            async () => void counter.count--,
+            async () => {
+               await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 40, 100', 'node Pay at 45, 105'));
+               counter.count++;
+            }
+         )
+      );
+      await undoOrRedo(diagram, UndoAction.create());
+
+      const skipped = await dispatchRefused(opened, counter, RedoAction.create());
+      const undone = await dispatchRefused(opened, counter, UndoAction.create());
+
+      expect({ skipped, undone }).toEqual({
+         skipped: {
+            count: 0,
+            layout: false,
+            messages: [{ severity: 'WARNING', message: DIAGRAM_REDO_SKIPPED.text }],
+            canUndo: true,
+            canRedo: false
+         },
+         undone: { count: 0, layout: true, messages: [], canUndo: false, canRedo: true }
+      });
+   });
+
+   it('undoes the rest of a compound executed outside an operation when the write of one child collides, and warns of it', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      const counter = { count: 0 };
+      await commandStackOf(diagram).execute(
+         new CompoundCommand([
+            new OrderFlowCommand(diagram.state, 'Pay', () => place(diagram, 'Pay', 50, 110)),
+            new OrderFlowCommand(
+               diagram.state,
+               'Ship',
+               () => {
+                  counter.count++;
+                  place(diagram, 'Ship', 700, 220);
+               },
+               async () => {
+                  await changeTextBuilt(opened, layoutUri, text => text.replace('node Ship at 700, 220', 'node Ship at 705, 225'));
+                  counter.count--;
+               },
+               async () => void counter.count++
+            )
+         ])
+      );
+
+      const skipped = await dispatchRefused(opened, counter, UndoAction.create());
+
+      expect(skipped).toMatchObject({
+         count: 1,
+         messages: [{ severity: 'WARNING', message: DIAGRAM_UNDO_PARTLY_SKIPPED.text }],
+         canUndo: false,
+         canRedo: true
+      });
+      const layout = textOf(opened, layoutUri);
+      expect({ payUndone: layout.includes('node Pay at 40, 100'), foreign: layout.includes('node Ship at 705, 225') }).toEqual({
+         payUndone: true,
+         foreign: true
+      });
+   });
+
+   it('says the history is gone when an undo whose write collides ran a hook it has no redo hook to revert', async () => {
+      // Skipped, the entry would stay in the history with its hook's effect undone.
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      const create = createTask();
+      const counter = { count: 1 };
+      vi.spyOn(handlerOf(diagram, create), 'createCommand').mockImplementationOnce(
+         () =>
+            new OrderFlowCommand(
+               diagram.state,
+               'Move Pay',
+               () => place(diagram, 'Pay', 50, 110),
+               async () => {
+                  await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 50, 110', 'node Pay at 55, 115'));
+                  counter.count--;
+               }
+            )
+      );
+      await apply(diagram, create);
+
+      const failed = await dispatchRefused(opened, counter, UndoAction.create());
+
+      expect(failed).toEqual({
+         count: 0,
+         layout: false,
+         messages: [{ severity: 'ERROR', message: DIAGRAM_UNDO_FAILED.text }],
+         canUndo: false,
+         canRedo: false
+      });
+   });
+
+   it('says the history is gone when a redo whose write collides cannot undo a step it already ran', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      let redone = false;
+      await applyUndoable(
+         opened,
+         async () => {
+            if (redone) {
+               throw new Error('undo step failed');
+            }
+         },
+         async () => {
+            redone = true;
+            await changeTextBuilt(opened, layoutUri, text => text.replace('node Pay at 40, 100', 'node Pay at 45, 105'));
+         }
+      );
+      await undoOrRedo(diagram, UndoAction.create());
+
+      const failed = await applyFailing(diagram, RedoAction.create());
+
+      expect({ message: failed.message, canUndo: commandStackOf(diagram).canUndo(), canRedo: commandStackOf(diagram).canRedo() }).toEqual({
+         message: DIAGRAM_REDO_FAILED.text,
+         canUndo: false,
+         canRedo: false
+      });
    });
 
    describe("when the text already holds the undo's or redo's result", () => {
@@ -971,8 +1326,14 @@ describe('undo and redo of an operation', () => {
 
       const failed = await applyFailing(diagram, UndoAction.create());
 
-      expect({ message: failed.message, canUndo: commandStackOf(diagram).canUndo(), canRedo: commandStackOf(diagram).canRedo() }).toEqual({
+      expect({
+         message: failed.message,
+         namesTheDocument: failed.details?.includes(new DocumentSyntaxError(layoutUri).message),
+         canUndo: commandStackOf(diagram).canUndo(),
+         canRedo: commandStackOf(diagram).canRedo()
+      }).toEqual({
          message: DIAGRAM_UNDO_ERROR.text,
+         namesTheDocument: true,
          canUndo: false,
          canRedo: false
       });
@@ -993,6 +1354,26 @@ describe('undo and redo of an operation', () => {
 
       expect({ message: failed.message, canUndo: commandStackOf(diagram).canUndo(), canRedo: commandStackOf(diagram).canRedo() }).toEqual({
          message: DIAGRAM_UNDO_ERROR.text,
+         canUndo: false,
+         canRedo: false
+      });
+   });
+
+   it('says the history is gone when an undo whose write throws a conflict cannot redo a step it already ran', async () => {
+      // The step stays undone, so a retry would no longer find what it undoes.
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await applyUndoable(
+         opened,
+         async () => undefined,
+         () => Promise.reject(new Error('redo step failed'))
+      );
+      vi.spyOn(diagram.state, 'updateSourceModel').mockRejectedValueOnce(new ConflictError(layoutUri, asModelVersion(1), 2));
+
+      const failed = await applyFailing(diagram, UndoAction.create());
+
+      expect({ message: failed.message, canUndo: commandStackOf(diagram).canUndo(), canRedo: commandStackOf(diagram).canRedo() }).toEqual({
+         message: DIAGRAM_UNDO_FAILED.text,
          canUndo: false,
          canRedo: false
       });
@@ -1053,21 +1434,63 @@ describe('undo and redo of an operation', () => {
       });
    });
 
-   it("tells a conflict thrown by an undo's write as a foreign edit", async () => {
+   it('keeps the history and its place when an undo’s write throws a conflict, and undoes once retried', async () => {
       const opened = await openDiagram();
       const { diagram, layoutUri } = opened;
-      await applyUndoable(opened, async () => undefined);
+      const counter = await applyUndoable(opened, async () => undefined);
       vi.spyOn(diagram.state, 'updateSourceModel').mockRejectedValueOnce(new ConflictError(layoutUri, asModelVersion(1), 2));
-      const before = diagram.actions.length;
 
-      await applyFailing(diagram, UndoAction.create());
+      const refused = await dispatchRefused(opened, counter, UndoAction.create());
+      await undoOrRedo(diagram, UndoAction.create());
 
-      expect(
-         diagram.actions
-            .slice(before)
-            .filter(MessageAction.is)
-            .map(({ message }) => message)
-      ).toEqual([DIAGRAM_UNDO_FAILED.text]);
+      expect(refused).toEqual({
+         count: 1,
+         layout: true,
+         messages: [{ severity: 'WARNING', message: DIAGRAM_UNDO_CONFLICT.text }],
+         canUndo: true,
+         canRedo: false
+      });
+      expect({ count: counter.count, payUndone: textOf(opened, layoutUri).includes('node Pay at 40, 100') }).toEqual({
+         count: 0,
+         payUndone: true
+      });
+   });
+
+   it('keeps the history and its place when a redo’s write throws a conflict, and redoes once retried', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      const counter = await applyUndoable(opened, async () => undefined);
+      await undoOrRedo(diagram, UndoAction.create());
+      vi.spyOn(diagram.state, 'updateSourceModel').mockRejectedValueOnce(new ConflictError(layoutUri, asModelVersion(1), 2));
+
+      const refused = await dispatchRefused(opened, counter, RedoAction.create());
+      await undoOrRedo(diagram, RedoAction.create());
+
+      expect(refused).toEqual({
+         count: 0,
+         layout: true,
+         messages: [{ severity: 'WARNING', message: DIAGRAM_REDO_CONFLICT.text }],
+         canUndo: false,
+         canRedo: true
+      });
+      expect({ count: counter.count, payRedone: textOf(opened, layoutUri).includes('node Pay at 50, 110') }).toEqual({
+         count: 1,
+         payRedone: true
+      });
+   });
+
+   it('says the history is gone when a conflict is thrown by a step of an undo, since that step may have written before', async () => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      await applyUndoable(opened, () => Promise.reject(new ConflictError(layoutUri, asModelVersion(1), 2)));
+
+      const failed = await applyFailing(diagram, UndoAction.create());
+
+      expect({ message: failed.message, canUndo: commandStackOf(diagram).canUndo(), canRedo: commandStackOf(diagram).canRedo() }).toEqual({
+         message: DIAGRAM_UNDO_FAILED.text,
+         canUndo: false,
+         canRedo: false
+      });
    });
 
    it('says the history is gone when a redo fails for a reason of its own', async () => {

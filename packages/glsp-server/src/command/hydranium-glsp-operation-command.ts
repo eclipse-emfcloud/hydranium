@@ -20,8 +20,15 @@ import {
    type Reference
 } from '@hydranium/langium';
 import { hasSkippedText } from '@hydranium/core';
-import { DocumentSyntaxError, type ModelVersion, describeErrorWithStack, isDocumentSyntaxError } from '@hydranium/protocol';
-import { DiagramEditDroppedError } from './diagram-edit-dropped-error.js';
+import {
+   DocumentSyntaxError,
+   type ModelVersion,
+   describeError,
+   describeErrorWithStack,
+   isConflictError,
+   isDocumentSyntaxError
+} from '@hydranium/protocol';
+import { DiagramEditDroppedError, isDiagramEditDroppedError } from './diagram-edit-dropped-error.js';
 import { type HydraniumGlspRecordingState } from './hydranium-glsp-recording-command.js';
 
 /**
@@ -92,7 +99,9 @@ export function openOperationOf(state: object): OperationInternals | undefined {
 
 /**
  * How many operations an undo or redo skipped and applied, as one command-stack
- * entry, a compound executed outside an operation, can undo several.
+ * entry, a compound executed outside an operation, can undo several. The run
+ * that does nothing after a skip counts as applied, since the model already
+ * holds where it leads.
  */
 export interface UndoRedoTally {
    skipped: number;
@@ -188,6 +197,14 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
    protected transition?: OperationTransition<TSourceModel>;
    /** Whether an undo or redo is running the side effects, on copies it discards. */
    protected undoingOrRedoing = false;
+   /**
+    * The direction of the last undo or redo if a foreign edit skipped it. The
+    * model and the side effects then stay where the other direction leads, so
+    * the next run that way does nothing. A run after that is an ordinary one,
+    * including the undo a failing compound runs to roll back that no-op, so its
+    * hooks run.
+    */
+   protected skippedDirection?: UndoRedoDirection;
 
    constructor(protected readonly modelState: HydraniumGlspRecordingState<TSourceModel>) {
       const members: OperationInternals = {
@@ -460,11 +477,22 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
     * collision does nothing but warn, unless a document the model is read from
     * does not parse, which throws `DocumentSyntaxError`. A transition with
     * nothing left to apply, or one the model already holds, still runs the side
-    * effects. Either way the outcome is counted for {@link takeUndoRedoTally}.
+    * effects. A write a foreign edit drops is skipped as a collision is, see
+    * {@link undoOrRedoSideEffects}. The run after a skip in the other
+    * direction does nothing, see {@link skippedDirection}. Either way the
+    * outcome is counted for {@link takeUndoRedoTally}.
     *
     * The caller holds `runExclusive`, which nothing here takes again.
     */
    protected async undoOrRedo(direction: UndoRedoDirection): Promise<void> {
+      if (this.skippedDirection !== undefined) {
+         const undoesSkip = this.skippedDirection !== direction;
+         this.skippedDirection = undefined;
+         if (undoesSkip) {
+            tallyOf(this.modelState).applied++;
+            return;
+         }
+      }
       // Captured again so the model the transition is resolved onto, the base
       // a conflict reconciles from and the versions the write is gated on are
       // read together.
@@ -492,12 +520,17 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
             this.modelState.logger.warn(
                `${direction === 'undo' ? 'Undo' : 'Redo'} of an operation skipped (${outcome.status}); a foreign edit changed a shared field`
             );
+            this.skippedDirection = direction;
             tallyOf(this.modelState).skipped++;
             return;
          }
       }
-      await this.undoOrRedoSideEffects(direction, merged);
-      tallyOf(this.modelState).applied++;
+      if (await this.undoOrRedoSideEffects(direction, merged)) {
+         tallyOf(this.modelState).applied++;
+      } else {
+         this.skippedDirection = direction;
+         tallyOf(this.modelState).skipped++;
+      }
    }
 
    /**
@@ -533,14 +566,19 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
     * throws.
     *
     * When a step or the write throws, or the write's reconcile drops it, the
-    * steps already run are run the other way, newest first, and the error is
-    * rethrown with nothing written. GLSP's command stack then flushes, except
-    * for a `DocumentSyntaxError` the write threw, after which the model is as
-    * it was. A refusal a step threw, or one after a step that cannot be run
-    * back, is rethrown as the `cause` of a plain error, so the stack flushes:
-    * that step may have written before it was refused.
+    * steps already run are run the other way, newest first, with nothing
+    * written. A write dropped after every step was run back changed nothing,
+    * and resolves to `false`: the undo or redo is skipped as for a collision,
+    * and the history kept. A `DocumentSyntaxError` or `ConflictError` the
+    * write threw then is rethrown, and the command stack keeps its place, so a
+    * retry reads the model again. This relies on the state's write applying
+    * none of its documents when it throws. Any other error is rethrown, and
+    * GLSP's command stack flushes. A refusal a step threw, or one after a step
+    * that cannot be run back, is rethrown as the `cause` of a plain error, so
+    * the stack flushes: that step may have written before it was refused.
+    * Resolves to `true` once the undo or redo applied.
     */
-   protected async undoOrRedoSideEffects(direction: UndoRedoDirection, merged?: TSourceModel): Promise<void> {
+   protected async undoOrRedoSideEffects(direction: UndoRedoDirection, merged?: TSourceModel): Promise<boolean> {
       this.operationRoots.clear();
       this.trace.clear();
       this.writtenRoot = undefined;
@@ -564,10 +602,19 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
                throw new DiagramEditDroppedError(`The ${direction} of an operation was dropped: a foreign edit changed a field it writes`);
             }
          }
+         return true;
       } catch (error: unknown) {
          const reverted = await this.compensate(done, direction);
-         if (isDocumentSyntaxError(error) && !(writing && reverted)) {
-            throw new Error(`The ${direction} was refused for a syntax error after a step that may have changed the model`, {
+         if (writing && reverted) {
+            if (isDiagramEditDroppedError(error)) {
+               // Its reconcile has warned of it.
+               this.modelState.logger.debug(`${direction === 'undo' ? 'Undo' : 'Redo'} of an operation skipped: ${describeError(error)}`);
+               return false;
+            }
+            throw error;
+         }
+         if (isDocumentSyntaxError(error) || isConflictError(error)) {
+            throw new Error(`The ${direction} was refused, and a step it ran may have changed the model: ${describeError(error)}`, {
                cause: error
             });
          }

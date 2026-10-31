@@ -35,7 +35,8 @@ export function isDiagramEditDroppedError(error: unknown): error is DiagramEditD
  * Log an action that failed, once, at the level of what happened: a dropped
  * edit at `debug`, since its reconcile has logged it, a conflict at `warn`
  * naming its versions and a write to a document that does not parse at
- * `warn`, since both were declined, and anything else at `error`.
+ * `warn`, since both were declined, and anything else at `error`. A failure
+ * caused by a conflict names the conflict's versions too.
  * A request is named by its id too, which its client's reject carries.
  */
 export function logActionFailure(logger: Logger, action: Action, error: unknown): void {
@@ -49,6 +50,8 @@ export function logActionFailure(logger: Logger, action: Action, error: unknown)
    } else if (isDocumentSyntaxError(error)) {
       logger.warn(`Could not process action ${named}: ${describeError(error)}`);
    } else {
-      logger.error(`Could not process action ${named}: ${describeErrorWithStack(error)}`);
+      const cause = error instanceof Error ? error.cause : undefined;
+      const versions = isConflictError(cause) ? ` (model v${cause.baseVersion} / text v${cause.actualVersion})` : '';
+      logger.error(`Could not process action ${named}${versions}: ${describeErrorWithStack(error)}`);
    }
 }

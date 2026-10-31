@@ -8,7 +8,15 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { ClientId, type Command, CompoundCommand, GModelIndex, GModelSerializer, ModelState } from '@eclipse-glsp/server';
+import {
+   ClientId,
+   type Command,
+   CompoundCommand,
+   GModelIndex,
+   GModelSerializer,
+   Logger as GlspLogger,
+   ModelState
+} from '@eclipse-glsp/server';
 import 'reflect-metadata';
 import { Container, injectable } from 'inversify';
 import { type AstNode, type LangiumDocument } from '@hydranium/langium';
@@ -21,12 +29,14 @@ import {
    isModelVersion,
    ReconcilingConflictResolver
 } from '@hydranium/protocol';
-import { makeFakeAstNode, makeStubServiceRegistry } from '@hydranium/core/testing';
+import { makeFakeAstNode, makeNoopSharedServices, makeStubServiceRegistry } from '@hydranium/core/testing';
+import { HydraniumGlspCommandStack } from '../src/command/hydranium-glsp-command-stack.js';
+import { makeNoopGlspLogger } from '../src/testing/make-noop-glsp-logger.js';
 import { HydraniumGlspIndex } from '../src/state/hydranium-glsp-index.js';
 import { FullTextHydraniumGlspState, type FullTextSourceModel } from '../src/state/full-text-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { HydraniumGlspRecordingCommand, type HydraniumGlspRecordingState } from '../src/command/hydranium-glsp-recording-command.js';
-import { HydraniumGlspOperationCommand, runOperation } from '../src/command/hydranium-glsp-operation-command.js';
+import { HydraniumGlspOperationCommand, runOperation, takeUndoRedoTally } from '../src/command/hydranium-glsp-operation-command.js';
 
 interface TestRoot extends AstNode {
    readonly $type: 'TestRoot';
@@ -441,6 +451,66 @@ describe('FullTextHydraniumGlspState undo', () => {
          sideEffects: 0,
          writes: ['serialized:edited', 'serialized:r1'],
          version: 6
+      });
+   });
+});
+
+function commandStackOver(state: TestFullTextState): HydraniumGlspCommandStack {
+   const container = new Container();
+   container.bind(GlspLogger).toConstantValue(makeNoopGlspLogger());
+   container.bind(ModelState).toConstantValue(state);
+   container.bind(HydraniumTypes.SharedCoreServices).toConstantValue(makeNoopSharedServices<ServerSharedServices>({}));
+   container.bind(HydraniumGlspCommandStack).toSelf();
+   return container.get(HydraniumGlspCommandStack);
+}
+
+function recordingCommandOver(state: TestFullTextState, mutate: () => void): HydraniumGlspRecordingCommand<FullTextSourceModel> {
+   return new HydraniumGlspRecordingCommand<FullTextSourceModel>(state, 'Edit', mutate);
+}
+
+describe('FullTextHydraniumGlspState undo after a foreign edit', () => {
+   it('keeps the history when an undo’s write meets a foreign edit, and skips the entry once that edit is built, keeping its text', async () => {
+      // Every foreign edit changes the one field, so the retry collides.
+      let text = 'element Before {}';
+      const harness = makeHarness();
+      harness.serialize = () => text;
+      harness.onUpdate = written => (text = written);
+      harness.documentVersion = 3;
+      const state = createState(harness);
+      state.setSourceRoot('file:///a.a', parsedAt(3));
+      harness.nextUpdatedRoot = parsedAt(5);
+      const stack = commandStackOver(state);
+      const operation = new HydraniumGlspOperationCommand<FullTextSourceModel>(state);
+      await runOperation(operation, () => recordingCommandOver(state, () => (text = 'element After {}')));
+      await stack.execute(operation);
+      harness.documentVersion = 6;
+      harness.storeText = 'element Foreign {}';
+      harness.conflictOnNextUpdate = true;
+
+      const refused = await stack.undo().then(
+         () => undefined,
+         (error: unknown) => error
+      );
+      const kept = { canUndo: stack.canUndo(), canRedo: stack.canRedo() };
+      text = 'element Foreign {}';
+      state.setSourceRoot('file:///a.a', parsedAt(6));
+      takeUndoRedoTally(state);
+      await stack.undo();
+
+      expect({
+         refusedBare: refused instanceof ConflictError,
+         kept,
+         tally: takeUndoRedoTally(state),
+         skippedPast: { canUndo: stack.canUndo(), canRedo: stack.canRedo() },
+         writes: harness.updateCalls.map(call => call.model),
+         text
+      }).toEqual({
+         refusedBare: true,
+         kept: { canUndo: true, canRedo: false },
+         tally: { skipped: 1, applied: 0 },
+         skippedPast: { canUndo: false, canRedo: true },
+         writes: ['element After {}', 'element Before {}'],
+         text: 'element Foreign {}'
       });
    });
 });

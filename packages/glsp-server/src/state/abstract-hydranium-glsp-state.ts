@@ -452,8 +452,8 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
     * Resync after a write whose reconcile dropped the edit: during an
     * operation the operation undoes its side effects, pushes nothing, and
     * captures the document's current root when it ends. Announced on
-    * {@link onEditDropped}, except during an undo or redo, which fails and
-    * reports that itself.
+    * {@link onEditDropped}, except during an undo or redo, which is skipped
+    * or fails and reports that itself.
     */
    protected writeDropped(): void {
       const operation = openOperationOf(this);
