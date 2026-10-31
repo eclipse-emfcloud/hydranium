@@ -9,6 +9,8 @@
 
 import { Format, type Stopwatch, SystemClock } from '@hydranium/protocol';
 import { DocumentState, type LangiumDocuments } from '@hydranium/langium';
+import { type ModelLedger } from '../documents/model-ledger.js';
+import { type ServerSharedServicesMinimal } from '../langium/shared-services.js';
 import { isCstShed } from '../langium/residency/cst-residency-service.js';
 import { performance } from 'node:perf_hooks';
 import * as v8 from 'node:v8';
@@ -58,9 +60,15 @@ export interface ServerStateSnapshotOptions {
  * logs the result, e.g. `tracer.info(formatServerState(...))`), matching
  * `formatProcessMemory` / `formatPodMemory`. Tracks deltas across calls so
  * subsequent snapshots show "since last snapshot" rates. Optional sections are
- * requested via `options` ({@link ServerStateSnapshotOptions}).
+ * requested via `options` ({@link ServerStateSnapshotOptions}). `workspace`
+ * adds the document counts. Its ledger tells a shed document from one that
+ * never had a CST.
  */
-export function formatServerState(documents?: LangiumDocuments, label?: string, options?: ServerStateSnapshotOptions): string {
+export function formatServerState(
+   workspace?: Pick<ServerSharedServicesMinimal['workspace'], 'LangiumDocuments' | 'ModelLedger'>,
+   label?: string,
+   options?: ServerStateSnapshotOptions
+): string {
    const sinceSample = new SystemClock().stopwatch();
    const mem = process.memoryUsage();
    const heap = v8.getHeapStatistics();
@@ -110,7 +118,8 @@ export function formatServerState(documents?: LangiumDocuments, label?: string, 
       const eluPct = eluTotal > 0 ? Math.round((elu.active / eluTotal) * 100) : 0;
       lines.push(`  loop      utilization ${eluPct}% (cumulative since process start)`);
    }
-   if (documents) {
+   if (workspace) {
+      const { LangiumDocuments: documents, ModelLedger: ledger } = workspace;
       const counts = countDocumentsByState(documents);
       const total = Object.values(counts).reduce((sum, n) => sum + n, 0);
       const breakdown = Object.entries(counts)
@@ -118,9 +127,9 @@ export function formatServerState(documents?: LangiumDocuments, label?: string, 
          .map(([state, n]) => `${state}: ${n}`)
          .join(', ');
       lines.push(`  documents ${total} tracked${breakdown ? ` (${breakdown})` : ''}`);
-      // CST-residency breakdown — only meaningful (and only emitted) once a residency
-      // policy has shed at least one document; silent under the always-keep default.
-      const residency = countCstResidency(documents);
+      // CST-residency breakdown, emitted once a document waits for a CST graft:
+      // shed by a residency policy, or built from code and not built yet.
+      const residency = countCstResidency(documents, ledger);
       if (residency.shed > 0) {
          lines.push(`  cst       ${residency.resident} resident, ${residency.shed} shed`);
       }
@@ -143,17 +152,17 @@ export function formatServerState(documents?: LangiumDocuments, label?: string, 
 
 /**
  * Count documents whose CST is resident vs. shed by a residency policy
- * ({@link isCstShed}). A document can also be in neither bucket — not-yet-parsed
- * or a synthetic placeholder with no `$cstNode` at all (nothing to be "resident"
- * or "shed") — which is intentionally counted as neither; `resident + shed` is
- * therefore ≤ total tracked, with the remainder explained by the state breakdown
- * on the preceding `documents` line.
+ * ({@link isCstShed}). A document can also be in neither bucket: a
+ * not-yet-parsed document, a synthetic placeholder, or a `fromModel` document
+ * without a serializer has no CST and no text to graft one from. So
+ * `resident + shed` is at most the total tracked, with the remainder explained
+ * by the state breakdown on the preceding `documents` line.
  */
-function countCstResidency(documents: LangiumDocuments): { resident: number; shed: number } {
+function countCstResidency(documents: LangiumDocuments, ledger: ModelLedger): { resident: number; shed: number } {
    let resident = 0;
    let shed = 0;
    for (const doc of documents.all) {
-      if (isCstShed(doc)) {
+      if (isCstShed(doc, ledger)) {
          shed++;
       } else if (doc.parseResult?.value?.$cstNode !== undefined) {
          resident++;

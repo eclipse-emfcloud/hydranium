@@ -703,24 +703,36 @@ describe('HydraniumDocumentBuilder', () => {
       // `graft` stands in for the residency service: `true` reattaches a CST,
       // `false` leaves the document shed as a diverged graft does. `rebuilds`
       // collects the follow-up builds asked of the version sync service.
+      // `parsedFromText` has the ledger hold a text for every root, as a shed records it.
+      // `unlinked` collects the documents the linker unlinks.
+      // `fileExists` answers whether a file is at every document's URI, and
+      // `openInStore` whether the store holds every document open.
       function rehydrateBuilder({
          refreshCrossDocumentComputedScopes = false,
          graft = true,
+         parsedFromText = true,
+         fileExists = false,
+         openInStore = false,
          documents = [],
          rebuilds = [],
+         unlinked = [],
          onGraft = () => undefined
       }: {
          refreshCrossDocumentComputedScopes?: boolean;
          graft?: boolean;
+         parsedFromText?: boolean;
+         fileExists?: boolean;
+         openInStore?: boolean;
          documents?: LangiumDocument[];
          rebuilds?: LangiumDocument[];
+         unlinked?: LangiumDocument[];
          onGraft?: () => void;
       } = {}): HydraniumDocumentBuilder {
          const services = makeNoopSharedServices({
             Logger: makeNoopLogger(),
             ServiceRegistry: {
                getServices: () => ({
-                  references: { Linker: { unlink: () => undefined } },
+                  references: { Linker: { unlink: (document: LangiumDocument) => unlinked.push(document) } },
                   validation: { ValidationRegistry: { getAllValidationCategories: () => new Set(['fast', 'slow']) } }
                })
             },
@@ -736,6 +748,9 @@ describe('HydraniumDocumentBuilder', () => {
                      rebuilds.push(document);
                   }
                },
+               ModelLedger: { textOf: () => (parsedFromText ? 'text' : undefined) },
+               FileSystemProvider: { exists: () => Promise.resolve(fileExists) },
+               ...(openInStore ? { TextDocuments: { get: () => ({ version: 1 }) } } : {}),
                IndexManager: {
                   removeContent: () => undefined,
                   removeReferences: () => undefined,
@@ -810,6 +825,44 @@ describe('HydraniumDocumentBuilder', () => {
          // The build after this one relinks the dependents, as a changed document's.
          expect(rebuilds).toEqual([shed]);
       });
+
+      it('a build unlinks a document below Linked that lists references, as a code-built one does before its first build', async () => {
+         const codeBuilt = doc(DocumentState.Parsed, { $type: 'Model' }, '/code-built.a');
+         codeBuilt.references.push({ $refText: 'Target', ref: undefined });
+         const parsed = doc(DocumentState.Parsed, { $type: 'Model' });
+         const linked = doc(DocumentState.Linked, { $type: 'Model' }, '/linked.a');
+         linked.references.push({ $refText: 'Target', ref: undefined });
+         const unlinked: LangiumDocument[] = [];
+         const builder = rehydrateBuilder({ documents: [codeBuilt, parsed, linked], unlinked });
+         await buildWithoutPhases(() => builder.build([codeBuilt, parsed, linked], {}));
+         expect(unlinked).toEqual([codeBuilt]);
+      });
+
+      it.each([
+         ['leaves it as it is with no file at its URI and no open text', false, false, DocumentState.ComputedScopes, 0],
+         ['resets it to be re-read with a file at its URI', true, false, DocumentState.Changed, 1],
+         ['resets it to be re-read with its text open in the store and no file', false, true, DocumentState.Changed, 1]
+      ])(
+         'a build given a document without a CST and with no text to graft one from %s',
+         async (_outcome, fileExists, openInStore, state, rebuildCount) => {
+            const grafts: LangiumDocument[] = [];
+            const textless = doc(DocumentState.Validated, { $type: 'Model' });
+            const rebuilds: LangiumDocument[] = [];
+            const builder = rehydrateBuilder({
+               parsedFromText: false,
+               fileExists,
+               openInStore,
+               documents: [textless],
+               rebuilds,
+               onGraft: () => grafts.push(textless)
+            });
+            builder.resetToState(textless, DocumentState.ComputedScopes);
+            await buildWithoutPhases(() => builder.build([textless], {}));
+            expect(grafts).toEqual([]);
+            expect(textless.state).toBe(state);
+            expect(rebuilds).toHaveLength(rebuildCount);
+         }
+      );
 
       it('a cancelled build stops grafting between shed documents', async () => {
          const first = doc(DocumentState.ComputedScopes, { $type: 'Model' });

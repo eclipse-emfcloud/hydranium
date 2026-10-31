@@ -9,7 +9,11 @@
 
 import { performance } from 'node:perf_hooks';
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
+import { type AstNode, DocumentState, type LangiumDocument } from '@hydranium/langium';
+import { DefaultModelLedger } from '../../src/documents/model-ledger.js';
+import type { ServerSharedServicesMinimal } from '../../src/langium/shared-services.js';
 import { formatServerState } from '../../src/node/server-state-snapshot.js';
+import { makeFakeAstNode } from '../../src/testing/index.js';
 
 describe('formatServerState', () => {
    let nowSpy: MockInstance<typeof performance.now>;
@@ -97,5 +101,22 @@ describe('formatServerState', () => {
       expect(snapshot).toContain('file:///doc-1.x');
       expect(snapshot).not.toContain('file:///doc-2.x');
       expect(snapshot).toContain('… and 2 more');
+   });
+
+   it('counts as shed only a document whose ledger holds a text to graft its CST from', () => {
+      nowSpy.mockReturnValue(1000);
+      cpuSpy.mockReturnValue({ user: 0, system: 0 });
+      eluSpy.mockReturnValue({ idle: 0, active: 0, utilization: 0 });
+      const doc = (root: AstNode): LangiumDocument =>
+         ({ state: DocumentState.Validated, parseResult: { value: root } }) as unknown as LangiumDocument;
+      const shedRoot: AstNode = { $type: 'Model' };
+      const residentRoot = makeFakeAstNode({ $type: 'Model', $cstNode: {} });
+      const textlessRoot: AstNode = { $type: 'Model' };
+      const ledger = new DefaultModelLedger();
+      ledger.record(shedRoot, 1, 'text');
+      const documents = {
+         all: [doc(shedRoot), doc(residentRoot), doc(textlessRoot)]
+      } as unknown as ServerSharedServicesMinimal['workspace']['LangiumDocuments'];
+      expect(formatServerState({ LangiumDocuments: documents, ModelLedger: ledger })).toContain('cst       1 resident, 1 shed');
    });
 });

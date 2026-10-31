@@ -29,10 +29,11 @@
  */
 
 import { DefaultCstResidencyService, DefaultModelLedger, DefaultVersionSyncService } from '@hydranium/core';
-import { asMutable } from '@hydranium/protocol';
+import { asMutable, STALE_VERSION } from '@hydranium/protocol';
 import {
    type AstNode,
    AstUtils,
+   Cancellation,
    type CstNode,
    DocumentState,
    isReference,
@@ -161,6 +162,12 @@ function collectReferences(document: LangiumDocument): ReadonlyArray<Reference |
  */
 function resolvedTarget(reference: Reference | MultiReference): AstNode | undefined {
    return isReference(reference) ? reference.ref : undefined;
+}
+
+/** Assert that `after` holds the nodes of `before`, naming the first one that was replaced. */
+function expectSameNodes(after: readonly AstNode[], before: readonly AstNode[]): void {
+   expect(after).toHaveLength(before.length);
+   after.forEach((node, index) => expect(node, `node ${index}, a ${before[index].$type}`).toBe(before[index]));
 }
 
 /** The named `Entity` of a built `.domain` document, or a throw naming what was found instead. */
@@ -389,9 +396,7 @@ describe('CstResidencyService.rehydrate identity-preserving CST graft', () => {
       expect(root.$cstNode).toBeUndefined();
    });
 
-   it('leaves a code-built document without a CST, though its serialized text parses', () => {
-      // The serialized text is not the text the model was parsed from, so its
-      // pre-order node pairing would not have to match.
+   it('grafts the CST of a code-built document from its serialized text, keeping its nodes', () => {
       const harness = makeServices();
       const factory = harness.shared.workspace.LangiumDocumentFactory;
       const model = factory.fromString<DomainModel>(DOMAIN_SOURCE, URI.parse('file:///parsed.domain')).parseResult.value;
@@ -401,9 +406,16 @@ describe('CstResidencyService.rehydrate identity-preserving CST graft', () => {
       const document = factory.fromModel(model, URI.parse('file:///code-built.domain'));
       expect(document.textDocument.getText()).not.toBe('');
 
+      const nodes = [...AstUtils.streamAst(model)];
+
       harness.shared.workspace.CstResidencyService.rehydrate(document);
 
-      expect(model.$cstNode).toBeUndefined();
+      expect(model.$cstNode?.root.fullText).toBe(document.textDocument.getText());
+      const after = [...AstUtils.streamAst(document.parseResult.value)];
+      expectSameNodes(after, nodes);
+      for (const node of nodes) {
+         expect(node.$cstNode?.astNode, node.$type).toBe(node);
+      }
    });
 
    it('NameProvider.getNameNode transparently rehydrates a shed document in either grammar', async () => {
@@ -573,6 +585,196 @@ describe('a shed document re-entering a build without a text change', () => {
       expect(subject.ref).toBe(order);
    });
 
+   /**
+    * Replace `document` with one built by `fromModel` from its model.
+    * A model built in code has neither CST nodes nor `$refNode`s, and its
+    * references are linker-built or, from a reference builder, object literals.
+    */
+   function rebuildFromModel(
+      harness: OrderFlowHarness,
+      document: LangiumDocument<DomainModel>,
+      { literalReferences = false }: { literalReferences?: boolean } = {}
+   ): LangiumDocument<DomainModel> {
+      const model = document.parseResult.value;
+      for (const node of AstUtils.streamAst(model)) {
+         asMutable(node).$cstNode = undefined;
+         for (const { reference, container, property, index } of [...AstUtils.streamReferences(node)]) {
+            asMutable(reference).$refNode = undefined;
+            if (literalReferences) {
+               const literal = { $refText: reference.$refText, ref: resolvedTarget(reference) };
+               const owner: unknown = Reflect.get(container, property);
+               if (index === undefined) {
+                  Reflect.set(container, property, literal);
+               } else if (Array.isArray(owner)) {
+                  owner[index] = literal;
+               }
+            }
+         }
+      }
+      const workspace = harness.shared.workspace;
+      workspace.LangiumDocuments.deleteDocument(document.uri);
+      const codeBuilt = workspace.LangiumDocumentFactory.fromModel(model, document.uri);
+      workspace.LangiumDocuments.addDocument(codeBuilt);
+      return codeBuilt;
+   }
+
+   it.each([
+      ['linker-built', false],
+      ['object-literal', true]
+   ])(
+      'keeps the AST nodes of a code-built document with %s references and relinks it when its target changes',
+      async (_shape, literalReferences) => {
+         const { harness, statusUri, orderDocument, processDocument } = await buildChain();
+         const model = orderDocument.parseResult.value;
+         const codeBuilt = rebuildFromModel(harness, orderDocument, { literalReferences });
+         const statusBefore = harness.shared.workspace.LangiumDocuments.getDocument(statusUri)?.parseResult.value;
+         // Until the first build, every reference reads the target its code set.
+         const codeSet = collectReferences(codeBuilt).map(reference => resolvedTarget(reference));
+         expect(codeSet.length).toBeGreaterThan(0);
+         for (const target of codeSet) {
+            expect(target && AstUtils.findRootNode(target)).toBe(statusBefore);
+         }
+
+         const workspace = harness.shared.workspace;
+         const rebuilt: LangiumDocument[] = [codeBuilt, processDocument];
+         await workspace.DocumentBuilder.build(rebuilt, { validation: true });
+         expect(codeBuilt.parseResult.value).toBe(model);
+         expect(model.$cstNode).toBeDefined();
+         const order = entityNamed(codeBuilt, 'Order');
+         const subject = processDocument.parseResult.value.subject;
+         expect(subject.ref).toBe(order);
+
+         await changeStatus(harness, statusUri);
+
+         expect(codeBuilt.parseResult.value).toBe(model);
+         expect(entityNamed(codeBuilt, 'Order')).toBe(order);
+         expect(subject.ref).toBe(order);
+         const statusRoot = workspace.LangiumDocuments.getDocument(statusUri)?.parseResult.value;
+         expect(statusRoot).not.toBe(statusBefore);
+         const targets = collectReferences(codeBuilt).map(reference => resolvedTarget(reference));
+         expect(targets.length).toBeGreaterThan(0);
+         for (const target of targets) {
+            expect(target && AstUtils.findRootNode(target)).toBe(statusRoot);
+         }
+      }
+   );
+
+   /** A code-built document of a language without a serializer, which `fromModel` gives no text. */
+   function buildWithoutSerializer(harness: OrderFlowHarness, document: LangiumDocument<DomainModel>): LangiumDocument<DomainModel> {
+      const factory = harness.shared.workspace.LangiumDocumentFactory;
+      Reflect.set(factory, 'serializeModel', () => undefined);
+      try {
+         return rebuildFromModel(harness, document);
+      } finally {
+         Reflect.deleteProperty(factory, 'serializeModel');
+      }
+   }
+
+   it('re-reads a code-built document without a serializer from its file and relinks it when its target changes', async () => {
+      const { harness, statusUri, orderDocument } = await buildChain();
+      const codeBuilt = buildWithoutSerializer(harness, orderDocument);
+      const workspace = harness.shared.workspace;
+
+      await workspace.DocumentBuilder.build([codeBuilt], { validation: true });
+      expect(codeBuilt.parseResult.value.$cstNode).toBeDefined();
+      await changeStatus(harness, statusUri);
+
+      const statusRoot = workspace.LangiumDocuments.getDocument(statusUri)?.parseResult.value;
+      const targets = collectReferences(codeBuilt).map(reference => resolvedTarget(reference));
+      expect(targets.length).toBeGreaterThan(0);
+      for (const target of targets) {
+         expect(target && AstUtils.findRootNode(target)).toBe(statusRoot);
+      }
+   });
+
+   it('keeps the AST nodes of a code-built document without a serializer when no file or open text holds its text', async () => {
+      const { harness, orderDocument } = await buildChain();
+      const codeBuilt = buildWithoutSerializer(harness, orderDocument);
+      const model = codeBuilt.parseResult.value;
+      rmSync(codeBuilt.uri.fsPath);
+
+      await harness.shared.workspace.DocumentBuilder.build([codeBuilt], { validation: true });
+
+      expect(codeBuilt.parseResult.value).toBe(model);
+      expect(model.$cstNode).toBeUndefined();
+      expect(codeBuilt.state).toBe(DocumentState.Validated);
+   });
+
+   it('keeps the AST nodes of a model built in code without the defaults the parser fills in, and relinks it', async () => {
+      const { harness, statusUri, orderDocument } = await buildChain();
+      const workspace = harness.shared.workspace;
+      const statusBefore = workspace.LangiumDocuments.getDocument(statusUri)?.parseResult.value as DomainModel;
+      // No `many: false` and no `fields: []`, which a parse of the same text
+      // sets. The serializer reads `fields`.
+      const model = {
+         $type: 'DomainModel',
+         declarations: [
+            { $type: 'Entity', name: 'Customer' },
+            {
+               $type: 'Entity',
+               name: 'Order',
+               fields: [
+                  {
+                     $type: 'Field',
+                     name: 'status',
+                     type: { $type: 'TypeReference', declared: { $refText: 'OrderStatus', ref: statusBefore.declarations[0] } }
+                  }
+               ]
+            }
+         ]
+      } as unknown as DomainModel;
+      workspace.LangiumDocuments.deleteDocument(orderDocument.uri);
+      const codeBuilt = workspace.LangiumDocumentFactory.fromModel(model, orderDocument.uri);
+      workspace.LangiumDocuments.addDocument(codeBuilt);
+      const nodes = [...AstUtils.streamAst(model)];
+
+      await workspace.DocumentBuilder.build([codeBuilt], { validation: true });
+      await changeStatus(harness, statusUri);
+
+      const after = [...AstUtils.streamAst(codeBuilt.parseResult.value)];
+      expectSameNodes(after, nodes);
+      const statusRoot = workspace.LangiumDocuments.getDocument(statusUri)?.parseResult.value;
+      const targets = collectReferences(codeBuilt).map(reference => resolvedTarget(reference));
+      expect(targets).toHaveLength(1);
+      expect(targets[0] && AstUtils.findRootNode(targets[0])).toBe(statusRoot);
+   });
+
+   it('re-parses a code-built document from its file when the file changes on disk', async () => {
+      const { harness, orderDocument } = await buildChain();
+      const codeBuilt = rebuildFromModel(harness, orderDocument);
+      await harness.shared.workspace.DocumentBuilder.build([codeBuilt], { validation: true });
+      const renamed = ORDER_SOURCE.replace('Order', 'Renamed');
+
+      writeFileSync(codeBuilt.uri.fsPath, renamed);
+      await harness.shared.workspace.WorkspaceLock.write(token =>
+         harness.shared.workspace.DocumentBuilder.update([codeBuilt.uri], [], token)
+      );
+
+      expect(codeBuilt.parseResult.value.$cstNode?.root.fullText).toBe(renamed);
+      expect(entityNamed(codeBuilt, 'Renamed')).toBeDefined();
+   });
+
+   it('re-parses a code-built document from its serialized text when its graft diverges, never reading its URI', async () => {
+      const { harness, orderDocument, processDocument } = await buildChain();
+      const codeBuilt = rebuildFromModel(harness, orderDocument);
+      // No file is left at its URI, so reading it would throw.
+      rmSync(codeBuilt.uri.fsPath);
+      const model = codeBuilt.parseResult.value;
+      const serialized = codeBuilt.textDocument.getText();
+      // Changed after serializing, the model no longer pairs with its text.
+      entityNamed(codeBuilt, 'Order').name = 'Renamed';
+
+      const recovery = vi.spyOn(harness.shared.workspace.VersionSyncService, 'requestRecoveryBuild');
+      const rebuilt: LangiumDocument[] = [codeBuilt, processDocument];
+      await harness.shared.workspace.DocumentBuilder.build(rebuilt, { validation: true });
+      // The dependents relink in the build after this one.
+      await Promise.all(recovery.mock.results.map(result => result.value));
+
+      expect(codeBuilt.parseResult.value).not.toBe(model);
+      expect(codeBuilt.parseResult.value.$cstNode?.root.fullText).toBe(serialized);
+      expect(processDocument.parseResult.value.subject.ref).toBe(entityNamed(codeBuilt, 'Order'));
+   });
+
    /** Reset `order.domain` to `Changed` once the update has picked its relinks, as a project change does. */
    async function resetToChanged(harness: OrderFlowHarness, document: LangiumDocument): Promise<void> {
       const builder = harness.shared.workspace.DocumentBuilder;
@@ -627,6 +829,65 @@ describe('a shed document re-entering a build without a text change', () => {
       const textDocument = { uri: document.uri.toString(), languageId: 'domain', version: 1, text };
       harness.shared.workspace.TextDocuments.notifyDidOpenTextDocument({ textDocument });
    }
+
+   it('re-reads a code-built document with no file from the text it last held once the store drops it, never reading its URI', async () => {
+      const { harness, orderDocument } = await buildChain();
+      const codeBuilt = rebuildFromModel(harness, orderDocument);
+      await harness.shared.workspace.DocumentBuilder.build([codeBuilt], { validation: true });
+      rmSync(codeBuilt.uri.fsPath);
+      const edited = ORDER_SOURCE.replace('Order', 'Purchase');
+      open(harness, codeBuilt, edited);
+      await resetToChanged(harness, codeBuilt);
+      harness.shared.workspace.TextDocuments.notifyDidCloseTextDocument({ textDocument: { uri: codeBuilt.uri.toString() } });
+
+      // The factory alone: the release a close starts removes a document with no file.
+      await harness.shared.workspace.LangiumDocumentFactory.update(codeBuilt, Cancellation.CancellationToken.None);
+
+      expect(codeBuilt.parseResult.value.$cstNode?.root.fullText).toBe(edited);
+      expect(entityNamed(codeBuilt, 'Purchase')).toBeDefined();
+   });
+
+   it.each([
+      ['open', 'an edit'],
+      ['closed', 'an open with other text']
+   ])(
+      'records a code-built document with no file read while %s at the version of the text it parsed, when %s lands before the factory resumes',
+      async read => {
+         const { harness, orderDocument } = await buildChain();
+         const codeBuilt = rebuildFromModel(harness, orderDocument);
+         await harness.shared.workspace.DocumentBuilder.build([codeBuilt], { validation: true });
+         rmSync(codeBuilt.uri.fsPath);
+         const store = harness.shared.workspace.TextDocuments;
+         const uri = codeBuilt.uri.toString();
+         const parsed = read === 'open' ? ORDER_SOURCE.replace('Order', 'Purchase') : codeBuilt.textDocument.getText();
+         if (read === 'open') {
+            open(harness, codeBuilt, parsed);
+         }
+         const factory = harness.shared.workspace.LangiumDocumentFactory;
+         const capture: unknown = Reflect.get(factory, 'codeBuiltSource');
+         if (typeof capture !== 'function') {
+            throw new Error('expected the factory to read a code-built document through codeBuiltSource');
+         }
+         const parsedVersion = read === 'open' ? store.get(uri)?.version : STALE_VERSION;
+         // The store changes after the factory captured the text, before it resumes.
+         Reflect.set(factory, 'codeBuiltSource', async (document: LangiumDocument) => {
+            const source: unknown = await capture.call(factory, document);
+            if (read === 'open') {
+               store.notifyDidChangeTextDocument({ textDocument: { uri, version: 2 }, contentChanges: [{ text: ORDER_SOURCE }] });
+            } else {
+               open(harness, codeBuilt, ORDER_SOURCE.replace('Order', 'Purchase'));
+            }
+            return source;
+         });
+
+         await factory.update(codeBuilt, Cancellation.CancellationToken.None);
+         Reflect.deleteProperty(factory, 'codeBuiltSource');
+
+         expect(codeBuilt.parseResult.value.$cstNode?.root.fullText).toBe(parsed);
+         expect(store.get(uri)?.getText()).not.toBe(parsed);
+         expect(harness.shared.workspace.ModelLedger.versionOf(codeBuilt.parseResult.value)).toBe(parsedVersion);
+      }
+   );
 
    it('keeps its AST nodes across a reset to Changed once opened with the text it was parsed from', async () => {
       const { harness, orderDocument, processDocument } = await buildChain();

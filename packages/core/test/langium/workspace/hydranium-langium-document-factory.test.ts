@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { type AstNode, URI } from '@hydranium/langium';
+import { type AstNode, DefaultLinker, type LangiumCoreServices, type MultiReference, type Reference, URI } from '@hydranium/langium';
 import { DefaultModelLedger } from '../../../src/documents/model-ledger.js';
 import { DefaultVersionSyncService } from '../../../src/documents/version-sync-service.js';
 import type { ServerSharedServices } from '../../../src/langium/module.js';
@@ -19,13 +19,23 @@ interface NamedNode extends AstNode {
    name: string;
 }
 
+/** Langium's linker, with no scope: these tests only build and unlink references. */
+const linker = new DefaultLinker({
+   shared: { AstReflection: undefined, workspace: {}, profilers: {} },
+   references: {},
+   workspace: {},
+   LanguageMetaData: { languageId: 'test' }
+} as unknown as LangiumCoreServices);
+
 function factoryWith(serializeAst?: (node: AstNode) => string): HydraniumLangiumDocumentFactory {
    const services = {
       Tracer: makeNoopTracer(),
+      AstReflection: { getTypeMetaData: () => ({ properties: {} }) },
       ServiceRegistry: {
          getServices: (_uri: URI) => ({
             LanguageMetaData: { languageId: 'test' },
-            serializer: serializeAst ? { Serializer: { serializeAst } } : undefined
+            serializer: serializeAst ? { Serializer: { serializeAst } } : undefined,
+            references: { Linker: linker }
          })
       },
       workspace: {
@@ -53,6 +63,35 @@ describe('HydraniumLangiumDocumentFactory.fromModel', () => {
       const factory = factoryWith(node => `serialized:${(node as NamedNode).name}`);
       const doc = factory.fromModel(model, URI.parse('virtual:x'));
       expect(doc.parseResult.value).toBe(model);
+   });
+
+   it('rebuilds code-set references through the linker, keeping their targets and listing them', () => {
+      const factory = factoryWith(node => `serialized:${(node as NamedNode).name}`);
+      const { root, child } = makeTree();
+      // The shape a reference builder returns, which neither a relink nor the reference index reads.
+      Object.assign(root, { base: { $refText: 'Any', ref: child }, bases: [{ $refText: 'Any', ref: child }] });
+      const doc = factory.fromModel(root, URI.parse('virtual:x'));
+      const { base, bases } = root as AstNode & { base: Reference; bases: Reference[] };
+      const [listedBase, listedElement] = doc.references;
+      expect(listedBase).toBe(base);
+      expect(listedElement).toBe(bases[0]);
+      expect([base.ref, bases[0].ref]).toEqual([child, child]);
+      linker.unlink(doc);
+      // Unlinked, a linker-built reference resolves through the scope again. A literal has no such field.
+      expect([base, bases[0]].map(reference => '_ref' in reference && reference._ref === undefined)).toEqual([true, true]);
+   });
+
+   it('rebuilds a code-set multi-reference through the linker, keeping its targets and listing it', () => {
+      const factory = factoryWith(node => `serialized:${(node as NamedNode).name}`);
+      const { root, child } = makeTree();
+      Object.assign(root, { overloads: { $refText: 'Any', items: [{ ref: child }] } });
+      const doc = factory.fromModel(root, URI.parse('virtual:x'));
+      const { overloads } = root as AstNode & { overloads: MultiReference };
+      expect(doc.references).toHaveLength(1);
+      expect(doc.references[0]).toBe(overloads);
+      expect(overloads.items.map(item => item.ref)).toEqual([child]);
+      linker.unlink(doc);
+      expect('_items' in overloads && overloads._items).toBeUndefined();
    });
 
    it('links container properties so the code-built AST is indexable', () => {

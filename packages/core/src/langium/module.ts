@@ -539,9 +539,9 @@ export function createServerSharedModule(
          // language ids, so a section `lsp.configurationRoot` is bound to reads
          // `undefined` forever with no request on the wire.
          ConfigurationProvider: services => new HydraniumConfigurationProvider(services),
-         // Override Langium's factory so a `fromModel` (code-built) virtual
-         // document retains serialized text via the per-language Serializer,
-         // making it re-read-safe through `VirtualFileSystemProvider`.
+         // Override Langium's factory so a `fromModel` (code-built) document
+         // retains serialized text via the per-language Serializer, and is
+         // re-read from that text while no file is at its URI.
          LangiumDocumentFactory: services => new HydraniumLangiumDocumentFactory(services),
          // Langium's default routes through no identity seam and treats every
          // failed load alike, so leaving this unbound opts a server out of both

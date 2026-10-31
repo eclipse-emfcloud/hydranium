@@ -37,6 +37,7 @@ import {
 // restating it.
 import { CancellationToken, Diagnostic, Disposable } from 'vscode-languageserver-protocol';
 import type { HydraniumTextDocuments } from '../../documents/hydranium-text-documents.js';
+import { type ModelLedger } from '../../documents/model-ledger.js';
 import { type VersionSyncService } from '../../documents/version-sync-service.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { IntegrityService } from '../integrity/integrity-service.js';
@@ -313,6 +314,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected readonly versionSyncService: () => VersionSyncService;
    /** A thunk: a residency service whose constructor reads the builder would otherwise be a cycle. */
    protected readonly cstResidency: () => CstResidencyService;
+   protected readonly modelLedger: ModelLedger;
 
    constructor(services: ServerSharedServicesMinimal, options: DocumentBuilderOptions = {}) {
       super(services);
@@ -323,6 +325,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       this.workspaceLock = services.workspace.WorkspaceLock;
       this.versionSyncService = () => services.workspace.VersionSyncService;
       this.cstResidency = () => services.workspace.CstResidencyService;
+      this.modelLedger = services.workspace.ModelLedger;
       this.tracer = services.Tracer.for(options.logName ?? 'DocumentBuilder').trace('instantiated');
       this.logLevel = options.logLevel ?? 'debug';
       this.loggedPhases = options.loggedPhases ?? DEFAULT_LOGGED_PHASES;
@@ -933,6 +936,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       cancelToken: CancellationToken
    ): Promise<void> {
       await this.rehydrateShedDocuments(documents, cancelToken);
+      this.unlinkPrelinkedReferences(documents);
       await super.buildDocuments(documents, options, cancelToken);
       this.notifyBuildEnded({ completed: true });
    }
@@ -946,18 +950,61 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * with a cancellation check between, as the parse phase does. A refused or
     * diverged graft resets the document to `Changed`, so this build re-parses
     * it, and asks for a build after this one, whose relink selection reaches
-    * its dependents as those of a changed document.
+    * its dependents as those of a changed document. A document without a CST
+    * or a text to graft one from is reset the same way when it can be re-read.
     */
    protected async rehydrateShedDocuments(documents: LangiumDocument[], cancelToken: CancellationToken): Promise<void> {
       for (const document of documents) {
-         if (document.state < DocumentState.Validated && isCstShed(document)) {
+         if (document.state < DocumentState.Validated && isCstShed(document, this.modelLedger)) {
             await interruptAndCheck(cancelToken);
             this.tracer.debug(`rehydrating CST of ${this.formatUri(document.uri)} (re-entered build while shed)`);
             this.cstResidency().rehydrate(document);
-            if (isCstShed(document)) {
+            if (isCstShed(document, this.modelLedger)) {
                this.resetToState(document, CST_REHYDRATION_RESET_STATE);
                this.versionSyncService().rebuildWhileCurrent(document);
             }
+         } else if (document.state < DocumentState.Validated && this.hasNoCstToGraft(document) && (await this.hasReadableText(document))) {
+            await interruptAndCheck(cancelToken);
+            this.tracer.debug(`re-reading ${this.formatUri(document.uri)} (re-entered build without a CST to graft)`);
+            this.resetToState(document, CST_REHYDRATION_RESET_STATE);
+            this.versionSyncService().rebuildWhileCurrent(document);
+         }
+      }
+   }
+
+   /**
+    * Whether `document` has an AST but no CST and no text to graft one from,
+    * as a `fromModel` document without a serializer has. Such a document is
+    * re-read when {@link hasReadableText}, so its references are indexed.
+    * Synchronous, so a build awaits nothing for a document with a CST.
+    */
+   protected hasNoCstToGraft(document: LangiumDocument): boolean {
+      const root = document.parseResult?.value;
+      return (
+         document.state >= DocumentState.Parsed &&
+         root !== undefined &&
+         root.$cstNode === undefined &&
+         this.modelLedger.textOf(root) === undefined
+      );
+   }
+
+   /** Whether the store or a file holds the text of `document`. Without either, reading it would fail. */
+   protected async hasReadableText(document: LangiumDocument): Promise<boolean> {
+      return this.textDocuments?.get(document.uri) !== undefined || (await this.fileSystemProvider.exists(document.uri));
+   }
+
+   /**
+    * Unlink every document of the build that is below `Linked` but lists
+    * references, so the link phase resolves and indexes them. Such a document
+    * is mostly a code-built one, which holds the targets its code set until
+    * its first build. Any other document had references resolved before its
+    * link phase, by a cancelled build or a lazy read, and they are resolved
+    * again.
+    */
+   protected unlinkPrelinkedReferences(documents: LangiumDocument[]): void {
+      for (const document of documents) {
+         if (document.state < DocumentState.Linked && document.references.length > 0) {
+            this.languageRegistry.getServices(document.uri).references.Linker.unlink(document);
          }
       }
    }
