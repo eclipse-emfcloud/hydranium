@@ -46,8 +46,8 @@ const SECONDARY_SOURCE = `entity ReasonCustomer {
 
 let scratch: ScratchOrderFlowHarness | undefined;
 
-afterEach(() => {
-   scratch?.workspace.dispose();
+afterEach(async () => {
+   await scratch?.dispose();
    scratch = undefined;
 });
 

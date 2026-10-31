@@ -25,6 +25,7 @@ import { DefaultFileSystemProvider } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
 import { type DataServerHarness, makeDataServerHarness } from '@hydranium/data-server/testing';
 import {
+   disposeScratchWorkspace,
    type LspHarness,
    makeLspHarness,
    makeLspServerConnection,
@@ -46,7 +47,7 @@ import {
    WillSaveTextDocumentWaitUntilRequest
 } from 'vscode-languageserver-protocol';
 import type { DomainModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
-import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
+import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
 import { WORKSPACE_ROOT } from './order-flow-harness.js';
 
 const FILE = 'editor-save.domain';
@@ -69,9 +70,10 @@ type OrderFlowTransfer = DomainModel | ProcessModel;
 
 let workspace: ScratchWorkspace | undefined;
 let lsp: LspHarness | undefined;
+let lspShared: OrderFlowSharedServices | undefined;
 let dataHead: DataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer> | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    // A test that failed before releasing would leave every later write held.
    GatedFileSystemProvider.gate?.resolve();
    GatedFileSystemProvider.gate = undefined;
@@ -80,8 +82,10 @@ afterEach(() => {
    dataHead = undefined;
    lsp?.dispose();
    lsp = undefined;
-   workspace?.dispose();
+   const disposing = disposeScratchWorkspace(workspace, lspShared);
+   lspShared = undefined;
    workspace = undefined;
+   await disposing;
 });
 
 /**
@@ -129,6 +133,7 @@ async function boot(options: { editorText?: string; withForm?: boolean } = {}): 
    });
    const harness = makeLspHarness({ connection: wire, services: services.shared });
    lsp = harness;
+   lspShared = services.shared;
    const initialized = await harness.initialize({ workspaceFolders: [{ uri: workspace.uri(), name: 'order-flow' }] });
    const uri = workspace.uri(FILE);
    harness.openDocument(uri, options.editorText ?? CLEAN, 'order-flow-domain', 1);
@@ -386,6 +391,7 @@ describe('an editor save right after a keystroke', () => {
       );
       const harness = makeLspHarness({ connection: wire, services: services.shared });
       lsp = harness;
+      lspShared = services.shared;
       await harness.initialize({ workspaceFolders: [{ uri: workspace.uri(), name: 'order-flow' }] });
       const uri = workspace.uri(FILE);
       harness.openDocument(uri, CLEAN, 'order-flow-domain', 1);

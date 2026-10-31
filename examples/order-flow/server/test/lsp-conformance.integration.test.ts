@@ -37,10 +37,10 @@
 import type { LanguageFixture } from '@hydranium/conformance';
 import { runLspConformance } from '@hydranium/conformance/vitest';
 import { NodeFileSystem } from '@hydranium/core/node';
-import { makeLspHarness, makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
+import { disposeScratchWorkspace, makeLspHarness, makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { afterAll } from 'vitest';
 import { DomainLanguageMetaData, LayoutLanguageMetaData, ProcessLanguageMetaData } from '../src/language-server/generated/module.js';
-import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
+import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
 import { WORKSPACE_ROOT } from './order-flow-harness.js';
 
 /**
@@ -53,9 +53,18 @@ import { WORKSPACE_ROOT } from './order-flow-harness.js';
  * per check instead of baked in at module load.
  */
 let workspace: ScratchWorkspace | undefined;
+/** The tree reading {@link workspace}, settled before the directory goes. */
+let workspaceShared: OrderFlowSharedServices | undefined;
 
-afterAll(() => {
-   workspace?.dispose();
+/** Settle the tree of the previous check, then delete its workspace. */
+async function disposeWorkspace(): Promise<void> {
+   const disposing = disposeScratchWorkspace(workspace, workspaceShared);
+   workspaceShared = undefined;
+   await disposing;
+}
+
+afterAll(async () => {
+   await disposeWorkspace();
    workspace = undefined;
 });
 
@@ -174,14 +183,14 @@ const layoutFixture: LanguageFixture = {
 };
 
 runLspConformance({
-   connect: () => {
-      workspace?.dispose();
+   connect: async () => {
+      await disposeWorkspace();
       workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-lsp-conformance-' });
       const workspaceUri = workspace.uri();
       const harness = makeLspHarness({
          // NodeFileSystem, not EmptyFileSystem: the fixtures resolve against
          // real files in the scratch workspace.
-         createServices: connection => createOrderFlowServices({ connection, ...NodeFileSystem }).shared
+         createServices: connection => (workspaceShared = createOrderFlowServices({ connection, ...NodeFileSystem }).shared)
       });
       return {
          ...harness,

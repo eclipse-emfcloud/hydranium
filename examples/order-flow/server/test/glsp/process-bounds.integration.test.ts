@@ -36,7 +36,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { type DiagramNode, type ProcessModel, isTask } from '../../src/language-server/ast.js';
-import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from '../order-flow-harness.js';
+import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
 
@@ -52,12 +52,12 @@ interface OpenDiagram {
 }
 
 let open: OpenDiagram | undefined;
-let scratch: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 
 /** Boot the real GLSP container over a scratch copy, after `prepare` has edited it, and open one `.process` file. */
 async function openDiagram(relativePath: string, prepare?: (workspace: ScratchWorkspace) => void): Promise<OpenDiagram> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness(prepare);
-   scratch = workspace;
+   scratch = await makeScratchWorkspaceHarness(prepare);
+   const { harness: services, workspace } = scratch;
    const sourceUri = workspace.resolve(relativePath);
    const harness = makeGlspHarness<OrderFlowGlspState>({
       serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
@@ -112,10 +112,10 @@ function layoutFor(diagram: OpenDiagram, name: string): DiagramNode | undefined 
 }
 
 describe('order-flow .process change-bounds', () => {
-   afterEach(() => {
+   afterEach(async () => {
       open?.harness.dispose();
       open = undefined;
-      scratch?.dispose();
+      await scratch?.dispose();
       scratch = undefined;
    });
 

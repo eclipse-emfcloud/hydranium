@@ -67,8 +67,8 @@ let staged: string[] = [];
 /** Runs once a file read completes, before its reader continues; cleared per test. */
 let afterRead: ((uri: string) => Promise<void>) | undefined;
 
-afterEach(() => {
-   scratch?.workspace.dispose();
+afterEach(async () => {
+   await scratch?.dispose();
    scratch = undefined;
    recorded = [];
    propagated = [];

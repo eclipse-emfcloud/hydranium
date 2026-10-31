@@ -31,14 +31,13 @@
 import { ReferenceSource, SyntheticStep } from '@hydranium/protocol';
 import { DataServer } from '@hydranium/data-server';
 import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-server/testing';
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DomainModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
-import { makeScratchWorkspaceHarness } from './order-flow-harness.js';
+import { makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from './order-flow-harness.js';
 
 type OrderFlowTransfer = DomainModel | ProcessModel;
 
-let workspace: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 let harness: DataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer> | undefined;
 
 /** Boot all three languages over a scratch workspace with a real data head on it. */
@@ -46,12 +45,12 @@ async function driveDataHead(): Promise<{
    readonly server: DataServer<OrderFlowTransfer>;
    readonly folderUri: (relativePath: string) => string;
 }> {
-   const { harness: services, workspace: scratch } = await makeScratchWorkspaceHarness();
-   workspace = scratch;
+   scratch = await makeScratchWorkspaceHarness();
+   const { harness: services, workspace } = scratch;
    harness = makeDataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer>({
       server: channel => new DataServer<OrderFlowTransfer>(channel, services.shared)
    });
-   return { server: harness.server, folderUri: relativePath => scratch.uri(relativePath) };
+   return { server: harness.server, folderUri: relativePath => workspace.uri(relativePath) };
 }
 
 /** What a "New Process in `orders/`" dialog asks for its `subject` picker. */
@@ -63,11 +62,11 @@ function subjectPickerRequest(folderUri: string): Parameters<DataServer<OrderFlo
 }
 
 describe('creating a document that does not exist yet', () => {
-   afterEach(() => {
+   afterEach(async () => {
       harness?.dispose();
       harness = undefined;
-      workspace?.dispose();
-      workspace = undefined;
+      await scratch?.dispose();
+      scratch = undefined;
    });
 
    it('offers the in-scope entities for a file whose folder is all the caller knows', async () => {

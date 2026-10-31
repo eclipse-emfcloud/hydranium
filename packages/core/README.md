@@ -76,7 +76,7 @@ See *Compose a server by hand* and *Add a validation check* in
 | `./node`               | The Node filesystem, the stdio and socket launchers, the headless tools      | Node-only       |
 | `./messages`           | Validation messages with stable codes, and the codes this package raises     | browser-neutral |
 | `./testing`            | Parsing and service doubles for unit tests                                   | browser-neutral |
-| `./testing/node`       | Scratch workspaces, the LSP harness, a spawned server                        | Node-only       |
+| `./testing/node`       | Scratch workspaces and the server settle, the LSP harness, a spawned server  | Node-only       |
 | `./testing/playwright` | Playwright fixtures that capture the server log                              | Node-only       |
 
 The subpaths need a TypeScript `moduleResolution` that reads `exports`

@@ -22,3 +22,13 @@ export interface Harness {
    /** Release every resource the harness holds. Idempotent; the uniform teardown hook. */
    dispose(): void;
 }
+
+/**
+ * {@link Harness} for a harness whose teardown has to wait, such as one that
+ * deletes a directory only once its server reads none of it. Separate rather
+ * than a widened `Harness`, whose callers rely on a synchronous `dispose()`.
+ */
+export interface AsyncHarness {
+   /** Release every resource the harness holds, resolving once it has. Idempotent. */
+   dispose(): Promise<void>;
+}

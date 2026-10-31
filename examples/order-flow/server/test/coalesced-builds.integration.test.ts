@@ -22,7 +22,13 @@
  */
 
 import { NodeFileSystem } from '@hydranium/core/node';
-import { makeLspHarness, makeScratchWorkspace, type LspHarness, type ScratchWorkspace } from '@hydranium/core/testing/node';
+import {
+   disposeScratchWorkspace,
+   type LspHarness,
+   makeLspHarness,
+   makeScratchWorkspace,
+   type ScratchWorkspace
+} from '@hydranium/core/testing/node';
 import { DocumentState, URI } from '@hydranium/langium';
 import type { CancellationToken } from 'vscode-languageserver-protocol';
 import { waitFor } from '@hydranium/protocol/testing';
@@ -48,12 +54,15 @@ const LONE_SOURCE = `entity CoalesceLone {
 
 let workspace: ScratchWorkspace | undefined;
 let lsp: LspHarness | undefined;
+let lspShared: OrderFlowSharedServices | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    lsp?.dispose();
    lsp = undefined;
-   workspace?.dispose();
+   const disposing = disposeScratchWorkspace(workspace, lspShared);
+   lspShared = undefined;
    workspace = undefined;
+   await disposing;
 });
 
 /** What reached the lock and the builder since the last {@link Recorder.reset}. */
@@ -103,6 +112,7 @@ async function boot(): Promise<{ shared: OrderFlowSharedServices; uri: (file: st
    const harness = makeLspHarness({
       createServices: connection => {
          booted = createOrderFlowServices({ connection, ...NodeFileSystem }).shared;
+         lspShared = booted;
          return booted;
       }
    });

@@ -38,7 +38,6 @@ import {
    SetDirtyStateAction,
    UndoAction
 } from '@eclipse-glsp/server';
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { HydraniumGlspAppModule, HydraniumGlspOperationCommand, type HydraniumGlspSubmissionHandler } from '@hydranium/glsp-server';
 import { DIAGRAM_REDO_CONFLICT, DIAGRAM_REDO_SKIPPED, DIAGRAM_UNDO_CONFLICT, DIAGRAM_UNDO_SKIPPED } from '@hydranium/glsp-server/messages';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
@@ -49,14 +48,19 @@ import { OrderFlowCommand } from '../../src/glsp/order-flow-command.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
-import { makeScratchWorkspaceHarness, type OrderFlowHarness, WORKSPACE_FILES } from '../order-flow-harness.js';
+import {
+   makeScratchWorkspaceHarness,
+   type OrderFlowHarness,
+   type ScratchOrderFlowHarness,
+   WORKSPACE_FILES
+} from '../order-flow-harness.js';
 
 type Diagram = GlspHarness<OrderFlowGlspState>;
 
 export interface Opened {
    readonly services: OrderFlowHarness;
    readonly diagram: Diagram;
-   readonly workspace: ScratchWorkspace;
+   readonly scratch: ScratchOrderFlowHarness;
    readonly processUri: string;
    readonly layoutUri: string;
 }
@@ -236,7 +240,8 @@ export const GESTURES: readonly Gesture[] = [
 ];
 
 async function open(): Promise<Opened> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness();
+   const scratch = await makeScratchWorkspaceHarness();
+   const { harness: services, workspace } = scratch;
    const sourcePath = workspace.resolve(WORKSPACE_FILES.fulfillmentProcess);
    const diagram = makeGlspHarness<OrderFlowGlspState>({
       serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
@@ -247,7 +252,7 @@ async function open(): Promise<Opened> {
    await diagram.openDocument(sourcePath);
    const layoutUri = diagram.state.layoutUri;
    await waitFor(() => services.shared.workspace.TextDocuments.get(layoutUri) !== undefined, { message: 'the layout never opened' });
-   return { services, diagram, workspace, processUri: URI.file(sourcePath).toString(), layoutUri };
+   return { services, diagram, scratch, processUri: URI.file(sourcePath).toString(), layoutUri };
 }
 
 function textsOf({ services, processUri, layoutUri }: Opened): Texts {
@@ -458,7 +463,7 @@ export async function runOnce(
       restore.forEach(spy => spy.mockRestore());
       process.off('unhandledRejection', onUnhandled);
       diagram.dispose();
-      opened.workspace.dispose();
+      await opened.scratch.dispose();
    }
 }
 

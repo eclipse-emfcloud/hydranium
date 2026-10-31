@@ -69,6 +69,7 @@ import {
 } from '@hydranium/core/messages';
 import { makeNoopSharedServices } from '@hydranium/core/testing';
 import {
+   disposeScratchWorkspace,
    type LspHarness,
    makeLspHarness,
    makeLspServerConnection,
@@ -165,6 +166,15 @@ interface Booted {
 
 let booted: Booted | undefined;
 let scratch: ScratchWorkspace | undefined;
+/** The tree reading {@link scratch}, settled before the directory goes. */
+let scratchShared: OrderFlowSharedServices | undefined;
+
+async function disposeScratch(): Promise<void> {
+   const disposing = disposeScratchWorkspace(scratch, scratchShared);
+   scratchShared = undefined;
+   scratch = undefined;
+   await disposing;
+}
 /** Held apart from {@link booted}: the race suite owns the harness but no data head. */
 let raceHarness: LspHarness | undefined;
 
@@ -177,6 +187,7 @@ async function boot(choice: RendererChoice, locale: string | undefined = TEST_LO
       { connection: wire.serverConnection, ...NodeFileSystem },
       { extraSharedModules: [rendererModule(choice)] }
    );
+   scratchShared = services.shared;
    const lsp = makeLspHarness({ connection: wire, services: services.shared });
    const data = makeDataServerHarness<DataServer<OrderFlowTransfer>, OrderFlowTransfer>({
       server: channel => new DataServer<OrderFlowTransfer>(channel, services.shared)
@@ -212,12 +223,11 @@ const PARSE_ERROR_SOURCE = 'process Probe for Order {\n   task\n';
 const LINKING_ERROR_SOURCE = 'process Probe for Missing {\n   task Pay\n}\n';
 
 describe('order-flow server-side message rendering', () => {
-   afterEach(() => {
+   afterEach(async () => {
       booted?.data.dispose();
       booted?.lsp.dispose();
       booted = undefined;
-      scratch?.dispose();
-      scratch = undefined;
+      await disposeScratch();
    });
 
    it('publishes an identity-bearing diagnostic RENDERED, parameters included', async () => {
@@ -362,9 +372,8 @@ describe('order-flow server-side message rendering', () => {
 });
 
 describe('the headless locale seam', () => {
-   afterEach(() => {
-      scratch?.dispose();
-      scratch = undefined;
+   afterEach(async () => {
+      await disposeScratch();
    });
 
    /**
@@ -381,6 +390,7 @@ describe('the headless locale seam', () => {
       scratch = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-headless-' });
       const workspace = scratch;
       const services = createOrderFlowServices({ ...NodeFileSystem }, { extraSharedModules: [rendererModule('test')] });
+      scratchShared = services.shared;
       workspace.write('orders/headless.process', SELF_TRANSITION_SOURCE);
       await initializeWorkspaceProgrammatically(services.shared, workspace.root, { locale });
 
@@ -431,11 +441,10 @@ describe('the headless locale seam', () => {
  * there is exactly ONE build of the URI and no second pass to race.
  */
 describe('rendering across a racing rebuild', () => {
-   afterEach(() => {
+   afterEach(async () => {
       raceHarness?.dispose();
       raceHarness = undefined;
-      scratch?.dispose();
-      scratch = undefined;
+      await disposeScratch();
    });
 
    /** The rendered and English forms of the workspace's one intended error. */
@@ -458,6 +467,7 @@ describe('rendering across a racing rebuild', () => {
       const booted = makeLspHarness({
          createServices: connection => {
             shared = createOrderFlowServices({ connection, ...NodeFileSystem }, { extraSharedModules: [rendererModule('test')] }).shared;
+            scratchShared = shared;
             return shared;
          }
       });
@@ -536,11 +546,10 @@ describe('rendering across a racing rebuild', () => {
  * and the wait armed after it.
  */
 describe('the applyEdit undo label', () => {
-   afterEach(() => {
+   afterEach(async () => {
       raceHarness?.dispose();
       raceHarness = undefined;
-      scratch?.dispose();
-      scratch = undefined;
+      await disposeScratch();
    });
 
    /** Drive a server-authored write and return the label its egress push carried. */
@@ -551,6 +560,7 @@ describe('the applyEdit undo label', () => {
       const booted = makeLspHarness({
          createServices: connection => {
             shared = createOrderFlowServices({ connection, ...NodeFileSystem }, { extraSharedModules: [rendererModule('test')] }).shared;
+            scratchShared = shared;
             return shared;
          }
       });
@@ -596,9 +606,8 @@ describe('the applyEdit undo label', () => {
  * import; none of the rest.
  */
 describe('OrderFlowMessageRenderer', () => {
-   afterEach(() => {
-      scratch?.dispose();
-      scratch = undefined;
+   afterEach(async () => {
+      await disposeScratch();
    });
 
    /** Surfaces the one protected override, which has no other observation point. */
@@ -619,6 +628,7 @@ describe('OrderFlowMessageRenderer', () => {
       scratch = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-shipped-' });
       const workspace = scratch;
       const services = createOrderFlowServices({ ...NodeFileSystem });
+      scratchShared = services.shared;
       workspace.write('orders/shipped.process', SELF_TRANSITION_SOURCE);
       await initializeWorkspaceProgrammatically(services.shared, workspace.root, { locale });
 

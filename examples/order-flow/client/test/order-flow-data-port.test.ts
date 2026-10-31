@@ -37,7 +37,7 @@
 
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
 import { NodeFileSystem } from '@hydranium/core/node';
-import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/testing/node';
+import { disposeScratchWorkspace, makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { DataServer } from '@hydranium/data-server';
 import {
    DATA_SERVER_NOT_READY,
@@ -114,6 +114,7 @@ class FakeDataPort implements DataPort {
 }
 
 let workspace: ScratchWorkspace | undefined;
+let sharedServices: ReturnType<typeof createOrderFlowServices>['shared'] | undefined;
 let port: FakeDataPort | undefined;
 let connection: DataConnection<OrderFlowTransferRoot> | undefined;
 let session: DataSession<OrderFlowTransferRoot> | undefined;
@@ -142,6 +143,7 @@ describe('order-flow data port', () => {
       // aimed at the committed workspace would rewrite it.
       workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-port-' });
       const { shared } = createOrderFlowServices({ ...NodeFileSystem });
+      sharedServices = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
 
       port = new FakeDataPort(channel => {
@@ -155,15 +157,17 @@ describe('order-flow data port', () => {
       session = connection.createSession('order-flow-port-test');
    });
 
-   afterEach(() => {
+   afterEach(async () => {
       session?.dispose();
       session = undefined;
       connection?.dispose();
       connection = undefined;
       port?.dispose();
       port = undefined;
-      workspace?.dispose();
+      const disposing = disposeScratchWorkspace(workspace, sharedServices);
+      sharedServices = undefined;
       workspace = undefined;
+      await disposing;
       updates = [];
    });
 

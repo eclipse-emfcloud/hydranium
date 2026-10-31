@@ -416,8 +416,10 @@ Commands, the runner and timeouts are in [Testing](testing.md).
   `test-fixture-builder-function` / `test-fixture-builder-variable`), and don't
   cast an object literal to a type a builder covers (`test-fixture-cast-*`); a
   type joins those rules once no test needs a minimal cast of it.
-- **Every harness extends `Harness`**, whose one member is an idempotent
-  `dispose()`, so teardown is uniform. Prefer one options object to
+- **Every harness extends `Harness` or `AsyncHarness`**, whose one member is
+  an idempotent `dispose()`, so teardown is uniform. `AsyncHarness` is for one
+  whose teardown has to wait, such as for a server still reading its scratch
+  workspace, and its `dispose()` is awaited. Prefer one options object to
   positional arguments, so growth is non-breaking.
 - **A multi-language test gets a real `ServiceRegistry`** from
   `makeStubServiceRegistry` or `makeTestServices({ languages })`, never a

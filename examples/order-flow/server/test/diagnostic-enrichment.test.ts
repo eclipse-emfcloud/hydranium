@@ -82,8 +82,8 @@ async function validate(harness: OrderFlowHarness, uri: URI): Promise<Diagnostic
 describe('validation.DocumentValidator with the framework validator bound', () => {
    let booted: ScratchOrderFlowHarness | undefined;
 
-   afterEach(() => {
-      booted?.workspace.dispose();
+   afterEach(async () => {
+      await booted?.dispose();
       booted = undefined;
    });
 

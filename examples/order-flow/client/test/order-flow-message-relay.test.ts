@@ -28,7 +28,7 @@
 
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
 import { NodeFileSystem } from '@hydranium/core/node';
-import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/testing/node';
+import { disposeScratchWorkspace, makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import {
    DATA_SERVER_WIRE_PREFIX,
    DataEvents,
@@ -125,6 +125,7 @@ class RelayedWebviewPort implements DataPort {
 }
 
 let workspace: ScratchWorkspace | undefined;
+let sharedServices: ReturnType<typeof createOrderFlowServices>['shared'] | undefined;
 let dataServer: SocketDataServer | undefined;
 let port: RelayedWebviewPort | undefined;
 let events: DataEvents<OrderFlowTransferRoot> | undefined;
@@ -154,7 +155,7 @@ describe('order-flow data head over a socket relayed onto a clone hop', () => {
    beforeEach(async () => {
       workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-relay-' });
       const services = createOrderFlowServices({ ...NodeFileSystem });
-      const sharedServices = services.shared;
+      sharedServices = services.shared;
       await initializeWorkspaceProgrammatically(sharedServices, workspace.root);
       dataServer = await startSocketDataServer(sharedServices);
       crossed = [];
@@ -171,9 +172,11 @@ describe('order-flow data head over a socket relayed onto a clone hop', () => {
       port = undefined;
       await dataServer?.dispose();
       dataServer = undefined;
-      workspace?.dispose();
-      workspace = undefined;
       crossed = [];
+      const disposing = disposeScratchWorkspace(workspace, sharedServices);
+      sharedServices = undefined;
+      workspace = undefined;
+      await disposing;
    });
 
    it('answers a request that crossed framing and structured clone', async () => {

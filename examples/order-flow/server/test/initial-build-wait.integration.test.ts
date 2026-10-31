@@ -19,7 +19,7 @@
  */
 
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
-import { makeScratchWorkspace } from '@hydranium/core/testing/node';
+import { disposeScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/testing/node';
 import { Deferred, DocumentState, URI } from '@hydranium/langium';
 import { waitFor } from '@hydranium/protocol/testing';
 import * as path from 'node:path';
@@ -28,12 +28,13 @@ import { WORKSPACE_FILES, WORKSPACE_ROOT, makeServices } from './order-flow-harn
 
 describe('a wait for Validated armed during the initial workspace build', () => {
    it('resolves once that build ends, although the build validates nothing', async () => {
+      // Services first, so a throw from them leaves no directory behind.
+      const harness = makeServices();
       const workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-initial-wait-' });
+      const releaseInit = new Deferred<void>();
       try {
-         const harness = makeServices();
          const builder = harness.shared.workspace.DocumentBuilder;
          const reachedBarrier = new Deferred<void>();
-         const releaseInit = new Deferred<void>();
          let barrierArmed = true;
          builder.onBuildPhase(DocumentState.Linked, async () => {
             if (!barrierArmed) {
@@ -57,7 +58,9 @@ describe('a wait for Validated armed during the initial workspace build', () => 
          await waitFor(() => validated, { timeoutMs: 5_000, message: 'the wait armed during the initial build never resolved' });
          expect(harness.shared.workspace.LangiumDocuments.getDocument(processUri)?.state).toBe(DocumentState.Validated);
       } finally {
-         workspace.dispose();
+         // A failed assertion before the release would otherwise hold the build, and the settle with it.
+         releaseInit.resolve();
+         await disposeScratchWorkspace(workspace, harness.shared);
       }
    }, 30_000);
 });
@@ -73,13 +76,19 @@ describe('a wait for Validated whose build ends before validating', () => {
    async function boot(): Promise<{
       harness: ReturnType<typeof makeServices>;
       processUri: URI;
-      dispose: () => void;
+      dispose: () => Promise<void>;
    }> {
       const workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-cut-wait-' });
       const harness = makeServices();
       await initializeWorkspaceProgrammatically(harness.shared, workspace.root);
       const processUri = URI.file(path.join(workspace.root, WORKSPACE_FILES.fulfillmentProcess));
-      return { harness, processUri, dispose: () => workspace.dispose() };
+      return {
+         harness,
+         processUri,
+         dispose: async () => {
+            await disposeScratchWorkspace(workspace, harness.shared);
+         }
+      };
    }
 
    it.each([
@@ -89,10 +98,10 @@ describe('a wait for Validated whose build ends before validating', () => {
       'resolves when %s',
       async (_name, ending) => {
          const { harness, processUri, dispose } = await boot();
+         const release = new Deferred<void>();
          try {
             const builder = harness.shared.workspace.DocumentBuilder;
             const reachedBarrier = new Deferred<void>();
-            const release = new Deferred<void>();
             let barrierArmed = true;
             builder.onBuildPhase(DocumentState.Linked, async () => {
                if (!barrierArmed) {
@@ -120,7 +129,9 @@ describe('a wait for Validated whose build ends before validating', () => {
             await waitFor(() => validated, { timeoutMs: 5_000, message: 'the wait on the build that ended early never resolved' });
             expect(harness.shared.workspace.LangiumDocuments.getDocument(processUri)?.state).toBe(DocumentState.Validated);
          } finally {
-            dispose();
+            // A failed assertion before the release would otherwise hold the build, and the settle with it.
+            release.resolve();
+            await dispose();
          }
       },
       30_000

@@ -36,7 +36,7 @@ import { GLSPSaveable } from '@eclipse-glsp/theia-integration/lib/browser/diagra
 import { ChangeBoundsOperation, DefaultGLSPServer, ServerModule } from '@eclipse-glsp/server';
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
 import { NodeFileSystem } from '@hydranium/core/node';
-import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/testing/node';
+import { disposeScratchWorkspace, makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import { OrderFlowProcessDiagramModule } from '@hydranium/example-order-flow-server/lib/glsp/order-flow-process-diagram-module.js';
@@ -74,20 +74,24 @@ class WiredDispatcher extends GLSPActionDispatcher {
 
 let diagram: GlspHarness<OrderFlowGlspState> | undefined;
 let scratch: ScratchWorkspace | undefined;
+let sharedServices: ReturnType<typeof createOrderFlowServices>['shared'] | undefined;
 let pump: ReturnType<typeof setInterval> | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    clearInterval(pump);
    diagram?.dispose();
    diagram = undefined;
-   scratch?.dispose();
+   const disposing = disposeScratchWorkspace(scratch, sharedServices);
+   sharedServices = undefined;
    scratch = undefined;
+   await disposing;
 });
 
 describe('GLSPSaveable on the order-flow diagram', () => {
    it('settles a save of a drag on the save’s own dirty state', async () => {
       scratch = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-diagram-save-' });
       const { shared } = createOrderFlowServices({ ...NodeFileSystem }, {});
+      sharedServices = shared;
       await initializeWorkspaceProgrammatically(shared, scratch.root);
       const server = makeGlspHarness<OrderFlowGlspState>({
          serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),

@@ -37,11 +37,12 @@ import { initializeWorkspaceProgrammatically, type ServerSharedServices } from '
 import { HydraniumDocumentUpdateHandler } from '@hydranium/core/lsp';
 import { NodeFileSystem } from '@hydranium/core/node';
 import {
+   disposeScratchWorkspace,
    type LspHarness,
    makeLspHarness,
    makeLspServerConnection,
-   type ScratchWorkspace,
-   makeScratchWorkspace
+   makeScratchWorkspace,
+   type ScratchWorkspace
 } from '@hydranium/core/testing/node';
 import { DataServer } from '@hydranium/data-server';
 import {
@@ -231,7 +232,7 @@ describe('order-flow properties model', () => {
       session = dataSession;
    });
 
-   afterEach(() => {
+   afterEach(async () => {
       for (const model of models) {
          model.dispose();
       }
@@ -242,9 +243,10 @@ describe('order-flow properties model', () => {
       events = undefined;
       port?.dispose();
       port = undefined;
+      const disposing = disposeScratchWorkspace(workspace, sharedServices);
       sharedServices = undefined;
-      workspace?.dispose();
       workspace = undefined;
+      await disposing;
    });
 
    it('presents the root string properties as editable fields', async () => {
@@ -1153,7 +1155,7 @@ async function currentRoot(uri: string): Promise<OrderFlowTransferRoot> {
 describe('order-flow properties model beside a debouncing editor', () => {
    let lsp: LspHarness | undefined;
 
-   afterEach(() => {
+   afterEach(async () => {
       for (const model of models) {
          model.dispose();
       }
@@ -1166,9 +1168,10 @@ describe('order-flow properties model beside a debouncing editor', () => {
       port = undefined;
       lsp?.dispose();
       lsp = undefined;
+      const disposing = disposeScratchWorkspace(workspace, sharedServices);
       sharedServices = undefined;
-      workspace?.dispose();
       workspace = undefined;
+      await disposing;
    });
 
    it('merges a field write over an editor change the debounce still holds, once it is built', async () => {

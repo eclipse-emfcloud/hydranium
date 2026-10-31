@@ -53,7 +53,7 @@ import {
    PROCESS_TRANSITION_EDGE_TYPE
 } from '@hydranium/example-order-flow-protocol';
 import { type Gateway, type ProcessModel, isGateway, isTask } from '../../src/language-server/ast.js';
-import { makeScratchWorkspaceHarness } from '../order-flow-harness.js';
+import { makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
 const PROCESS_FILE = 'orders/fulfillment.process';
@@ -82,7 +82,7 @@ interface OpenDiagram {
 }
 
 let open: OpenDiagram | undefined;
-let scratch: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 
 /**
  * Boot the real GLSP container over a scratch workspace and open the diagram.
@@ -92,8 +92,8 @@ let scratch: ScratchWorkspace | undefined;
  * not hold.
  */
 async function openDiagram(prepare?: (workspace: ScratchWorkspace) => void): Promise<OpenDiagram> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness(prepare);
-   scratch = workspace;
+   scratch = await makeScratchWorkspaceHarness(prepare);
+   const { harness: services, workspace } = scratch;
    const sourceUri = workspace.resolve(PROCESS_FILE);
    const harness = makeGlspHarness<OrderFlowGlspState>({
       serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
@@ -157,10 +157,10 @@ function idOf(diagram: OpenDiagram, name: string): string {
 const code = (text: string): string => text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
 
 describe('order-flow .process operations', () => {
-   afterEach(() => {
+   afterEach(async () => {
       open?.harness.dispose();
       open = undefined;
-      scratch?.dispose();
+      await scratch?.dispose();
       scratch = undefined;
    });
 

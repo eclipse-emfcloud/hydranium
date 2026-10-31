@@ -74,8 +74,8 @@ const MARKED = `entity Marked {
 
 let scratch: ScratchOrderFlowHarness | undefined;
 
-afterEach(() => {
-   scratch?.workspace.dispose();
+afterEach(async () => {
+   await scratch?.dispose();
    scratch = undefined;
 });
 

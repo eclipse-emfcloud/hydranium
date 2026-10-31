@@ -33,7 +33,7 @@ import {
    UndoAction
 } from '@eclipse-glsp/server';
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
-import { makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
+import { disposeScratchWorkspace, makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import { URI } from '@hydranium/langium';
@@ -52,13 +52,16 @@ import { isBookstoreModel } from '../src/language-server/ast.js';
 import { createServices } from '../src/node/services.js';
 
 let workspace: ScratchWorkspace | undefined;
+let serverShared: ReturnType<typeof createServices>['shared'] | undefined;
 let diagram: GlspHarness<BookstoreGlspState> | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    diagram?.dispose();
-   workspace?.dispose();
+   const disposing = disposeScratchWorkspace(workspace, serverShared);
+   serverShared = undefined;
    diagram = undefined;
    workspace = undefined;
+   await disposing;
 });
 
 /** Send `action` and wait for the dirty state the server answers it with, which it sends once the edit is written. */
@@ -76,6 +79,7 @@ describe('Bookstore diagram', () => {
       const original = '// keep this comment\nnode first -> second\n// about second\nnode second';
       const file = workspace.write('model.bookstore', original);
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       diagram = makeGlspHarness<BookstoreGlspState>({
          serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
@@ -105,6 +109,7 @@ describe('Bookstore diagram', () => {
       const original = 'node first -> second\nnode second\nnode third -> first';
       const file = workspace.write('model.bookstore', original);
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       const harness = makeGlspHarness<BookstoreGlspState>({
          serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
@@ -136,6 +141,7 @@ describe('Bookstore diagram', () => {
       workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
       const file = workspace.write('model.bookstore', 'node first -> second\nnode first\nnode second -> first');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       const harness = makeGlspHarness<BookstoreGlspState>({
          serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
@@ -156,6 +162,7 @@ describe('Bookstore diagram', () => {
       workspace.write('other.bookstore', 'node second');
       const file = workspace.write('model.bookstore', 'node first -> second\nnode second');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       const harness = makeGlspHarness<BookstoreGlspState>({
          serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
@@ -175,6 +182,7 @@ describe('Bookstore diagram', () => {
       workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
       const file = workspace.write('model.bookstore', 'node a\nnode a -> b\nnode b');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       diagram = makeGlspHarness<BookstoreGlspState>({
          serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
@@ -196,6 +204,7 @@ describe('Bookstore diagram', () => {
       workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
       const file = workspace.write('model.bookstore', 'node a -> b\nnode b\nnode a_name\nnode a_target');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       diagram = makeGlspHarness<BookstoreGlspState>({
          serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
@@ -219,6 +228,7 @@ describe('Bookstore diagram', () => {
       workspace.write('declaring.bookstore', 'node second');
       const file = workspace.write('referencing.bookstore', 'node first -> second\nnode third -> second');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       diagram = makeGlspHarness<BookstoreGlspState>({
          serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
@@ -254,6 +264,7 @@ describe('Bookstore diagram', () => {
       workspace.write('two.bookstore', 'node second');
       const file = workspace.write('referencing.bookstore', 'node first -> second\nnode third -> second');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       const harness = makeGlspHarness<BookstoreGlspState>({
          serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
@@ -292,6 +303,7 @@ describe('Bookstore diagram', () => {
       workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
       const file = workspace.write('cycle.bookstore', 'node a -> b\nnode b -> a\nnode c -> a');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       diagram = makeGlspHarness<BookstoreGlspState>({
          serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
@@ -325,6 +337,7 @@ describe('Bookstore diagram', () => {
       workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
       const file = workspace.write('loop.bookstore', 'node a -> a');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       const harness = makeGlspHarness<BookstoreGlspState>({
          serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
@@ -353,6 +366,7 @@ describe('Bookstore diagram', () => {
       workspace = makeScratchWorkspace({ prefix: 'bookstore-diagram-' });
       const file = workspace.write('duplicate.bookstore', 'node first\nnode first');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       diagram = makeGlspHarness<BookstoreGlspState>({
          serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
@@ -378,6 +392,7 @@ describe('Bookstore diagram', () => {
       workspace.write('declaring.bookstore', 'node second');
       const file = workspace.write('referencing.bookstore', 'node first -> second');
       const { shared } = createServices();
+      serverShared = shared;
       diagram = makeGlspHarness<BookstoreGlspState>({
          serverModule: new ServerModule().configureDiagramModule(new BookstoreDiagramModule()),
          diagramType: BOOKSTORE_DIAGRAM_TYPE,

@@ -34,7 +34,7 @@
 
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
 import { NodeFileSystem } from '@hydranium/core/node';
-import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/testing/node';
+import { disposeScratchWorkspace, makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { DataServer } from '@hydranium/data-server';
 import {
    DataConnection,
@@ -113,6 +113,7 @@ class WebviewLikePort implements DataPort {
 }
 
 let workspace: ScratchWorkspace | undefined;
+let sharedServices: ReturnType<typeof createOrderFlowServices>['shared'] | undefined;
 let port: WebviewLikePort | undefined;
 let events: DataEvents<OrderFlowTransferRoot> | undefined;
 let connection: DataConnection<OrderFlowTransferRoot> | undefined;
@@ -136,6 +137,7 @@ describe('order-flow data head over a structured-clone hop', () => {
    beforeEach(async () => {
       workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-clone-' });
       const { shared } = createOrderFlowServices({ ...NodeFileSystem });
+      sharedServices = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
 
       crossed = [];
@@ -149,7 +151,7 @@ describe('order-flow data head over a structured-clone hop', () => {
       model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(dataSession, events, uriOf(FULFILLMENT_PROCESS));
    });
 
-   afterEach(() => {
+   afterEach(async () => {
       model?.dispose();
       model = undefined;
       session?.dispose();
@@ -158,9 +160,11 @@ describe('order-flow data head over a structured-clone hop', () => {
       events = undefined;
       port?.dispose();
       port = undefined;
-      workspace?.dispose();
-      workspace = undefined;
       crossed = [];
+      const disposing = disposeScratchWorkspace(workspace, sharedServices);
+      sharedServices = undefined;
+      workspace = undefined;
+      await disposing;
    });
 
    it('runs createRpcProxy unchanged across the hop', async () => {

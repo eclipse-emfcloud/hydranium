@@ -90,13 +90,12 @@ import {
 import { runGlspConformance, type GlspFixture } from '@hydranium/conformance/vitest';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { afterAll } from 'vitest';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { UNPOSITIONED_ROW_HEIGHT } from '../../src/glsp/order-flow-process-gmodel-factory.js';
 import { PROCESS_GATEWAY_NODE_TYPE, PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
-import { makeScratchWorkspaceHarness, WORKSPACE_FILES } from '../order-flow-harness.js';
+import { makeScratchWorkspaceHarness, type ScratchOrderFlowHarness, WORKSPACE_FILES } from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
 
@@ -118,10 +117,10 @@ const PAY_BOUNDS = { position: { x: 40, y: 100 }, size: { width: 160, height: 60
  * expectation — the kit hands it the driver and no pre-operation snapshot — so a
  * copy carrying a previous check's `NewTask` would make the count wrong.
  */
-let scratch: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 
-afterAll(() => {
-   scratch?.dispose();
+afterAll(async () => {
+   await scratch?.dispose();
    scratch = undefined;
 });
 
@@ -130,7 +129,7 @@ function scratchPath(relativePath: string): string {
    if (!scratch) {
       throw new Error('scratchPath called before connect seeded a workspace copy');
    }
-   return scratch.resolve(relativePath);
+   return scratch.workspace.resolve(relativePath);
 }
 
 /**
@@ -144,9 +143,9 @@ function scratchPath(relativePath: string): string {
  * everything twice and hide a regression in the init path.
  */
 async function connect(): Promise<Driver> {
-   scratch?.dispose();
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness();
-   scratch = workspace;
+   await scratch?.dispose();
+   scratch = await makeScratchWorkspaceHarness();
+   const services = scratch.harness;
    return makeGlspHarness<OrderFlowGlspState>({
       serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
       diagramType: DIAGRAM_TYPE,

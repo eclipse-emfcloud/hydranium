@@ -57,7 +57,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { isTask } from '../../src/language-server/ast.js';
-import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type OrderFlowHarness } from '../order-flow-harness.js';
+import {
+   WORKSPACE_FILES,
+   makeScratchWorkspaceHarness,
+   type OrderFlowHarness,
+   type ScratchOrderFlowHarness
+} from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
 
@@ -65,7 +70,7 @@ const DIAGRAM_TYPE = 'order-flow-process';
 interface OpenDiagram {
    readonly services: OrderFlowHarness;
    readonly harness: GlspHarness<OrderFlowGlspState>;
-   readonly workspace: ScratchWorkspace;
+   readonly scratch: ScratchOrderFlowHarness;
 }
 
 let open: OpenDiagram | undefined;
@@ -96,7 +101,8 @@ function breakReference(workspace: ScratchWorkspace, relativePath: string, from:
  * on. Editing after the open would be a rebuild scenario — a different subject.
  */
 async function openDiagram(prepare?: (workspace: ScratchWorkspace) => void): Promise<OpenDiagram> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness(prepare);
+   const scratch = await makeScratchWorkspaceHarness(prepare);
+   const { harness: services, workspace } = scratch;
    const harness = makeGlspHarness<OrderFlowGlspState>({
       serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
       diagramType: DIAGRAM_TYPE,
@@ -108,13 +114,13 @@ async function openDiagram(prepare?: (workspace: ScratchWorkspace) => void): Pro
    });
    await harness.start();
    await harness.openDocument(workspace.resolve(WORKSPACE_FILES.fulfillmentProcess));
-   open = { services, harness, workspace };
+   open = { services, harness, scratch };
    return open;
 }
 
 /** The loaded document for a workspace-relative path in the scratch copy. */
 async function documentIn(diagram: OpenDiagram, relativePath: string): Promise<LangiumDocument> {
-   const uri = URI.file(diagram.workspace.resolve(relativePath));
+   const uri = URI.file(diagram.scratch.workspace.resolve(relativePath));
    return diagram.services.shared.workspace.LangiumDocuments.getOrCreateDocument(uri);
 }
 
@@ -205,9 +211,9 @@ async function waitForPushedMarkers(diagram: OpenDiagram, since: number, timeout
 }
 
 describe('order-flow .process diagram markers', () => {
-   afterEach(() => {
+   afterEach(async () => {
       open?.harness.dispose();
-      open?.workspace.dispose();
+      await open?.scratch.dispose();
       open = undefined;
    });
 
@@ -289,7 +295,7 @@ describe('order-flow .process diagram markers', () => {
          breakReference(workspace, WORKSPACE_FILES.ordersDomain, 'id: ID', 'id: NoSuchIdType');
          breakReference(workspace, WORKSPACE_FILES.ordersDomain, 'price: Money', 'price: NoSuchPriceType');
       });
-      const domainUri = URI.file(diagram.workspace.resolve(WORKSPACE_FILES.ordersDomain)).toString();
+      const domainUri = URI.file(diagram.scratch.workspace.resolve(WORKSPACE_FILES.ordersDomain)).toString();
 
       // The projection registered, so the validator will scan the other document.
       // Without this the scan skips it and both cases below would report nothing
@@ -316,7 +322,7 @@ describe('order-flow .process diagram markers', () => {
          const path = workspace.resolve(WORKSPACE_FILES.ordersDomain);
          workspace.write(WORKSPACE_FILES.ordersDomain, readFileSync(path, 'utf8') + '\nentity Pick {\n   x: NoSuchType\n}\n');
       });
-      const domainUri = URI.file(diagram.workspace.resolve(WORKSPACE_FILES.ordersDomain)).toString();
+      const domainUri = URI.file(diagram.scratch.workspace.resolve(WORKSPACE_FILES.ordersDomain)).toString();
       expect(diagram.harness.state.index.renderedDocumentUris()).toContain(domainUri);
       expect(diagram.harness.state.index.find('Pick')).toBeDefined();
       const messages = (await validateDocument(diagram, WORKSPACE_FILES.ordersDomain)).map(messageOf);

@@ -35,23 +35,22 @@ import 'reflect-metadata';
 import { type CheckEdgeResultAction, CreateEdgeOperation, RequestCheckEdgeAction, ServerModule } from '@eclipse-glsp/server';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { afterEach, describe, expect, it } from 'vitest';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { PROCESS_TRANSITION_EDGE_TYPE } from '@hydranium/example-order-flow-protocol';
 import type { ProcessModel } from '../../src/language-server/ast.js';
-import { makeScratchWorkspaceHarness } from '../order-flow-harness.js';
+import { makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
 const PROCESS_FILE = 'orders/fulfillment.process';
 
 let harness: GlspHarness<OrderFlowGlspState> | undefined;
-let scratch: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 
 async function openDiagram(): Promise<GlspHarness<OrderFlowGlspState>> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness();
-   scratch = workspace;
+   scratch = await makeScratchWorkspaceHarness();
+   const { harness: services, workspace } = scratch;
    harness = makeGlspHarness<OrderFlowGlspState>({
       serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
       diagramType: DIAGRAM_TYPE,
@@ -99,10 +98,10 @@ async function check(driver: GlspHarness<OrderFlowGlspState>, source: string, ta
 }
 
 describe('order-flow .process edge-creation feedback', () => {
-   afterEach(() => {
+   afterEach(async () => {
       harness?.dispose();
       harness = undefined;
-      scratch?.dispose();
+      await scratch?.dispose();
       scratch = undefined;
    });
 
