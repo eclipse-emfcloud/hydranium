@@ -604,12 +604,16 @@ function makeCorrectionsProbe(
                },
                reparseAndRelink: async (document: LangiumDocument) => {
                   builderCalls.reparseAndRelink.push(document.uri.toString());
-               }
+               },
+               // A Linked-phase correction watches for the start of the build it asks for.
+               onUpdate: () => ({ dispose: () => undefined })
             },
             VersionSyncService: {
                modelProduced: (document: LangiumDocument, origin?: { text?: string }) => {
                   produced.push({ uri: document.uri.toString(), text: origin?.text });
-               }
+               },
+               // A Linked-phase correction asks for a build that relinks its dependents.
+               requestRecoveryBuild: async () => undefined
             },
             FileSystemTaskQueue: {
                enqueue: async <T>(uri: string, task: () => Promise<T>): Promise<T> => {

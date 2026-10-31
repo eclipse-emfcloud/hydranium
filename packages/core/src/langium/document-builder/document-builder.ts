@@ -1041,8 +1041,11 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * Treating an un-indexed document as affected is the conservative reading and
     * costs nothing in steady state — documents sit at `Validated` there, so this
     * branch is only taken for documents an interrupted build left behind.
+    *
+    * Public so a service that requests a build can skip one that would relink
+    * nothing.
     */
-   protected override shouldRelink(document: LangiumDocument, changedUris: Set<string>): boolean {
+   override shouldRelink(document: LangiumDocument, changedUris: Set<string>): boolean {
       if (document.state < DocumentState.IndexedReferences) {
          return true;
       }
@@ -1163,6 +1166,10 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * re-parsed AST would otherwise lack them. The caller
     * runs inside the `Linked` build phase; the build carries the document
     * through IndexedReferences + Validation (and their `onDocumentPhase`) next.
+    *
+    * Only this document is relinked. The documents that reference it still
+    * hold nodes a re-parse replaced, or names a mutation changed, so the
+    * caller has to relink them in a later build.
     */
    async reparseAndRelink(document: LangiumDocument, cancelToken: CancellationToken = CancellationToken.None): Promise<void> {
       const languageServices = this.serviceRegistry.getServices(document.uri);
