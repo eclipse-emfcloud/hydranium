@@ -9,9 +9,15 @@
 
 import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
-import { type ActionMessage, type Operation } from '@eclipse-glsp/server';
-import { asModelVersion, ConflictError, DocumentSyntaxError, SaveFailedError } from '@hydranium/protocol';
+import { type Action, type ActionMessage, type Operation, type OperationHandler } from '@eclipse-glsp/server';
+import { asModelVersion, ConflictError, Deferred, DocumentSyntaxError, SaveFailedError } from '@hydranium/protocol';
+import {
+   DiagramTextUnreadableError,
+   DiagramWriteRanOutError,
+   isDiagramWriteUnsettledError
+} from '../src/command/diagram-edit-dropped-error.js';
 import { HydraniumGlspOperationActionHandler } from '../src/command/hydranium-glsp-operation-action-handler.js';
+import { queuedDeliveriesOf } from '../src/command/queued-deliveries.js';
 import { makeNoopGlspLogger } from '../src/testing/make-noop-glsp-logger.js';
 
 /** A handler whose log and client are recorded, built without a container. */
@@ -39,6 +45,11 @@ class RecordingHandler extends HydraniumGlspOperationActionHandler {
 
    fail(error: unknown): void {
       this.reportFailure({ kind: 'someOperation', isOperation: true } as Operation, error);
+   }
+
+   /** Run an operation the way the server runs one no other operation holds up. */
+   runStraightAway(): Promise<Action[]> {
+      return this.executeHandler({ kind: 'someOperation', isOperation: true } as Operation, {} as OperationHandler);
    }
 
    /** End the diagram's session, as the storage's dispose does. */
@@ -79,6 +90,33 @@ describe('HydraniumGlspOperationActionHandler.reportFailure', () => {
       expect(handler.errors[0]).toContain('model v1 / text v2');
    });
 
+   it.each([
+      ['whose writes ran out', (conflict: ConflictError) => new DiagramWriteRanOutError('the document kept changing', conflict)],
+      ['that could not read the text', (conflict: ConflictError) => new DiagramTextUnreadableError('the document cannot be read', conflict)]
+   ])(
+      'warns without a stack for a write %s, naming its document and both versions, and heads the notification with its message',
+      (_why, make) => {
+         const handler = new RecordingHandler();
+         const conflict = new ConflictError('file:///a.x', asModelVersion(1), 2);
+         const error = make(conflict);
+         handler.fail(error);
+         expect({ errors: handler.errors, warnings: handler.warnings.length }).toEqual({ errors: [], warnings: 1 });
+         expect(handler.warnings[0]).toContain('file:///a.x, model v1 / text v2');
+         expect(handler.warnings[0]).not.toMatch(/\n\s+at /);
+         expect(handler.sent[0].action).toMatchObject({ message: error.message, details: String(conflict) });
+      }
+   );
+
+   it.each([
+      ['whose writes ran out', (conflict: ConflictError) => new DiagramWriteRanOutError('the document kept changing', conflict)],
+      ['that could not read the text', (conflict: ConflictError) => new DiagramTextUnreadableError('the document cannot be read', conflict)]
+   ])('logs a refusal of a write %s wrapped as the cause of a failure as an error, still naming both versions', (_why, make) => {
+      const handler = new RecordingHandler();
+      handler.fail(new Error('refused after a step', { cause: make(new ConflictError('file:///a.x', asModelVersion(1), 2)) }));
+      expect({ errors: handler.errors.length, warnings: handler.warnings }).toEqual({ errors: 1, warnings: [] });
+      expect(handler.errors[0]).toContain('model v1 / text v2');
+   });
+
    it('warns without a stack for a write to a document that does not parse, which is declined too', () => {
       const handler = new RecordingHandler();
       handler.fail(new DocumentSyntaxError('file:///a.x'));
@@ -93,5 +131,41 @@ describe('HydraniumGlspOperationActionHandler.reportFailure', () => {
       handler.fail(new Error('No client session is registered for client_1; the diagram cannot write'));
       expect({ errors: handler.errors, warnings: handler.warnings, sent: handler.sent }).toEqual({ errors: [], warnings: [], sent: [] });
       expect(handler.debugs.some(line => line.includes('someOperation'))).toBe(true);
+   });
+});
+
+describe('HydraniumGlspOperationActionHandler.executeHandler', () => {
+   it('tracks the resync after an operation run straight away is refused, so a settle request waits for its delivery', async () => {
+      const handler = new RecordingHandler();
+      const submitted = new Deferred<Action[]>();
+      const dispatched: Action[][] = [];
+      const refusal = new ConflictError('file:///a.x', asModelVersion(1), 2);
+      Object.assign(handler.state, { runExclusive: <T>(run: () => Promise<T>): Promise<T> => run() });
+      Object.assign(handler, {
+         runOperation: () => Promise.reject(refusal),
+         submitModel: () => submitted.promise,
+         actionDispatcher: { dispatchAll: async (actions: Action[]): Promise<void> => void dispatched.push(actions) }
+      });
+
+      await expect(handler.runStraightAway()).rejects.toBe(refusal);
+      const tracked = [...queuedDeliveriesOf(handler.state)];
+      submitted.resolve([{ kind: 'updateModel' }]);
+      await Promise.all(tracked);
+
+      expect({ tracked: tracked.length, dispatched }).toEqual({ tracked: 1, dispatched: [[{ kind: 'updateModel' }]] });
+   });
+});
+
+describe('isDiagramWriteUnsettledError', () => {
+   it('matches both writes the reconcile cannot settle, by name, and not the conflict they carry', () => {
+      const conflict = new ConflictError('file:///a.x', asModelVersion(1), 2);
+      const fromAnotherCopy = Object.assign(new Error('the document kept changing'), { name: 'DiagramWriteRanOutError', conflict });
+      const matches = [
+         new DiagramWriteRanOutError('the document kept changing', conflict),
+         new DiagramTextUnreadableError('the document cannot be read', conflict),
+         fromAnotherCopy,
+         conflict
+      ].map(isDiagramWriteUnsettledError);
+      expect(matches).toEqual([true, true, true, false]);
    });
 });

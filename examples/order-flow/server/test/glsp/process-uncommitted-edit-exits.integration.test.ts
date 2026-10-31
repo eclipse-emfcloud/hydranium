@@ -16,10 +16,19 @@ import {
    MessageAction,
    ModelSubmissionHandler,
    type Operation,
+   RedoAction,
    UndoAction
 } from '@eclipse-glsp/server';
 import { DiagramStatus, type HydraniumGlspSubmissionHandler } from '@hydranium/glsp-server';
-import { DIAGRAM_EDIT_DROPPED, DIAGRAM_UNDO_CONFLICT } from '@hydranium/glsp-server/messages';
+import {
+   DIAGRAM_EDIT_DROPPED,
+   DIAGRAM_EDIT_RAN_OUT,
+   DIAGRAM_EDIT_UNREADABLE,
+   DIAGRAM_REDO_RAN_OUT,
+   DIAGRAM_REDO_UNREADABLE,
+   DIAGRAM_UNDO_RAN_OUT,
+   DIAGRAM_UNDO_UNREADABLE
+} from '@hydranium/glsp-server/messages';
 import { waitFor } from '@hydranium/protocol/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { OrderFlowCommand } from '../../src/glsp/order-flow-command.js';
@@ -317,78 +326,106 @@ describe('the exits of an operation', () => {
       });
    });
 
-   it.each([
-      ['fails the operation', 'do'],
-      ['refuses an undo, keeping the history and its place,', 'undo']
-   ] as const)(
-      '%s whose write conflicts and cannot read the current text, writing nothing and keeping the foreign edit',
-      async (_what, phase) => {
-         const opened = await openDiagram();
-         const { diagram, layoutUri } = opened;
-         const create = createTask();
-         let count = 0;
-         const counted: Command = { execute: () => void count++, undo: () => void count--, redo: () => void count++ };
-         vi.spyOn(handlerOf(diagram, create), 'createCommand').mockImplementationOnce(
-            () => new CompoundCommand([counted, new OrderFlowCommand(diagram.state, 'Move Pay', () => place(diagram, 'Pay', 50, 110))])
-         );
-         if (phase === 'undo') {
-            await apply(diagram, create);
-         }
-         // A foreign edit to another entry makes the write conflict; its refetch then reads nothing.
-         await changeTextUnbuilt(opened, text => text.replace('node PaymentOk at 260, 90', 'node PaymentOk at 270, 95'), layoutUri);
-         const state = diagram.state as unknown as { refetch(): Promise<unknown> };
-         vi.spyOn(state, 'refetch').mockResolvedValueOnce(undefined);
-         const layoutBefore = textOf(opened, layoutUri);
-
-         const before = diagram.actions.length;
-         if (phase === 'do') {
-            await applyFailing(diagram, create);
-         } else {
-            await dispatcherOf(diagram).dispatch(UndoAction.create());
-         }
-
-         expect({
-            messages: diagram.actions
-               .slice(before)
-               .filter(MessageAction.is)
-               .map(({ severity, message, details }) => ({ severity, message, reported: details?.includes('was not applied') ?? false })),
-            layout: textOf(opened, layoutUri) === layoutBefore,
-            count,
-            canUndo: commandStackOf(diagram).canUndo(),
-            canRedo: commandStackOf(diagram).canRedo()
-         }).toEqual(
-            phase === 'do'
-               ? {
-                    messages: [expect.objectContaining({ severity: 'ERROR', reported: true })],
-                    layout: true,
-                    count: 0,
-                    canUndo: false,
-                    canRedo: false
-                 }
-               : {
-                    messages: [{ severity: 'WARNING', message: DIAGRAM_UNDO_CONFLICT.text, reported: true }],
-                    layout: true,
-                    count: 1,
-                    canUndo: true,
-                    canRedo: false
-                 }
-         );
-         if (phase === 'undo') {
-            // Read again, the foreign edit to another entry merges.
-            await undoOrRedo(diagram, UndoAction.create());
-            const layout = textOf(opened, layoutUri);
-            expect({
-               count,
-               payUndone: layout.includes('node Pay at 40, 100'),
-               foreign: layout.includes('node PaymentOk at 270, 95')
-            }).toEqual({
-               count: 0,
-               payUndone: true,
-               foreign: true
-            });
-         }
+   /** The messages a write that cannot reconcile is told with, by why and by phase. */
+   const REFUSALS = {
+      'cannot read the current text': { do: DIAGRAM_EDIT_UNREADABLE, undo: DIAGRAM_UNDO_UNREADABLE, redo: DIAGRAM_REDO_UNREADABLE },
+      'keeps meeting foreign edits until its writes run out': {
+         do: DIAGRAM_EDIT_RAN_OUT,
+         undo: DIAGRAM_UNDO_RAN_OUT,
+         redo: DIAGRAM_REDO_RAN_OUT
       }
-   );
+   } as const;
+
+   it.each(
+      (Object.keys(REFUSALS) as Array<keyof typeof REFUSALS>).flatMap(why => [
+         ['fails the operation', why, 'do'] as const,
+         ['refuses an undo, keeping the history and its place,', why, 'undo'] as const,
+         ['refuses a redo, keeping the history and its place,', why, 'redo'] as const
+      ])
+   )('%s whose write conflicts and %s, writing nothing of its own and keeping the foreign edits', async (_what, why, phase) => {
+      const opened = await openDiagram();
+      const { diagram, layoutUri } = opened;
+      const create = createTask();
+      let count = 0;
+      const counted: Command = { execute: () => void count++, undo: () => void count--, redo: () => void count++ };
+      vi.spyOn(handlerOf(diagram, create), 'createCommand').mockImplementationOnce(
+         () => new CompoundCommand([counted, new OrderFlowCommand(diagram.state, 'Move Pay', () => place(diagram, 'Pay', 50, 110))])
+      );
+      if (phase !== 'do') {
+         await apply(diagram, create);
+      }
+      if (phase === 'redo') {
+         await undoOrRedo(diagram, UndoAction.create());
+      }
+      // A foreign edit to another entry makes the write conflict.
+      await changeTextUnbuilt(opened, text => text.replace('node PaymentOk at 260, 90', 'node PaymentOk at 270, 95'), layoutUri);
+      const store = opened.services.shared.workspace.TextDocuments;
+      let foreign = 0;
+      const state = diagram.state as unknown as { persist(...args: unknown[]): Promise<unknown>; refetch(): Promise<unknown> };
+      const persist = state.persist.bind(state);
+      const racing =
+         why === 'cannot read the current text'
+            ? vi.spyOn(state, 'refetch').mockResolvedValueOnce(undefined)
+            : // Another one lands before each write, so every merge succeeds and every write conflicts again.
+              spyOnPersist(diagram).mockImplementation(async (...args: unknown[]) => {
+                 foreign++;
+                 const text = store.get(layoutUri)!.getText();
+                 store.applyContentChange(
+                    layoutUri,
+                    text.replace(/node PaymentOk at \d+, 95/, `node PaymentOk at ${270 + foreign}, 95`),
+                    'text-editor'
+                 );
+                 return persist(...args);
+              });
+
+      const submissions = vi.spyOn(
+         diagram.sessionContainer.get<HydraniumGlspSubmissionHandler<ProcessModel>>(ModelSubmissionHandler),
+         'submitModel'
+      );
+      const before = diagram.actions.length;
+      if (phase === 'do') {
+         await applyFailing(diagram, create);
+         // The resync runs in a section of its own, after the operation's.
+         await waitFor(() => submissions.mock.calls.length > 0, { message: 'no resync after the refusal' });
+      } else {
+         await dispatcherOf(diagram).dispatch(phase === 'undo' ? UndoAction.create() : RedoAction.create());
+      }
+      racing.mockRestore();
+      const lastForeign = `node PaymentOk at ${270 + foreign}, 95`;
+
+      const applied = phase === 'undo';
+      expect({
+         messages: diagram.actions
+            .slice(before)
+            .filter(MessageAction.is)
+            .map(({ severity, message, details }) => ({ severity, message, reported: details?.includes('was not applied') ?? false })),
+         payMoved: textOf(opened, layoutUri).includes('node Pay at 50, 110'),
+         foreign: textOf(opened, layoutUri).includes(lastForeign),
+         count,
+         // An edit's gesture is resynced off the client, and an undo or redo showed none.
+         submits: submissions.mock.calls.length,
+         canUndo: commandStackOf(diagram).canUndo(),
+         canRedo: commandStackOf(diagram).canRedo()
+      }).toEqual({
+         messages: [{ severity: phase === 'do' ? 'ERROR' : 'WARNING', message: REFUSALS[why][phase].text, reported: true }],
+         submits: phase === 'do' ? 1 : 0,
+         payMoved: applied,
+         foreign: true,
+         count: applied ? 1 : 0,
+         canUndo: applied,
+         canRedo: phase === 'redo'
+      });
+      if (phase !== 'do') {
+         // Tried again, the foreign edits to another entry merge.
+         await undoOrRedo(diagram, phase === 'undo' ? UndoAction.create() : RedoAction.create());
+         const layout = textOf(opened, layoutUri);
+         expect({ count, payMoved: layout.includes('node Pay at 50, 110'), foreign: layout.includes(lastForeign) }).toEqual({
+            count: applied ? 0 : 1,
+            payMoved: !applied,
+            foreign: true
+         });
+      }
+   });
 
    it('a failed operation rolls back the side effects of every command that executed', async () => {
       const opened = await openDiagram();

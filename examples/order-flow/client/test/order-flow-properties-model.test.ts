@@ -622,6 +622,39 @@ describe('order-flow properties model', () => {
       expect(model.fields.find(field => field.name === 'name')?.value).toBe('WonByTheOtherWriter');
    });
 
+   it('drops a write whose merges kept meeting foreign edits to other fields until its writes ran out, as run out', async () => {
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      // One for each reread before a merged write: the default allows three writes.
+      const subjects = ['Customer', 'Supplier'];
+      let racing = false;
+      // After each reread, another field changes before the merged write lands.
+      const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(
+         refetchIntercepting(session!, async () => {
+            const subject = racing ? subjects.shift() : undefined;
+            if (subject !== undefined) {
+               await thirdPartyWrite(uri, { ...foreign, subject });
+            }
+         }),
+         new DataEvents<OrderFlowTransferRoot>()
+      );
+      models.push(model);
+      await model.open(uri);
+      // Read only once racing, after this is set.
+      const foreign = (await currentRoot(uri)) as ProcessModel;
+      await thirdPartyWrite(uri, { ...foreign, subject: 'LineItem' });
+      racing = true;
+
+      expect(await model.setField('name', 'Fulfilment')).toEqual({ status: 'ran-out' });
+
+      const server = await session!.connected();
+      const reread = (await server.getModelDocument({ uri })).model?.root as ProcessModel;
+      expect({ name: reread.name, subject: reread.subject, shown: model.fields.find(field => field.name === 'subject')?.value }).toEqual({
+         name: foreign.name,
+         subject: 'Supplier',
+         shown: 'Supplier'
+      });
+   });
+
    it('settles a write a foreign writer already made, and takes the version it made it at', async () => {
       const uri = uriOf(FULFILLMENT_PROCESS);
       const model = pinnedModel();

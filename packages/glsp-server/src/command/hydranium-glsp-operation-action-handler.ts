@@ -20,11 +20,11 @@ import {
    type OperationHandler
 } from '@eclipse-glsp/server';
 import { type ServerSharedServices } from '@hydranium/core';
-import { describeErrorWithStack, isResponseError } from '@hydranium/protocol';
+import { describeErrorWithStack, isDocumentSyntaxError, isResponseError } from '@hydranium/protocol';
 import { inject, injectable } from 'inversify';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { logActionFailure } from './diagram-edit-dropped-error.js';
-import { HydraniumGlspOperationCommand, openOperationOf, runOperation } from './hydranium-glsp-operation-command.js';
+import { HydraniumGlspOperationCommand, isRefusal, openOperationOf, runOperation } from './hydranium-glsp-operation-command.js';
 import { type HydraniumGlspRecordingState } from './hydranium-glsp-recording-command.js';
 import { trackQueuedDelivery } from './queued-deliveries.js';
 
@@ -58,23 +58,50 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
 
    /**
     * Runs `operation`, or queues it behind the open one and tracks its delivery,
-    * which a settle request waits for. An override must call this one, or a
-    * settle answers before what the queued operation sends.
+    * which a settle request waits for. The resync after a refused operation is
+    * tracked either way. An override must call this one, or a settle answers
+    * before what the queued operation or the resync sends.
     */
    protected override executeHandler(operation: Operation, handler: OperationHandler): Promise<Action[]> {
       const queued = openOperationOf(this.modelState) !== undefined;
       const run = this.modelState.runExclusive(() => this.runOperation(operation, handler));
       if (!queued) {
-         return run;
+         return run.catch((error: unknown) => {
+            trackQueuedDelivery(this.modelState, this.resyncAfter(error));
+            throw error;
+         });
       }
       trackQueuedDelivery(
          this.modelState,
          run.then(
             actions => this.deliverQueued(actions),
-            (error: unknown) => this.reportFailure(operation, error)
+            (error: unknown) => {
+               this.reportFailure(operation, error);
+               return this.resyncAfter(error);
+            }
          )
       );
       return Promise.resolve([]);
+   }
+
+   /**
+    * Resync the client after `error` refused an operation, see `isRefusal`, as
+    * it still shows the rolled-back gesture. Not after a syntax error, since the
+    * storage keeps a model built from broken text off the client. Never rejects.
+    */
+   protected async resyncAfter(error: unknown): Promise<void> {
+      if (!isRefusal(error) || isDocumentSyntaxError(error) || this.modelState.modelSession === undefined) {
+         return;
+      }
+      let actions: Action[];
+      try {
+         // A section of its own, as the submit waits for a build the operation's section holds.
+         actions = await this.modelState.runExclusive(async () => this.submitModel());
+      } catch (submitError: unknown) {
+         this.logger.warn(`Could not resync the client after a refused operation: ${describeErrorWithStack(submitError)}`);
+         return;
+      }
+      await this.deliverQueued(actions);
    }
 
    /**
@@ -100,10 +127,10 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
    }
 
    /**
-    * Deliver what a queued operation answered: a message straight to the
-    * client, as {@link reportFailure} sends one, the rest through the
-    * dispatcher. A failure to deliver is logged, not reported as the
-    * operation's. Resolves once delivered, and never rejects.
+    * Deliver what a queued operation answered, or a refused one's resync: a
+    * message straight to the client, as {@link reportFailure} sends one, the
+    * rest through the dispatcher. A failure to deliver is logged, not reported
+    * as the operation's. Resolves once delivered, and never rejects.
     */
    protected deliverQueued(actions: Action[]): Promise<void> {
       const messages = actions.filter(action => MessageAction.is(action));

@@ -94,6 +94,11 @@ export const PROPERTIES_WRITE_CONFLICT = defineMessage(
    'Not saved — someone else changed this field first. The value shown is theirs.'
 );
 
+export const PROPERTIES_WRITE_RAN_OUT = defineMessage(
+   'order-flow/properties/write-ran-out',
+   'Not saved — the document kept changing while this was written. Try again.'
+);
+
 export const PROPERTIES_WRITE_UNAVAILABLE = defineMessage(
    'order-flow/properties/write-unavailable',
    'Not saved — the document could not be re-read to resolve a conflict.'

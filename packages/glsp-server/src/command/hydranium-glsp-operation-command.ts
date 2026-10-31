@@ -28,7 +28,7 @@ import {
    isConflictError,
    isDocumentSyntaxError
 } from '@hydranium/protocol';
-import { DiagramEditDroppedError, isDiagramEditDroppedError } from './diagram-edit-dropped-error.js';
+import { DiagramEditDroppedError, isDiagramEditDroppedError, isDiagramWriteUnsettledError } from './diagram-edit-dropped-error.js';
 import { type HydraniumGlspRecordingState } from './hydranium-glsp-recording-command.js';
 
 /**
@@ -569,9 +569,9 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
     * steps already run are run the other way, newest first, with nothing
     * written. A write dropped after every step was run back changed nothing,
     * and resolves to `false`: the undo or redo is skipped as for a collision,
-    * and the history kept. A `DocumentSyntaxError` or `ConflictError` the
-    * write threw then is rethrown, and the command stack keeps its place, so a
-    * retry reads the model again. This relies on the state's write applying
+    * and the history kept. A refusal the write threw then, see
+    * {@link isRefusal}, is rethrown, and the command stack keeps its place, so
+    * a retry reads the model again. This relies on the state's write applying
     * none of its documents when it throws. Any other error is rethrown, and
     * GLSP's command stack flushes. A refusal a step threw, or one after a step
     * that cannot be run back, is rethrown as the `cause` of a plain error, so
@@ -613,7 +613,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
             }
             throw error;
          }
-         if (isDocumentSyntaxError(error) || isConflictError(error)) {
+         if (isRefusal(error)) {
             throw new Error(`The ${direction} was refused, and a step it ran may have changed the model: ${describeError(error)}`, {
                cause: error
             });
@@ -731,6 +731,15 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
          }
       }
    }
+}
+
+/**
+ * Whether `error` refused a write without writing: a document that does not
+ * parse, a conflict, writes that ran out, or a text that could not be read.
+ * Only such a failure can leave the model as it was.
+ */
+export function isRefusal(error: unknown): boolean {
+   return isDocumentSyntaxError(error) || isConflictError(error) || isDiagramWriteUnsettledError(error);
 }
 
 /** Whether `value` is a list of commands, as a `CompoundCommand` holds its children. */

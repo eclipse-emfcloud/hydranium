@@ -11,7 +11,7 @@ import type { ResolvedMessage } from '@hydranium/protocol';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { SetFieldOutcome } from '../src/data/order-flow-properties-model';
 import { PropertiesForm } from '../src/properties/properties-form';
-import { PROPERTIES_UNSAVED, PROPERTIES_WRITE_FAILED } from '../src/properties/properties-messages';
+import { PROPERTIES_UNSAVED, PROPERTIES_WRITE_FAILED, PROPERTIES_WRITE_RAN_OUT } from '../src/properties/properties-messages';
 
 /**
  * The form's failure path, driven without a DOM.
@@ -121,6 +121,10 @@ class TestableForm extends PropertiesForm {
 
    statusLine(): string | null {
       return this.status.textContent;
+   }
+
+   statusKind(): string | undefined {
+      return this.status.dataset.kind;
    }
 
    unsaved(): StubElement {
@@ -236,6 +240,18 @@ describe('PropertiesForm.write failures', () => {
       await form.write('customerName', 'Ada');
 
       expect(form.statusLine()).toBe('the data server went away');
+   });
+
+   it('says a write whose writes ran out was not saved and can be tried again, coloured as a conflict', async () => {
+      const { form, reported } = makeForm(() => Promise.resolve({ status: 'ran-out' } as SetFieldOutcome));
+
+      await form.write('customerName', 'Ada');
+
+      expect({ status: form.statusLine(), kind: form.statusKind(), reported }).toEqual({
+         status: PROPERTIES_WRITE_RAN_OUT.text,
+         kind: 'conflict',
+         reported: []
+      });
    });
 
    it('reports nothing when the write succeeds', async () => {

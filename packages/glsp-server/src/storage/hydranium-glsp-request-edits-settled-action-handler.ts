@@ -37,11 +37,13 @@ import { HydraniumGlspStorage } from './hydranium-glsp-storage.js';
  * open.
  *
  * The server handles a client's actions one at a time, so the edits sent before
- * the request have been handled when it runs, except an operation queued behind
- * an open one, which runs in the state's exclusive section after its handler
- * has returned; the handler waits that section out first, then, for at most
- * {@link settleDeliveriesMs}, for what such an operation answered, its dirty
- * state among it, to be delivered; one it gave up on is not waited for again.
+ * the request have been handled when it runs. Two things can still be in
+ * flight: an operation queued behind an open one, which runs in the state's
+ * exclusive section after its handler has returned, and the model a refused
+ * operation resubmits in a section of its own. The handler waits those
+ * sections out first, then, for at most {@link settleDeliveriesMs}, for what
+ * they answered, a dirty state among it, to be delivered. One it gave up on is
+ * not waited for again.
  * Their text, though, reaches the language client on a push of its own that the
  * edit does not await; answering before it would let a page that tracks unsaved
  * text through that client read an edit as neither in flight nor unsaved. The

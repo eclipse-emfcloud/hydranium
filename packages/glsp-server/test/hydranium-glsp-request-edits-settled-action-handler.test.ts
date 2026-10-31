@@ -23,6 +23,7 @@ import {
    GGraph,
    type GModelFactory,
    type InstanceMultiBinding,
+   type MaybePromise,
    MessageAction,
    ModelState,
    type ModelSubmissionHandler,
@@ -41,8 +42,16 @@ import { BrowserActionDispatchScope } from '@eclipse-glsp/server/browser.js';
 import { ContainerModule, inject, injectable } from 'inversify';
 import { type AstNode } from '@hydranium/langium';
 import type { ServerSharedServices } from '@hydranium/core';
-import { Deferred, EditsSettledAction, ReconcilingConflictResolver, RequestEditsSettledAction } from '@hydranium/protocol';
+import {
+   asModelVersion,
+   ConflictError,
+   Deferred,
+   EditsSettledAction,
+   ReconcilingConflictResolver,
+   RequestEditsSettledAction
+} from '@hydranium/protocol';
 import { type FakeClock, makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
+import { DiagramWriteRanOutError } from '../src/command/diagram-edit-dropped-error.js';
 import { HydraniumGlspOperationActionHandler } from '../src/command/hydranium-glsp-operation-action-handler.js';
 import { HydraniumGlspServerActionDispatcher } from '../src/dispatcher/server-action-dispatcher.js';
 import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp-state.js';
@@ -123,6 +132,8 @@ let operationFailure: Error | undefined;
 let queueChain: Operation[] = [];
 /** What the queued operation answers, in place of a model update. */
 let queuedAnswers: Action[] = [];
+/** Refuses the queued operation when set, whose resync then answers {@link queuedAnswers}. */
+let queuedRefusal: Error | undefined;
 /** Holds the handling of a {@link HELD_KIND} action, a delivered answer, until the test resolves it. */
 let heldDelivery: Deferred<void> | undefined;
 const HELD_KIND = 'heldDelivery';
@@ -139,7 +150,14 @@ let deliveryDispatchGate: Deferred<void>;
 @injectable()
 class QueuingOperationActionHandler extends HydraniumGlspOperationActionHandler {
    protected override runOperation(operation: Operation, handler: OperationHandler): Promise<Action[]> {
-      return operation === queueChain.at(-1) ? Promise.resolve(queuedAnswers) : super.runOperation(operation, handler);
+      if (operation !== queueChain.at(-1)) {
+         return super.runOperation(operation, handler);
+      }
+      return queuedRefusal === undefined ? Promise.resolve(queuedAnswers) : Promise.reject(queuedRefusal);
+   }
+
+   protected override submitModel(): MaybePromise<Action[]> {
+      return queuedRefusal === undefined ? super.submitModel() : queuedAnswers;
    }
 }
 
@@ -289,6 +307,7 @@ async function startServer(
    clock = makeFakeClock();
    logged = makeCapturingGlspLogger();
    queuedAnswers = [];
+   queuedRefusal = undefined;
    heldDelivery = undefined;
    operationEntered = new Deferred<void>();
    deliveryEntered = new Deferred<void>();
@@ -524,6 +543,25 @@ describe.each(['node', 'browser'] as const)('HydraniumGlspRequestEditsSettledAct
       const kinds = server.actions.slice(before).map(action => action.kind);
       expect(kinds).toContain(SetDirtyStateAction.KIND);
       expect(kinds.indexOf(SetDirtyStateAction.KIND)).toBeLessThan(kinds.indexOf(EditsSettledAction.KIND));
+   });
+
+   it('answers only once the resync of an operation the server queued and refused has been delivered', async () => {
+      const server = await startServer('file:///a.x');
+      // The resync needs a session, which this fixture never loads.
+      Object.assign(server.state, { modelSession: {} });
+      queueChain = [ChangeBoundsOperation.create([])];
+      queuedRefusal = new DiagramWriteRanOutError('the document kept changing', new ConflictError('file:///a.x', asModelVersion(1), 2));
+      queuedAnswers = [{ kind: HELD_KIND }];
+      heldDelivery = new Deferred<void>();
+
+      server.dispatch(ChangeBoundsOperation.create([]));
+      server.dispatch(RequestEditsSettledAction.create({ requestId: 'settle-1' }));
+      await deliveryEntered.promise;
+      await tick(5);
+      expect(answers(server)).toEqual([]);
+
+      heldDelivery.resolve();
+      await expect(server.nextAction<EditsSettledAction>(EditsSettledAction.KIND)).resolves.toMatchObject({ responseId: 'settle-1' });
    });
 
    it('answers a second request only once the delivery the first is waiting for is done too', async () => {

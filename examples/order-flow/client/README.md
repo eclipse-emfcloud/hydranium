@@ -148,7 +148,8 @@ returns a status rather than `void`:
 | --- | --- |
 | `applied` | Landed against an unchanged document. |
 | `merged` | Raced foreign edits to *different* fields; both intents survive. |
-| `conflict` | Raced a foreign edit of the *same* field to a different value, or kept racing foreign edits; the write was dropped and the panel now shows the server's value. |
+| `conflict` | Raced a foreign edit of the *same* field to a different value. The write was dropped and the panel now shows the server's value. |
+| `ran-out` | Each write conflicted with a foreign edit until its writes ran out. The write was dropped and the panel now shows the server's values. |
 | `unchanged` | Nothing was written: the panel's value already matched, or the server turned out to hold it. |
 | `unavailable` | The document could not be refetched to reconcile against. |
 

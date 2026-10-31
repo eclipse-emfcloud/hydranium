@@ -73,6 +73,18 @@ edit, whether an operation or a recording command executed outside one wrote
 it. An undo or redo that a foreign edit of the same field skips, wholly or in
 part, is told as skipped.
 
+A write the reconcile cannot settle fails instead, with nothing written, and is
+told with its own reason. Its writes can run out: each one conflicted, because
+another writer kept changing the document, and a retry may land. Or the current
+text cannot be read to reconcile against, and forcing the write would overwrite
+text the diagram never saw. Told as a dropped edit, either would name a
+collision the reconcile never found. An edit refused this way, or for a
+conflict, is then sent the model again, so the client stops showing the
+gesture. That submit runs in a section of its own, since it waits for the
+document's build, and a settle request waits for its delivery. An edit refused
+for a syntax error is not, since a model built from the broken text is what the
+storage keeps off the client.
+
 An undo or redo whose own write is dropped, because a foreign edit of the same
 field lands while it runs, reverts the steps it ran and writes nothing. It is
 then skipped and told as one that collides before it runs: the command stack
@@ -85,13 +97,16 @@ run does nothing: when a `CompoundCommand` rolls it back after a later child
 fails, the entry's undo runs in full, its write and its hooks, as any undo
 does.
 
-An undo or redo whose own write throws `ConflictError`, as when the reconcile
-cannot read the current text, also reverts the steps it ran and writes nothing.
-The conflict tells only that the text moved, so the command stack keeps the
-history and its place, and the refusal is told as a warning. A retry reads the
-model again: an edit of another field merges, one of the same field skips the
-entry. Both cases rely on the state's write applying none of its documents
-when it throws, as `updateAll` does.
+An undo or redo whose own write is refused, because the text moved past the
+version it read, its writes ran out, or the current text cannot be read, also
+reverts the steps it ran and writes nothing. None of these says a foreign edit
+changed what the entry restores, so the command stack keeps the history and its
+place, and the refusal is told as a warning naming its reason. A retry reads
+the model again: an edit of another field merges, one of the same field skips
+the entry. While the text stays unreadable, every retry is refused the same
+way, and the place is still kept, since a refusal changes nothing. These cases
+rely on the state's write applying none of its documents when it throws, as
+`updateAll` does.
 
 An undo or redo whose own write is refused with `DocumentSyntaxError`, because
 a document it reads or writes does not parse, is refused as a conflict is. The
@@ -102,18 +117,20 @@ field. The full-text state refuses its own write while its source does not
 parse, since the session accepts text without that check.
 
 Any other undo or redo that fails clears the undo and redo history, as GLSP
-does, and its message says so. That includes a dropped, conflicting or
-unparsable write after a step that cannot be reverted, and a conflict or syntax
-error a step threw, since that step may have written. It also includes any
-refusal of an entry that is a `CompoundCommand`, whose revert of its children
-reports no failure. A recording command with only one of `undoAction` and
-`redoAction` has a step that cannot be reverted once that hook ran, and nothing
-to revert when it did not. A dropped write or a conflict is told as a foreign
-edit, any other failure as an error.
+does, and its message says so. That includes a dropped or refused write after
+a step that cannot be reverted, and a conflict or syntax error a step threw,
+since that step may have written. It also includes any refusal of an entry that
+is a `CompoundCommand`, whose revert of its children reports no failure. A
+recording command with only one of `undoAction` and `redoAction` has a step
+that cannot be reverted once that hook ran, and nothing to revert when it did
+not. A dropped write or a conflict is told as a foreign edit, any other failure
+as an error.
 
 A recording command executed outside an operation whose write is dropped pushes
 no undo step. In a compound whose other commands wrote, the step is pushed
-without it, and the server logs a warning.
+without it, and the server logs a warning. One whose write is refused pushes no
+step either: its operation rolled back, so the history is kept. A compound with
+a refused command clears the history, since its other commands wrote.
 
 ## One gesture, one operation
 
