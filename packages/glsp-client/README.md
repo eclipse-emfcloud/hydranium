@@ -22,8 +22,8 @@ VS Code webview, or a plain browser page. It builds on `@eclipse-glsp/client`.
 - One binder that mounts all of it in a diagram container.
 - For a plain page, one call that builds the container, loads the model and
   supplies what a shell would: framing, canvas bounds that follow the
-  element's size and position, touch input, and a context menu GLSP stops
-  warning about.
+  element's size and position, the server's messages and progress shown on
+  the diagram, touch input, and a context menu GLSP stops warning about.
 
 ## Install
 
@@ -121,16 +121,31 @@ A host that calls `createGlspClientModule` itself counts them only when it
 passes `trackEditsInFlight: true`, and reads them from
 `HydraniumGlspActionDispatcher`.
 
+The mount shows the server's messages, such as a refused undo, and its
+progress reports in the diagram's bottom-right corner. A message shows its
+severity's icon and is edged in its `--glsp-*-foreground` colour, and a
+progress report in the info one, with a spinner until it reports a
+percentage. The text keeps your page's colour over
+`--glsp-issue-background`, whose default is light, so a dark page sets that
+variable to one of its own surfaces. To show them in your page's own
+notifications instead, or to translate the dismiss and details labels,
+subclass `HydraniumMessageOverlay`, override `showMessage` and the progress
+methods or `dismissLabel` and `detailsLabel`, and rebind
+`HydraniumMessageOverlay` to your subclass in a module only your page
+loads, passed to your initializer after the mount's modules. A diagram
+module that Theia or VS Code also loads has no overlay bound to rebind.
+
 For a browser page, see *Host in a browser* in
 [Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
 ## Entry points
 
-| Subpath      | Use it for                                                | Runs in         |
-| ------------ | --------------------------------------------------------- | --------------- |
-| `.`          | The classes, the binder, the DI tokens and the page mount | browser         |
-| `./messages` | The codes of the messages this package raises             | browser-neutral |
-| `./testing`  | A binding recorder for testing your modules               | browser-neutral |
+| Subpath                       | Use it for                                                | Runs in         |
+| ----------------------------- | --------------------------------------------------------- | --------------- |
+| `.`                           | The classes, the binder, the DI tokens and the page mount | browser         |
+| `./messages`                  | The codes of the messages this package raises             | browser-neutral |
+| `./testing`                   | A binding recorder for testing your modules               | browser-neutral |
+| `./style/message-overlay.css` | The message overlay's stylesheet, imported for you        | browser         |
 
 The root loads `@eclipse-glsp/client`, whose graph imports stylesheets, so
 your bundler needs a CSS loader. The subpaths need a TypeScript

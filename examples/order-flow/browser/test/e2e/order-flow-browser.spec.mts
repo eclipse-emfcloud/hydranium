@@ -744,6 +744,42 @@ test.describe('order-flow in a web worker', () => {
       await expect(page.locator(`${MOUNT} .tool-palette`)).toBeVisible();
    });
 
+   test('an undo the server refuses shows its reason on the canvas', async ({ page }) => {
+      await page.goto('/');
+      await dragBy(page, nodeLocator('Cancel'), { x: 300, y: 180 });
+      await expectLayoutEntry(page, 'Cancel');
+
+      await page.locator(`${LAYOUT_EDITOR} .view-line`, { hasText: LAYOUT_DECLARATION }).click();
+      await page.keyboard.press('Home');
+      await page.keyboard.type('x');
+      await expect(page.locator(STATUS_BAND)).toContainText('fulfillment.layout has a syntax error');
+
+      // The undo is the diagram's, so the focus goes back to it.
+      await nodeLocator('Cancel')(page).click();
+      await page.keyboard.press('Control+Z');
+
+      const message = page.locator(`${MOUNT} .hydranium-message`);
+      await expect(message).toContainText('Nothing was undone: a document of this diagram has a syntax error. Fix it in the text first.');
+      // Text alone passes for a row the bundle shipped without its stylesheet, or one the graph covers.
+      await expect(message).toBeVisible();
+      await expect(page.locator(`${MOUNT} .hydranium-messages`)).toHaveCSS('position', 'absolute');
+      await message.click({ trial: true, timeout: 2000 });
+
+      // A held Ctrl+Z repeats the refusal, which must not stack over the diagram. The
+      // first row leaving the page is the sign the repeat arrived, since the count stays 1.
+      // The diagram still has the focus, and a second click could land on the row.
+      const first = await message.elementHandle();
+      await page.keyboard.press('Control+Z');
+      await expect.poll(() => first?.evaluate(row => row.isConnected)).toBe(false);
+      await expect(message).toHaveCount(1);
+
+      // Dismissed from the keyboard, the focus goes back to the diagram rather than the page.
+      await message.getByRole('button').focus();
+      await page.keyboard.press('Enter');
+      await expect(message).toHaveCount(0);
+      await expect(page.locator(GRAPH)).toBeFocused();
+   });
+
    test('highlighting comes from the server, not from a client grammar', async ({ page }) => {
       await page.goto('/');
       await expect(page.locator(`${PROCESS_EDITOR} .view-lines`)).toContainText(HIGHLIGHTED_LINE);

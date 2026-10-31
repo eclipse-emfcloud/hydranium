@@ -10,27 +10,36 @@
 import 'reflect-metadata';
 import {
    type Action,
+   type ActionHandlerRegistration,
    type ContainerConfiguration,
    DiagramLoader,
    EditorContextService,
+   EndProgressAction,
+   FallbackActionHandler,
    FitToScreenAction,
    GLSPActionDispatcher,
    GLSPHiddenBoundsUpdater,
+   initializeDiagramContainer as initializeGlspDiagramContainer,
    type IDiagramOptions,
    InitializeCanvasBoundsAction,
+   MessageAction,
    RankedSelectMouseListener,
    STANDALONE_MODULE_CONFIG,
+   standaloneDefaultModule,
+   StartProgressAction,
    StatusOverlay,
-   TYPES
+   TYPES,
+   UpdateProgressAction
 } from '@eclipse-glsp/client';
 import { Deferred, NoopLogger } from '@hydranium/protocol';
 import { tick } from '@hydranium/protocol/testing';
-import { Container, type ContainerModule, type interfaces } from 'inversify';
+import { Container, type ContainerModule, injectable, type interfaces } from 'inversify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HydraniumGlspActionDispatcher } from '../src/action-dispatcher';
 import { type DiagramLoadOutcome, HydraniumDiagramLoader } from '../src/diagram-loader';
 import { DIAGRAM_FIT_PADDING, type GlspDiagramMountOptions, mountGlspDiagram } from '../src/diagram-mount';
 import type { HydraniumGlspClient } from '../src/glsp-client';
+import { HydraniumMessageOverlay } from '../src/message-overlay';
 import { HydraniumClientTypes } from '../src/types';
 
 /** The calls the mount makes on the container's services, in order. */
@@ -236,6 +245,64 @@ describe('mountGlspDiagram', () => {
       }
       binderContainer.load(configuration[2] as ContainerModule);
       expect(binderContainer.get(HydraniumClientTypes.TrackEditsInFlight)).toBe(true);
+   });
+
+   it("shows the server's messages and progress on the canvas, where the standalone modules only logged them", async () => {
+      await mountGlspDiagram(options());
+      const binderContainer = new Container();
+      for (const token of [...GLSP_DEFAULT_TOKENS, FallbackActionHandler, TYPES.ViewerOptions]) {
+         binderContainer.bind(token).toConstantValue({});
+      }
+      binderContainer.load(configuration[2] as ContainerModule);
+      expect(binderContainer.get(FallbackActionHandler)).toBeInstanceOf(HydraniumMessageOverlay);
+   });
+
+   it("shares one overlay of a host's subclass across the message and progress kinds, even when rebound without a scope", async () => {
+      // GLSP resolves the fallback once per action kind, so a row started by one kind is ended by another.
+      @injectable()
+      class HostOverlay extends HydraniumMessageOverlay {}
+      await mountGlspDiagram(options());
+      const binderContainer = new Container();
+      for (const token of [...GLSP_DEFAULT_TOKENS, FallbackActionHandler, TYPES.ViewerOptions]) {
+         binderContainer.bind(token).toConstantValue({});
+      }
+      binderContainer.load(configuration[2] as ContainerModule);
+      binderContainer.rebind(HydraniumMessageOverlay).to(HostOverlay);
+      const forMessages = binderContainer.get(FallbackActionHandler);
+      expect(forMessages).toBeInstanceOf(HostOverlay);
+      expect(binderContainer.get(FallbackActionHandler)).toBe(forMessages);
+   });
+
+   it('starts the overlay that shows the messages, so it reattaches after the first render', async () => {
+      await mountGlspDiagram(options());
+      const binderContainer = new Container();
+      for (const token of [...GLSP_DEFAULT_TOKENS, FallbackActionHandler, TYPES.ViewerOptions]) {
+         binderContainer.bind(token).toConstantValue({});
+      }
+      binderContainer.load(configuration[2] as ContainerModule);
+      expect(binderContainer.getAll(TYPES.IDiagramStartup)).toContain(binderContainer.get(FallbackActionHandler));
+   });
+
+   it("reaches the overlay through the container GLSP builds from the mount's modules in their order", async () => {
+      // The binder rebinds only a fallback already bound, so an order that loads it first would leave the messages logged.
+      await mountGlspDiagram(options());
+      const built = initializeGlspDiagramContainer(new Container(), ...configuration);
+      expect(built.get(FallbackActionHandler)).toBeInstanceOf(HydraniumMessageOverlay);
+   });
+
+   it('finds the messages and progress on the fallback in the standalone modules, which the mount rebinds only when bound', () => {
+      // The mount's guard would hide a GLSP release that moves them, so this test fails instead.
+      const standalone = new Container();
+      standalone.bind(TYPES.ILogger).toConstantValue({ log: () => undefined });
+      standalone.load(standaloneDefaultModule);
+      const handlers = new Map(
+         standalone
+            .getAll<ActionHandlerRegistration>(TYPES.ActionHandlerRegistration)
+            .map(registration => [registration.actionKind, registration.factory()])
+      );
+      for (const kind of [MessageAction.KIND, StartProgressAction.KIND, UpdateProgressAction.KIND, EndProgressAction.KIND]) {
+         expect(handlers.get(kind), kind).toBeInstanceOf(FallbackActionHandler);
+      }
    });
 
    it('loads the model and then fits it without zooming in, before it resolves', async () => {

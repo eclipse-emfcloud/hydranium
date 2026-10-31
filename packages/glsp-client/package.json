@@ -26,9 +26,12 @@
   "files": [
     "lib",
     "src",
+    "style",
     "!lib/**/*.tsbuildinfo"
   ],
-  "sideEffects": false,
+  "sideEffects": [
+    "**/*.css"
+  ],
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "exports": {
@@ -43,7 +46,8 @@
     "./testing": {
       "types": "./lib/testing/index.d.ts",
       "default": "./lib/testing/index.js"
-    }
+    },
+    "./style/message-overlay.css": "./style/message-overlay.css"
   },
   "publishConfig": {
     "access": "public"
@@ -76,6 +80,8 @@
   "engines": {
     "node": ">=22.13"
   },
+  "//exports": "The stylesheet key is an asset entry, spelled as the exact filename so nothing becomes reachable automatically. It lets an adopter `@import` the sheet, re-bundle it or override it by specifier. `tsc` emits no assets, and `check:exports` asserts the file exists and ships through `files`.",
   "//peerDependencies": "`inversify` is imported plainly, as `@eclipse-glsp/client` imports it, and peered so the classes here decorate with the same copy the diagram container resolves; `@theia/core/shared/inversify` re-exports that copy, so a Theia frontend satisfies it without a second install. `snabbdom` is a peer for the `VNode` type the hidden-bounds updater reads, the same reason the Theia package peers it.",
-  "//prepack": "The publish guard, a `prepack` rather than a `prepare`: `prepack` runs only when a tarball is made (`npm pack`, `npm publish`) and never on install, so it cannot break the install it has no business touching. What it defends against: `files` lists `lib`, `lib` is gitignored, and a `files` entry matching nothing is skipped SILENTLY — so `npm publish` from an unbuilt tree emits a tarball of `src` and nothing else, with no error."
+  "//prepack": "The publish guard, a `prepack` rather than a `prepare`: `prepack` runs only when a tarball is made (`npm pack`, `npm publish`) and never on install, so it cannot break the install it has no business touching. What it defends against: `files` lists `lib`, `lib` is gitignored, and a `files` entry matching nothing is skipped SILENTLY — so `npm publish` from an unbuilt tree emits a tarball of `src` and nothing else, with no error.",
+  "//sideEffects": "A stylesheet IS the side effect: `style/message-overlay.css` is pulled in by a bare import in `message-overlay.js`, and a CSS module exports nothing, so under a blanket `false` a bundler drops the import as unused and the diagram's messages render unstyled. Nothing fails at build time."
 }

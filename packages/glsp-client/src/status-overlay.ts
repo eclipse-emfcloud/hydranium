@@ -9,6 +9,7 @@
 
 import { type StatusAction, StatusOverlay } from '@eclipse-glsp/client';
 import { injectable } from 'inversify';
+import { reattachUIExtension } from './reattach';
 
 /**
  * GLSP's status overlay, kept on the page.
@@ -31,13 +32,10 @@ export class HydraniumStatusOverlay extends StatusOverlay {
    }
 
    protected reattach(): void {
-      const container = this.containerElement as HTMLElement | undefined;
-      if (!container || container.isConnected) {
-         return;
-      }
-      const parent = this.getParentContainer();
-      if (parent) {
-         this.insertContainerIntoParent(container, parent);
-      }
+      reattachUIExtension(
+         this.containerElement as HTMLElement | undefined,
+         () => this.getParentContainer(),
+         (container, parent) => this.insertContainerIntoParent(container, parent)
+      );
    }
 }

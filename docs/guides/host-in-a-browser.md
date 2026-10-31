@@ -199,8 +199,9 @@ const fileSystem = persistentFileSystem({
    starts a worker of its own, so it is not the piece to use. The mount adds
    the framework's client module, so a failed load and sprotty's own errors
    reach your logger instead of vanishing, and supplies what a shell would:
-   framing, canvas bounds that follow the element's size and position, touch
-   input and a context menu GLSP stops warning about. The page supplies the
+   framing, canvas bounds that follow the element's size and position, the
+   server's messages and progress shown on the diagram, touch input and a
+   context menu GLSP stops warning about. The page supplies the
    element's CSS: a height and `position: relative`, so the tool palette stays
    on it; `touch-action: none`, or the browser takes a finger drag as a pan;
    and the `<svg>` sized to it, as in

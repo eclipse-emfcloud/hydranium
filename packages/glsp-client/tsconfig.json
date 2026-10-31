@@ -1,10 +1,12 @@
 {
   "extends": "../../tsconfig.base.json",
-  "//lib": "DOM, because the status overlay reattaches an `HTMLElement`; the neutrality gate reports the grant per entry.",
+  "//lib": "DOM, because the message overlay builds its rows with `document` and both overlays reattach an `HTMLElement`. The neutrality gate reports the grant per entry.",
+  "//noUncheckedSideEffectImports": "CSS imports are bundled by webpack or esbuild, and tsc cannot resolve them.",
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "lib",
-    "lib": ["ES2022", "DOM"]
+    "lib": ["ES2022", "DOM"],
+    "noUncheckedSideEffectImports": false
   },
   "include": ["src"],
   "references": [{ "path": "../protocol" }]

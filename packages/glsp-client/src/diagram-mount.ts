@@ -13,7 +13,9 @@ import {
    createDiagramOptionsModule,
    DiagramLoader,
    EditorContextService,
+   FallbackActionHandler,
    FitToScreenAction,
+   type IActionHandler,
    type GLSPActionDispatcher,
    type IDiagramOptions,
    InitializeCanvasBoundsAction,
@@ -26,6 +28,7 @@ import { HydraniumGlspActionDispatcher } from './action-dispatcher';
 import { type DiagramLoadOutcome, HydraniumDiagramLoader } from './diagram-loader';
 import type { HydraniumGlspClient } from './glsp-client';
 import { createGlspClientModule } from './glsp-client-module';
+import { HydraniumMessageOverlay } from './message-overlay';
 import { enableTouchDragging } from './touch-input';
 import { HydraniumClientTypes } from './types';
 
@@ -117,6 +120,10 @@ export const DIAGRAM_FIT_PADDING = 24;
  *   that scrolls, send the element's box in page coordinates whenever it
  *   differs from the model's. A zero-sized box, which a pane dragged shut
  *   reports, is skipped: a zero canvas culls the whole model.
+ * - **Server messages.** GLSP's standalone modules only log the server's
+ *   messages and progress reports, so a refused undo changes nothing the user
+ *   sees. {@link HydraniumMessageOverlay} shows them on the diagram instead.
+ *   Rebind it to a subclass to show them elsewhere.
  * - **Touch input.** sprotty binds mouse events only; see
  *   {@link enableTouchDragging}. Give the element `touch-action: none`.
  * - **The context menu.** GLSP warns on every container built without a
@@ -149,6 +156,18 @@ export async function mountGlspDiagram(options: GlspDiagramMountOptions): Promis
    // a token those modules bind.
    const hydraniumModule = new ContainerModule((bind, unbind, isBound, rebind) => {
       createGlspClientModule({ bind, unbind, isBound, rebind }, { logger: options.logger, trackEditsInFlight: true });
+      // The fallback is what the standalone modules register for the server's
+      // messages and progress, and it only logs them. A singleton, since GLSP
+      // resolves it once per action kind and a host may rebind the overlay
+      // without a scope.
+      bind(HydraniumMessageOverlay).toSelf().inSingletonScope();
+      if (isBound(FallbackActionHandler)) {
+         rebind<IActionHandler>(FallbackActionHandler)
+            .toDynamicValue(context => context.container.get(HydraniumMessageOverlay))
+            .inSingletonScope();
+         // Through the fallback, so the instance started is the one showing the messages.
+         bind(TYPES.IDiagramStartup).toService(FallbackActionHandler);
+      }
    });
    const container = options.initializeDiagramContainer(
       new Container(),

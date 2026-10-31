@@ -1,0 +1,74 @@
+/********************************************************************************
+ * Copyright (c) 2026 EclipseSource and others.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the MIT License which is available in the project root.
+ *
+ * SPDX-License-Identifier: MIT
+ ********************************************************************************/
+
+/* Bottom right: GLSP's status sits top left and its tool palette top right. */
+.hydranium-messages {
+   position: absolute;
+   right: 10px;
+   bottom: 10px;
+   /* Above the tool palette (1000), which a tall overlay reaches, so its controls stay reachable. */
+   z-index: 1001;
+   display: flex;
+   flex-direction: column;
+   gap: 4px;
+   max-width: min(480px, calc(100% - 20px));
+   /* Scrolls rather than grow past the diagram, where the page may clip a row's controls. */
+   max-height: calc(100% - 20px);
+   overflow-y: auto;
+   pointer-events: none;
+}
+
+.hydranium-message {
+   display: flex;
+   flex-wrap: wrap;
+   align-items: center;
+   gap: 8px;
+   padding: 6px 8px;
+   border-left: 3px solid var(--glsp-info-foreground);
+   background: var(--glsp-issue-background);
+   box-shadow: 0 1px 4px rgb(0 0 0 / 25%);
+   pointer-events: auto;
+}
+
+.hydranium-message-error,
+.hydranium-message-fatal {
+   border-left-color: var(--glsp-error-foreground);
+}
+
+.hydranium-message-warning {
+   border-left-color: var(--glsp-warning-foreground);
+}
+
+.hydranium-message-text {
+   flex: 1;
+}
+
+/* Above the codicon rules' `display`, whichever stylesheet a page loads last. */
+.hydranium-progress-spinner.codicon[hidden] {
+   display: none;
+}
+
+.hydranium-message > button {
+   border: none;
+   background: none;
+   color: inherit;
+   cursor: pointer;
+}
+
+.hydranium-message > details {
+   flex-basis: 100%;
+   order: 1;
+}
+
+.hydranium-message > details > pre {
+   max-height: 12em;
+   margin: 4px 0 0;
+   overflow-y: auto;
+   white-space: pre-wrap;
+}
