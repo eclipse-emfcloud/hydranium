@@ -333,6 +333,10 @@ const NOT_GATED = [
    {
       entry: 'packages/glsp-client-theia/style/diagram-loading.css',
       why: 'a stylesheet, not a module — there is no import graph to bundle and `check:exports` asserts its existence and shipping instead'
+   },
+   {
+      entry: 'packages/glsp-client/style/message-overlay.css',
+      why: 'a stylesheet, not a module — there is no import graph to bundle and `check:exports` asserts its existence and shipping instead'
    }
 ];
 

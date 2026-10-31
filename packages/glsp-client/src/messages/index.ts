@@ -15,3 +15,5 @@
 // own diagram chrome discovers the codes exist.
 
 export { DIAGRAM_LOAD_FAILED } from '../diagram-load-failed';
+export { DIAGRAM_MESSAGE_DETAILS } from '../diagram-message-details';
+export { DIAGRAM_MESSAGE_DISMISS } from '../diagram-message-dismiss';

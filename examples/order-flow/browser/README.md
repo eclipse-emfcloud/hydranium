@@ -133,6 +133,7 @@ afterwards.
 | Diagram editing | ✅ a drag and a palette create, both read back through the data head |
 | Text editors | ✅ three Monaco editors over the LSP channel: diagnostics, semantic highlighting, completion, hover, go-to-definition, occurrence highlighting |
 | Diagram → text | ✅ `workspace/applyEdit` applied to the Monaco models |
+| Server messages | ✅ a refused undo shows its reason on the diagram |
 | Light / dark | ✅ one switch over the page chrome, the `--order-flow-*` diagram roles and Monaco's theme |
 | Localization | ✅ one switch over the page chrome, the server's diagnostics and palette, and Monaco's menus |
 | Server log | ✅ a dock panel over `window/logMessage`, all three heads on one channel |

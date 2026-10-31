@@ -17,7 +17,8 @@
  * supplies is the transport and the page's element, and nothing about the
  * diagram itself. `mountGlspDiagram` from `@hydranium/glsp-client` supplies
  * what a shell would: GLSP's standalone modules, the framework's binder,
- * framing, resize tracking and touch input.
+ * framing, resize tracking, the server's messages on the canvas and touch
+ * input.
  *
  * What is left here is this page's own: the client over the head's connection,
  * and the report line that counts what the GLSP head sent.
