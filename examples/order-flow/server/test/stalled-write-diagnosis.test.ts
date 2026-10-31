@@ -34,9 +34,9 @@ class RecordingLock extends HydraniumWorkspaceLock {
 }
 
 let scratch: ScratchOrderFlowHarness | undefined;
-afterEach(() => {
+afterEach(async () => {
    setWriteLockScope(nodeWriteLockScope);
-   scratch?.workspace.dispose();
+   await scratch?.dispose({ settle: false });
    scratch = undefined;
 });
 

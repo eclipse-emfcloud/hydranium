@@ -37,7 +37,6 @@ import { ForceConflictResolver, asModelVersion } from '@hydranium/protocol';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import type { ServerSharedServices } from '@hydranium/core';
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { waitFor } from '@hydranium/protocol/testing';
 import { URI } from '@hydranium/langium';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -45,7 +44,7 @@ import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
 import { type ProcessModel } from '../../src/language-server/ast.js';
-import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from '../order-flow-harness.js';
+import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
 const CLIENT_ID = 'process-diagram_0';
@@ -61,19 +60,19 @@ interface Diagram {
 }
 
 let harness: GlspHarness<OrderFlowGlspState> | undefined;
-let scratch: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    harness?.dispose();
    harness = undefined;
-   scratch?.dispose();
+   await scratch?.dispose();
    scratch = undefined;
 });
 
 /** Boot the real GLSP container over a scratch copy; `open` also opens `relativePath` in the diagram. */
 async function startDiagram(relativePath: string, options: { open: boolean } = { open: true }): Promise<Diagram> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness();
-   scratch = workspace;
+   scratch = await makeScratchWorkspaceHarness();
+   const { harness: services, workspace } = scratch;
    const sourcePath = workspace.resolve(relativePath);
    const processUri = URI.file(sourcePath).toString();
    const layoutUri = processUri.replace(/\.process$/, '.layout');

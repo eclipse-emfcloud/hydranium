@@ -11,32 +11,44 @@ import 'reflect-metadata';
 import { RequestPopupModelAction, ServerModule, SetPopupModelAction } from '@eclipse-glsp/server';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { URI } from '@hydranium/langium';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { isTask } from '../../src/language-server/ast.js';
-import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type OrderFlowHarness } from '../order-flow-harness.js';
+import {
+   WORKSPACE_FILES,
+   makeScratchWorkspaceHarness,
+   type OrderFlowHarness,
+   type ScratchOrderFlowHarness
+} from '../order-flow-harness.js';
 
-let open: { services: OrderFlowHarness; harness: GlspHarness<OrderFlowGlspState>; workspace: ScratchWorkspace } | undefined;
+let open:
+   | {
+        services: OrderFlowHarness;
+        harness: GlspHarness<OrderFlowGlspState>;
+        workspace: ScratchOrderFlowHarness['workspace'];
+        scratch: ScratchOrderFlowHarness;
+     }
+   | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    open?.harness.dispose();
-   open?.workspace.dispose();
+   await open?.scratch.dispose();
    open = undefined;
 });
 
 describe('process diagram hover popup', () => {
    it('shows the hover the .process editor shows on the same task', async () => {
-      const { harness: services, workspace } = await makeScratchWorkspaceHarness();
+      const scratch = await makeScratchWorkspaceHarness();
+      const { harness: services, workspace } = scratch;
       const harness = makeGlspHarness<OrderFlowGlspState>({
          serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
          diagramType: 'order-flow-process',
          appModules: [new HydraniumGlspAppModule({ shared: services.shared })],
          additionalClientActionKinds: [SetPopupModelAction.KIND]
       });
-      open = { services, harness, workspace };
+      open = { services, harness, workspace, scratch };
       await harness.start();
       const path = workspace.resolve(WORKSPACE_FILES.fulfillmentProcess);
       await harness.openDocument(path);

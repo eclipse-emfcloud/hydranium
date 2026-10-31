@@ -42,8 +42,15 @@ import { tick, waitFor } from '@hydranium/protocol/testing';
 import { type CancellationToken, CancellationTokenSource } from 'vscode-languageserver';
 import { afterEach, describe, expect, it, onTestFinished } from 'vitest';
 import type { DomainModel } from '@hydranium/example-order-flow-protocol';
-import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
-import { makeScratchWorkspaceHarness, makeServices, type OrderFlowHarness, WORKSPACE_ROOT } from './order-flow-harness.js';
+import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
+import {
+   makeScratchWorkspaceHarness,
+   makeServices,
+   type OrderFlowHarness,
+   type ScratchOrderFlowHarness,
+   settleServer,
+   WORKSPACE_ROOT
+} from './order-flow-harness.js';
 const FILE = 'read-version-stamp.domain';
 const CLEAN = 'entity Solo {\n   a : string\n}\n';
 const EDITED = 'entity Solo {\n   a : string\n   b : string\n}\n';
@@ -51,16 +58,32 @@ const EDITED = 'entity Solo {\n   a : string\n   b : string\n}\n';
 type Head = DataServerHarness<DataServer<DomainModel>, DomainModel>;
 
 let workspace: ScratchWorkspace | undefined;
+/** The tree reading {@link workspace}, settled before the directory goes. */
+let workspaceShared: OrderFlowSharedServices | undefined;
+let booted: ScratchOrderFlowHarness | undefined;
 let lsp: LspHarness | undefined;
 let head: Head | undefined;
+/** Releases of holds a test arms, run before the teardown settles the server. */
+const holds: (() => void)[] = [];
 
-afterEach(() => {
+afterEach(async () => {
+   // A failed assertion before the release would otherwise hold the build, and the settle with it.
+   holds.splice(0).forEach(release => release());
    head?.dispose();
    head = undefined;
    lsp?.dispose();
    lsp = undefined;
-   workspace?.dispose();
-   workspace = undefined;
+   try {
+      if (workspaceShared) {
+         await settleServer(workspaceShared);
+      }
+   } finally {
+      workspaceShared = undefined;
+      workspace?.dispose();
+      workspace = undefined;
+      await booted?.dispose();
+      booted = undefined;
+   }
 });
 
 /**
@@ -92,6 +115,7 @@ async function changeDuringDebounce(): Promise<{
          ]
       }
    );
+   workspaceShared = services.shared;
    lsp = makeLspHarness({ connection: wire, services: services.shared });
    await lsp.initialize({ workspaceFolders: [{ uri: workspace.uri(), name: 'order-flow' }] });
    head = makeDataServerHarness<DataServer<DomainModel>, DomainModel>({
@@ -309,7 +333,7 @@ describe('a read while an editor change is debounced', () => {
 describe('the version of a closed document', () => {
    async function boot(): Promise<{ services: Awaited<ReturnType<typeof makeScratchWorkspaceHarness>>['harness']; uri: string }> {
       const scratch = await makeScratchWorkspaceHarness(seeded => seeded.write(FILE, CLEAN));
-      workspace = scratch.workspace;
+      booted = scratch;
       return { services: scratch.harness, uri: scratch.workspace.uri(FILE) };
    }
 
@@ -358,7 +382,7 @@ describe('the version of a closed document', () => {
       const models = services.shared.model.ModelService;
       const before = models.snapshot(uri)!.version;
 
-      workspace!.write(FILE, EDITED);
+      booted!.workspace.write(FILE, EDITED);
       await services.shared.workspace.DocumentBuilder.scheduleUpdate([URI.parse(uri)], []);
 
       await expectStaleWriteRefused(services, uri, before);
@@ -370,9 +394,9 @@ describe('the version of a closed document', () => {
       const builder = services.shared.workspace.DocumentBuilder;
       const before = models.snapshot(uri)!.version;
 
-      rmSync(workspace!.resolve(FILE));
+      rmSync(booted!.workspace.resolve(FILE));
       await builder.scheduleUpdate([], [URI.parse(uri)]);
-      workspace!.write(FILE, EDITED);
+      booted!.workspace.write(FILE, EDITED);
       await builder.scheduleUpdate([URI.parse(uri)], []);
 
       await expectStaleWriteRefused(services, uri, before);
@@ -428,6 +452,7 @@ describe('the version of a closed document', () => {
       let release!: () => void;
       const entering = new Promise<void>(resolve => (entered = resolve));
       const held = new Promise<void>(resolve => (release = resolve));
+      holds.push(release);
       const holding = services.shared.workspace.WorkspaceLock.write(async () => {
          entered();
          await held;
@@ -464,7 +489,7 @@ function holdNextRead(services: OrderFlowHarness, uri: string): { entered: Promi
       }
       return readFile(target);
    };
-   onTestFinished(() => {
+   holds.push(() => {
       release();
       provider.readFile = readFile;
    });
@@ -474,7 +499,7 @@ function holdNextRead(services: OrderFlowHarness, uri: string): { entered: Promi
 describe('a build that read the file while a headless open landed', () => {
    async function boot(): Promise<{ services: OrderFlowHarness; uri: string }> {
       const scratch = await makeScratchWorkspaceHarness(seeded => seeded.write(PROCESS, PARSED));
-      workspace = scratch.workspace;
+      booted = scratch;
       return { services: scratch.harness, uri: scratch.workspace.uri(PROCESS) };
    }
 
@@ -530,7 +555,7 @@ describe('a build that read the file while a headless open landed', () => {
       });
       onTestFinished(() => listener.dispose());
 
-      workspace!.write(PROCESS, OTHER);
+      booted!.workspace.write(PROCESS, OTHER);
       const building = services.shared.workspace.DocumentBuilder.scheduleUpdate([URI.parse(uri)], []);
       await read.entered;
       await services.shared.workspace.AstDocumentManager.open({ uri, clientId: 'reader', text: PARSED });
@@ -557,7 +582,7 @@ describe('a build that read the file while a headless open landed', () => {
       await head.proxy.watchModelDocument({ uri, clientId: 'tree' });
       const read = holdNextRead(services, uri);
 
-      workspace!.write(PROCESS, OTHER);
+      booted!.workspace.write(PROCESS, OTHER);
       const building = services.shared.workspace.DocumentBuilder.scheduleUpdate([URI.parse(uri)], []);
       await read.entered;
       await services.shared.workspace.AstDocumentManager.open({ uri, clientId: 'reader', text: PARSED });
@@ -590,7 +615,7 @@ describe('a build that read the file while a headless open landed', () => {
       await services.shared.workspace.WorkspaceLock.read(() => undefined);
       const read = holdNextRead(services, uri);
 
-      workspace!.write(PROCESS, OTHER);
+      booted!.workspace.write(PROCESS, OTHER);
       const building = services.shared.workspace.DocumentBuilder.scheduleUpdate([URI.parse(uri)], []);
       await read.entered;
       await services.shared.workspace.AstDocumentManager.open({ uri, clientId: 'reader', text: PARSED });
@@ -605,6 +630,7 @@ describe('a build that read the file while a headless open landed', () => {
       workspace.write(PROCESS, PARSED);
       const uri = workspace.uri(PROCESS);
       const services = makeServices();
+      workspaceShared = services.shared;
       const read = holdNextRead(services, uri);
 
       const starting = initializeWorkspaceProgrammatically(services.shared, workspace.root);
@@ -622,6 +648,7 @@ describe('a build that read the file while a headless open landed', () => {
       workspace.write(PROCESS, PARSED);
       const uri = workspace.uri(PROCESS);
       const services = makeServices();
+      workspaceShared = services.shared;
       const store = services.shared.workspace.TextDocuments;
       const read = holdNextRead(services, uri);
 
@@ -640,7 +667,8 @@ describe('a load outside a build', () => {
    /** A closed {@link PROCESS} whose sequence stands at 1, removed from the registry with its file kept. */
    async function unregisteredAtVersionOne(): Promise<{ services: OrderFlowHarness; uri: string }> {
       const scratch = await makeScratchWorkspaceHarness(seeded => seeded.write(PROCESS, PARSED));
-      workspace = scratch.workspace;
+      booted = scratch;
+      const { workspace } = scratch;
       const services = scratch.harness;
       const uri = workspace.uri(PROCESS);
       const builder = services.shared.workspace.DocumentBuilder;
@@ -678,7 +706,7 @@ describe('a load outside a build', () => {
    it('stamps a load of a file held open with the same text with the open version, without a build', async () => {
       const { services, uri } = await unregisteredAtVersionOne();
       const store = services.shared.workspace.TextDocuments;
-      workspace!.write(PROCESS, PARSED);
+      booted!.workspace.write(PROCESS, PARSED);
       store.notifyDidOpenTextDocument({ textDocument: { uri, languageId: 'order-flow-process', version: 7, text: PARSED } }, 'reader');
       const built = recordBuilds(services);
 
@@ -739,7 +767,8 @@ describe('a build of a closed document cancelled right after its parse', () => {
          seeded.write(PROCESS, PARSED);
          seeded.write(BYSTANDER, PARSED.replace('Solo', 'Bystander'));
       });
-      workspace = scratch.workspace;
+      booted = scratch;
+      const { workspace } = scratch;
       const services = scratch.harness;
       const uri = workspace.uri(PROCESS);
       const bystander = URI.parse(workspace.uri(BYSTANDER));
@@ -789,7 +818,8 @@ describe('a build of a closed document cancelled right after its parse', () => {
          seeded.write(PROCESS, PARSED);
          seeded.write(BYSTANDER, PARSED.replace('Solo', 'Bystander'));
       });
-      workspace = scratch.workspace;
+      booted = scratch;
+      const { workspace } = scratch;
       const services = scratch.harness;
       const uri = workspace.uri(PROCESS);
       const bystander = URI.parse(workspace.uri(BYSTANDER));
@@ -849,7 +879,8 @@ describe('a new file the builder registered but has not parsed yet', () => {
       ['empty', '']
    ])('reads as absent until its parse, with %s', async (_variant, text) => {
       const scratch = await makeScratchWorkspaceHarness();
-      workspace = scratch.workspace;
+      booted = scratch;
+      const { workspace } = scratch;
       const services = scratch.harness;
       const uri = workspace.uri('orders/read-version-fresh.process');
       const reader = makeDataServerHarness<EnvelopeReader, DomainModel>({
@@ -875,7 +906,8 @@ describe('a new file the builder registered but has not parsed yet', () => {
 
    it('conflicts with a write based on its projection', async () => {
       const scratch = await makeScratchWorkspaceHarness();
-      workspace = scratch.workspace;
+      booted = scratch;
+      const { workspace } = scratch;
       const services = scratch.harness;
       const uri = workspace.uri('orders/read-version-fresh.process');
       const models = services.shared.model.ModelService;
@@ -908,7 +940,8 @@ describe('a new file the builder registered but has not parsed yet', () => {
 describe('a built document between its rebuild reset and its parse', () => {
    it('is still read, with its old root and that root’s version', async () => {
       const scratch = await makeScratchWorkspaceHarness(seeded => seeded.write(PROCESS, PARSED));
-      workspace = scratch.workspace;
+      booted = scratch;
+      const { workspace } = scratch;
       const services = scratch.harness;
       const uri = workspace.uri(PROCESS);
       const models = services.shared.model.ModelService;
@@ -953,7 +986,8 @@ describe('a built document between its rebuild reset and its parse', () => {
 describe('a text change no build follows', () => {
    it('settles a syncing read by building the document', async () => {
       const scratch = await makeScratchWorkspaceHarness(seeded => seeded.write(PROCESS, PARSED));
-      workspace = scratch.workspace;
+      booted = scratch;
+      const { workspace } = scratch;
       const services = scratch.harness;
       const uri = workspace.uri(PROCESS);
       const models = services.shared.model.ModelService;
@@ -972,7 +1006,8 @@ describe('a text change no build follows', () => {
 
    it('rejects a syncing read once the build that would sync the document keeps failing', async () => {
       const scratch = await makeScratchWorkspaceHarness(seeded => seeded.write(PROCESS, PARSED));
-      workspace = scratch.workspace;
+      booted = scratch;
+      const { workspace } = scratch;
       const services = scratch.harness;
       const uri = workspace.uri(PROCESS);
       const models = services.shared.model.ModelService;
@@ -1003,7 +1038,8 @@ describe('a text change whose builds fail after the parse', () => {
    /** Apply {@link OTHER} with no build, failing every later build of the document after its parse. */
    async function changeThatFailsAfterParse(): Promise<{ services: OrderFlowHarness; uri: string; builds: () => number }> {
       const scratch = await makeScratchWorkspaceHarness(seeded => seeded.write(PROCESS, PARSED));
-      workspace = scratch.workspace;
+      booted = scratch;
+      const { workspace } = scratch;
       const services = scratch.harness;
       const uri = workspace.uri(PROCESS);
       const models = services.shared.model.ModelService;
@@ -1121,7 +1157,8 @@ describe('a passive wait on a root behind its text', () => {
    /** Apply {@link OTHER} with no build, counting the builds of the document from then on. */
    async function changeWithoutBuild(): Promise<{ services: OrderFlowHarness; uri: string; builds: () => number }> {
       const scratch = await makeScratchWorkspaceHarness(seeded => seeded.write(PROCESS, PARSED));
-      workspace = scratch.workspace;
+      booted = scratch;
+      const { workspace } = scratch;
       const services = scratch.harness;
       const uri = workspace.uri(PROCESS);
       const models = services.shared.model.ModelService;

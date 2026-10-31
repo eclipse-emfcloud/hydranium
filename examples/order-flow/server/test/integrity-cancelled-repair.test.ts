@@ -32,9 +32,9 @@ const OTHER = 'other.domain';
 const REPAIRED = 'Marked__repaired';
 
 let scratch: ScratchOrderFlowHarness | undefined;
-afterEach(() => {
+afterEach(async () => {
    setInterruptionPeriod(10);
-   scratch?.workspace.dispose();
+   await scratch?.dispose();
    scratch = undefined;
 });
 

@@ -24,7 +24,7 @@ import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-docum
 import { DefaultLanguageClientShadow, type LanguageClientShadow } from '../../src/documents/language-client-shadow.js';
 import { type AstNode } from '@hydranium/langium';
 import { asLanguageClientUri, type CanonicalUri, isSessionClosedError, textHash } from '@hydranium/protocol';
-import { makeFakeClock } from '@hydranium/protocol/testing';
+import { makeFakeClock, tick } from '@hydranium/protocol/testing';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 import { makeStubDocumentBuilder, makeStubLangiumDocuments } from '../../src/testing/index.js';
 import {
@@ -819,6 +819,33 @@ describe('HydraniumTextDocuments.isOpenInAnyClient', () => {
       });
       docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
       expect(observedDuringFire).toBe(false);
+   });
+});
+
+describe('HydraniumTextDocuments.releasesSettled', () => {
+   it('resolves once the release handler settled every release, including one handed over while it waits', async () => {
+      const services = makeSharedServices(undefined, makeLogger());
+      const finishes: Array<() => void> = [];
+      services.workspace.DocumentReleaseHandler = {
+         didReleaseDocument: () => new Promise<void>(resolve => finishes.push(resolve))
+      };
+      const docs = new HydraniumTextDocuments(services);
+      const other = 'file:///b.x';
+      for (const uri of [URI, other]) {
+         docs.notifyDidOpenTextDocument({ textDocument: { uri, languageId: 'plaintext', version: 1, text: 'x\n' } }, LANGUAGE_CLIENT_ID);
+      }
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
+      let settled = false;
+      const settling = docs.releasesSettled().then(() => (settled = true));
+
+      docs.notifyDidCloseTextDocument({ textDocument: { uri: other } }, LANGUAGE_CLIENT_ID);
+      finishes[0]();
+      await tick();
+      const afterFirst = settled;
+      finishes[1]();
+      await settling;
+
+      expect({ releases: finishes.length, afterFirst, settled }).toEqual({ releases: 2, afterFirst: false, settled: true });
    });
 });
 

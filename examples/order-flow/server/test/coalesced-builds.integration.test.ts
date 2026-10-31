@@ -28,7 +28,7 @@ import type { CancellationToken } from 'vscode-languageserver-protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
-import { WORKSPACE_ROOT } from './order-flow-harness.js';
+import { settleServer, WORKSPACE_ROOT } from './order-flow-harness.js';
 
 const CUSTOMER = 'orders/coalesce-customer.domain';
 const ORDER = 'orders/coalesce-order.domain';
@@ -48,12 +48,20 @@ const LONE_SOURCE = `entity CoalesceLone {
 
 let workspace: ScratchWorkspace | undefined;
 let lsp: LspHarness | undefined;
+let lspShared: OrderFlowSharedServices | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    lsp?.dispose();
    lsp = undefined;
-   workspace?.dispose();
-   workspace = undefined;
+   try {
+      if (lspShared) {
+         await settleServer(lspShared);
+      }
+   } finally {
+      lspShared = undefined;
+      workspace?.dispose();
+      workspace = undefined;
+   }
 });
 
 /** What reached the lock and the builder since the last {@link Recorder.reset}. */
@@ -103,6 +111,7 @@ async function boot(): Promise<{ shared: OrderFlowSharedServices; uri: (file: st
    const harness = makeLspHarness({
       createServices: connection => {
          booted = createOrderFlowServices({ connection, ...NodeFileSystem }).shared;
+         lspShared = booted;
          return booted;
       }
    });

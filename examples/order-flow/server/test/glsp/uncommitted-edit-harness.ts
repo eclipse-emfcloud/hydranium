@@ -60,7 +60,12 @@ import type { OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
 import type { LayoutModel, ProcessModel } from '../../src/language-server/ast.js';
-import { makeScratchWorkspaceHarness, type OrderFlowHarness, WORKSPACE_FILES } from '../order-flow-harness.js';
+import {
+   makeScratchWorkspaceHarness,
+   type ScratchOrderFlowHarness,
+   type OrderFlowHarness,
+   WORKSPACE_FILES
+} from '../order-flow-harness.js';
 
 export type Head = DataServerHarness<DataServer<TransferElement>, TransferElement>;
 export type Diagram = GlspHarness<OrderFlowGlspState>;
@@ -74,13 +79,13 @@ export interface Setup {
 }
 
 let setup: Setup | undefined;
-let scratch: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    setup?.head.dispose();
    setup?.diagram.dispose();
    setup = undefined;
-   scratch?.dispose();
+   await scratch?.dispose();
    scratch = undefined;
 });
 
@@ -93,8 +98,8 @@ export async function openDiagram(
    appModules: readonly interfaces.ContainerModule[] = [],
    awaitLayout = true
 ): Promise<Setup> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness(prepare);
-   scratch = workspace;
+   scratch = await makeScratchWorkspaceHarness(prepare);
+   const { harness: services, workspace } = scratch;
    const sourcePath = workspace.resolve(WORKSPACE_FILES.fulfillmentProcess);
    const diagram = makeGlspHarness<OrderFlowGlspState>({
       serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),

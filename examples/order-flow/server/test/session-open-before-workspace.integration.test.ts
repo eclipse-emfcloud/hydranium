@@ -23,13 +23,21 @@ import { type AstNode, URI } from '@hydranium/langium';
 import * as path from 'node:path';
 import { Diagnostic } from 'vscode-languageserver-protocol';
 import { afterEach, describe, expect, it } from 'vitest';
-import { WORKSPACE_FILES, WORKSPACE_ROOT, makeServices } from './order-flow-harness.js';
+import { type OrderFlowHarness, WORKSPACE_FILES, WORKSPACE_ROOT, makeServices, settleServer } from './order-flow-harness.js';
 
 let workspace: ScratchWorkspace | undefined;
+let services: OrderFlowHarness | undefined;
 
-afterEach(() => {
-   workspace?.dispose();
-   workspace = undefined;
+afterEach(async () => {
+   try {
+      if (services) {
+         await settleServer(services.shared);
+      }
+   } finally {
+      services = undefined;
+      workspace?.dispose();
+      workspace = undefined;
+   }
 });
 
 interface Reached {
@@ -47,7 +55,7 @@ async function reachBeforeBringUp(
    reach: (session: ClientSession<AstNode>, uri: string) => Promise<unknown>
 ): Promise<Reached> {
    workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-open-before-workspace-' });
-   const harness = makeServices();
+   const harness = (services = makeServices());
    const modelService = harness.shared.model.ModelService;
    const uri = URI.file(path.join(workspace.root, relativePath)).toString();
    const reaching = reach(modelService.createSession('early', 'early'), uri);
@@ -80,7 +88,7 @@ describe('a session that reaches the store before the workspace is brought up', 
 
    it('opens nothing for a session that ended while it waited', async () => {
       workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-open-before-workspace-' });
-      const harness = makeServices();
+      const harness = (services = makeServices());
       const session = harness.shared.model.ModelService.createSession('early', 'early');
       const uri = URI.file(path.join(workspace.root, WORKSPACE_FILES.fulfillmentProcess)).toString();
       const opened: string[] = [];

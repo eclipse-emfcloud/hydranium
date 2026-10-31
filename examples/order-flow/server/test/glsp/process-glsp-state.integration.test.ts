@@ -62,7 +62,6 @@ import {
 } from '@eclipse-glsp/server';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { DOCUMENT_SYNTAX_ERROR, Deferred, asModelVersion } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import { URI } from '@hydranium/langium';
@@ -72,7 +71,7 @@ import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js
 import { PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
 import { type ProcessModel, isRead, isTask } from '../../src/language-server/ast.js';
 import { type OrderFlowSharedServices } from '../../src/language-server/order-flow-module.js';
-import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from '../order-flow-harness.js';
+import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
 
@@ -108,12 +107,12 @@ interface OpenDiagram {
 }
 
 let open: OpenDiagram | undefined;
-let scratch: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 
 /** Boot the real GLSP container over a scratch workspace and open the diagram. */
 async function openDiagram(): Promise<OpenDiagram> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness();
-   scratch = workspace;
+   scratch = await makeScratchWorkspaceHarness();
+   const { harness: services, workspace } = scratch;
    const sourceUri = workspace.resolve(WORKSPACE_FILES.fulfillmentProcess);
    const rootUri = URI.file(sourceUri).toString();
    const harness = makeGlspHarness<OrderFlowGlspState>({
@@ -178,10 +177,10 @@ function readFieldOf(diagram: OpenDiagram, taskName: string): string | undefined
 }
 
 describe('order-flow .process glsp state with a foreign write between base and save', () => {
-   afterEach(() => {
+   afterEach(async () => {
       open?.harness.dispose();
       open = undefined;
-      scratch?.dispose();
+      await scratch?.dispose();
       scratch = undefined;
    });
 
@@ -325,14 +324,18 @@ describe('order-flow .process glsp state with a foreign write between base and s
 
       const before = diagram.harness.actions.length;
       diagram.harness.dispatch(CreateNodeOperation.create(PROCESS_TASK_NODE_TYPE, { location: { x: 320, y: 480 } }));
-      await waitFor(
-         () =>
-            diagram.harness.actions
-               .slice(before)
-               .some(action => MessageAction.is(action) || (SetDirtyStateAction.is(action) && action.reason === 'operation')),
-         { message: 'the operation neither failed nor completed' }
-      );
-      released.resolve();
+      try {
+         await waitFor(
+            () =>
+               diagram.harness.actions
+                  .slice(before)
+                  .some(action => MessageAction.is(action) || (SetDirtyStateAction.is(action) && action.reason === 'operation')),
+            { message: 'the operation neither failed nor completed' }
+         );
+      } finally {
+         // A failed wait would otherwise hold the build, and the settle with it.
+         released.resolve();
+      }
       await brokenWrite;
 
       expect({
@@ -385,14 +388,18 @@ describe('order-flow .process glsp state with a foreign write between base and s
 
       const before = diagram.harness.actions.length;
       diagram.harness.dispatch(CreateNodeOperation.create(PROCESS_TASK_NODE_TYPE, { location: { x: 320, y: 480 } }));
-      await waitFor(
-         () =>
-            diagram.harness.actions
-               .slice(before)
-               .some(action => MessageAction.is(action) || (SetDirtyStateAction.is(action) && action.reason === 'operation')),
-         { message: 'the operation neither failed nor completed' }
-      );
-      released.resolve();
+      try {
+         await waitFor(
+            () =>
+               diagram.harness.actions
+                  .slice(before)
+                  .some(action => MessageAction.is(action) || (SetDirtyStateAction.is(action) && action.reason === 'operation')),
+            { message: 'the operation neither failed nor completed' }
+         );
+      } finally {
+         // A failed wait would otherwise hold the build, and the settle with it.
+         released.resolve();
+      }
       await brokenWrite;
 
       expect({

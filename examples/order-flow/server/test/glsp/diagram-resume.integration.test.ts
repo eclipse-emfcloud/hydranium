@@ -11,25 +11,29 @@ import 'reflect-metadata';
 import { MessageAction, RequestModelAction, SOURCE_URI_ARG, ServerModule, SourceModelStorage } from '@eclipse-glsp/server';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { URI } from '@hydranium/langium';
 import { RESUME_TOKEN_ARG } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import type { OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
-import { makeScratchWorkspaceHarness, type OrderFlowHarness, WORKSPACE_FILES } from '../order-flow-harness.js';
+import {
+   makeScratchWorkspaceHarness,
+   type ScratchOrderFlowHarness,
+   type OrderFlowHarness,
+   WORKSPACE_FILES
+} from '../order-flow-harness.js';
 import { apply, move } from './uncommitted-edit-harness.js';
 
 const CLIENT_ID = 'order-flow-process_window_fulfillment';
 
 let diagrams: Array<GlspHarness<OrderFlowGlspState>> = [];
-let scratch: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    diagrams.forEach(diagram => diagram.dispose());
    diagrams = [];
-   scratch?.dispose();
+   await scratch?.dispose();
    scratch = undefined;
 });
 
@@ -49,8 +53,8 @@ async function connect(services: OrderFlowHarness, sourcePath: string, token: st
 }
 
 async function setup(): Promise<{ services: OrderFlowHarness; sourcePath: string; layoutUri: string }> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness();
-   scratch = workspace;
+   scratch = await makeScratchWorkspaceHarness();
+   const { harness: services, workspace } = scratch;
    const layoutUri = URI.file(workspace.resolve(WORKSPACE_FILES.fulfillmentDiagram)).toString();
    return { services, sourcePath: workspace.resolve(WORKSPACE_FILES.fulfillmentProcess), layoutUri };
 }

@@ -170,9 +170,9 @@ class WriteBeforeAnswerServer extends DataServer<DomainModel> {
 let scratch: ScratchOrderFlowHarness | undefined;
 const heads: Harness[] = [];
 
-afterEach(() => {
+afterEach(async () => {
    heads.splice(0).forEach(head => head.dispose());
-   scratch?.workspace.dispose();
+   await scratch?.dispose();
    scratch = undefined;
 });
 

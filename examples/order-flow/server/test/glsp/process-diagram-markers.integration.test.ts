@@ -57,7 +57,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { isTask } from '../../src/language-server/ast.js';
-import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type OrderFlowHarness } from '../order-flow-harness.js';
+import {
+   WORKSPACE_FILES,
+   makeScratchWorkspaceHarness,
+   type OrderFlowHarness,
+   type ScratchOrderFlowHarness
+} from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
 
@@ -65,7 +70,8 @@ const DIAGRAM_TYPE = 'order-flow-process';
 interface OpenDiagram {
    readonly services: OrderFlowHarness;
    readonly harness: GlspHarness<OrderFlowGlspState>;
-   readonly workspace: ScratchWorkspace;
+   readonly workspace: ScratchOrderFlowHarness['workspace'];
+   readonly scratch: ScratchOrderFlowHarness;
 }
 
 let open: OpenDiagram | undefined;
@@ -96,7 +102,8 @@ function breakReference(workspace: ScratchWorkspace, relativePath: string, from:
  * on. Editing after the open would be a rebuild scenario — a different subject.
  */
 async function openDiagram(prepare?: (workspace: ScratchWorkspace) => void): Promise<OpenDiagram> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness(prepare);
+   const scratch = await makeScratchWorkspaceHarness(prepare);
+   const { harness: services, workspace } = scratch;
    const harness = makeGlspHarness<OrderFlowGlspState>({
       serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
       diagramType: DIAGRAM_TYPE,
@@ -108,7 +115,7 @@ async function openDiagram(prepare?: (workspace: ScratchWorkspace) => void): Pro
    });
    await harness.start();
    await harness.openDocument(workspace.resolve(WORKSPACE_FILES.fulfillmentProcess));
-   open = { services, harness, workspace };
+   open = { services, harness, workspace, scratch };
    return open;
 }
 
@@ -205,9 +212,9 @@ async function waitForPushedMarkers(diagram: OpenDiagram, since: number, timeout
 }
 
 describe('order-flow .process diagram markers', () => {
-   afterEach(() => {
+   afterEach(async () => {
       open?.harness.dispose();
-      open?.workspace.dispose();
+      await open?.scratch.dispose();
       open = undefined;
    });
 

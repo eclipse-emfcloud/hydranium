@@ -44,10 +44,10 @@ type Harness = DataServerHarness<DataServer<DomainModel>, DomainModel>;
 let scratch: ScratchOrderFlowHarness | undefined;
 let head: Harness | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    head?.dispose();
    head = undefined;
-   scratch?.workspace.dispose();
+   await scratch?.dispose();
    scratch = undefined;
 });
 
@@ -147,17 +147,20 @@ describe('dirty state over the data head', () => {
       await proxy.updateModelDocument({ uri, clientId: 'form', model: PROCESS_EDITED, baseVersion: 'any' });
       await waitFor(() => flips.length === 1 && built.includes(1));
       let cancelled = false;
+      let cancelling: Promise<void> | undefined;
       const listener = cancelAt(shared, uri, () => {
          cancelled = true;
-         void (buildsNothing
+         cancelling = buildsNothing
             ? shared.workspace.WorkspaceLock.write(() => undefined)
-            : shared.workspace.DocumentBuilder.scheduleUpdate([URI.parse(scratch!.workspace.uri(OTHER_FILE))], []));
+            : shared.workspace.DocumentBuilder.scheduleUpdate([URI.parse(scratch!.workspace.uri(OTHER_FILE))], []);
       });
 
       await proxy.closeModelDocument({ uri, clientId: 'form' });
       // Times out without the flip, which the assertion then reports.
       await waitFor(() => flips.length === 2).catch(() => undefined);
       listener.dispose();
+      // Awaited so its failure fails the test, not the workspace teardown.
+      await cancelling;
       return {
          flips,
          hashes,

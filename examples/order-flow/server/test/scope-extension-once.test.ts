@@ -45,7 +45,7 @@ class CountingScopeContribution implements ScopeExtensionContribution {
 describe('order-flow scope extensions', () => {
    it('runs an extension once per scope and resolves both of its tiers', async () => {
       const contribution = new CountingScopeContribution();
-      const { harness, workspace } = await makeScratchWorkspaceHarness(undefined, {
+      const { harness, workspace, dispose } = await makeScratchWorkspaceHarness(undefined, {
          extraLanguageModules: [{ references: { scopes: { counting: () => contribution } } }]
       });
       try {
@@ -64,7 +64,7 @@ describe('order-flow scope extensions', () => {
          expect(scope.getElement(LOCAL_NAME)).toBeDefined();
          expect(scope.getElement(UNIVERSAL_NAME)).toBeDefined();
       } finally {
-         workspace.dispose();
+         await dispose();
       }
    });
 });
@@ -91,7 +91,7 @@ class KeyedScopeContribution implements ScopeExtensionContribution {
 describe('order-flow keyed scope extensions', () => {
    it('runs a keyed extension afresh and once while a process is relinked, and per lookup after', async () => {
       const contribution = new KeyedScopeContribution();
-      const { harness, workspace } = await makeScratchWorkspaceHarness(undefined, {
+      const { harness, workspace, dispose } = await makeScratchWorkspaceHarness(undefined, {
          extraLanguageModules: [{ references: { scopes: { keyed: () => contribution } } }]
       });
       try {
@@ -125,7 +125,7 @@ describe('order-flow keyed scope extensions', () => {
          expect({ afterLink, relink: contribution.calls }).toEqual({ afterLink: 2, relink: 1 });
          expect(scopes.map(scope => scope.getElement(NODE_NAME) !== undefined)).toEqual([true, true]);
       } finally {
-         workspace.dispose();
+         await dispose();
       }
    });
 });
@@ -137,11 +137,11 @@ describe('order-flow scope extension profile', () => {
       const contribution = new CountingScopeContribution();
       Logger.setLevel('debug');
       try {
-         const { workspace } = await makeScratchWorkspaceHarness(undefined, {
+         const { dispose } = await makeScratchWorkspaceHarness(undefined, {
             extraSharedModules: [{ Tracer: () => tracer }],
             extraLanguageModules: [{ references: { scopes: { counting: () => contribution } } }]
          });
-         workspace.dispose();
+         await dispose();
       } finally {
          Logger.setLevel(level);
       }

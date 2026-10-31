@@ -44,7 +44,12 @@ import { setTimeout as nextMacrotask } from 'node:timers/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
-import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type OrderFlowHarness } from '../order-flow-harness.js';
+import {
+   WORKSPACE_FILES,
+   makeScratchWorkspaceHarness,
+   type OrderFlowHarness,
+   type ScratchOrderFlowHarness
+} from '../order-flow-harness.js';
 
 const INTACT = 'transition Pick -> Ship';
 const BROKEN = 'transition Pick ->';
@@ -54,7 +59,8 @@ const LAYOUT_BROKEN = 'layoxut {';
 interface OpenDiagram {
    readonly services: OrderFlowHarness;
    readonly harness: GlspHarness<OrderFlowGlspState>;
-   readonly workspace: ScratchWorkspace;
+   readonly workspace: ScratchOrderFlowHarness['workspace'];
+   readonly scratch: ScratchOrderFlowHarness;
    /** The number of actions sent when each live validation withdrew its status. */
    readonly liveValidationEnds: readonly number[];
 }
@@ -87,7 +93,8 @@ function layoutText(diagram: OpenDiagram): string | undefined {
 
 /** Open `fulfillment.process` and answer the bounds request as a client does. */
 async function openDiagram(prepare?: (workspace: ScratchWorkspace) => void): Promise<OpenDiagram> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness(prepare);
+   const scratch = await makeScratchWorkspaceHarness(prepare);
+   const { harness: services, workspace } = scratch;
    const harness = makeGlspHarness<OrderFlowGlspState>({
       serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
       diagramType: 'order-flow-process',
@@ -95,7 +102,7 @@ async function openDiagram(prepare?: (workspace: ScratchWorkspace) => void): Pro
       additionalClientActionKinds: [SetMarkersAction.KIND, SetEditModeAction.KIND, MessageAction.KIND]
    });
    const liveValidationEnds: number[] = [];
-   open = { services, harness, workspace, liveValidationEnds };
+   open = { services, harness, workspace, scratch, liveValidationEnds };
    await harness.start();
    const setStatus = harness.state.setStatus.bind(harness.state);
    harness.state.setStatus = (status, entry) => {
@@ -139,9 +146,9 @@ function lastOf<T extends Action>(diagram: OpenDiagram, is: (action: Action) => 
 }
 
 describe('order-flow .process read-only status', () => {
-   afterEach(() => {
+   afterEach(async () => {
       open?.harness.dispose();
-      open?.workspace.dispose();
+      await open?.scratch.dispose();
       open = undefined;
    });
 
@@ -181,13 +188,14 @@ describe('order-flow .process read-only status', () => {
    });
 
    it('withdraws the loading status when the model fails to load', async () => {
-      const { harness: services, workspace } = await makeScratchWorkspaceHarness();
+      const scratch = await makeScratchWorkspaceHarness();
+      const { harness: services, workspace } = scratch;
       const harness = makeGlspHarness<OrderFlowGlspState>({
          serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
          diagramType: 'order-flow-process',
          appModules: [new HydraniumGlspAppModule({ shared: services.shared })]
       });
-      open = { services, harness, workspace, liveValidationEnds: [] };
+      open = { services, harness, workspace, scratch, liveValidationEnds: [] };
       await harness.start();
 
       // No source URI, so the load throws before it reads anything.
