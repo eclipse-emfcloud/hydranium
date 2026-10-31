@@ -14,9 +14,9 @@
  * presents `postMessage` as a `PostMessageChannel`,
  * `createPostMessageTransport` turns that into a reader/writer pair,
  * `DataConnection` owns readiness and reconnect over a `DataPort`, and
- * `OrderFlowPropertiesModel` owns the open/watch/write/reconcile policy. What
- * this file adds is only the two things a webview alone can do: acquire the VS
- * Code API, and draw.
+ * `WorkingCopy`, which `OrderFlowPropertiesModel` extends, owns the
+ * open/watch/write/reconcile policy. What this file adds is only the two
+ * things a webview alone can do: acquire the VS Code API, and draw.
  *
  * **Import discipline.** MODULE paths into `@hydranium/example-order-flow-client`
  * rather than its barrel, because the barrel re-exports the GLSP diagram
@@ -31,11 +31,10 @@ import {
 } from '../properties-panel-protocol';
 import { createWebviewSideChannel } from '@hydranium/data-client-vscode';
 import { WebviewDataPort } from '@hydranium/data-client-vscode/browser';
-import { describeFailure, PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
+import { PropertiesDocuments } from '@hydranium/example-order-flow-client/lib/properties/properties-documents';
+import { PropertiesForm } from '@hydranium/example-order-flow-client/lib/properties/properties-form';
 import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
-import { OrderFlowPropertiesModel } from '@hydranium/example-order-flow-client/lib/data/order-flow-properties-model';
-import { PROPERTIES_LOADING, PROPERTIES_OPEN_FAILED } from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
-import { ConsoleLogger, DataConnectionWithEvents, renderFrameworkMessage, resolve, type ResolvedMessage } from '@hydranium/protocol';
+import { ConsoleLogger, DataConnectionWithEvents, renderFrameworkMessage, type ResolvedMessage } from '@hydranium/protocol';
 
 /**
  * The label of this webview's session on the data head. `createSession` mints
@@ -60,6 +59,11 @@ type OrderFlowTransferRoot = DomainModel | LayoutModel | ProcessModel;
  * hand-narrowed structural stand-in got wrong.
  */
 declare function acquireVsCodeApi(): VsCodeApi;
+
+/** The host sends a document when an editor of it takes focus, so a failed open is tried again then. */
+class RetryingPropertiesDocuments extends PropertiesDocuments<OrderFlowTransferRoot> {
+   protected override readonly retryFailedOpen = true;
+}
 
 function main(): void {
    const root = document.getElementById('root');
@@ -89,25 +93,18 @@ function main(): void {
    });
    const connection = new DataConnectionWithEvents<OrderFlowTransferRoot>(port);
    const session = connection.createSession(PROPERTIES_WEBVIEW_SESSION_LABEL);
-   const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session, connection.events);
-
    const form = new PropertiesForm(root, {
-      setField: (name, value) => model.setField(name, value),
+      setField: (name, value) => documents.setField(name, value),
       reportError
    });
-
-   const render = (): void => {
-      form.setFields(model.fields);
-      form.setDiagnostics(model.diagnostics);
-   };
-   model.onDidChange(render);
-   model.onDidChangeDirty(() => form.setDirty(model.dirty));
+   // No catalogue in the webview, so an error's own sentence is its English.
+   const documents = new RetryingPropertiesDocuments(session, connection.events, form, {
+      reportError,
+      renderMessage: message => renderFrameworkMessage(message)
+   });
 
    messenger.onNotification(ORDER_FLOW_PANEL_SET_DOCUMENT, document_ => {
       form.setTitle(document_.label);
-      // Bound to a local, so the failure path below can name it: narrowing a
-      // property does not survive into a callback, and the message's `{uri}`
-      // parameter takes no `undefined`.
       const uri = document_.uri;
       if (!uri) {
          return;
@@ -115,27 +112,11 @@ function main(): void {
       // Remember it for a reload, BEFORE the load rather than after: a reload
       // during a slow open should still come back to the right document.
       vscodeApi.setState(document_);
-      form.setLoading(true);
-      form.report(PROPERTIES_LOADING);
-      model
-         .open(uri)
-         .then(() => {
-            form.setLoading(false);
-            // Render again explicitly. The model fires its change synchronously
-            // inside `open`, i.e. while `loading` is still true — harmless for a
-            // document that has fields, but a root that genuinely has NONE would
-            // otherwise have its (suppressed) empty render be the only one, and
-            // the panel would keep showing the previous document's inputs.
-            render();
-            form.report('');
-         })
-         .catch((error: unknown) => {
-            form.setLoading(false);
-            // No catalogue in the webview, so an error's own sentence is its English.
-            const detail = describeFailure(error, message => renderFrameworkMessage(message));
-            reportError(error, resolve(PROPERTIES_OPEN_FAILED, { uri, detail }));
-            form.report(detail, 'error');
-         });
+      // Sent again whenever an editor of it takes focus. That reloads it only
+      // when its copy follows none, after a deletion or a failed open. A
+      // reload of a copy that follows it would hide the outcome of the write
+      // the focus change committed.
+      documents.show(uri);
    });
 
    messenger.onNotification(ORDER_FLOW_PANEL_CONNECTION_LOST, () => {

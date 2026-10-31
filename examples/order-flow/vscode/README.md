@@ -9,9 +9,12 @@ packages, `@hydranium/client-vscode`, `@hydranium/data-client-vscode` and
 `@hydranium/glsp-client-vscode`; the
 [Host in VS Code](../../../docs/guides/host-in-vscode.md) guide walks through
 them. What sits _above_ them — the diagram definition,
-`OrderFlowPropertiesModel`, `PropertiesForm` — is mounted unchanged from
-[`../client`](../client/README.md), and the properties panel, its webview
-document and the webview UI are this example's own.
+`OrderFlowPropertiesModel` and `PropertiesForm` — is mounted unchanged from
+[`../client`](../client/README.md). `PropertiesDocuments` comes from there too,
+subclassed to open a document whose open failed again when it is shown again,
+since the panel shows one only when an editor of it takes focus. The
+properties panel, its webview document and the webview UI are this example's
+own.
 
 The server launch is **not** here: it lives in
 [`../vscode-servers`](../vscode-servers/README.md) and is shared, so the two

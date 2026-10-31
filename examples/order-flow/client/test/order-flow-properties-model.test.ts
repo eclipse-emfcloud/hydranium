@@ -49,6 +49,7 @@ import {
    DataConnection,
    DataEvents,
    Deferred,
+   isConflictError,
    type DataSession,
    TransferDocument,
    type DataPort,
@@ -61,8 +62,9 @@ import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { Emitter, type Event, type MessageConnection } from 'vscode-jsonrpc';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { OrderFlowPropertiesModel } from '../src/data/order-flow-properties-model';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { OrderFlowPropertiesModel, type PropertyField, type SetFieldOutcome } from '../src/data/order-flow-properties-model';
+import { PropertiesDocuments } from '../src/properties/properties-documents';
 import { thirdPartyWrite as writeAsThirdParty } from './testing/third-party-write.js';
 
 type OrderFlowTransferRoot = DomainModel | LayoutModel | ProcessModel;
@@ -150,8 +152,8 @@ function uriOf(relativePath: string): string {
 /**
  * A model following the live connection — the normal wiring.
  */
-function followingModel(): OrderFlowPropertiesModel<OrderFlowTransferRoot> {
-   const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session!, events!);
+function followingModel(uri: string): OrderFlowPropertiesModel<OrderFlowTransferRoot> {
+   const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session!, events!, uri);
    models.push(model);
    return model;
 }
@@ -161,8 +163,8 @@ function followingModel(): OrderFlowPropertiesModel<OrderFlowTransferRoot> {
  * bound to the connection. See the suite doc for why this is the honest way to
  * make a stale write deterministic.
  */
-function pinnedModel(): OrderFlowPropertiesModel<OrderFlowTransferRoot> {
-   const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session!, new DataEvents<OrderFlowTransferRoot>());
+function pinnedModel(uri: string): OrderFlowPropertiesModel<OrderFlowTransferRoot> {
+   const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session!, new DataEvents<OrderFlowTransferRoot>(), uri);
    models.push(model);
    return model;
 }
@@ -243,8 +245,8 @@ describe('order-flow properties model', () => {
    });
 
    it('presents the root string properties as editable fields', async () => {
-      const model = followingModel();
-      await model.open(uriOf(FULFILLMENT_PROCESS));
+      const model = followingModel(uriOf(FULFILLMENT_PROCESS));
+      await model.open();
 
       // Derived from the root, so this asserts what the transfer shape actually
       // offers: `name` plus `subject`, whose transfer form is the reference
@@ -268,8 +270,8 @@ describe('order-flow properties model', () => {
       // checked-in fixture, so nothing has to be mutated to produce a
       // diagnostic — and `DomainModel` has no string-valued own property, which
       // pins that diagnostics are independent of whether there are any fields.
-      const model = pinnedModel();
-      await model.open(uriOf('orders/audit-leak.domain'));
+      const model = pinnedModel(uriOf('orders/audit-leak.domain'));
+      await model.open();
 
       expect(model.fields).toEqual([]);
       expect(model.diagnostics.map(diagnostic => diagnostic.message).join('\n')).toContain('AuditStamp');
@@ -287,8 +289,8 @@ describe('order-flow properties model', () => {
       // them — so this covers the user-visible property and not the
       // subscription. The `waitFor` is therefore a tolerance, not the subject:
       // it also passes if a later push is what fills them in.
-      const model = followingModel();
-      await model.open(uriOf(FULFILLMENT_PROCESS));
+      const model = followingModel(uriOf(FULFILLMENT_PROCESS));
+      await model.open();
       expect(model.diagnostics).toEqual([]);
 
       await model.setField('subject', 'NoSuchEntity');
@@ -298,9 +300,9 @@ describe('order-flow properties model', () => {
    });
 
    it('writes a field back as a typed transfer root', async () => {
-      const model = followingModel();
       const uri = uriOf(FULFILLMENT_PROCESS);
-      await model.open(uri);
+      const model = followingModel(uri);
+      await model.open();
 
       const outcome = await model.setField('name', 'Fulfilment');
       expect(outcome).toEqual({ status: 'applied' });
@@ -320,9 +322,30 @@ describe('order-flow properties model', () => {
       expect(model.fields.find(field => field.name === 'name')?.value).toBe('Fulfilment');
    });
 
+   it('reports a conflict for a field edit made while the write before it is out, when the server trimmed that write', async () => {
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      const model = followingModel(uri);
+      await model.open();
+      // Made as the first write goes out, so its answer cannot be in yet.
+      let second: Promise<SetFieldOutcome> | undefined;
+      const update = session!.updateDocument.bind(session!);
+      vi.spyOn(session!, 'updateDocument').mockImplementationOnce(params => {
+         const sent = update(params);
+         second = model.setField('name', 'Fulfilment2');
+         return sent;
+      });
+      const first = model.setField('name', 'Fulfilment ');
+      await waitFor(() => second !== undefined);
+      // The answer does not say whether it holds another write too, so the
+      // edit is reconciled against it, and the trimmed value collides.
+      expect([await first, await second]).toEqual([{ status: 'applied' }, { status: 'conflict' }]);
+      const reread = await (await session!.connected()).getModelDocument({ uri });
+      expect((reread.model!.root as ProcessModel).name).toBe('Fulfilment');
+   });
+
    it('reports an unchanged write without sending it', async () => {
-      const model = followingModel();
-      await model.open(uriOf(FULFILLMENT_PROCESS));
+      const model = followingModel(uriOf(FULFILLMENT_PROCESS));
+      await model.open();
       const before = model.version;
 
       expect(await model.setField('name', 'Fulfillment')).toEqual({ status: 'unchanged' });
@@ -330,8 +353,8 @@ describe('order-flow properties model', () => {
    });
 
    it('rejects a field the root does not offer', async () => {
-      const model = followingModel();
-      await model.open(uriOf(FULFILLMENT_PROCESS));
+      const model = followingModel(uriOf(FULFILLMENT_PROCESS));
+      await model.open();
 
       await expect(model.setField('nodes', 'nope')).rejects.toThrow(/not an editable field/);
    });
@@ -342,17 +365,17 @@ describe('order-flow properties model', () => {
       await other.open(uri);
       await other.update({ uri, model: `${sharedServices!.workspace.TextDocuments.get(uri)!.getText()}\n`, baseVersion: 'any' });
       // Pinned, so only what the open read can make it dirty.
-      const model = pinnedModel();
+      const model = pinnedModel(uri);
 
-      await model.open(uri);
+      await model.open();
 
       expect(model.dirty).toBe(true);
    });
 
    it("follows the document's dirty state through its own write and then another client's save", async () => {
-      const model = followingModel();
       const uri = uriOf(FULFILLMENT_PROCESS);
-      await model.open(uri);
+      const model = followingModel(uri);
+      await model.open();
       const flips: boolean[] = [];
       model.onDidChangeDirty(() => flips.push(model.dirty));
       expect(model.dirty).toBe(false);
@@ -367,40 +390,30 @@ describe('order-flow properties model', () => {
       expect(flips).toEqual([true, false]);
    });
 
-   it('does not fire a second change for its own echo', async () => {
-      // What echo filtering actually buys a properties view. The echo's CONTENT
-      // equals the write response the model already adopted, so no assertion on
-      // the fields can catch it — the observable is the extra change event, and
-      // an extra change is a re-render, which is the "the field resets while I
-      // am typing" bug.
-      const model = followingModel();
+   it("shows its edit in every change it fires, the write's answer included", async () => {
+      // A change that showed the old value would reset the field the user is
+      // typing in. The edit fires one change and the write's answer another.
       const uri = uriOf(FULFILLMENT_PROCESS);
-      await model.open(uri);
+      const model = followingModel(uri);
+      await model.open();
 
-      let changes = 0;
+      const shown: (string | undefined)[] = [];
       model.onDidChange(() => {
-         changes++;
+         shown.push(model.fields.find(field => field.name === 'name')?.value);
       });
 
       expect(await model.setField('name', 'Fulfilment')).toEqual({ status: 'applied' });
 
-      // Let every push the write provoked arrive. Asserting immediately would
-      // pass whether or not the echo is filtered.
+      // Let every push the write provoked arrive.
       await new Promise(resolve => setTimeout(resolve, 300));
 
-      // An ABSOLUTE count, not a delta measured after the write. The phase
-      // event fires while the update response is still in flight, so a delta
-      // captured after `setField` returns has already absorbed the echo and
-      // compares post-echo against post-echo — which passes with the filter
-      // deliberately removed. Measured, not assumed.
-      expect(changes).toBe(1);
-      expect(model.fields.find(field => field.name === 'name')?.value).toBe('Fulfilment');
+      expect(shown).toEqual(['Fulfilment', 'Fulfilment']);
    });
 
    it('follows a third-party write without one of its own', async () => {
-      const model = followingModel();
       const uri = uriOf(FULFILLMENT_PROCESS);
-      await model.open(uri);
+      const model = followingModel(uri);
+      await model.open();
 
       let changes = 0;
       model.onDidChange(() => {
@@ -417,9 +430,9 @@ describe('order-flow properties model', () => {
    });
 
    it("takes a third party's comment-only edit's version without re-rendering", async () => {
-      const model = followingModel();
       const uri = uriOf(FULFILLMENT_PROCESS);
-      await model.open(uri);
+      const model = followingModel(uri);
+      await model.open();
       const opened = model.version;
 
       let changes = 0;
@@ -436,10 +449,10 @@ describe('order-flow properties model', () => {
 
    it('re-renders an unchanged-model update over a model it missed the change to', async () => {
       const relay = new DataEvents<OrderFlowTransferRoot>();
-      const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session!, relay);
-      models.push(model);
       const uri = uriOf(FULFILLMENT_PROCESS);
-      await model.open(uri);
+      const model = new OrderFlowPropertiesModel<OrderFlowTransferRoot>(session!, relay, uri);
+      models.push(model);
+      await model.open();
       let changes = 0;
       model.onDidChange(() => {
          changes++;
@@ -468,9 +481,9 @@ describe('order-flow properties model', () => {
    });
 
    it('clears its fields when the open document is deleted', async () => {
-      const model = followingModel();
       const uri = uriOf(FULFILLMENT_PROCESS);
-      await model.open(uri);
+      const model = followingModel(uri);
+      await model.open();
       expect(model.fields.length).toBeGreaterThan(0);
 
       // Driven through the builder, not the protocol: a deletion originates at
@@ -485,13 +498,13 @@ describe('order-flow properties model', () => {
       await waitFor(() => model.fields.length === 0, {
          message: 'the model kept its fields after the document was deleted'
       });
-      expect(model.uri).toBeUndefined();
+      expect(model.snapshot).toBeUndefined();
    });
 
    it('merges a write that raced a foreign edit to a different field', async () => {
       const uri = uriOf(FULFILLMENT_PROCESS);
-      const model = pinnedModel();
-      await model.open(uri);
+      const model = pinnedModel(uri);
+      await model.open();
 
       // Foreign writer touches `subject`; the pinned model still holds the
       // pre-write version, so its own write to `name` trips the gate.
@@ -517,10 +530,11 @@ describe('order-flow properties model', () => {
             landBetween = undefined;
             await write?.();
          }),
-         new DataEvents<OrderFlowTransferRoot>()
+         new DataEvents<OrderFlowTransferRoot>(),
+         uri
       );
       models.push(model);
-      await model.open(uri);
+      await model.open();
 
       const foreign = (await currentRoot(uri)) as ProcessModel;
       await thirdPartyWrite(uri, { ...foreign, subject: 'LineItem' });
@@ -546,10 +560,11 @@ describe('order-flow properties model', () => {
                await hold.promise;
             }
          }),
-         new DataEvents<OrderFlowTransferRoot>()
+         new DataEvents<OrderFlowTransferRoot>(),
+         uri
       );
       models.push(model);
-      await model.open(uri);
+      await model.open();
       const foreign = (await currentRoot(uri)) as ProcessModel;
       await thirdPartyWrite(uri, { ...foreign, subject: 'LineItem' });
       holding = true;
@@ -580,10 +595,11 @@ describe('order-flow properties model', () => {
                await hold.promise;
             }
          }),
-         new DataEvents<OrderFlowTransferRoot>()
+         new DataEvents<OrderFlowTransferRoot>(),
+         uri
       );
       models.push(model);
-      await model.open(uri);
+      await model.open();
       const foreign = (await currentRoot(uri)) as ProcessModel;
       await thirdPartyWrite(uri, { ...foreign, subject: 'LineItem' });
       holding = true;
@@ -606,8 +622,8 @@ describe('order-flow properties model', () => {
 
    it('drops a write that raced a foreign edit to the same field', async () => {
       const uri = uriOf(FULFILLMENT_PROCESS);
-      const model = pinnedModel();
-      await model.open(uri);
+      const model = pinnedModel(uri);
+      await model.open();
 
       const foreign = (await currentRoot(uri)) as ProcessModel;
       await thirdPartyWrite(uri, { ...foreign, name: 'WonByTheOtherWriter' });
@@ -624,8 +640,8 @@ describe('order-flow properties model', () => {
 
    it('settles a write a foreign writer already made, and takes the version it made it at', async () => {
       const uri = uriOf(FULFILLMENT_PROCESS);
-      const model = pinnedModel();
-      await model.open(uri);
+      const model = pinnedModel(uri);
+      await model.open();
 
       const foreign = (await currentRoot(uri)) as ProcessModel;
       await thirdPartyWrite(uri, { ...foreign, name: 'Fulfilment', subject: 'LineItem' });
@@ -636,22 +652,409 @@ describe('order-flow properties model', () => {
       expect(await model.setField('name', 'Fulfillment')).toEqual({ status: 'applied' });
    });
 
+   it('writes edits made in the same turn as one write', async () => {
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      const model = followingModel(uri);
+      await model.open();
+
+      const outcomes = await Promise.all([model.setField('name', 'Fulfilment'), model.setField('subject', 'LineItem')]);
+
+      expect(outcomes).toEqual([{ status: 'applied' }, { status: 'applied' }]);
+      expect(port!.sent.filter(request => request.method.endsWith('updateModelDocument'))).toHaveLength(1);
+      const reread = (await currentRoot(uri)) as ProcessModel;
+      expect([reread.name, reread.subject]).toEqual(['Fulfilment', 'LineItem']);
+   });
+
+   it('shows an edit and counts it as dirty before it is written', async () => {
+      const model = followingModel(uriOf(FULFILLMENT_PROCESS));
+      await model.open();
+      const flips: boolean[] = [];
+      model.onDidChangeDirty(() => flips.push(model.dirty));
+
+      const written = model.setField('name', 'Fulfilment');
+
+      expect(model.fields.find(field => field.name === 'name')?.value).toBe('Fulfilment');
+      expect(model.dirty).toBe(true);
+      expect(port!.sent.some(request => request.method.endsWith('updateModelDocument'))).toBe(false);
+      expect(await written).toEqual({ status: 'applied' });
+      // Still dirty: the server now holds unsaved text.
+      expect(flips).toEqual([true]);
+   });
+
+   it('keeps an edit made during a write when that write answers and echoes', async () => {
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      const model = followingModel(uri);
+      await model.open();
+
+      const first = model.setField('name', 'Fulfilment');
+      await waitFor(() => port!.sent.some(request => request.method.endsWith('updateModelDocument')));
+      const second = model.setField('subject', 'LineItem');
+
+      expect(await first).toEqual({ status: 'applied' });
+      expect(model.fields.find(field => field.name === 'subject')?.value).toBe('LineItem');
+      expect(await second).toEqual({ status: 'applied' });
+      expect(((await currentRoot(uri)) as ProcessModel).subject).toBe('LineItem');
+   });
+
+   it('saves its edit to the file', async () => {
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      const model = followingModel(uri);
+      await model.open();
+
+      const written = model.setField('name', 'Fulfilment');
+      const saved = await model.save();
+
+      expect(await written).toEqual({ status: 'applied' });
+      expect(saved?.persisted.version).toBeDefined();
+      expect(model.dirty).toBe(false);
+      expect(readFileSync(path.join(workspace!.root, FULFILLMENT_PROCESS), 'utf8')).toContain('process Fulfilment ');
+   });
+
+   it("saves another client's unsaved text when it has no edit of its own", async () => {
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      const other = sharedServices!.model.ModelService.createSession('other');
+      await other.open(uri);
+      const text = `${sharedServices!.workspace.TextDocuments.get(uri)!.getText()}\n`;
+      await other.update({ uri, model: text, baseVersion: 'any' });
+      const model = followingModel(uri);
+      await model.open();
+      expect(model.dirty).toBe(true);
+
+      expect(await model.save()).toBeDefined();
+
+      expect(model.dirty).toBe(false);
+      expect(readFileSync(path.join(workspace!.root, FULFILLMENT_PROCESS), 'utf8')).toBe(text);
+   });
+
+   it('saves an edit the server already held from another writer', async () => {
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      const model = pinnedModel(uri);
+      await model.open();
+      const foreign = (await currentRoot(uri)) as ProcessModel;
+      await thirdPartyWrite(uri, { ...foreign, name: 'Fulfilment' });
+
+      expect(await model.setField('name', 'Fulfilment')).toEqual({ status: 'unchanged' });
+      expect(await model.save()).toBeDefined();
+
+      expect(readFileSync(path.join(workspace!.root, FULFILLMENT_PROCESS), 'utf8')).toContain('process Fulfilment ');
+   });
+
+   it('refuses to save text that moved past what it shows', async () => {
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      const model = pinnedModel(uri);
+      await model.open();
+      await model.setField('name', 'Fulfilment');
+      const foreign = (await currentRoot(uri)) as ProcessModel;
+      await thirdPartyWrite(uri, { ...foreign, subject: 'LineItem' });
+
+      const refusal = await model.save().catch((error: unknown) => error);
+
+      expect(isConflictError(refusal)).toBe(true);
+      expect(readFileSync(path.join(workspace!.root, FULFILLMENT_PROCESS), 'utf8')).not.toContain('LineItem');
+   });
+
+   it('writes an edit made just before it is disposed', async () => {
+      const uri = uriOf(FULFILLMENT_PROCESS);
+      const model = followingModel(uri);
+      await model.open();
+
+      const written = model.setField('name', 'Fulfilment');
+      model.dispose();
+
+      expect(await written).toEqual({ status: 'applied' });
+      expect(((await currentRoot(uri)) as ProcessModel).name).toBe('Fulfilment');
+   });
+
    it('closes the document and clears its fields', async () => {
-      const model = followingModel();
-      await model.open(uriOf(FULFILLMENT_PROCESS));
+      const model = followingModel(uriOf(FULFILLMENT_PROCESS));
+      await model.open();
       expect(model.fields).not.toEqual([]);
 
       await model.close();
 
-      expect(model.uri).toBeUndefined();
+      expect(model.snapshot).toBeUndefined();
       expect(model.fields).toEqual([]);
    });
 
    it('refuses use after dispose', async () => {
-      const model = followingModel();
+      const model = followingModel(uriOf(FULFILLMENT_PROCESS));
       model.dispose();
 
-      await expect(model.open(uriOf(FULFILLMENT_PROCESS))).rejects.toThrow(/disposed/);
+      await expect(model.open()).rejects.toThrow(/disposed/);
+   });
+
+   describe('shown through PropertiesDocuments', () => {
+      const RETURNS_PROCESS = 'orders/returns.process';
+      const shown: PropertiesDocuments<OrderFlowTransferRoot>[] = [];
+
+      function showing(
+         setLoading: (loading: boolean) => void = () => undefined,
+         reportError: (error: unknown) => void = () => undefined,
+         form: { setFields?(fields: readonly PropertyField[]): void; setDirty?(dirty: boolean): void } = {},
+         retryFailedOpen = false
+      ): PropertiesDocuments<OrderFlowTransferRoot> {
+         const documents = new (class extends PropertiesDocuments<OrderFlowTransferRoot> {
+            protected override readonly retryFailedOpen = retryFailedOpen;
+         })(
+            session!,
+            events!,
+            {
+               switchDocument: () => undefined,
+               setLoading,
+               report: () => undefined,
+               setFields: fields => form.setFields?.(fields),
+               setDiagnostics: () => undefined,
+               setDirty: dirty => form.setDirty?.(dirty)
+            },
+            { reportError, renderMessage: message => message.text }
+         );
+         shown.push(documents);
+         return documents;
+      }
+
+      afterEach(async () => {
+         await Promise.all(shown.splice(0).map(documents => documents.dispose()));
+      });
+
+      it('loads a document shown again while it loads only once', async () => {
+         const loads: boolean[] = [];
+         const documents = showing(loading => loads.push(loading));
+         const uri = uriOf(FULFILLMENT_PROCESS);
+
+         documents.show(uri);
+         documents.show(uri);
+         await waitFor(() => loads.includes(false));
+
+         expect(loads).toEqual([true, false]);
+      });
+
+      it('forgets a document shown before once its close has settled', async () => {
+         const documents = new (class extends PropertiesDocuments<OrderFlowTransferRoot> {
+            get retiredCount(): number {
+               return this.retired.size;
+            }
+         })(
+            session!,
+            events!,
+            {
+               switchDocument: () => undefined,
+               setLoading: () => undefined,
+               report: () => undefined,
+               setFields: () => undefined,
+               setDiagnostics: () => undefined,
+               setDirty: () => undefined
+            },
+            { reportError: () => undefined, renderMessage: message => message.text }
+         );
+         shown.push(documents);
+         documents.show(uriOf(FULFILLMENT_PROCESS));
+         await waitFor(() => documents.current?.snapshot !== undefined);
+
+         documents.show(uriOf(RETURNS_PROCESS));
+
+         await waitFor(() => documents.retiredCount === 0, { message: 'the document shown before stayed retired' });
+      });
+
+      it('keeps the open of a document shown again while its close is under way', async () => {
+         const documents = showing();
+         const uri = uriOf(FULFILLMENT_PROCESS);
+         documents.show(uri);
+         await waitFor(() => documents.current?.snapshot !== undefined);
+
+         documents.show(uriOf(RETURNS_PROCESS));
+         documents.show(uri);
+         await waitFor(() => documents.current?.uri === uri && documents.current.snapshot !== undefined);
+
+         expect(await documents.setField('name', 'ShownAgain')).toEqual({ status: 'applied' });
+      });
+
+      it('counts the write of a document shown before until it answers', async () => {
+         const documents = showing();
+         const uri = uriOf(FULFILLMENT_PROCESS);
+         documents.show(uri);
+         await waitFor(() => documents.current?.snapshot !== undefined);
+         const written = documents.setField('name', 'BeforeSwitch');
+
+         documents.show(uriOf(RETURNS_PROCESS));
+
+         expect(documents.documentsWithWritesInFlight).toEqual([uri]);
+         expect(await documents.whenWritesSettled()).toBe(true);
+         expect(await written).toEqual({ status: 'applied' });
+         expect(documents.documentsWithWritesInFlight).toEqual([]);
+      });
+
+      it('ends only once the edit of the document shown has answered', async () => {
+         // A host ends the session after this, and a write sent as it ends is never sent.
+         const documents = showing();
+         const uri = uriOf(FULFILLMENT_PROCESS);
+         documents.show(uri);
+         await waitFor(() => documents.current?.snapshot !== undefined);
+         let answered = false;
+         const written = documents.setField('name', 'BeforeDispose').finally(() => {
+            answered = true;
+         });
+
+         await documents.dispose();
+
+         expect(answered).toBe(true);
+         expect(await written).toEqual({ status: 'applied' });
+      });
+
+      it('loads nothing again when a document whose open failed is shown again', async () => {
+         const loads: boolean[] = [];
+         const documents = showing(loading => loads.push(loading));
+         const uri = uriOf('orders/missing.process');
+         documents.show(uri);
+         await waitFor(() => loads.length === 2);
+
+         // A load reports itself within the call, so none has started.
+         documents.show(uri);
+
+         expect(loads).toEqual([true, false]);
+      });
+
+      it('loads a document whose open failed again when it is shown again, if told to', async () => {
+         const loads: boolean[] = [];
+         const documents = showing(loading => loads.push(loading), undefined, undefined, true);
+         const uri = uriOf('orders/missing.process');
+         documents.show(uri);
+         await waitFor(() => loads.length === 2);
+
+         documents.show(uri);
+
+         expect(loads).toEqual([true, false, true]);
+      });
+
+      it('loads a document again when it is shown after it was deleted', async () => {
+         const loads: boolean[] = [];
+         const documents = showing(loading => loads.push(loading));
+         const uri = uriOf(FULFILLMENT_PROCESS);
+         documents.show(uri);
+         // Loaded, not only read, since a show during the load loads nothing again.
+         await waitFor(() => loads.length === 2);
+         const langiumDocuments = sharedServices!.workspace.LangiumDocuments;
+         const open = langiumDocuments.all.find((document: { uri: { toString(): string } }) => document.uri.toString() === uri);
+         await sharedServices!.workspace.DocumentBuilder.update([], [open!.uri]);
+         await waitFor(() => documents.current?.snapshot === undefined);
+
+         documents.show(uri);
+
+         await waitFor(() => documents.current?.snapshot !== undefined, { message: 'the document never loaded again' });
+      });
+
+      it('reports nothing of an open that fails after the next document is shown', async () => {
+         const errors: unknown[] = [];
+         const documents = showing(undefined, error => errors.push(error));
+         documents.show(uriOf(RETURNS_PROCESS));
+         const opened = new Deferred<void>();
+         const failed = opened.promise.then(() => Promise.reject(new Error('open failed')));
+         const open = vi.spyOn(documents.current!, 'open').mockReturnValue(failed);
+         await waitFor(() => open.mock.calls.length === 1);
+
+         documents.show(uriOf(FULFILLMENT_PROCESS));
+         opened.resolve();
+         await failed.catch(() => undefined);
+         await waitFor(() => documents.current?.snapshot !== undefined);
+
+         expect(errors).toEqual([]);
+      });
+
+      it('opens nothing of a document shown again whose close it waits on when another is shown', async () => {
+         const documents = showing();
+         const uri = uriOf(FULFILLMENT_PROCESS);
+         documents.show(uri);
+         await waitFor(() => documents.current?.snapshot !== undefined);
+         documents.show(uriOf(RETURNS_PROCESS));
+         documents.show(uri);
+         const shownAgain = documents.current;
+         const opened = vi.spyOn(shownAgain!, 'open');
+
+         documents.show(uriOf(RETURNS_PROCESS));
+         await waitFor(() => documents.current?.snapshot !== undefined);
+
+         expect(opened).not.toHaveBeenCalled();
+      });
+
+      it('draws no fields when it shows no document', async () => {
+         const drawn: (readonly PropertyField[])[] = [];
+         const documents = showing(undefined, undefined, { setFields: fields => drawn.push(fields) });
+         documents.show(uriOf(FULFILLMENT_PROCESS));
+         await waitFor(() => documents.current?.snapshot !== undefined);
+         drawn.length = 0;
+
+         documents.show(undefined);
+
+         expect(drawn).toEqual([]);
+      });
+
+      it('draws and marks nothing of a change a document shown before announces', async () => {
+         const drawn: (readonly PropertyField[])[] = [];
+         const dirty: boolean[] = [];
+         const documents = showing(undefined, undefined, {
+            setFields: fields => drawn.push(fields),
+            setDirty: flag => dirty.push(flag)
+         });
+         documents.show(uriOf(FULFILLMENT_PROCESS));
+         await waitFor(() => documents.current?.snapshot !== undefined);
+         const before = documents.current!;
+         documents.show(uriOf(RETURNS_PROCESS));
+         drawn.length = 0;
+         dirty.length = 0;
+
+         // Still closing, it can announce a change, as when its write answers.
+         before['changeEmitter'].fire(undefined);
+         before['dirtyEmitter'].fire(undefined);
+
+         expect(drawn).toEqual([]);
+         expect(dirty).toEqual([]);
+      });
+
+      it('shows nothing of the open of a document shown before that answers after the switch', async () => {
+         const loads: boolean[] = [];
+         const documents = showing(loading => loads.push(loading));
+         documents.show(uriOf(FULFILLMENT_PROCESS));
+         const before = new Deferred<void>();
+         const opened = vi.spyOn(documents.current!, 'open').mockReturnValue(before.promise);
+         await waitFor(() => opened.mock.calls.length === 1);
+         documents.show(uriOf(RETURNS_PROCESS));
+         const next = new Deferred<void>();
+         const opening = vi.spyOn(documents.current!, 'open').mockReturnValue(next.promise);
+         await waitFor(() => opening.mock.calls.length === 1);
+
+         before.resolve();
+         await tick(0);
+
+         expect(loads).toEqual([true, true]);
+         next.resolve();
+         await waitFor(() => loads.length === 3);
+      });
+
+      it('reports nothing of the failed close of a document shown before', async () => {
+         const errors: unknown[] = [];
+         const documents = showing(undefined, error => errors.push(error));
+         documents.show(uriOf(FULFILLMENT_PROCESS));
+         await waitFor(() => documents.current?.snapshot !== undefined);
+         const closing = new Deferred<void>();
+         vi.spyOn(documents.current!, 'close').mockReturnValue(closing.promise);
+         documents.show(uriOf(RETURNS_PROCESS));
+         await waitFor(() => documents.current?.snapshot !== undefined);
+
+         closing.reject(new Error('the session ended'));
+         await documents.dispose();
+
+         expect(errors).toEqual([]);
+      });
+
+      it('shows nothing once it is disposed', async () => {
+         const documents = showing();
+         documents.show(uriOf(FULFILLMENT_PROCESS));
+         await waitFor(() => documents.current?.snapshot !== undefined);
+         await documents.dispose();
+
+         documents.show(uriOf(RETURNS_PROCESS));
+
+         expect(documents.current).toBeUndefined();
+      });
    });
 });
 
@@ -713,8 +1116,8 @@ describe('order-flow properties model beside a debouncing editor', () => {
       const edited = clean.replace('   transition Pay', '   task Audit reads Order.id\n   transition Pay');
       lsp.openDocument(uri, clean, 'order-flow-process', 1);
       await waitFor(() => store.get(uri)?.getText() === clean);
-      const model = pinnedModel();
-      await model.open(uri);
+      const model = pinnedModel(uri);
+      await model.open();
       lsp.changeDocument(uri, edited, 2);
       await waitFor(() => store.get(uri)?.getText() === edited);
 

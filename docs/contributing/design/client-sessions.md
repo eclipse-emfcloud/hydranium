@@ -249,6 +249,19 @@ blocks its set, as one that cannot be re-opened does, whenever its deletion
 arrived: written again without it, the set would no longer be the one its
 caller wrote together.
 
+No update event tells of a change made while the connection was down, so the
+session fires `onDidRestoreDocument` for each document it opened again, with
+what the restore read, which is missing when that read failed, and with
+`reopened: false` for one it could not open again and did not find deleted. A
+client that keeps a document or its version takes them from the event. A write,
+save, persist or delete called before a document's event and gated on a version
+is refused with a `ConflictError` rather than sent, since the restarted server's
+numbering can match that version by chance and the call would land on text its
+caller never saw. A re-open that found the text the session last saw, at its
+version, refuses nothing, so a brief drop costs no conflict. The gate knows only
+when a call was made, not where its version came from: a call made after the
+event with a version kept from before is sent.
+
 ### In Theia
 
 `bindDataConnection` has `DataSessionStopContribution` dispose every session
@@ -258,6 +271,45 @@ connection. A session with a call in flight at the stop closes too late, and
 the page's last frames can be lost under load, so the close is best effort.
 The adopter's side is in
 [Connect a data client](../../guides/connect-a-data-client.md#in-theia).
+
+### `WorkingCopy`
+
+`WorkingCopy` holds one document over a `DataSession` for a part of the UI that
+edits it, such as a form. Its class doc lists what it does. This section holds
+the contracts behind it.
+
+**An edit is applied once.** A write's edits leave the root before its answer
+is taken, and the documents the server sends while a request is out wait for
+it, since one may already hold the write. The cost is that another client's
+change shows only once the copy's request has answered, or after
+`settleWritesMs`. While a request is out, a dirty flag decided on older text is
+skipped, so an answer built before another client's save does not mark the copy
+unsaved again.
+
+**An edit typed during the copy's own write does not conflict with it**, since
+it is measured against that write. The exception is an answer that differs from
+the write, as when the server trims a name: it may hold another client's change
+too, and neither its root nor its version tells, so the edit is reconciled
+against it and an edit of the trimmed field conflicts.
+
+**A dropped edit is not carried.** An edit typed during a write that a conflict
+dropped edits from is reconciled against the server. An edit of the dropped
+field conflicts, one that restates the dropped value or reverts to the value
+before it included, since the server keeps the other client's, and an edit of a
+field the write merged does not.
+
+**A write never lands on text the copy has not seen.** A restarted server
+numbers versions afresh, so a write based before the latest restore, one that
+found the snapshot's text at its version aside, is refused before it is sent
+and reconciled against the restarted server's document. A field changed while
+the connection was down then reports a conflict. Until the copy reads the
+restored document again, it keeps the problems from before.
+
+**An ended open stays ended.** A close, a deletion, a restore that could not
+open the document again, a failed second read of the open or a read that finds
+the file gone ends it. Edits not yet written settle as `unavailable`, and a
+late answer neither brings the document back nor undoes an open made later. A
+close is final.
 
 ## Over the GLSP head
 
