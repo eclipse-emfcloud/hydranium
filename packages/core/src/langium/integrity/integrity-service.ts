@@ -7,14 +7,16 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { isPromiseLike, Logger, type ProfileSession, type Tracer } from '@hydranium/protocol';
+import { describeErrorWithStack, isPromiseLike, Logger, type ProfileSession, textHash, type Tracer } from '@hydranium/protocol';
 import {
    type AstNode,
    AstUtils,
    DocumentState,
    interruptAndCheck,
+   isMultiReference,
    isOperationCancelled,
    type LangiumDocument,
+   type URI,
    UriUtils
 } from '@hydranium/langium';
 import { CancellationToken, type Disposable } from 'vscode-languageserver';
@@ -94,6 +96,13 @@ export namespace IntegrityService {
     * `textDocument` still mirrors disk — read the repair off the AST, or from
     * the staged content the next open consumes.
     *
+    * A `Linked`-phase repair settles the documents that reference the repaired
+    * one in the same build against what the repair replaced. A build after it
+    * relinks them, and they settle again. Past `maxRelinkChain` such builds in
+    * a row they keep stale links. A closed `'editor'` document whose CST was
+    * shed re-reads its unrepaired text in that build and repeats the repair,
+    * so they resolve a renamed element by its old name until the next change.
+    *
     * Invariant: integrity rules only register at Parsed or Linked, so the build
     * is guaranteed post-integrity once it advances past `onBuildPhase(Linked)`
     * into `IndexedReferences`. {@link IntegrityService.register} enforces this at
@@ -111,6 +120,9 @@ export namespace IntegrityService {
  */
 const silentWriteReported = new WeakSet<ServerSharedServices>();
 
+/** The running builds that relink dependents, per server, because a repair in one language can extend a chain in another. */
+const runningRelinksByServer = new WeakMap<ServerSharedServices, Set<DependentRelink>>();
+
 /**
  * Construction options for {@link DefaultIntegrityService}. All fields
  * optional — the defaults reproduce the framework's behaviour exactly.
@@ -124,6 +136,20 @@ export interface IntegrityServiceOptions extends LogNameOptions {
     * to `'silent'`. See {@link IntegritySyncMode}.
     */
    readonly syncMode?: IntegritySyncMode;
+}
+
+/** The text a `Linked`-phase repair was computed from, and the text it produced. */
+export interface IntegrityRepairTexts {
+   readonly from: string;
+   readonly to: string;
+}
+
+/** The build a repaired document has requested to relink its dependents. */
+export interface DependentRelink {
+   /** The repaired document, whose dependents the build relinks. */
+   readonly document: LangiumDocument;
+   /** Its place in a chain of such builds, each requested by a repair of a document the one before relinked. */
+   readonly chain: number;
 }
 
 /**
@@ -173,6 +199,25 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     * Linked-phase correction (see {@link resyncDocument}).
     */
    protected readonly documentBuilder: HydraniumDocumentBuilder;
+   /** Each document's {@link DependentRelink}, from its request until it settles. See {@link relinkDependents}. */
+   protected readonly relinkBuilds = new WeakMap<LangiumDocument, DependentRelink>();
+   /** The {@link replayKey} of the latest repair of each document that {@link stagesRepairs}. */
+   protected readonly replayKeys = new WeakMap<LangiumDocument, string>();
+   /** The relinks the check inside the lock found needed, until their build starts. */
+   protected readonly scheduledRelinks = new WeakSet<DependentRelink>();
+   /** The relinks of every language whose build runs, from its start until the next build starts. */
+   protected readonly runningRelinks: Set<DependentRelink>;
+   /** The rules of a repair while a relink's build ran, which gets the next build in the chain. */
+   protected readonly repairedAgain = new WeakMap<DependentRelink, readonly IntegrityRule[]>();
+   /** Marks {@link scheduledRelinks} running as their builds start, subscribed on the first request. */
+   protected relinkStarts?: Disposable;
+   /**
+    * How long a chain of builds that relink dependents may grow before a
+    * repair only warns. A rule that settles within it gets every build it needs.
+    */
+   protected readonly maxRelinkChain: number = 3;
+   /** The rules that mutated each document in its latest `Linked`-phase {@link enforceIntegrity} pass, so a warning can name them. */
+   protected readonly mutatingRules = new WeakMap<LangiumDocument, Set<IntegrityRule>>();
 
    constructor(
       protected readonly services: ServerLanguageServices,
@@ -183,6 +228,8 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       this.tracer = services.shared.Tracer.for(options.logName ?? 'Integrity').trace('instantiated');
       this.documentBuilder = services.shared.workspace.DocumentBuilder;
       this.syncMode = options.syncMode ?? 'silent';
+      this.runningRelinks = runningRelinksByServer.get(services.shared) ?? new Set();
+      runningRelinksByServer.set(services.shared, this.runningRelinks);
 
       // Read the language's IntegrityRuleContribution group and let each
       // contribution register one or many rules through this service (the
@@ -322,6 +369,13 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       if (rulesByType.size === 0) {
          return false;
       }
+      // Read only after a Linked-phase repair. Cleared when such a pass starts, so
+      // one that records nothing leaves no older record to be named in its place.
+      const recorded = phase > DocumentState.Parsed;
+      if (recorded) {
+         this.mutatingRules.delete(document);
+      }
+      let mutating: Set<IntegrityRule> | undefined;
       const relativeUri = this.services.shared.workspace.WorkspaceManager.wsRelativePath(document.uri);
       for (const node of AstUtils.streamAst(document.parseResult.value)) {
          for (const rule of rulesByType.get(node.$type) ?? NO_RULES) {
@@ -333,6 +387,12 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
                : rule.enforce(node, document, ruleLogger);
             const mutated = isPromiseLike(enforced) ? await enforced : enforced;
             if (mutated) {
+               if (recorded && mutating === undefined) {
+                  // Only a mutating pass leads to a read, so a pass that mutates nothing allocates nothing.
+                  mutating = new Set();
+                  this.mutatingRules.set(document, mutating);
+               }
+               mutating?.add(rule);
                ruleLogger.trace(`[${relativeUri}] Mutated ${this.formatNode(node)}`);
             }
             changed = mutated || changed;
@@ -409,7 +469,9 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          // mutation in place would answer questions about this document from a
          // parse of text nobody has. Reconciling discards it by re-reading the
          // store, which is what the document now has to agree with.
-         await this.reconcileDocument(document, cancelToken);
+         //
+         // No repair is passed, because the edit's build relinks the dependents.
+         await this.reconcileDocument(document, cancelToken, undefined);
          return;
       }
 
@@ -423,7 +485,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
 
       await this.syncCorrections(textDocument, parsedFrom);
 
-      await this.reconcileDocument(document, cancelToken);
+      await this.reconcileDocument(document, cancelToken, { from: parsedFrom, to: newText });
 
       // Re-version against the REPAIRED text, after either branch. The repair is
       // a content change the store has not seen: whatever reconciliation ran
@@ -455,8 +517,16 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     * moved under the CST; abandoned, the AST carries a mutation the text never
     * had. Both are the same question — re-read and re-derive — and the phase is
     * what decides how far that has to go.
+    *
+    * `repair` is the text the repair was computed from and the text it
+    * produced, which {@link relinkDependents} compares a later repair with.
+    * `undefined` for an abandoned repair, which relinks no dependents.
     */
-   protected async reconcileDocument(document: LangiumDocument, cancelToken?: CancellationToken): Promise<void> {
+   protected async reconcileDocument(
+      document: LangiumDocument,
+      cancelToken: CancellationToken | undefined,
+      repair: IntegrityRepairTexts | undefined
+   ): Promise<void> {
       if (document.state <= DocumentState.Parsed) {
          // Parsed-phase correction: re-parse only. The build pipeline still runs
          // IndexedContent → ComputedScopes → Linked → … on the fresh AST afterwards,
@@ -479,8 +549,182 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          // self-consistent (text + CST + AST + links) without re-firing the
          // build-phase listeners (which would re-enter integrity). The phase logic
          // stays in the builder, its proper home, rather than being duplicated here.
+         // Requested first, so a relink that throws cannot skip it.
+         if (repair !== undefined) {
+            this.relinkDependents(document, repair);
+         }
          await this.documentBuilder.reparseAndRelink(document, cancelToken);
       }
+   }
+
+   /**
+    * Relink the documents that reference `document` in a build after this
+    * one, where it counts as changed. They were linked before the repair, so
+    * they hold nodes a re-parse replaced, or names the repair changed.
+    *
+    * Each document has at most one such build, its {@link DependentRelink},
+    * which goes through four steps.
+    *
+    * 1. Requested here, and kept in {@link relinkBuilds}. A repair while it
+    *    waits is relinked by it.
+    * 2. Checked inside the lock, which skips it unless {@link isRelinkNeeded}.
+    *    A needed one joins {@link scheduledRelinks}.
+    * 3. Started, when `onUpdate` reports its build. It is in
+    *    {@link runningRelinks} until the next build starts. A repair while it
+    *    runs is kept in {@link repairedAgain} and gets the next build.
+    * 4. Settled, when its request resolves, which drops it from every record.
+    *
+    * A repair of a document that a running build relinked continues that
+    * build's chain, which {@link maxRelinkChain} bounds. A repair with the
+    * {@link replayKey} of the one before requests none.
+    */
+   protected relinkDependents(document: LangiumDocument, repair: IntegrityRepairTexts): void {
+      const key = this.replayKey(document, repair);
+      if (key !== undefined) {
+         if (this.replayKeys.get(document) === key) {
+            return;
+         }
+         this.replayKeys.set(document, key);
+      }
+      const rules = [...(this.mutatingRules.get(document) ?? [])];
+      const pending = this.relinkBuilds.get(document);
+      if (pending !== undefined) {
+         this.repairedAgain.set(pending, rules);
+         return;
+      }
+      const causes = [...this.runningRelinks].filter(relink => this.isRelinkedBy(document, relink.document));
+      this.relinkInChain(document, Math.max(0, ...causes.map(relink => relink.chain)) + 1, rules);
+   }
+
+   /**
+    * Whether a build where `changed` counts as changed relinks `document`, as
+    * Langium's `shouldRelink` decides. Read from the document's links, because
+    * its build has dropped its indexed references until it indexes again.
+    */
+   protected isRelinkedBy(document: LangiumDocument, changed: LangiumDocument): boolean {
+      const target = changed.uri.toString();
+      return document.references.some(reference => {
+         const descriptions = isMultiReference(reference)
+            ? reference.items.map(item => item.$nodeDescription)
+            : [reference.$nodeDescription];
+         return reference.error !== undefined || descriptions.some(description => description?.documentUri.toString() === target);
+      });
+   }
+
+   /** Request the build at `chain`, or warn naming `rules` past {@link maxRelinkChain}. */
+   protected relinkInChain(document: LangiumDocument, chain: number, rules: readonly IntegrityRule[]): void {
+      if (chain > this.maxRelinkChain) {
+         const builds = this.maxRelinkChain === 1 ? '1 build in a row that relinks' : `${this.maxRelinkChain} builds in a row that relink`;
+         this.tracer
+            .with(document.uri.toString())
+            .warn(
+               `${this.formatRules(rules)} repaired documents in ${builds} their dependents, ` +
+                  'which keep stale links until the next change. A rule that does not settle causes this.'
+            );
+         return;
+      }
+      this.requestRelink(document, chain);
+   }
+
+   /** Request the build {@link relinkInChain} decided on, skipped unless {@link isRelinkNeeded}. */
+   protected requestRelink(document: LangiumDocument, chain: number): void {
+      const uri = document.uri;
+      this.relinkStarts ??= this.documentBuilder.onUpdate(changed => this.startRelinks(changed));
+      const relink: DependentRelink = { document, chain };
+      this.relinkBuilds.set(document, relink);
+      const stillNeeded = (): boolean => {
+         const needed = this.isRelinkNeeded(document);
+         if (needed) {
+            this.scheduledRelinks.add(relink);
+         }
+         return needed;
+      };
+      const settled = (): void => {
+         this.relinkBuilds.delete(document);
+         this.scheduledRelinks.delete(relink);
+         this.runningRelinks.delete(relink);
+      };
+      this.services.shared.workspace.VersionSyncService.requestRecoveryBuild(uri, { stillNeeded })
+         .then(
+            () => {
+               // A build that never started, or was cancelled and not run again,
+               // leaves the repair to the build that held it back.
+               const ran = this.runningRelinks.has(relink);
+               settled();
+               const again = this.repairedAgain.get(relink);
+               if (ran && again !== undefined) {
+                  this.relinkInChain(document, chain + 1, again);
+               }
+            },
+            (error: unknown) => {
+               settled();
+               this.tracer
+                  .with(uri.toString())
+                  .error(`The build that relinks the dependents of a repaired document failed. ${describeErrorWithStack(error)}`);
+            }
+         )
+         .catch((error: unknown) =>
+            this.tracer
+               .with(uri.toString())
+               .error(
+                  `Requesting the next build that relinks the dependents of a repaired document failed. ${describeErrorWithStack(error)}`
+               )
+         );
+   }
+
+   /** Mark the {@link scheduledRelinks} of the `changed` documents running, as the build that carries them starts. */
+   protected startRelinks(changed: readonly URI[]): void {
+      // The build before this one ended, done or cancelled, so its relinks run no more.
+      for (const relink of this.runningRelinks) {
+         if (this.relinkBuilds.get(relink.document) === relink) {
+            this.runningRelinks.delete(relink);
+         }
+      }
+      const documents = this.services.shared.workspace.LangiumDocuments;
+      for (const uri of changed) {
+         const document = documents.getDocument(uri);
+         const relink = document === undefined ? undefined : this.relinkBuilds.get(document);
+         if (relink !== undefined && this.scheduledRelinks.delete(relink)) {
+            // The starting build relinks any repair while it waited.
+            this.repairedAgain.delete(relink);
+            this.runningRelinks.add(relink);
+         }
+      }
+   }
+
+   /**
+    * Whether a build where `document` counts as changed relinks another
+    * document, by the builder's own test, which counts a document a cancelled
+    * build left unindexed as relinked.
+    */
+   protected isRelinkNeeded(document: LangiumDocument): boolean {
+      const documents = this.services.shared.workspace.LangiumDocuments;
+      const changed = new Set([document.uri.toString()]);
+      return (
+         documents.getDocument(document.uri) === document &&
+         documents.all.some(other => other !== document && this.documentBuilder.shouldRelink(other, changed))
+      );
+   }
+
+   /**
+    * Whether `document` stages its repairs rather than writing them, as a
+    * closed document does in `'editor'` mode, so its source keeps the
+    * unrepaired text.
+    */
+   protected stagesRepairs(document: LangiumDocument): boolean {
+      return this.syncMode === 'editor' && !this.textDocuments.isOpen(document.textDocument.uri);
+   }
+
+   /**
+    * What tells `repair` made again from the same text apart from a new one,
+    * for a document that {@link stagesRepairs}, which reads the unrepaired
+    * text again in every build that re-parses it after its CST was shed. Such
+    * a repair requests no build, because the build that re-parsed the
+    * document relinked its dependents, and another would replay it again.
+    * Hashes, so the record keeps no text the shed freed.
+    */
+   protected replayKey(document: LangiumDocument, repair: IntegrityRepairTexts): string | undefined {
+      return this.stagesRepairs(document) ? textHash(repair.from) + textHash(repair.to) : undefined;
    }
 
    /**
@@ -633,12 +877,21 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
 
    /**
     * Format a rule's name for inclusion in user-facing diagnostic strings
-    * (error messages thrown during registration). Defaults to
+    * (error messages thrown during registration, and log lines). Defaults to
     * `label ?? id`. Adopters override when their error reporting needs
     * richer rule context.
     */
    protected formatRule(rule: IntegrityRule): string {
       return rule.label ?? rule.id;
+   }
+
+   /** `rules` as the subject of a log line, or a rule left unnamed when an override recorded none. */
+   protected formatRules(rules: readonly IntegrityRule[]): string {
+      if (rules.length === 0) {
+         return 'An integrity rule';
+      }
+      const names = rules.map(rule => `'${this.formatRule(rule)}'`).join(', ');
+      return rules.length === 1 ? `Integrity rule ${names}` : `Integrity rules ${names}`;
    }
 
    /**

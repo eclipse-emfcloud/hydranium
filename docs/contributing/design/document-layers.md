@@ -86,6 +86,18 @@ depends on who holds the URI:
   disk while the AST carries the repair until a first open consumes the
   stage. `IntegrityService.SettledState` guarantees the AST, not the text.
 
+A `Linked`-phase repair relinks only the repaired document within its build.
+The documents that reference it were linked before the repair, so the repair
+requests a build after it that relinks them. That build is skipped when no
+other document would be relinked, which needs a workspace without linking
+errors, because Langium relinks every document that has one. A repair of a
+document that build relinked gets another, in any language, up to
+`maxRelinkChain` in a row. A repair that a closed `'editor'` document replays
+from disk requests no build, because the build that re-read the document
+relinked the dependents, even when that is the build the repair asked for.
+The [concepts page](../../concepts/document-layers.md) gives what an adopter
+sees past the bound and the stale name a replay leaves.
+
 A server's first `'silent'` write, from either route and whichever language
 makes it, is logged at `info` with the file and the `syncMode` option, so an
 adopter learns that rules edit their sources; later writes add no line.
