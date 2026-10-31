@@ -23,6 +23,7 @@ import {
    URI
 } from '@hydranium/langium';
 import { type HydraniumTextDocuments } from '../../documents/hydranium-text-documents.js';
+import { type ModelLedger } from '../../documents/model-ledger.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 
@@ -90,19 +91,17 @@ export interface CstResidencyOptions extends LogNameOptions {
 export const CST_REHYDRATION_RESET_STATE: DocumentState = DocumentState.Changed;
 
 /**
- * Whether `document`'s CST has been shed by a residency policy: the AST root is
- * resident but its `$cstNode` was nulled. The built-state and present-root guards
- * exclude the `fromModel` INVALID placeholder and not-yet-parsed documents, which
- * legitimately have no CST. The single definition of "shed", shared by
- * {@link CstResidencyService} and the document builder's rehydrate-on-re-entry
- * seam so the two cannot drift.
+ * Whether `document` has a resident AST without a CST, and `ledger` holds the
+ * text to graft one from. That text is the one a residency policy recorded when
+ * it shed the CST, or the serialized text of a `fromModel` document. A
+ * not-yet-parsed document has no CST to graft, and nor has a `fromModel`
+ * document without a serializer. The single definition of "shed", shared by the
+ * document builder's rehydrate-on-re-entry seam and the server-state snapshot
+ * so the two cannot drift.
  */
-export function isCstShed(document: LangiumDocument): boolean {
-   return (
-      document.state >= DocumentState.Parsed &&
-      document.parseResult?.value !== undefined &&
-      document.parseResult.value.$cstNode === undefined
-   );
+export function isCstShed(document: LangiumDocument, ledger: ModelLedger): boolean {
+   const root = document.parseResult?.value;
+   return document.state >= DocumentState.Parsed && root !== undefined && root.$cstNode === undefined && ledger.textOf(root) !== undefined;
 }
 
 /**
@@ -485,8 +484,9 @@ export class DefaultCstResidencyService implements CstResidencyService {
     * references. Only a `Validated` document qualifies: the idle timer can fire
     * while a build waits between documents, and a build that indexes a
     * document's references without their CST drops them from the reference
-    * index. Its root needs a recorded version, because `shed` then records no
-    * text and the graft refuses it. A document whose graft diverged on its
+    * index. Its root needs a recorded version, since without one the ledger
+    * keeps no text to graft the CST back from, and `shed` refuses it for a
+    * caller that skips this check. A document whose graft diverged on its
     * current text would cost a parse on every re-entry. Checked before
     * {@link isSheddable}, so an override of that policy keeps these guards.
     */
@@ -515,22 +515,21 @@ export class DefaultCstResidencyService implements CstResidencyService {
    /**
     * Shed one document's CST: null every AST node's `$cstNode` and every
     * reference's `$refNode`. Returns the number of `$cstNode`s cleared (0 if the
-    * document is unparsed or already shed).
+    * document is unparsed, already shed, or has no recorded version).
     */
    protected shed(document: LangiumDocument): number {
       const root = document.parseResult?.value;
-      if (root === undefined || root.$cstNode === undefined) {
+      const ledger = this.services.workspace.ModelLedger;
+      // Without a version the ledger keeps no text, and without the text no
+      // build can graft the CST back or tell the document is shed.
+      if (root === undefined || root.$cstNode === undefined || ledger.versionOf(root) === UNRECORDED_VERSION) {
          return 0;
       }
       // Readers of the parsed text, the `'text-diagnostics'` fingerprint among
       // them, otherwise see none once the CST is gone. Recorded in the ledger
       // directly: no root is produced, and reconciling it with the store would
       // step a closed document's sequence for a root behind its text.
-      const ledger = this.services.workspace.ModelLedger;
-      const version = ledger.versionOf(root);
-      if (version !== UNRECORDED_VERSION) {
-         ledger.record(root, version, ledger.textOf(root));
-      }
+      ledger.record(root, ledger.versionOf(root), ledger.textOf(root));
       let cleared = 0;
       for (const node of AstUtils.streamAst(root)) {
          if (node.$cstNode) {

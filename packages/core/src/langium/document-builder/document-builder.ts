@@ -37,6 +37,7 @@ import {
 // restating it.
 import { CancellationToken, Diagnostic, Disposable } from 'vscode-languageserver-protocol';
 import type { HydraniumTextDocuments } from '../../documents/hydranium-text-documents.js';
+import { type ModelLedger } from '../../documents/model-ledger.js';
 import { type VersionSyncService } from '../../documents/version-sync-service.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { IntegrityService } from '../integrity/integrity-service.js';
@@ -313,6 +314,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected readonly versionSyncService: () => VersionSyncService;
    /** A thunk: a residency service whose constructor reads the builder would otherwise be a cycle. */
    protected readonly cstResidency: () => CstResidencyService;
+   protected readonly modelLedger: ModelLedger;
 
    constructor(services: ServerSharedServicesMinimal, options: DocumentBuilderOptions = {}) {
       super(services);
@@ -323,6 +325,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       this.workspaceLock = services.workspace.WorkspaceLock;
       this.versionSyncService = () => services.workspace.VersionSyncService;
       this.cstResidency = () => services.workspace.CstResidencyService;
+      this.modelLedger = services.workspace.ModelLedger;
       this.tracer = services.Tracer.for(options.logName ?? 'DocumentBuilder').trace('instantiated');
       this.logLevel = options.logLevel ?? 'debug';
       this.loggedPhases = options.loggedPhases ?? DEFAULT_LOGGED_PHASES;
@@ -933,6 +936,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       cancelToken: CancellationToken
    ): Promise<void> {
       await this.rehydrateShedDocuments(documents, cancelToken);
+      this.unlinkCodeSetReferences(documents);
       await super.buildDocuments(documents, options, cancelToken);
       this.notifyBuildEnded({ completed: true });
    }
@@ -950,14 +954,29 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     */
    protected async rehydrateShedDocuments(documents: LangiumDocument[], cancelToken: CancellationToken): Promise<void> {
       for (const document of documents) {
-         if (document.state < DocumentState.Validated && isCstShed(document)) {
+         if (document.state < DocumentState.Validated && isCstShed(document, this.modelLedger)) {
             await interruptAndCheck(cancelToken);
             this.tracer.debug(`rehydrating CST of ${this.formatUri(document.uri)} (re-entered build while shed)`);
             this.cstResidency().rehydrate(document);
-            if (isCstShed(document)) {
+            if (isCstShed(document, this.modelLedger)) {
                this.resetToState(document, CST_REHYDRATION_RESET_STATE);
                this.versionSyncService().rebuildWhileCurrent(document);
             }
+         }
+      }
+   }
+
+   /**
+    * Unlink every document of the build that is below `Linked` but lists
+    * references, so the link phase resolves and indexes them. Such a document
+    * is mostly a code-built one, which holds the targets its code set until
+    * its first build. A reference resolved early through a lazy read is
+    * linked again, as Langium's reset below `Linked` would.
+    */
+   protected unlinkCodeSetReferences(documents: LangiumDocument[]): void {
+      for (const document of documents) {
+         if (document.state < DocumentState.Linked && document.references.length > 0) {
+            this.languageRegistry.getServices(document.uri).references.Linker.unlink(document);
          }
       }
    }

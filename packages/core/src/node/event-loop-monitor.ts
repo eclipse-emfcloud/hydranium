@@ -52,9 +52,7 @@ export function startEventLoopMonitor(shared: ServerSharedServicesMinimal, optio
    const onStallSnapshot =
       options.onStallSnapshot ??
       ((maxMs: number) =>
-         shared.Logger.for('Process').info(
-            formatServerState(shared.workspace.LangiumDocuments, `auto: event-loop stall ${Math.round(maxMs)}ms`)
-         ));
+         shared.Logger.for('Process').info(formatServerState(shared.workspace, `auto: event-loop stall ${Math.round(maxMs)}ms`)));
    const histogram = monitorEventLoopDelay({ resolution: 10 });
    histogram.enable();
    const interval = setInterval(() => {

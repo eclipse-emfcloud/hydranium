@@ -10,10 +10,19 @@
 import {
    type AstNode,
    AstUtils,
+   type DefaultMultiReference,
+   type DefaultReference,
    DefaultLangiumDocumentFactory,
+   DocumentState,
+   isAstNode,
+   isMultiReference,
    type LangiumDocument,
+   type Linker,
+   type MultiReference,
    type Mutable,
    type ParseResult,
+   type Reference,
+   type ReferenceInfo,
    type URI
 } from '@hydranium/langium';
 import { type CancellationToken } from 'vscode-languageserver-protocol';
@@ -44,10 +53,17 @@ interface WithSerializer {
  * scope descriptions pointing at them, stay valid. A `fromString` document
  * already carries its source, so only `fromModel` needs help.
  *
+ * The first build grafts the CST of that text onto the model, as for a shed
+ * document, which gives every reference the `$refNode` the reference index
+ * needs. A model that does not pair node for node with its serialized text is
+ * re-parsed from it instead, and its nodes are replaced. A code-built document
+ * whose URI names no file is re-read from the text it holds, or from the store
+ * while it is open, since reading its URI would throw.
+ *
  * Degrades to Langium's text-less `fromModel` when no serializer is bound for
- * the URI's language (the serializer throws or is absent) — the document still
- * works; only a re-read of it would yield empty text, which never happens for a
- * build-once virtual document.
+ * the URI's language (the serializer throws or is absent). The document keeps
+ * its nodes but gets no CST, so its references stay out of the reference index
+ * and it is not relinked when their targets change.
  *
  * Also links the model's container properties (`$container` /
  * `$containerProperty` / `$containerIndex`), which Langium's parser sets via
@@ -71,6 +87,8 @@ export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFacto
    protected readonly modelLedger: () => ModelLedger;
    /** A thunk: the residency service resolves `LangiumDocuments`, which is built with this factory. */
    protected readonly cstResidency: () => CstResidencyService;
+   /** The code-built documents, which are re-read from the text they hold when no file is at their URI. */
+   protected readonly codeBuiltDocuments = new WeakSet<LangiumDocument>();
 
    constructor(services: ServerSharedServicesMinimal) {
       super(services);
@@ -113,8 +131,46 @@ export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFacto
       if (text === undefined) {
          return super.fromModel(model, uri);
       }
+      const services = this.serviceRegistry.getServices(uri);
+      // The parser fills in the defaults a model built in code may leave out.
+      // Without them the model does not pair with the parse of its text.
+      for (const node of AstUtils.streamAst(model)) {
+         AstUtils.assignMandatoryProperties(services.shared.AstReflection, node);
+      }
       const parseResult: ParseResult<T> = { value: model, parserErrors: [], lexerErrors: [] };
-      return this.createLangiumDocument<T>(parseResult, uri, undefined, text);
+      const document = this.createLangiumDocument<T>(parseResult, uri, undefined, text);
+      this.codeBuiltDocuments.add(document);
+      const linker = services.references.Linker;
+      document.references = AstUtils.streamAst(model)
+         .flatMap(node => AstUtils.streamReferences(node))
+         .toArray()
+         .map(info => this.rebuildReference(linker, info));
+      return document;
+   }
+
+   /**
+    * Replace a code-set reference with one the linker built, holding the same
+    * target. A relink resets and the reference index reads only such
+    * references, and only those listed in `document.references`. The first
+    * build unlinks them before its link phase, which resolves and indexes them.
+    */
+   protected rebuildReference(linker: Linker, { reference, container, property, index }: ReferenceInfo): Reference | MultiReference {
+      let rebuilt: Reference | MultiReference;
+      if (isMultiReference(reference)) {
+         // Read through the field, as `items` would resolve a linker-built reference.
+         const items = '_items' in reference ? reference._items : reference.items;
+         const multi = linker.buildMultiReference(container, property, reference.$refNode, reference.$refText) as DefaultMultiReference;
+         multi._items = Array.isArray(items) ? [...items] : undefined;
+         rebuilt = multi;
+      } else {
+         const target = '_ref' in reference ? reference._ref : reference.ref;
+         const single: DefaultReference = linker.buildReference(container, property, reference.$refNode, reference.$refText);
+         single._ref = isAstNode(target) ? target : undefined;
+         rebuilt = single;
+      }
+      const owner: unknown = Reflect.get(container, property);
+      Reflect.set(index === undefined || !Array.isArray(owner) ? container : owner, index ?? property, rebuilt);
+      return rebuilt;
    }
 
    protected override createLangiumDocument<T extends AstNode = AstNode>(
@@ -127,7 +183,10 @@ export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFacto
       // Without `textDocument` Langium creates one at version 0 on first read,
       // which needs a language for `uri` that a folder URI does not have.
       const parsed = parseResult.value.$cstNode?.root.fullText ?? text ?? textDocument?.getText();
-      this.versionSyncService().modelProduced(document, { version: this.versionOfParsedText(uri, parsed, textDocument?.version ?? 0) });
+      const version = this.versionOfParsedText(uri, parsed, textDocument?.version ?? 0);
+      // A `fromModel` root has no CST to hold its serialized text. Recorded, it
+      // is the text a build grafts a CST from, keeping the model's nodes.
+      this.versionSyncService().modelProduced(document, { version, text: parseResult.value.$cstNode ? undefined : text });
       return document;
    }
 
@@ -172,7 +231,10 @@ export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFacto
       const root = document.parseResult.value;
       const parsedFrom = root.$cstNode === undefined ? this.modelLedger().textOf(root) : undefined;
       if (parsedFrom !== undefined) {
-         const text = this.textDocuments?.get(document.uri.toString())?.getText() ?? (await this.fileSystemProvider.readFile(document.uri));
+         const text =
+            this.codeBuiltText(document) ??
+            this.textDocuments?.get(document.uri.toString())?.getText() ??
+            (await this.fileSystemProvider.readFile(document.uri));
          if (text === parsedFrom) {
             this.cstResidency().rehydrate(document);
             if (root.$cstNode === undefined) {
@@ -181,7 +243,11 @@ export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFacto
          }
       }
       const stored = this.textDocuments?.get(document.uri.toString())?.version;
-      const updated = await super.update(document, cancellationToken);
+      const codeBuiltText = this.codeBuiltText(document);
+      const updated =
+         codeBuiltText === undefined
+            ? await super.update(document, cancellationToken)
+            : await this.reparse(document, codeBuiltText, cancellationToken);
       const version =
          stored ??
          this.versionOfParsedText(
@@ -191,6 +257,39 @@ export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFacto
          );
       this.versionSyncService().modelProduced(updated, { version });
       return updated;
+   }
+
+   /**
+    * The text a code-built document is read from when no file is at its URI:
+    * the store's while it is open, else the text it holds, serialized at
+    * creation or last read, as `VirtualFileSystemProvider` serves it.
+    * `undefined` for any other document, which is read as Langium reads it.
+    */
+   protected codeBuiltText(document: LangiumDocument): string | undefined {
+      if (!this.codeBuiltDocuments.has(document) || this.fileSystemProvider.existsSync(document.uri)) {
+         return undefined;
+      }
+      return this.textDocuments?.get(document.uri.toString())?.getText() ?? document.textDocument.getText();
+   }
+
+   /** Langium's `update` with `text` in place of the text it reads from the store or the URI. */
+   protected async reparse<T extends AstNode = AstNode>(
+      document: Mutable<LangiumDocument<T>>,
+      text: string,
+      cancellationToken: CancellationToken
+   ): Promise<LangiumDocument<T>> {
+      const textDocument = this.textDocuments?.get(document.uri.toString());
+      Object.defineProperty(
+         document,
+         'textDocument',
+         textDocument ? { value: textDocument } : { get: this.createTextDocumentGetter(document.uri, text) }
+      );
+      if (document.parseResult.value.$cstNode?.root.fullText !== text) {
+         document.parseResult = await this.parseAsync<T>(document.uri, text, cancellationToken);
+         (document.parseResult.value as Mutable<AstNode>).$document = document;
+      }
+      document.state = DocumentState.Parsed;
+      return document;
    }
 
    /**
