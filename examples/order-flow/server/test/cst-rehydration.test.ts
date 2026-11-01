@@ -55,6 +55,7 @@ import {
    type ProcessModel,
    type Task
 } from '../src/language-server/ast.js';
+import { settleServer } from '@hydranium/core/testing/node';
 import { makeServices, type OrderFlowHarness } from './order-flow-harness.js';
 
 /**
@@ -510,10 +511,20 @@ const FULFILLMENT_SOURCE = `process Fulfillment for Order {
 describe('a shed document re-entering a build without a text change', () => {
    // Real files, because an update and a re-parse read the text from disk.
    let folder = '';
+   let chain: OrderFlowHarness | undefined;
    beforeEach(() => {
       folder = mkdtempSync(join(tmpdir(), 'order-flow-cst-re-entry-'));
    });
-   afterEach(() => rmSync(folder, { recursive: true, force: true }));
+   afterEach(async () => {
+      try {
+         if (chain) {
+            await settleServer(chain.shared);
+         }
+      } finally {
+         chain = undefined;
+         rmSync(folder, { recursive: true, force: true });
+      }
+   });
 
    async function buildChain(): Promise<{
       harness: OrderFlowHarness;
@@ -522,6 +533,7 @@ describe('a shed document re-entering a build without a text change', () => {
       processDocument: LangiumDocument<ProcessModel>;
    }> {
       const harness = makeServices();
+      chain = harness;
       const factory = harness.shared.workspace.LangiumDocumentFactory;
       const create = <T extends AstNode>(name: string, text: string): LangiumDocument<T> => {
          writeFileSync(join(folder, name), text);

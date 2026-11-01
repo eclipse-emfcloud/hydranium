@@ -26,7 +26,6 @@ import { ChangeBoundsOperation, SaveModelAction, ServerModule } from '@eclipse-g
 import { type ClientSessionPersistArgs, DefaultClientSession, type ServerSharedServices } from '@hydranium/core';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { type AstNode } from '@hydranium/langium';
 import { type TextVersion } from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
@@ -36,26 +35,26 @@ import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { type ProcessModel } from '../../src/language-server/ast.js';
 import { type OrderFlowOptions } from '../../src/language-server/order-flow-module.js';
-import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from '../order-flow-harness.js';
+import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
 
 let harness: GlspHarness<OrderFlowGlspState> | undefined;
-let scratch: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 /** Saves the store announced, in order — the signal that a file was written at all. */
 let savedUris: string[] = [];
 
-afterEach(() => {
+afterEach(async () => {
    harness?.dispose();
    harness = undefined;
-   scratch?.dispose();
+   await scratch?.dispose();
    scratch = undefined;
 });
 
 /** Boot the real GLSP container over a scratch copy and open the `.process` file. */
 async function openDiagram(options: OrderFlowOptions = {}): Promise<GlspHarness<OrderFlowGlspState>> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness(undefined, options);
-   scratch = workspace;
+   scratch = await makeScratchWorkspaceHarness(undefined, options);
+   const { harness: services, workspace } = scratch;
    savedUris = [];
    services.shared.workspace.TextDocuments.onDidSave(event => savedUris.push(event.document.uri));
    const opened = makeGlspHarness<OrderFlowGlspState>({
@@ -119,8 +118,8 @@ function waitForSaveAnnouncements(count: number): Promise<void> {
 describe('order-flow .process save', () => {
    it('writes the moved bounds to disk and leaves the process file untouched', async () => {
       const diagram = await openDiagram();
-      const processPath = scratch!.resolve(WORKSPACE_FILES.fulfillmentProcess);
-      const layoutPath = scratch!.resolve(WORKSPACE_FILES.fulfillmentDiagram);
+      const processPath = scratch!.workspace.resolve(WORKSPACE_FILES.fulfillmentProcess);
+      const layoutPath = scratch!.workspace.resolve(WORKSPACE_FILES.fulfillmentDiagram);
       const processOnDisk = readFileSync(processPath, 'utf8');
       // Control inside the test: the entry starts where the sample workspace put
       // it, so neither assertion below can pass by the value never changing.
@@ -154,8 +153,8 @@ describe('order-flow .process save', () => {
       // So the mtime is the observable, and the layout's is what separates a
       // skipped write from a save that never ran at all.
       const diagram = await openDiagram();
-      const processPath = scratch!.resolve(WORKSPACE_FILES.fulfillmentProcess);
-      const layoutPath = scratch!.resolve(WORKSPACE_FILES.fulfillmentDiagram);
+      const processPath = scratch!.workspace.resolve(WORKSPACE_FILES.fulfillmentProcess);
+      const layoutPath = scratch!.workspace.resolve(WORKSPACE_FILES.fulfillmentDiagram);
       const processMtime = statSync(processPath).mtimeMs;
       const layoutMtime = statSync(layoutPath).mtimeMs;
 

@@ -27,6 +27,7 @@ import { HydraniumDocumentUpdateHandler } from '@hydranium/core/lsp';
 import { NodeFileSystem } from '@hydranium/core/node';
 import { makeCapturingTracer } from '@hydranium/core/testing';
 import {
+   disposeScratchWorkspace,
    type LspHarness,
    makeLspHarness,
    makeLspServerConnection,
@@ -40,7 +41,7 @@ import { tick, waitFor } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Diagnostic } from 'vscode-languageserver-protocol';
 import { isDomainModel } from '../src/language-server/ast.js';
-import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
+import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
 import { ORDER_FLOW_STDLIB_SOURCE, ORDER_FLOW_STDLIB_URI } from '../src/language-server/order-flow-stdlib.js';
 import { WORKSPACE_FILES, WORKSPACE_ROOT } from './order-flow-harness.js';
 
@@ -51,12 +52,15 @@ const LAST = 'entity Solo {\n   a : string\n   c : string\n}\n';
 
 let workspace: ScratchWorkspace | undefined;
 let lsp: LspHarness | undefined;
+let lspShared: OrderFlowSharedServices | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    lsp?.dispose();
    lsp = undefined;
-   workspace?.dispose();
+   const disposing = disposeScratchWorkspace(workspace, lspShared);
+   lspShared = undefined;
    workspace = undefined;
+   await disposing;
 });
 
 const MEMORY_ROOT = 'memory:///order-flow';
@@ -119,6 +123,7 @@ async function boot(
    );
    const harness = makeLspHarness({ connection: wire, services: services.shared });
    lsp = harness;
+   lspShared = services.shared;
    await harness.initialize({ workspaceFolders: [{ uri: rootUri, name: 'order-flow' }] });
    return { harness, services };
 }

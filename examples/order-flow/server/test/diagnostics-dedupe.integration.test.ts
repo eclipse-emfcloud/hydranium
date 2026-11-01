@@ -62,7 +62,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DefaultModelService, setWriteLockScope } from '@hydranium/core';
 import { NodeFileSystem, nodeWriteLockScope } from '@hydranium/core/node';
-import { makeLspHarness, makeScratchWorkspace, type LspHarness, type ScratchWorkspace } from '@hydranium/core/testing/node';
+import {
+   disposeScratchWorkspace,
+   type LspHarness,
+   makeLspHarness,
+   makeScratchWorkspace,
+   type ScratchWorkspace
+} from '@hydranium/core/testing/node';
 import { type DeepPartial, URI, type Module } from '@hydranium/langium';
 import type { Diagnostic } from 'vscode-languageserver';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -85,13 +91,16 @@ function withReentrantBuilds(allowReentrantBuilds: boolean): Module<OrderFlowSha
 
 let workspace: ScratchWorkspace | undefined;
 let harness: LspHarness | undefined;
+let harnessShared: OrderFlowSharedServices | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    setWriteLockScope(nodeWriteLockScope);
    harness?.dispose();
    harness = undefined;
-   workspace?.dispose();
+   const disposing = disposeScratchWorkspace(workspace, harnessShared);
+   harnessShared = undefined;
    workspace = undefined;
+   await disposing;
 });
 
 interface Booted {
@@ -113,6 +122,7 @@ async function boot(locked: boolean): Promise<Booted> {
    const booted = makeLspHarness({
       createServices: connection => {
          shared = createOrderFlowServices({ connection, ...NodeFileSystem }, { extraSharedModules: [withReentrantBuilds(!locked)] }).shared;
+         harnessShared = shared;
          return shared;
       }
    });

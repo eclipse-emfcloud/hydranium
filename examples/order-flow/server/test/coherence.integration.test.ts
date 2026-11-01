@@ -51,11 +51,13 @@ import { type DataServerHarness, makeDataServerHarness } from '@hydranium/data-s
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import {
+   disposeScratchWorkspace,
    type LspHarness,
    makeLspHarness,
    makeLspServerConnection,
    makeScratchWorkspace,
-   type ScratchWorkspace
+   type ScratchWorkspace,
+   settleServer
 } from '@hydranium/core/testing/node';
 import { NodeFileSystem } from '@hydranium/core/node';
 import { tick, waitFor } from '@hydranium/protocol/testing';
@@ -269,27 +271,27 @@ async function bootHeads(): Promise<Heads> {
 
 describe('order-flow cross-head coherence of the LSP, data and GLSP heads on one shared tree', () => {
    afterEach(async () => {
-      if (heads) {
-         // Quiesce before tearing the shared LSP wire down: a head's edit can
-         // leave a build settling to `Validated` after that head's own wait
-         // returned, and that build fires the diagnostics handler — a publish
-         // nobody awaited. Draining first is what keeps dispose from surfacing
-         // as "Connection is disposed".
-         const shared = heads.shared;
-         await shared.model.ModelService.waitForBuilderState(DocumentState.Validated);
-         await tick();
-         await tick();
-         heads.glsp.dispose();
-         heads.data.dispose();
-         heads.lsp.dispose();
+      const current = heads;
+      const workspace = scratch;
+      heads = undefined;
+      scratch = undefined;
+      try {
+         if (current) {
+            // Quiesce before tearing the shared LSP wire down: a head's edit can
+            // leave a build settling to `Validated` after that head's own wait
+            // returned, and that build fires the diagnostics handler — a publish
+            // nobody awaited. Draining first is what keeps dispose from surfacing
+            // as "Connection is disposed".
+            await settleServer(current.shared);
+            current.glsp.dispose();
+            current.data.dispose();
+            current.lsp.dispose();
+         }
+      } finally {
          // Closing a client can enqueue a last-close rebuild after dispose.
          // Drain that second boundary before deleting the scratch workspace.
-         await shared.model.ModelService.waitForBuilderState(DocumentState.Validated);
-         await tick();
-         heads = undefined;
+         await disposeScratchWorkspace(workspace, current?.shared);
       }
-      scratch?.dispose();
-      scratch = undefined;
    });
 
    it('crosses a data-head edit of .process to the GLSP head and re-diagnoses on the LSP head', async () => {

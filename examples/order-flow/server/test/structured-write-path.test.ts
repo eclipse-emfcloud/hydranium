@@ -36,6 +36,7 @@ import type { TransferElement } from '@hydranium/protocol';
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
+import { settleServer } from '@hydranium/core/testing/node';
 import { makeWorkspaceHarness, WORKSPACE_ROOT, type OrderFlowHarness } from './order-flow-harness.js';
 
 /**
@@ -53,11 +54,12 @@ async function loadCopy(harness: OrderFlowHarness, relativePath: string): Promis
    // failure because this copy is what `update` wrote — the artefact that says
    // what the write path actually produced. stderr, not `console`, because
    // vitest drops output written after the test body.
-   onTestFinished(context => {
+   onTestFinished(async context => {
       if (context.task.result?.state === 'fail') {
          process.stderr.write(`[order-flow] kept the written copy at ${scratch}\n`);
          return;
       }
+      await settleServer(harness.shared);
       rmSync(scratch, { recursive: true, force: true });
    });
    const copy = path.join(scratch, path.basename(relativePath));

@@ -58,7 +58,7 @@
  */
 
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
-import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/testing/node';
+import { disposeScratchWorkspace, makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { Deferred, DocumentState, URI } from '@hydranium/langium';
 import * as path from 'node:path';
 import { Diagnostic } from 'vscode-languageserver-protocol';
@@ -136,9 +136,11 @@ const BARRIERS_BY_NAME = BARRIER_PHASES.map(barrier => [barrier.name, barrier] a
 
 describe.each(BARRIERS_BY_NAME)('a write that lands during workspace initialization and is cancelled at %s', (_name, { phase }) => {
    it('still validates cross-grammar dependents, and leaves the readiness gate resolvable', async () => {
+      // Services first, so a throw from them leaves no directory behind.
+      const harness = makeServices();
       const workspace: ScratchWorkspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-init-race-' });
+      const releaseInit = new Deferred<void>();
       try {
-         const harness = makeServices();
          const documents = harness.shared.workspace.LangiumDocuments;
          const modelService = harness.shared.model.ModelService;
 
@@ -147,7 +149,6 @@ describe.each(BARRIERS_BY_NAME)('a write that lands during workspace initializat
          // the write's OWN build reaches `Linked` too, and blocking that one would
          // deadlock the test rather than measure it.
          const reachedBarrier = new Deferred<void>();
-         const releaseInit = new Deferred<void>();
          let barrierArmed = true;
          harness.shared.workspace.DocumentBuilder.onBuildPhase(phase, async () => {
             if (!barrierArmed) {
@@ -200,7 +201,9 @@ describe.each(BARRIERS_BY_NAME)('a write that lands during workspace initializat
             EXPECTED_DEPENDENT_ERROR
          );
       } finally {
-         workspace.dispose();
+         // A failed assertion before the release would otherwise hold the build, and the settle with it.
+         releaseInit.resolve();
+         await disposeScratchWorkspace(workspace, harness.shared);
       }
    }, 60_000);
 });

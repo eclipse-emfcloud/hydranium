@@ -103,7 +103,8 @@ export interface ScratchWorkspace {
 
 /**
  * Create a throwaway workspace directory. The caller owns teardown — pair the
- * returned {@link ScratchWorkspace.dispose} with an `afterEach`.
+ * returned {@link ScratchWorkspace.dispose} with an `afterEach`, or
+ * `disposeScratchWorkspace` once a server was initialized over it.
  */
 export function makeScratchWorkspace(options: ScratchWorkspaceOptions = {}): ScratchWorkspace {
    // RESOLVED, because `tmpdir()` can itself be a symlink — on macOS it answers

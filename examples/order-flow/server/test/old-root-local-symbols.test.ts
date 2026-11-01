@@ -21,7 +21,7 @@ import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from './order-flow-harne
 
 describe('the local symbols of a replaced root', () => {
    it('are the map the scope computation returned, an override included', async () => {
-      const { harness, workspace } = await makeScratchWorkspaceHarness();
+      const { harness, workspace, dispose } = await makeScratchWorkspaceHarness();
       try {
          const computation = harness.process.references.ScopeComputation;
          const collect = computation.collectLocalSymbols.bind(computation);
@@ -60,7 +60,7 @@ describe('the local symbols of a replaced root', () => {
             local: scope.getElement('Pick')?.name
          }).toEqual({ replaced: true, extra: 'Extra', local: 'Pick' });
       } finally {
-         workspace.dispose();
+         await dispose();
       }
    });
 });

@@ -21,6 +21,7 @@
 import { serverSharedFactory } from '@hydranium/core';
 import { DefaultFileSystemProvider } from '@hydranium/core/node';
 import {
+   disposeScratchWorkspace,
    type LspHarness,
    makeLspHarness,
    makeLspServerConnection,
@@ -30,7 +31,7 @@ import {
 import { DocumentState, URI } from '@hydranium/langium';
 import { tick, waitFor } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
+import { createOrderFlowServices, type OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
 import { WORKSPACE_ROOT } from './order-flow-harness.js';
 
 const FILE = 'queue.domain';
@@ -46,14 +47,17 @@ const EDITED = `entity Solo {
 
 let workspace: ScratchWorkspace | undefined;
 let lsp: LspHarness | undefined;
+let lspShared: OrderFlowSharedServices | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    // A test that failed before releasing would leave every later write held.
    GatedFileSystemProvider.release?.();
    lsp?.dispose();
    lsp = undefined;
-   workspace?.dispose();
+   const disposing = disposeScratchWorkspace(workspace, lspShared);
+   lspShared = undefined;
    workspace = undefined;
+   await disposing;
 });
 
 /** Holds every write while a gate is set, so a test can act while a save is on its way to disk. */
@@ -90,6 +94,7 @@ describe('a save followed by the last close', () => {
          fileSystemProvider: serverSharedFactory(shared => new GatedFileSystemProvider(shared))
       });
       lsp = makeLspHarness({ connection: wire, services: services.shared });
+      lspShared = services.shared;
       await lsp.initialize({ workspaceFolders: [{ uri: workspace.uri(), name: 'order-flow' }] });
       const shared = services.shared;
       const models = shared.model.ModelService;

@@ -53,9 +53,9 @@ type Head = DataServerHarness<LosableDataServer, DomainModel>;
 let scratch: ScratchOrderFlowHarness | undefined;
 const heads: Head[] = [];
 
-afterEach(() => {
+afterEach(async () => {
    heads.splice(0).forEach(head => head.dispose());
-   scratch?.workspace.dispose();
+   await scratch?.dispose();
    scratch = undefined;
 });
 

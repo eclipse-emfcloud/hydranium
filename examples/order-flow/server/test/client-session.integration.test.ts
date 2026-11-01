@@ -73,9 +73,13 @@ const WITH_SYNTAX_ERROR = `entity Solo {
 `;
 
 let scratch: ScratchOrderFlowHarness | undefined;
+/** Releases of holds a test arms, run before the teardown settles the server. */
+const holds: (() => void)[] = [];
 
-afterEach(() => {
-   scratch?.workspace.dispose();
+afterEach(async () => {
+   // A failed assertion before the release would otherwise hold the file removal, and the settle with it.
+   holds.splice(0).forEach(release => release());
+   await scratch?.dispose();
    scratch = undefined;
 });
 
@@ -1104,15 +1108,17 @@ describe('ClientSession.delete', () => {
       // watcher's late report of a save is, merges over the deletion.
       const builder = harness.shared.workspace.DocumentBuilder;
       const scheduleUpdate = builder.scheduleUpdate.bind(builder);
+      let merged: Promise<void> | undefined;
       builder.scheduleUpdate = (changed, deleted, reason) => {
          const scheduled = scheduleUpdate(changed, deleted, reason);
          if (deleted.length > 0) {
-            void scheduleUpdate([URI.parse(uri)], []);
+            merged = scheduleUpdate([URI.parse(uri)], []);
          }
          return scheduled;
       };
 
       await session.delete({ uri, baseVersion: 'any' });
+      await merged;
 
       expect({
          fileExists: existsSync(path(FILE)),
@@ -1272,6 +1278,7 @@ describe('ClientSession.delete at each of its awaits', () => {
          await held;
          return deleteFile(target);
       };
+      holds.push(release);
       return { reached, release };
    }
 

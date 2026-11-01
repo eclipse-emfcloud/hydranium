@@ -528,3 +528,26 @@ describe('DefaultVersionSyncService.requestRecoveryBuild', () => {
       expect(rig.builds).toEqual([{ changed: [URI_A], deleted: [], reason: undefined }]);
    });
 });
+
+describe('DefaultVersionSyncService.recoveryBuildsSettled', () => {
+   it('resolves once no request is pending, including one made while it waits', async () => {
+      const rig = makeRig();
+      const finishes: Array<() => void> = [];
+      const held = (): Promise<void> => new Promise<void>(resolve => finishes.push(resolve));
+      rig.outcomes.push(held, held);
+      void rig.sync.requestRecoveryBuild(URI.parse(URI_A), { stillNeeded: () => true });
+      await settle(rig);
+      let settled = false;
+      const settling = rig.sync.recoveryBuildsSettled().then(() => (settled = true));
+
+      void rig.sync.requestRecoveryBuild(URI.parse(URI_B), { stillNeeded: () => true });
+      await settle(rig);
+      finishes[0]();
+      await settle(rig);
+      const afterFirst = settled;
+      finishes[1]();
+      await settling;
+
+      expect({ builds: rig.builds.length, afterFirst, settled }).toEqual({ builds: 2, afterFirst: false, settled: true });
+   });
+});

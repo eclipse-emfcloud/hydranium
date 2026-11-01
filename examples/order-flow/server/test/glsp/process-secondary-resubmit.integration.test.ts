@@ -43,14 +43,13 @@ import 'reflect-metadata';
 import { type Action, ChangeBoundsOperation, ServerModule, SetDirtyStateAction } from '@eclipse-glsp/server';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, MODEL_SUBMISSION_KINDS, makeGlspHarness } from '@hydranium/glsp-server/testing';
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { tick, waitFor } from '@hydranium/protocol/testing';
 import { URI } from '@hydranium/langium';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { type ProcessModel } from '../../src/language-server/ast.js';
-import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from '../order-flow-harness.js';
+import { WORKSPACE_FILES, makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
 
@@ -78,7 +77,7 @@ interface OpenDiagram {
 }
 
 let open: OpenDiagram | undefined;
-let scratch: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 
 /**
  * Boot the real GLSP container over a scratch workspace and open the diagram.
@@ -88,8 +87,8 @@ let scratch: ScratchWorkspace | undefined;
  * on the build call below. Default on; the drag-echo case needs it off.
  */
 async function openDiagram({ preValidate = true }: { preValidate?: boolean } = {}): Promise<OpenDiagram> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness();
-   scratch = workspace;
+   scratch = await makeScratchWorkspaceHarness();
+   const { harness: services, workspace } = scratch;
    const sourceUri = workspace.resolve(WORKSPACE_FILES.fulfillmentProcess);
    const harness = makeGlspHarness<OrderFlowGlspState>({
       serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
@@ -195,10 +194,10 @@ function publishedPosition(action: Action, elementId: string): { x: number; y: n
 }
 
 describe('order-flow .process glsp storage after an edit to the layout secondary', () => {
-   afterEach(() => {
+   afterEach(async () => {
       open?.harness.dispose();
       open = undefined;
-      scratch?.dispose();
+      await scratch?.dispose();
       scratch = undefined;
    });
 

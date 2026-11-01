@@ -35,6 +35,7 @@
 
 import { buildWorkspaceProgrammatically } from '@hydranium/core';
 import { NodeFileSystem, validateWorkspace } from '@hydranium/core/node';
+import { settleServer } from '@hydranium/core/testing/node';
 import { type AstNode, AstUtils, URI } from '@hydranium/langium';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -181,7 +182,17 @@ describe('generateLargeWorkspace corpus the server builds', () => {
    });
 
    it('validates with no findings of any severity, through the CLI gate function', async () => {
-      const result = await validateWorkspace({ createServices: () => createOrderFlowServices({ ...NodeFileSystem }), workspace: root });
+      let validating: OrderFlowSharedServices | undefined;
+      const createServices = (): ReturnType<typeof createOrderFlowServices> => {
+         const services = createOrderFlowServices({ ...NodeFileSystem });
+         validating = services.shared;
+         return services;
+      };
+      const result = await validateWorkspace({ createServices, workspace: root });
+      // Settled here, since the file's afterAll deletes the root.
+      if (validating) {
+         await settleServer(validating);
+      }
 
       // Zero errors is the fixture's acceptance contract; the other severities
       // are asserted too so a warning-level regression cannot slip in as noise.
@@ -200,6 +211,13 @@ describe('generateLargeWorkspace edges the corpus exists to exercise', () => {
       generateLargeWorkspace({ root, ...SMALL });
       shared = createOrderFlowServices({ ...NodeFileSystem }).shared;
       await buildWorkspaceProgrammatically(shared, root);
+   });
+
+   // Runs before the file's afterAll deletes the root.
+   afterAll(async () => {
+      if (shared) {
+         await settleServer(shared);
+      }
    });
 
    /** The root node of a built document of the generated corpus, or a throw naming the path. */

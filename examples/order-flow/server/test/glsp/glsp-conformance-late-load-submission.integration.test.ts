@@ -31,13 +31,12 @@ import {
 import { buildGlspChecks, type GlspFixture } from '@hydranium/conformance/glsp';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
-import type { ScratchWorkspace } from '@hydranium/core/testing/node';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OrderFlowGlspStorage } from '../../src/glsp/order-flow-glsp-storage.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
-import { makeScratchWorkspaceHarness, WORKSPACE_FILES } from '../order-flow-harness.js';
+import { makeScratchWorkspaceHarness, type ScratchOrderFlowHarness, WORKSPACE_FILES } from '../order-flow-harness.js';
 
 type Driver = GlspHarness<OrderFlowGlspState>;
 
@@ -56,16 +55,16 @@ class LateSubmissionModule extends OrderFlowProcessDiagramModule {
    }
 }
 
-let scratch: ScratchWorkspace | undefined;
+let scratch: ScratchOrderFlowHarness | undefined;
 
-afterEach(() => {
-   scratch?.dispose();
+afterEach(async () => {
+   await scratch?.dispose();
    scratch = undefined;
 });
 
 async function connect(): Promise<Driver> {
-   const { harness: services, workspace } = await makeScratchWorkspaceHarness();
-   scratch = workspace;
+   scratch = await makeScratchWorkspaceHarness();
+   const services = scratch.harness;
    return makeGlspHarness<OrderFlowGlspState>({
       serverModule: new ServerModule().configureDiagramModule(new LateSubmissionModule()),
       diagramType: 'order-flow-process',
@@ -82,7 +81,7 @@ async function runCreateCheckFor(nodeType: string): Promise<void> {
          if (!scratch) {
             throw new Error('requestModel called before connect seeded a workspace copy');
          }
-         return RequestModelAction.create({ options: { [SOURCE_URI_ARG]: scratch.resolve(WORKSPACE_FILES.fulfillmentProcess) } });
+         return RequestModelAction.create({ options: { [SOURCE_URI_ARG]: scratch.workspace.resolve(WORKSPACE_FILES.fulfillmentProcess) } });
       },
       expectedResponseKind: RequestBoundsAction.KIND,
       // Weak on purpose, so the receipt is all that can fail the check.

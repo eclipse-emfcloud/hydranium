@@ -24,7 +24,7 @@ import {
    UndoAction
 } from '@eclipse-glsp/server';
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
-import { makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
+import { disposeScratchWorkspace, makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
 import { type GlspHarness, makeGlspHarness } from '@hydranium/glsp-server/testing';
 import { URI } from '@hydranium/langium';
@@ -43,13 +43,16 @@ import { is__ENTRY_RULE__ } from '../src/language-server/ast.js';
 import { createServices } from '../src/node/services.js';
 
 let workspace: ScratchWorkspace | undefined;
+let serverShared: ReturnType<typeof createServices>['shared'] | undefined;
 let diagram: GlspHarness<__GRAMMAR__GlspState> | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    diagram?.dispose();
-   workspace?.dispose();
+   const disposing = disposeScratchWorkspace(workspace, serverShared);
+   serverShared = undefined;
    diagram = undefined;
    workspace = undefined;
+   await disposing;
 });
 
 /** Send `action` and wait for the dirty state the server answers it with, which it sends once the edit is written. */
@@ -67,6 +70,7 @@ describe('__GRAMMAR__ diagram', () => {
       const original = '// keep this comment\nnode first -> second\n// about second\nnode second';
       const file = workspace.write('model.__EXTENSION__', original);
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       diagram = makeGlspHarness<__GRAMMAR__GlspState>({
          serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
@@ -96,6 +100,7 @@ describe('__GRAMMAR__ diagram', () => {
       const original = 'node first -> second\nnode second\nnode third -> first';
       const file = workspace.write('model.__EXTENSION__', original);
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       const harness = makeGlspHarness<__GRAMMAR__GlspState>({
          serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
@@ -127,6 +132,7 @@ describe('__GRAMMAR__ diagram', () => {
       workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
       const file = workspace.write('model.__EXTENSION__', 'node first -> second\nnode first\nnode second -> first');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       const harness = makeGlspHarness<__GRAMMAR__GlspState>({
          serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
@@ -147,6 +153,7 @@ describe('__GRAMMAR__ diagram', () => {
       workspace.write('other.__EXTENSION__', 'node second');
       const file = workspace.write('model.__EXTENSION__', 'node first -> second\nnode second');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       const harness = makeGlspHarness<__GRAMMAR__GlspState>({
          serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
@@ -166,6 +173,7 @@ describe('__GRAMMAR__ diagram', () => {
       workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
       const file = workspace.write('model.__EXTENSION__', 'node a\nnode a -> b\nnode b');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       diagram = makeGlspHarness<__GRAMMAR__GlspState>({
          serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
@@ -187,6 +195,7 @@ describe('__GRAMMAR__ diagram', () => {
       workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
       const file = workspace.write('model.__EXTENSION__', 'node a -> b\nnode b\nnode a_name\nnode a_target');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       diagram = makeGlspHarness<__GRAMMAR__GlspState>({
          serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
@@ -210,6 +219,7 @@ describe('__GRAMMAR__ diagram', () => {
       workspace.write('declaring.__EXTENSION__', 'node second');
       const file = workspace.write('referencing.__EXTENSION__', 'node first -> second\nnode third -> second');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       diagram = makeGlspHarness<__GRAMMAR__GlspState>({
          serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
@@ -245,6 +255,7 @@ describe('__GRAMMAR__ diagram', () => {
       workspace.write('two.__EXTENSION__', 'node second');
       const file = workspace.write('referencing.__EXTENSION__', 'node first -> second\nnode third -> second');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       const harness = makeGlspHarness<__GRAMMAR__GlspState>({
          serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
@@ -283,6 +294,7 @@ describe('__GRAMMAR__ diagram', () => {
       workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
       const file = workspace.write('cycle.__EXTENSION__', 'node a -> b\nnode b -> a\nnode c -> a');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       diagram = makeGlspHarness<__GRAMMAR__GlspState>({
          serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
@@ -316,6 +328,7 @@ describe('__GRAMMAR__ diagram', () => {
       workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
       const file = workspace.write('loop.__EXTENSION__', 'node a -> a');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       const harness = makeGlspHarness<__GRAMMAR__GlspState>({
          serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
@@ -344,6 +357,7 @@ describe('__GRAMMAR__ diagram', () => {
       workspace = makeScratchWorkspace({ prefix: '__GRAMMAR_ID__-diagram-' });
       const file = workspace.write('duplicate.__EXTENSION__', 'node first\nnode first');
       const { shared } = createServices();
+      serverShared = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       diagram = makeGlspHarness<__GRAMMAR__GlspState>({
          serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
@@ -369,6 +383,7 @@ describe('__GRAMMAR__ diagram', () => {
       workspace.write('declaring.__EXTENSION__', 'node second');
       const file = workspace.write('referencing.__EXTENSION__', 'node first -> second');
       const { shared } = createServices();
+      serverShared = shared;
       diagram = makeGlspHarness<__GRAMMAR__GlspState>({
          serverModule: new ServerModule().configureDiagramModule(new __GRAMMAR__DiagramModule()),
          diagramType: __GRAMMAR_ID_CONST___DIAGRAM_TYPE,

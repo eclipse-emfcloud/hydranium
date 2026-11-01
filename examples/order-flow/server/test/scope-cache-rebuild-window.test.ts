@@ -43,7 +43,7 @@ import { WORKSPACE_FILES, makeScratchWorkspaceHarness } from './order-flow-harne
 
 describe('order-flow scope caches under a query landing mid-rebuild', () => {
    it('does not strand a cross-document reference in an unedited document', async () => {
-      const { harness, workspace } = await makeScratchWorkspaceHarness();
+      const { harness, workspace, dispose } = await makeScratchWorkspaceHarness();
       try {
          const returnsUri = URI.file(workspace.resolve(WORKSPACE_FILES.returnsProcess));
          const returnsDocument = harness.shared.workspace.LangiumDocuments.getDocument(returnsUri);
@@ -91,7 +91,7 @@ describe('order-flow scope caches under a query landing mid-rebuild', () => {
          expect(relinked.subject.ref).toBeDefined();
          expect((relinked.subject.ref as Entity).name).toBe(subjectName);
       } finally {
-         workspace.dispose();
+         await dispose();
       }
    });
 });

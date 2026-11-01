@@ -41,7 +41,9 @@ package's main entry; see
    `makeDataServerHarness` from `@hydranium/data-server/testing`, and
    `makeGlspHarness` from `@hydranium/glsp-server/testing`. Give it a
    throwaway workspace from `makeScratchWorkspace`, so a test never writes to
-   your committed models. The scaffold's diagram test is a complete example.
+   your committed models. Delete it with `disposeScratchWorkspace` from the
+   same entry, passing the head's shared services. It waits until no build
+   still reads the files. The scaffold's diagram test is a complete example.
 
 4. **Wait for events, never for time.** A head answers asynchronously. Wait
    with `waitFor` from `@hydranium/protocol/testing`, which resolves as soon as

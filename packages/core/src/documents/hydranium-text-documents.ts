@@ -219,6 +219,8 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
    protected __dirtyStateTracker: DirtyStateTracker | undefined;
    protected __documentReleaseScheduler: DocumentReleaseScheduler | undefined;
    protected readonly documentReleasedEmitter = new Emitter<DocumentReleasedEvent>();
+   /** Each release the `DocumentReleaseHandler` slot has not settled yet. */
+   protected readonly releasesInFlight = new Set<Promise<void>>();
    protected readonly languageClientSavedEmitter = new Emitter<LanguageClientSavedEvent>();
 
    constructor(
@@ -654,7 +656,7 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             cleanAnnouncement.announce(inBuild ? this.textState(released.uri) : undefined);
          }
       };
-      settled.then(
+      const handled = settled.then(
          () => announceClean(true),
          (err: unknown) => {
             // A release skipped at teardown, its peer or its workspace gone, is
@@ -668,6 +670,20 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
             announceClean(false);
          }
       );
+      this.releasesInFlight.add(handled);
+      // A throw from the announcement surfaces once, as an unhandled rejection of the `finally` copy.
+      void handled.finally(() => this.releasesInFlight.delete(handled));
+   }
+
+   /**
+    * Resolves once the `DocumentReleaseHandler` slot has settled every
+    * release, including those handed over while waiting. A release still
+    * waiting out its grace has not been handed over.
+    */
+   async releasesSettled(): Promise<void> {
+      while (this.releasesInFlight.size > 0) {
+         await Promise.allSettled(this.releasesInFlight);
+      }
    }
 
    /** `uri` as the `DocumentReleaseHandler` slot receives it. */

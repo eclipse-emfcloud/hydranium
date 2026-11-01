@@ -20,9 +20,10 @@ import { serverSharedFactory } from '@hydranium/core';
 import { startLanguageServer } from '@hydranium/core/lsp';
 import { DefaultFileSystemProvider } from '@hydranium/core/node';
 import {
+   disposeScratchWorkspace,
+   type LspServerConnection,
    makeLspServerConnection,
    makeScratchWorkspace,
-   type LspServerConnection,
    type ScratchWorkspace
 } from '@hydranium/core/testing/node';
 import { URI } from '@hydranium/langium';
@@ -67,15 +68,18 @@ const WRITTEN = `process Handling for Crate {
 const ANSWER_TIMEOUT_MS = 3_000;
 
 let transport: LspServerConnection | undefined;
+let transportShared: OrderFlowSharedServices | undefined;
 let workspace: ScratchWorkspace | undefined;
 let describeDocuments: () => string = () => 'no server';
 
-afterEach(() => {
+afterEach(async () => {
    transport?.dispose();
    transport = undefined;
    describeDocuments = () => 'no server';
-   workspace?.dispose();
+   const disposing = disposeScratchWorkspace(workspace, transportShared);
+   transportShared = undefined;
    workspace = undefined;
+   await disposing;
 });
 
 async function composeServer(
@@ -97,6 +101,7 @@ async function composeServer(
          : { connection: composed.serverConnection },
       options
    );
+   transportShared = services.shared;
    startLanguageServer(services.shared);
    describeDocuments = () => {
       const store = services.shared.workspace.TextDocuments;

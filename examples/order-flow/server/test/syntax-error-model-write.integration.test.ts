@@ -28,10 +28,10 @@ const WITH_SYNTAX_ERROR = 'entity Solo {\n   a : string\n   b :\n}\n';
 let scratch: ScratchOrderFlowHarness | undefined;
 let head: DataServerHarness<DataServer<DomainModel>, DomainModel> | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    head?.dispose();
    head = undefined;
-   scratch?.workspace.dispose();
+   await scratch?.dispose();
    scratch = undefined;
 });
 

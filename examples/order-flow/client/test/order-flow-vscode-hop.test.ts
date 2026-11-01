@@ -43,7 +43,7 @@
 
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
 import { NodeFileSystem } from '@hydranium/core/node';
-import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/testing/node';
+import { disposeScratchWorkspace, makeScratchWorkspace, type ScratchWorkspace } from '@hydranium/core/testing/node';
 import {
    DATA_SERVER_WIRE_PREFIX,
    DataEvents,
@@ -91,6 +91,7 @@ class CountingWebviewDataPort extends WebviewDataPort {
 }
 
 let workspace: ScratchWorkspace | undefined;
+let sharedServices: ReturnType<typeof createOrderFlowServices>['shared'] | undefined;
 let dataServer: SocketDataServer | undefined;
 let harness: MessengerHarness | undefined;
 let webview: MessengerHarnessWebview | undefined;
@@ -148,6 +149,7 @@ describe('order-flow properties panel data path through a socket, a relay and a 
    beforeEach(async () => {
       workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-hop-' });
       const { shared } = createOrderFlowServices({ ...NodeFileSystem });
+      sharedServices = shared;
       await initializeWorkspaceProgrammatically(shared, workspace.root);
       dataServer = await startSocketDataServer(shared);
    });
@@ -168,8 +170,10 @@ describe('order-flow properties panel data path through a socket, a relay and a 
       harness = undefined;
       await dataServer?.dispose();
       dataServer = undefined;
-      workspace?.dispose();
+      const disposing = disposeScratchWorkspace(workspace, sharedServices);
+      sharedServices = undefined;
       workspace = undefined;
+      await disposing;
    });
 
    it('opens a document and writes a field across the whole hop', async () => {

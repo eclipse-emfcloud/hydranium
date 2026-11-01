@@ -31,10 +31,10 @@ type Harness = DataServerHarness<DataServer<DomainModel>, DomainModel>;
 let scratch: ScratchOrderFlowHarness | undefined;
 let head: Harness | undefined;
 
-afterEach(() => {
+afterEach(async () => {
    head?.dispose();
    head = undefined;
-   scratch?.workspace.dispose();
+   await scratch?.dispose();
    scratch = undefined;
 });
 

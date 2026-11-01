@@ -10,7 +10,8 @@
 /**
  * `@hydranium/core/testing/node` — the test support that needs a Node runtime:
  * the scratch-workspace, golden-corpus and generated-workspace fixtures (all
- * three reach the real filesystem), the in-process LSP transport
+ * three reach the real filesystem), the server settle that guards their
+ * deletion (it reports on `process.stderr`), the in-process LSP transport
  * (`vscode-jsonrpc/node` stream readers), the all-in-one LSP harness (a
  * `vscode-languageserver/node` `Connection`), and the subprocess tier, which
  * spawns a built entry as a child process.
@@ -26,5 +27,6 @@ export * from './golden-corpus.js';
 export * from './lsp-harness.js';
 export * from './lsp-server-connection.js';
 export * from './scratch-workspace.js';
+export * from './settle-server.js';
 export * from './spawned-server.js';
 export { captureUnhandledRejections } from '@hydranium/protocol/testing/node';
