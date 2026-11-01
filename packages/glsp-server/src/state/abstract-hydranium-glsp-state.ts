@@ -107,8 +107,9 @@ export abstract class AbstractHydraniumGlspState<TRoot extends AstNode, TSourceM
    /**
     * Writes of one diagram edit, the first included, that may conflict before
     * the edit is dropped with a warning; each further write reconciles again.
+    * Absent, `reconcileWrite`'s default applies.
     */
-   protected readonly maxSourceModelWrites: number = 3;
+   protected readonly maxSourceModelWrites?: number;
 
    /**
     * Per-class tracer, caller-tagged with this state's runtime subclass name by

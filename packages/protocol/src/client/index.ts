@@ -44,3 +44,4 @@ export * from './message-relay';
 export * from './post-message-transport';
 export * from './rpc-connection';
 export * from './worker-handshake';
+export * from './working-copy';

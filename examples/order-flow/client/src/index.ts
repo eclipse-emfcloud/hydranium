@@ -29,11 +29,13 @@
  * and grammar-free, and this example imports them from `@hydranium/protocol`.
  * What stays is what the framework should not carry: the properties model, which
  * chooses which fields are editable, and the properties FORM, which is plain DOM
- * and host-free so both shells mount the same class rather than each growing its
- * own.
+ * and host-free so every shell mounts the same class rather than each growing its
+ * own. The document switch a properties panel makes stays here for the same
+ * reason.
  */
 
 export * from './data/order-flow-properties-model';
 export * from './diagram/order-flow-process-diagram-module';
+export * from './properties/properties-documents';
 export * from './properties/properties-form';
 export * from './properties/properties-messages';
