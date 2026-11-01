@@ -79,9 +79,10 @@ function makeFakeProtocol(): DataServerProtocol<FakeRoot> {
          return { ...document, created: { version: TransferDocument.assertLoaded(document).model.version } };
       },
       async updateModelDocuments(args: TransferUpdateDocumentsArgs<FakeRoot>) {
-         return args.updates.map(update =>
-            makeDocument(update.uri, typeof update.model === 'string' ? FakeRoot.make(update.model) : update.model)
-         );
+         return args.updates.map(update => ({
+            ...makeDocument(update.uri, typeof update.model === 'string' ? FakeRoot.make(update.model) : update.model),
+            written: { version: 1 }
+         }));
       },
       async openModelDocument(args: OpenModelArgs) {
          return makeDocument(args.uri, FakeRoot.make('opened'));
@@ -94,7 +95,7 @@ function makeFakeProtocol(): DataServerProtocol<FakeRoot> {
       },
       async updateModelDocument(args: TransferUpdateDocumentArgs<FakeRoot>) {
          const root = typeof args.model === 'string' ? FakeRoot.make(args.model) : args.model;
-         return makeDocument(args.uri, root);
+         return { ...makeDocument(args.uri, root), written: { version: 1 } };
       },
       async saveModelDocument(args: TransferSaveDocumentArgs<FakeRoot>) {
          const root = typeof args.model === 'string' ? FakeRoot.make(args.model) : args.model;

@@ -52,7 +52,10 @@ function makeStubProxy(
       },
       async updateModelDocument(args) {
          calls.updateModelDocument.push(args);
-         return TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'updated' }, 'hash');
+         return {
+            ...TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'updated' }, 'hash'),
+            written: { version: 1 }
+         };
       },
       async saveModelDocument(args) {
          calls.saveModelDocument.push(args);

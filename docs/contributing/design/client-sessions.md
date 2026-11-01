@@ -289,10 +289,9 @@ skipped, so an answer built before another client's save does not mark the copy
 unsaved again.
 
 **An edit typed during the copy's own write does not conflict with it**, since
-it is measured against that write. The exception is an answer that differs from
-the write, as when the server trims a name: it may hold another client's change
-too, and neither its root nor its version tells, so the edit is reconciled
-against it and an edit of the trimmed field conflicts.
+it is measured against that write as the server answered it, normalized or not.
+An answer built past its `written` version holds a later write too, so unless
+its model is the one the copy sent, the edit is reconciled against it.
 
 **A dropped edit is not carried.** An edit typed during a write that a conflict
 dropped edits from is reconciled against the server. An edit of the dropped

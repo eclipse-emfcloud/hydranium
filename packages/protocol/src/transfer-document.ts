@@ -100,6 +100,20 @@ export type TransferSavedDocument<TTransfer extends TransferElement, TDiagnostic
 };
 
 /**
+ * What an update answers: the document, and in `written` the version its text
+ * took. A `model.version` past it means the document was built from a later
+ * text, which holds a later write or an integrity repair too. A text
+ * version, not a model version, because the server may have normalized the
+ * text, so the writer does not hold the text at that version.
+ */
+export type TransferWrittenDocument<TTransfer extends TransferElement, TDiagnostic = TransferDiagnostic> = TransferDocument<
+   TTransfer,
+   TDiagnostic
+> & {
+   written: { version: TextVersion };
+};
+
+/**
  * What a create answers: the document as a read after the create finds it,
  * and in `created` the version the create's text took. Another client's write
  * or an integrity repair can land between the create and that read, so

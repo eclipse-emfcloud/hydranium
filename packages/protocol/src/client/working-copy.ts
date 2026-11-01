@@ -31,9 +31,7 @@ export type WorkingCopyEditOutcome =
    /**
     * The edit raced a foreign edit of the same path, or kept racing foreign
     * edits, and was dropped, or wrote a path an edit before it lost that way.
-    * A server that normalizes the copy's own write, as a name it trims, also
-    * yields it for an edit of that path made while the write was out. The
-    * copy shows the server's value, unless the read after the last race
+    * The copy shows the server's value, unless the read after the last race
     * failed.
     */
    | { readonly status: 'conflict' }
@@ -173,9 +171,10 @@ function isDropped(outcome: WorkingCopyEditOutcome | Promise<never>): boolean {
  * - **Batches edits behind a write.** An edit goes out at once when no write
  *   is out. The edits made while one is out go out after it, as one write of
  *   the whole root, gated on the version of the snapshot the first of them
- *   was made on, or of the answer to the copy's write before when that landed
- *   unchanged. Each edit resolves to a {@link WorkingCopyEditOutcome}, its
- *   batch's unless the batch splits on a conflict.
+ *   was made on, or of the answer to the copy's write before when that was
+ *   built from the write's own text or holds its model unchanged. Each edit
+ *   resolves to a {@link WorkingCopyEditOutcome}, its batch's unless the
+ *   batch splits on a conflict.
  * - **Reconciles.** A write that meets a newer version goes through
  *   `reconcileWrite`: the edits are replayed onto the refetched root, and a
  *   same-path collision drops the edit that made it in favour of the
@@ -759,13 +758,13 @@ export class WorkingCopy<TTransfer extends TransferElement> {
             const answer = await this.session.updateDocument({ uri: this.uri, model, baseVersion });
             written = answer;
             landedOn = baseVersion;
-            // Landed unchanged, the answer is what the edits queued meanwhile
-            // were made on, so their write needs no reconcile of its own. One
-            // that differs may hold a later write too, whose fields they would
-            // overwrite, and its version does not tell, since a write that
-            // changes no text makes none.
+            // The queued edits were made on the answer when it was built from
+            // the write's own text, normalized or not, or holds its model
+            // unchanged. Otherwise it holds another write they must reconcile.
             const queued = open.base;
-            const landed = TransferDocument.isLoaded(answer) && compare(answer.model.root, model).length === 0;
+            const landed =
+               TransferDocument.isLoaded(answer) &&
+               (answer.model.version === answer.written.version || compare(answer.model.root, model).length === 0);
             if (whole && onBase && queued?.baseVersion === base.baseVersion && landed) {
                open.base = { model: answer.model.root, baseVersion: answer.model.version, restores: this.restores };
             }

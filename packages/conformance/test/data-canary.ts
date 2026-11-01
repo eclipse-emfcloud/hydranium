@@ -62,7 +62,8 @@ import type {
    TransferCreatedDocument,
    TransferElement,
    TransferSavedDocument,
-   TransferWatchedDocument
+   TransferWatchedDocument,
+   TransferWrittenDocument
 } from '@hydranium/protocol';
 import type {
    CloseSessionArgs,
@@ -227,6 +228,10 @@ export interface CanaryDefects {
    readonly createNamesLaterVersion?: boolean;
    /** `updateModelDocuments` checks and applies one document at a time, so a later stale one leaves the earlier applied. */
    readonly partialSets?: boolean;
+   /** `updateModelDocument` answers without the version its text took. */
+   readonly writtenVersionOmitted?: boolean;
+   /** `updateModelDocument` answers once later writes landed, naming the latest version as written. */
+   readonly writtenFromLatest?: boolean;
    /** A session's save of a document it has not opened opens it. */
    readonly saveOpensImplicitly?: boolean;
    /** A persist writes the text with its trailing whitespace trimmed, as a head re-serialising the model would. */
@@ -472,7 +477,9 @@ export class CanaryDataServer {
       return { ...envelope, created: { version: asModelVersion(this.defects.createNamesLaterVersion ? version + 1 : version) } };
    }
 
-   async updateModelDocuments(args: TransferUpdateDocumentsArgs<CanaryRoot>): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>[]> {
+   async updateModelDocuments(
+      args: TransferUpdateDocumentsArgs<CanaryRoot>
+   ): Promise<TransferWrittenDocument<CanaryRoot, TransferDiagnostic>[]> {
       if (!this.defects.partialSets) {
          // Every check before any apply; the per-document write repeats them
          // harmlessly.
@@ -481,7 +488,7 @@ export class CanaryDataServer {
             this.assertBaseVersion(update.uri, update.baseVersion);
          }
       }
-      const documents: TransferDocument<CanaryRoot, TransferDiagnostic>[] = [];
+      const documents: TransferWrittenDocument<CanaryRoot, TransferDiagnostic>[] = [];
       for (const update of args.updates) {
          documents.push(await this.updateModelDocument({ ...update, clientId: args.clientId }));
       }
@@ -527,7 +534,9 @@ export class CanaryDataServer {
       }
    }
 
-   async updateModelDocument(args: TransferUpdateDocumentArgs<CanaryRoot>): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>> {
+   async updateModelDocument(
+      args: TransferUpdateDocumentArgs<CanaryRoot>
+   ): Promise<TransferWrittenDocument<CanaryRoot, TransferDiagnostic>> {
       this.assertSessionMayWrite(args.clientId, args.uri);
       const text = typeof args.model === 'string' ? args.model : args.model.text;
       const existing = this.documents.get(args.uri);
@@ -580,7 +589,17 @@ export class CanaryDataServer {
             sequence: ++this.sequence
          });
       }
-      return answer;
+      if (this.defects.writtenVersionOmitted) {
+         // The defect is the missing field, which the declared type cannot hold.
+         return answer as TransferWrittenDocument<CanaryRoot, TransferDiagnostic>;
+      }
+      if (this.defects.writtenFromLatest) {
+         // Answered after a wait, as a head that waits for validation.
+         await new Promise(resolve => setTimeout(resolve, 0));
+         const latest = this.envelope(args.uri);
+         return { ...latest, written: { version: latest.model?.version ?? 0 } };
+      }
+      return { ...answer, written: { version: this.documents.get(args.uri)?.version ?? 0 } };
    }
 
    async watchModelDocument(args: WatchModelDocumentArgs): Promise<TransferWatchedDocument> {

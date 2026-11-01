@@ -79,7 +79,12 @@ export function resolveModel(model: ConformanceModel): ResolvedConformanceModel 
  * the adopter knows what "the edit landed" means for its grammar.
  */
 export interface EditSpec {
-   /** Replacement model text; {@link Deferred} for the same reasons as `ConformanceModel.text`. */
+   /**
+    * Replacement model text, {@link Deferred} for the same reasons as
+    * `ConformanceModel.text`. Held by the head as written, as `valid` is: a
+    * text an integrity rule repairs moves the version past the one its write
+    * answers as written.
+    */
    readonly to: Deferred<string>;
    /** True of the root after the edit and false of `valid`'s root, so a check can tell the two apart. */
    readonly expect: (root: unknown) => boolean;

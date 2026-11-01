@@ -401,6 +401,21 @@ describe('DataServer', () => {
          }
       });
 
+      it('answers with the version the text took, not that of the build', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         const { proxy, pair } = makeHarness(bundle.services);
+         try {
+            await openAs(proxy, bundle, 'editor-1');
+
+            const answer = await proxy.updateModelDocument({ uri: URI_A, clientId: 'editor-1', model: 'name:updated', baseVersion: 'any' });
+
+            expect(answer.written).toEqual({ version: bundle.textDocuments.version(URI_A) });
+         } finally {
+            pair.dispose();
+         }
+      });
+
       it('accepts a serialised-string payload, which parseModel deserialises', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });

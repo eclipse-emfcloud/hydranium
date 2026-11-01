@@ -26,7 +26,13 @@ import { PendingWorkTracker } from '../pending-work-tracker';
 import { randomUuid } from '../random-uuid';
 import type { MaybePromise } from '../util';
 import type { RpcProxy } from '../rpc';
-import type { TextState, TransferCreatedDocument, TransferDocument, TransferSavedDocument } from '../transfer-document';
+import type {
+   TextState,
+   TransferCreatedDocument,
+   TransferDocument,
+   TransferSavedDocument,
+   TransferWrittenDocument
+} from '../transfer-document';
 import type { TransferElement } from '../transfer-element';
 
 /**
@@ -756,7 +762,7 @@ export class DataSession<
     * open. Refused unsent with a `ConflictError` when a restore ran between the
     * call and its send, see the class doc.
     */
-   updateDocument(args: DataSessionUpdateArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
+   updateDocument(args: DataSessionUpdateArgs<TTransfer, TServer>): Promise<TransferWrittenDocument<TTransfer, DiagnosticOf<TServer>>> {
       const restores = this.restoresOf(args.uri);
       return this.trackWrite([args.uri], async () => {
          const server = await this.connected();
@@ -776,7 +782,7 @@ export class DataSession<
     * open. Resolves to the documents in the order given. Refused unsent with a
     * `ConflictError` when a restore ran between the call and its send.
     */
-   updateDocuments(args: DataSessionUpdatesArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>[]> {
+   updateDocuments(args: DataSessionUpdatesArgs<TTransfer, TServer>): Promise<TransferWrittenDocument<TTransfer, DiagnosticOf<TServer>>[]> {
       const restores = args.updates.map(update => this.restoresOf(update.uri));
       return this.trackWrite(
          args.updates.map(update => update.uri),
