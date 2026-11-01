@@ -58,7 +58,7 @@ interface WidenedServer extends DataServerProtocol<ProbeElement> {
 const URI_A = 'file:///a.x';
 
 function document(uri: string): unknown {
-   return { uri, version: 1, root: { $type: 'TypeOne' }, diagnostics: [], persisted: { version: 1 } };
+   return { uri, version: 1, root: { $type: 'TypeOne' }, diagnostics: [], persisted: { version: 1 }, written: { version: 1 } };
 }
 
 /** Bind a server that keeps every argument object verbatim, keyed by method. */

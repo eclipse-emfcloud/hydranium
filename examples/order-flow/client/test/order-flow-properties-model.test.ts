@@ -327,7 +327,7 @@ describe('order-flow properties model', () => {
       expect(model.fields.find(field => field.name === 'name')?.value).toBe('Fulfilment');
    });
 
-   it('reports a conflict for a field edit made while the write before it is out, when the server trimmed that write', async () => {
+   it('applies a field edit made while the write before it is out, when the server trimmed that write', async () => {
       const uri = uriOf(FULFILLMENT_PROCESS);
       const model = followingModel(uri);
       await model.open();
@@ -341,11 +341,11 @@ describe('order-flow properties model', () => {
       });
       const first = model.setField('name', 'Fulfilment ');
       await waitFor(() => second !== undefined);
-      // The answer does not say whether it holds another write too, so the
-      // edit is reconciled against it, and the trimmed value collides.
-      expect([await first, await second]).toEqual([{ status: 'applied' }, { status: 'conflict' }]);
+      // The answer was built from the trimmed write alone, so the edit made
+      // on it raced nothing.
+      expect([await first, await second]).toEqual([{ status: 'applied' }, { status: 'applied' }]);
       const reread = await (await session!.connected()).getModelDocument({ uri });
-      expect((reread.model!.root as ProcessModel).name).toBe('Fulfilment');
+      expect((reread.model!.root as ProcessModel).name).toBe('Fulfilment2');
    });
 
    it('reports an unchanged write without sending it', async () => {

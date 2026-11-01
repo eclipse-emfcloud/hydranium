@@ -1136,7 +1136,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
       const editSkipReason = 'fixture supplies no `edit` (data-slice only; omit it if this language is not driven through the data head)';
 
       checks.push({
-         title: `updateModelDocument applies an edit a follow-up get reflects ${tag}`,
+         title: `updateModelDocument applies an edit a follow-up get reflects, at the version it answers as written ${tag}`,
          skipReason: edit ? undefined : editSkipReason,
          body: edit
             ? async () => {
@@ -1144,7 +1144,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                  try {
                     const model = resolveModel(valid);
                     const seeder = await seed(driver, model);
-                    await driver.proxy.updateModelDocument({
+                    const answer = await driver.proxy.updateModelDocument({
                        uri: model.uri,
                        clientId: seeder,
                        model: resolveDeferred(edit.to),
@@ -1154,6 +1154,46 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                     assert.ok(
                        edit.expect(document.model?.root),
                        'edit.expect(root) was false — the edit was not reflected by a follow-up get'
+                    );
+                    // A writer tells its own write from a later one by it.
+                    assert.strictEqual(
+                       answer.written?.version,
+                       document.model?.version,
+                       `the update answered written version ${answer.written?.version}, but a follow-up get built version ${document.model?.version}`
+                    );
+                 } finally {
+                    driver.dispose();
+                 }
+              }
+            : undefined
+      });
+
+      checks.push({
+         title: `updateModelDocument answers racing writes each with the version it wrote ${tag}`,
+         skipReason: edit ? undefined : editSkipReason,
+         body: edit
+            ? async () => {
+                 const driver = await connect();
+                 try {
+                    const model = resolveModel(valid);
+                    const seeder = await seed(driver, model);
+                    const author = await openAs(driver, model.uri);
+                    // Sent together, so one answer may be built after the
+                    // other write. A head naming its latest build as written
+                    // then answers both with one version.
+                    const [first, second] = await Promise.all([
+                       driver.proxy.updateModelDocument({
+                          uri: model.uri,
+                          clientId: seeder,
+                          model: resolveDeferred(edit.to),
+                          baseVersion: 'any'
+                       }),
+                       driver.proxy.updateModelDocument({ uri: model.uri, clientId: author, model: model.text, baseVersion: 'any' })
+                    ]);
+                    assert.notStrictEqual(
+                       first.written?.version,
+                       second.written?.version,
+                       `two racing writes both answered written version ${first.written?.version}`
                     );
                  } finally {
                     driver.dispose();
@@ -1265,7 +1305,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
          'fixture supplies no `dependent` (a document referencing `valid`), so no cascade can be provoked over the protocol';
 
       checks.push({
-         title: `updateModelDocuments writes a set all or none ${tag}`,
+         title: `updateModelDocuments writes a set all or none, answering the version each wrote ${tag}`,
          skipReason:
             edit && dependent
                ? undefined
@@ -1305,7 +1345,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        const untouched = await driver.proxy.getModelDocument({ uri: model.uri });
                        assert.strictEqual(untouched.model?.version, first.version, 'a refused set applied its first document');
 
-                       await driver.proxy.updateModelDocuments({
+                       const answers = await driver.proxy.updateModelDocuments({
                           clientId,
                           updates: [
                              { uri: model.uri, model: edited, baseVersion: first.version },
@@ -1314,6 +1354,12 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        });
                        const applied = await driver.proxy.getModelDocument({ uri: model.uri });
                        assert.ok(edit.expect(applied.model?.root), 'edit.expect(root) was false — a current set was not applied');
+                       const appliedOther = await driver.proxy.getModelDocument({ uri: other.uri });
+                       assert.deepStrictEqual(
+                          answers.map(answer => answer.written?.version),
+                          [applied.model?.version, appliedOther.model?.version],
+                          'the set did not answer, for each document, the version a follow-up get built'
+                       );
                        await driver.proxy.closeSession({ clientId });
                     } finally {
                        driver.dispose();

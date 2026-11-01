@@ -62,7 +62,7 @@ import {
 import { NodeFileSystem } from '@hydranium/core/node';
 import { tick, waitFor } from '@hydranium/protocol/testing';
 import { DocumentState, URI } from '@hydranium/langium';
-import { Deferred, isConflictError, isSessionClosedError, type TransferDocument } from '@hydranium/protocol';
+import { Deferred, isConflictError, isSessionClosedError, type TransferWrittenDocument } from '@hydranium/protocol';
 import type { DataServerProtocol, TransferUpdateDocumentArgs } from '@hydranium/protocol/data';
 import { ErrorCodes } from 'vscode-jsonrpc';
 import { Diagnostic, type PublishDiagnosticsParams } from 'vscode-languageserver-protocol';
@@ -213,9 +213,11 @@ class HeldDataServer extends DataServer<OrderFlowTransfer> {
    readonly entered = new Deferred();
    readonly release = new Deferred();
    /** The held write's own outcome, once released — the reply nobody will read. */
-   late: Promise<TransferDocument<OrderFlowTransfer>> | undefined;
+   late: Promise<TransferWrittenDocument<OrderFlowTransfer>> | undefined;
 
-   override async updateModelDocument(args: TransferUpdateDocumentArgs<OrderFlowTransfer>): Promise<TransferDocument<OrderFlowTransfer>> {
+   override async updateModelDocument(
+      args: TransferUpdateDocumentArgs<OrderFlowTransfer>
+   ): Promise<TransferWrittenDocument<OrderFlowTransfer>> {
       this.entered.resolve();
       await this.release.promise;
       this.late = super.updateModelDocument(args);

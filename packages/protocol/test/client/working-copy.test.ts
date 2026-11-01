@@ -154,9 +154,10 @@ class ProbeServer {
          throw new ConflictError(URI_A, asModelVersion(args.baseVersion), this.modelVersion);
       }
       await this.change(args.model, args.clientId);
+      const written = { version: this.modelVersion };
       const answer = this.document();
       await answerGate;
-      return this.answerLatest ? this.document() : answer;
+      return { ...(this.answerLatest ? this.document() : answer), written };
    }
 
    async persistModelDocument(args: { clientId: string; baseVersion: number }): Promise<unknown> {
@@ -1542,6 +1543,45 @@ describe('WorkingCopy', () => {
       await first;
 
       expect({ outcome: await second, server: server.root.name }).toEqual({ outcome: { status: 'conflict' }, server: 'theirs' });
+   });
+
+   it('applies an edit of another field queued behind a write the server normalized', async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      const change = server['change'].bind(server);
+      server['change'] = (root, clientId) => change({ ...root, name: root.name.trim() }, clientId);
+      const answer = new Deferred<void>();
+      server.answerGate = answer.promise;
+      const first = copy.edit(root => ({ ...root, name: 'first ' }));
+      await waitFor(() => server.updates === 1);
+      const second = copy.edit(root => ({ ...root, note: 'ours' }));
+      answer.resolve();
+
+      expect({ first: await first, second: await second }).toEqual({ first: { status: 'applied' }, second: { status: 'applied' } });
+      expect(server.root).toMatchObject({ name: 'first', note: 'ours' });
+   });
+
+   it("applies an edit queued behind a write whose answer holds another client's change of text the model does not show", async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      const answer = new Deferred<void>();
+      server.answerGate = answer.promise;
+      server.answerLatest = true;
+      const first = copy.edit(root => ({ ...root, name: 'first' }));
+      await waitFor(() => server.updates === 1);
+      const second = copy.edit(root => ({ ...root, note: 'ours' }));
+      // A comment another client adds: a new version with the same model.
+      server.version++;
+      await server.push(server['document'](), OTHER_CLIENT);
+      answer.resolve();
+
+      expect({ first: await first, second: await second, updates: server.updates }).toEqual({
+         first: { status: 'applied' },
+         second: { status: 'applied' },
+         updates: 2
+      });
    });
 
    it('announces the dirty flag of a write answer once the answer is shown, so an edit made then is applied', async () => {

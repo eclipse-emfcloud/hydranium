@@ -154,7 +154,7 @@ returns a status rather than `void`:
 | --- | --- |
 | `applied` | Landed against an unchanged document. |
 | `merged` | Raced foreign edits to *different* fields; both intents survive. |
-| `conflict` | Raced a foreign edit of the *same* field to a different value, and was dropped while the other edits of its write still landed. Or kept racing foreign edits, and the whole write was dropped. Or set a field an earlier edit lost that way, a revert to the value before it included. A server that rewrites the panel's own write, as one that trims a name, also yields it for an edit of that field made while the write was out, with no other client involved. The panel then shows the server's value, unless reading it failed. |
+| `conflict` | Raced a foreign edit of the *same* field to a different value, and was dropped while the other edits of its write still landed. Or kept racing foreign edits, and the whole write was dropped. Or set a field an earlier edit lost that way, a revert to the value before it included. The panel then shows the server's value, unless reading it failed. |
 | `unchanged` | Nothing was written: the panel's value already matched, or the server turned out to hold it. |
 | `unavailable` | Nothing was written: the document was closed or deleted, a restore could not open it again, or its open's second read failed, before a write carried the edit. |
 

@@ -10,7 +10,13 @@
 import type { TransferDiagnostic } from '../transfer-diagnostic';
 import type { TransferElement } from '../transfer-element';
 import type { Project } from '../project';
-import type { TransferCreatedDocument, TransferDocument, TransferSavedDocument, TransferWatchedDocument } from '../transfer-document';
+import type {
+   TransferCreatedDocument,
+   TransferDocument,
+   TransferSavedDocument,
+   TransferWatchedDocument,
+   TransferWrittenDocument
+} from '../transfer-document';
 import type { CloseModelArgs, FindNextNameArgs, OpenModelArgs, ReferenceContext, ReferenceRequest } from '../model-server';
 import type { ReferenceCandidate, ReferenceTarget } from '../model-service/reference-candidate';
 import type {
@@ -95,12 +101,13 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
     * Write several documents the session has open, all or none: a conflict, a
     * document not open, or a model for a document whose parse lacks some of
     * its text fails the whole set before any text applies.
-    * Resolves to the documents in the order given, once the language client
-    * has answered the push of each, or the server-side bound on that wait
-    * passes, as {@link updateModelDocument} does. Only for a session
-    * registered on this connection.
+    * Resolves to the documents in the order given, each with the version its
+    * text took in `written`, once the language client has answered the push
+    * of each, or the server-side bound on that wait passes, as
+    * {@link updateModelDocument} does. Only for a session registered on this
+    * connection.
     */
-   updateModelDocuments(args: TransferUpdateDocumentsArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>[]>;
+   updateModelDocuments(args: TransferUpdateDocumentsArgs<TTransfer>): Promise<TransferWrittenDocument<TTransfer, TDiagnostic>[]>;
 
    /**
     * Open a document for the client session `clientId` and return its current
@@ -142,14 +149,16 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
    /**
     * Update a document's content as the session `clientId`, which must have
     * it open. The response carries the latest built state including
-    * diagnostics; callers observe convergence via that response. It is sent
-    * once the language client has answered the push of the text, or the
-    * server-side bound on that wait passes, as {@link saveModelDocument}'s
-    * is, so an editor already shows the write when it arrives. A model, not
-    * text, for a document whose parse lacks some of its text fails with a
-    * `DocumentSyntaxError` code, unless the write is a `restore`.
+    * diagnostics. Callers observe convergence via that response. `written`
+    * carries the version the write's text took, which tells a writer whether
+    * the build holds a later text too. It is sent once the language client
+    * has answered the push of the text, or the server-side bound on that wait
+    * passes, as {@link saveModelDocument}'s is, so an editor already shows
+    * the write when it arrives. A model, not text, for a document whose parse
+    * lacks some of its text fails with a `DocumentSyntaxError` code, unless
+    * the write is a `restore`.
     */
-   updateModelDocument(args: TransferUpdateDocumentArgs<TTransfer>): Promise<TransferDocument<TTransfer, TDiagnostic>>;
+   updateModelDocument(args: TransferUpdateDocumentArgs<TTransfer>): Promise<TransferWrittenDocument<TTransfer, TDiagnostic>>;
 
    /**
     * Write a document as the session `clientId`, which must have it open, and

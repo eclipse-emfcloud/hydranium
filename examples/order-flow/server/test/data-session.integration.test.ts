@@ -31,6 +31,7 @@ import {
    type TransferElement,
    TransferDocument,
    type TransferWatchedDocument,
+   type TransferWrittenDocument,
    UNKNOWN_CLIENT_ID
 } from '@hydranium/protocol';
 import { makeFakeDataPort, waitFor } from '@hydranium/protocol/testing';
@@ -108,7 +109,7 @@ class RestoreProbeServer extends DataServer<DomainModel> {
       this.dispose('lost');
    }
 
-   override async updateModelDocument(args: TransferUpdateDocumentArgs<DomainModel>): Promise<TransferDocument<DomainModel>> {
+   override async updateModelDocument(args: TransferUpdateDocumentArgs<DomainModel>): Promise<TransferWrittenDocument<DomainModel>> {
       this.writes.push(`update ${args.uri}`);
       if (typeof args.model !== 'string' && this.failModelWrites > 0) {
          this.failModelWrites--;
@@ -122,10 +123,10 @@ class RestoreProbeServer extends DataServer<DomainModel> {
       // as a write whose validation outlasts the calls after it.
       const astDocument = await this.requireSession(args.clientId).update(this.toSessionWrite(args));
       await held;
-      return this.encodeDocument(astDocument);
+      return { ...this.encodeDocument(astDocument), written: astDocument.written };
    }
 
-   override async updateModelDocuments(args: TransferUpdateDocumentsArgs<DomainModel>): Promise<TransferDocument<DomainModel>[]> {
+   override async updateModelDocuments(args: TransferUpdateDocumentsArgs<DomainModel>): Promise<TransferWrittenDocument<DomainModel>[]> {
       this.writes.push(`updates ${args.updates.map(update => update.uri).join(' ')}`);
       return super.updateModelDocuments(args);
    }

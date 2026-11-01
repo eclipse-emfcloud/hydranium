@@ -33,6 +33,7 @@ const VALID_ENVELOPE = 'getModelDocument(valid) returns a coherent envelope';
 const INVALID_DIAGNOSTICS = 'getModelDocument(invalid) reports at least one diagnostic';
 const DIAGNOSTIC_PARAMS = 'a diagnostic carrying a framework message code also carries its params';
 const EDIT_REFLECTED = 'updateModelDocument applies an edit';
+const WRITES_RACED = 'updateModelDocument answers racing writes';
 const SUBSCRIPTION = 'subscribe + update delivers an onDocumentUpdated event';
 const FOLDER_CANDIDATES = 'findReferenceCandidates answers for a synthetic source at a folder URI';
 const CASCADE = 'editing a document reports its unwatched dependent as built';
@@ -137,18 +138,19 @@ describe('the /data battery discriminates', () => {
       }
    });
 
-   it('plans exactly the thirty-five checks the must-fail cases below name', () => {
+   it('plans exactly the thirty-six checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(35);
+      expect(titles).toHaveLength(36);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
          READY,
          VALID_ENVELOPE,
          INVALID_DIAGNOSTICS,
+         WRITES_RACED,
          DIAGNOSTIC_PARAMS,
          EDIT_REFLECTED,
          CONFLICT_GATE,
@@ -180,7 +182,7 @@ describe('the /data battery discriminates', () => {
          DELETE_UNSAVED,
          SYNTAX_ERROR
       ];
-      expect(matching(titles, covered)).toHaveLength(35);
+      expect(matching(titles, covered)).toHaveLength(36);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -196,9 +198,10 @@ describe('the /data battery discriminates', () => {
          // Also every check writing on a version the envelope reported, so a
          // head that cannot report a whole one cannot be based on it either;
          // not the checks based on the created version, which is whole here.
+         // Also the edit check, whose answer names the whole version written.
          label: 'a non-integer envelope version',
          defects: { fractionalVersion: true },
-         expected: [VALID_ENVELOPE, CONFLICT_GATE, SET, PERSIST, DELETE]
+         expected: [VALID_ENVELOPE, EDIT_REFLECTED, CONFLICT_GATE, SET, PERSIST, DELETE]
       },
       { label: 'a diagnostic on a valid model', defects: { diagnosticsOnValid: true }, expected: [VALID_ENVELOPE] },
       {
@@ -214,13 +217,13 @@ describe('the /data battery discriminates', () => {
       },
       {
          // Also the gate, and necessarily: a head that stores no edit never
-         // advances a version, so nothing a caller holds can go stale. And the
-         // set check, whose current set carries an edit, and the dirty,
-         // text-hash, last-close, persist and delete-gate checks, whose second
-         // text is an edit.
+         // advances a version, so nothing a caller holds can go stale, and
+         // racing writes answer one version. And the set check, whose current
+         // set carries an edit, and the dirty, text-hash, last-close, persist
+         // and delete-gate checks, whose second text is an edit.
          label: 'an edit acknowledged but not stored',
          defects: { ignoreEdits: true },
-         expected: [EDIT_REFLECTED, CONFLICT_GATE, SET, DIRTY, PERSIST, TEXT_HASH, LAST_CLOSE, DELETE_GATE, SYNTAX_ERROR]
+         expected: [EDIT_REFLECTED, WRITES_RACED, CONFLICT_GATE, SET, DIRTY, PERSIST, TEXT_HASH, LAST_CLOSE, DELETE_GATE, SYNTAX_ERROR]
       },
       { label: 'a model written over text with a syntax error', defects: { syntaxErrorsWritten: true }, expected: [SYNTAX_ERROR] },
       {
@@ -348,6 +351,16 @@ describe('the /data battery discriminates', () => {
          label: 'a save or persist answering without the version it wrote',
          defects: { persistedVersionOmitted: true },
          expected: [CREATED_VERSION, DIRTY, PERSIST]
+      },
+      {
+         label: 'an update answering without the version it wrote',
+         defects: { writtenVersionOmitted: true },
+         expected: [EDIT_REFLECTED, WRITES_RACED, SET]
+      },
+      {
+         label: 'an update answering the latest version as written',
+         defects: { writtenFromLatest: true },
+         expected: [WRITES_RACED]
       },
       { label: 'sessions outliving their connection', defects: { sessionsOutliveConnection: true }, expected: [CONNECTION_END] },
       { label: 'a write answered before its document is validated', defects: { writeAnswersUnvalidated: true }, expected: [WRITE_ANSWER] },

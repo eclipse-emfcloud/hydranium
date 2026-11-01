@@ -253,6 +253,11 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
       behaviour.texts.set(uri, textOf(model));
       return textOf(model);
    };
+   // A write's answer, built from the text it wrote.
+   const wrote = (uri: string, model: unknown): unknown => {
+      const version = moveOn(uri);
+      return { ...(document(answered(uri), version, undefined, written(uri, model)) as object), written: { version } };
+   };
    const read = (uri: string): unknown =>
       document(answered(uri), versionOf(uri), behaviour.dirty?.get(uri), behaviour.texts?.get(uri), behaviour.modelVersions?.get(uri));
    const target = {
@@ -351,7 +356,7 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
          if (behaviour.answerWithoutModel) {
             return { uri: answered(args.uri) };
          }
-         return document(answered(args.uri), moveOn(args.uri), undefined, written(args.uri, args.model));
+         return wrote(args.uri, args.model);
       },
       updateModelDocuments: async (args: {
          clientId: string;
@@ -359,9 +364,7 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
       }): Promise<unknown> => {
          record('updates', args);
          await behaviour.updatesGate;
-         return args.updates.map(update =>
-            document(answered(update.uri), moveOn(update.uri), undefined, written(update.uri, update.model))
-         );
+         return args.updates.map(update => wrote(update.uri, update.model));
       },
       saveModelDocument: async (args: { uri: string; clientId: string; model: unknown }): Promise<unknown> => {
          record('save', args);
