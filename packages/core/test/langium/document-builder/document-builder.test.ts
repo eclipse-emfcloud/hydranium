@@ -1682,6 +1682,17 @@ describe('HydraniumDocumentBuilder', () => {
          expect(seen).toEqual(['before await true', 'before await false', 'after await false', 'after await false']);
       });
 
+      it('tell an update listener whether its build overlaps another that still runs', async () => {
+         const builder = new HydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
+         const seen: boolean[] = [];
+         builder.onUpdate(() => void seen.push(builder.overlapsRunningBuild()));
+
+         await builder.update([], []);
+         await Promise.all([builder.build([]), builder.update([], [])]);
+
+         expect(seen).toEqual([false, false, true]);
+      });
+
       it('report a build in progress until the last of two overlapping builds has ended', async () => {
          const { builder } = makeTestBuilder(makeNoopLogger());
          const context = (kind: BuildSessionContext['kind']): BuildSessionContext => ({

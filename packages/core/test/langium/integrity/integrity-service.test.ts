@@ -9,20 +9,22 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { asMutable, Disposable, Logger } from '@hydranium/protocol';
-import { makeFakeClock } from '@hydranium/protocol/testing';
+import { type Harness, makeFakeClock, tick } from '@hydranium/protocol/testing';
 import {
    AbstractAstReflection,
    type AstMetaData,
    type AstNode,
    DocumentState,
    isOperationCancelled,
-   type LangiumDocument
+   type LangiumDocument,
+   type URI
 } from '@hydranium/langium';
 import type { ApplyWorkspaceEditParams, CancellationToken, TextEdit } from 'vscode-languageserver';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { HydraniumTextDocuments } from '../../../src/documents/hydranium-text-documents.js';
 import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
-import { DefaultIntegrityService } from '../../../src/langium/integrity/integrity-service.js';
+import { DefaultIntegrityService, type IntegrityRepairTexts } from '../../../src/langium/integrity/integrity-service.js';
+import type { RecoveryBuildRequest } from '../../../src/documents/version-sync-service.js';
 import { virtualUri } from '../../../src/langium/workspace/virtual-document.js';
 import type { ServerLanguageServices } from '../../../src/langium/language-module.js';
 import type { ServerSharedServices } from '../../../src/langium/module.js';
@@ -604,12 +606,16 @@ function makeCorrectionsProbe(
                },
                reparseAndRelink: async (document: LangiumDocument) => {
                   builderCalls.reparseAndRelink.push(document.uri.toString());
-               }
+               },
+               // A Linked-phase correction watches for the start of the build it asks for.
+               onUpdate: () => ({ dispose: () => undefined })
             },
             VersionSyncService: {
                modelProduced: (document: LangiumDocument, origin?: { text?: string }) => {
                   produced.push({ uri: document.uri.toString(), text: origin?.text });
-               }
+               },
+               // A Linked-phase correction asks for a build that relinks its dependents.
+               requestRecoveryBuild: async () => undefined
             },
             FileSystemTaskQueue: {
                enqueue: async <T>(uri: string, task: () => Promise<T>): Promise<T> => {
@@ -1407,5 +1413,229 @@ describe('IntegrityService phase-bucket cache identity', () => {
       const second = service.bucket(DocumentState.Parsed);
 
       expect(second).not.toBe(first);
+   });
+});
+
+/** Probe exposing the steps of the build that relinks a repaired document's dependents. */
+class RelinkProbe extends DefaultIntegrityService<FakeNode> {
+   /** Whether every running build relinks the repaired document, as one that links into it would. */
+   relinkedByRunning = false;
+   protected override isRelinkedBy(document: LangiumDocument, changed: LangiumDocument): boolean {
+      return this.relinkedByRunning || super.isRelinkedBy(document, changed);
+   }
+   relinkNow(document: LangiumDocument, repair: IntegrityRepairTexts): void {
+      this.relinkDependents(document, repair);
+   }
+   recordRules(document: LangiumDocument, rules: IntegrityRule[]): void {
+      this.mutatingRules.set(document, new Set(rules));
+   }
+   chainOf(document: LangiumDocument): number | undefined {
+      return this.relinkBuilds.get(document)?.chain;
+   }
+}
+
+interface RequestedBuild {
+   readonly uri: string;
+   readonly request: RecoveryBuildRequest;
+   readonly resolve: () => void;
+   readonly reject: (error: unknown) => void;
+}
+
+interface RelinkHarness extends Harness {
+   probe: RelinkProbe;
+   repaired: LangiumDocument;
+   dependent: LangiumDocument;
+   /** Every build the service requested, held until the test settles it. */
+   requests: RequestedBuild[];
+   /** Report `document`'s build starting, from an update or, when `explicit`, an explicit build. */
+   start(document: LangiumDocument, explicit?: boolean): void;
+   lines: CapturedLine[];
+}
+
+function makeRelinkHarness(
+   options: { syncMode?: IntegritySyncMode; maxRelinkChain?: number; throwOnRequest?: number } = {}
+): RelinkHarness {
+   const { tracer, lines } = makeCapturingTracer();
+   const requests: RequestedBuild[] = [];
+   const listeners: ((changed: URI[]) => void)[] = [];
+   let explicitBuild = false;
+   let requested = 0;
+   const repaired = makeResyncDocument('file:///repaired.fake', 'repaired', DocumentState.Linked);
+   const dependent = makeResyncDocument('file:///dependent.fake', 'dependent', DocumentState.Validated);
+   const documents = [repaired, dependent];
+   const services = makeIntegrityServices({
+      shared: {
+         Tracer: tracer,
+         workspace: {
+            TextDocuments: { isOpen: () => false },
+            LangiumDocuments: {
+               getDocument: (uri: URI) => documents.find(document => document.uri.toString() === uri.toString()),
+               all: documents
+            },
+            DocumentBuilder: {
+               onUpdate: (listener: (changed: URI[]) => void) => {
+                  listeners.push(listener);
+                  return { dispose: () => undefined };
+               },
+               isInsideBuildUpdate: () => explicitBuild,
+               overlapsRunningBuild: () => false,
+               // Every other document is a dependent.
+               shouldRelink: () => true
+            },
+            VersionSyncService: {
+               requestRecoveryBuild: (uri: URI, request: RecoveryBuildRequest): Promise<void> => {
+                  if (++requested === options.throwOnRequest) {
+                     throw new Error('request failed');
+                  }
+                  return new Promise<void>((resolve, reject) => requests.push({ uri: uri.toString(), request, resolve, reject }));
+               }
+            }
+         }
+      }
+   });
+   const probe = new RelinkProbe(services, { syncMode: options.syncMode, maxRelinkChain: options.maxRelinkChain });
+   const start = (document: LangiumDocument, explicit = false): void => {
+      explicitBuild = explicit;
+      listeners.forEach(listener => listener([document.uri]));
+      explicitBuild = false;
+   };
+   return { probe, repaired, dependent, requests, start, lines, dispose: () => undefined };
+}
+
+const REPAIR: IntegrityRepairTexts = { from: 'unrepaired', to: 'repaired' };
+
+describe('IntegrityService build that relinks the dependents of a Linked-phase repair', () => {
+   it('requests one build, which relinks a repair made while it waits', async () => {
+      const { probe, repaired, requests, start } = makeRelinkHarness();
+      probe.relinkNow(repaired, REPAIR);
+      probe.relinkNow(repaired, REPAIR);
+      expect(requests[0].request.stillNeeded()).toBe(true);
+      start(repaired);
+      requests[0].resolve();
+      await tick(0);
+
+      expect(requests.map(requested => requested.uri)).toEqual(['file:///repaired.fake']);
+   });
+
+   it('requests the next build in the chain for a repair made while the build runs', async () => {
+      const { probe, repaired, requests, start } = makeRelinkHarness();
+      probe.relinkNow(repaired, REPAIR);
+      requests[0].request.stillNeeded();
+      start(repaired);
+      probe.relinkNow(repaired, REPAIR);
+      requests[0].resolve();
+      await tick(0);
+
+      expect(requests).toHaveLength(2);
+      expect(probe.chainOf(repaired)).toBe(2);
+   });
+
+   it.each([
+      ['never started', false],
+      ['an explicit build reported', true]
+   ])('continues no chain from a build that %s', async (_label, explicit) => {
+      const { probe, repaired, requests, start } = makeRelinkHarness();
+      probe.relinkNow(repaired, REPAIR);
+      requests[0].request.stillNeeded();
+      if (explicit) {
+         start(repaired, true);
+      }
+      probe.relinkNow(repaired, REPAIR);
+      requests[0].resolve();
+      await tick(0);
+
+      expect(requests).toHaveLength(1);
+   });
+
+   it('warns naming the rules instead of requesting a build past maxRelinkChain', async () => {
+      const { probe, repaired, requests, start, lines } = makeRelinkHarness({ maxRelinkChain: 1 });
+      probe.relinkNow(repaired, REPAIR);
+      requests[0].request.stillNeeded();
+      start(repaired);
+      probe.recordRules(repaired, [{ id: 'rule-unsettled', nodeType: 'Root', phase: DocumentState.Linked, enforce: () => true }]);
+      probe.relinkNow(repaired, REPAIR);
+      requests[0].resolve();
+      await tick(0);
+
+      expect(requests).toHaveLength(1);
+      const warnings = lines.filter(line => line.level === 'warn').map(line => line.message);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("'rule-unsettled' repaired documents in 1 build in a row that relinks");
+   });
+
+   it('requests a build for the next repair after a request that threw', () => {
+      const { probe, repaired, requests } = makeRelinkHarness({ throwOnRequest: 1 });
+
+      expect(() => probe.relinkNow(repaired, REPAIR)).toThrow('request failed');
+      probe.relinkNow(repaired, REPAIR);
+      expect(requests).toHaveLength(1);
+   });
+
+   it("requests a build for the same repair of a closed 'editor' document after the one before went past maxRelinkChain", async () => {
+      const { probe, repaired, requests, start } = makeRelinkHarness({ syncMode: 'editor', maxRelinkChain: 1 });
+      probe.relinkNow(repaired, REPAIR);
+      requests[0].request.stillNeeded();
+      start(repaired);
+      probe.relinkNow(repaired, { from: 'edited', to: 'repaired' });
+      requests[0].resolve();
+      await tick(0);
+      probe.relinkNow(repaired, { from: 'edited', to: 'repaired' });
+
+      expect(requests).toHaveLength(2);
+   });
+
+   it("requests a build for the same repair of a closed 'editor' document after the chain it continued was past maxRelinkChain", async () => {
+      const { probe, repaired, dependent, requests, start } = makeRelinkHarness({ syncMode: 'editor', maxRelinkChain: 1 });
+      probe.relinkNow(dependent, REPAIR);
+      requests[0].request.stillNeeded();
+      start(dependent);
+      probe.relinkedByRunning = true;
+      probe.relinkNow(repaired, REPAIR);
+      requests[0].resolve();
+      await tick(0);
+      probe.relinkNow(repaired, REPAIR);
+
+      expect(requests.map(requested => requested.uri)).toEqual(['file:///dependent.fake', 'file:///repaired.fake']);
+   });
+
+   it("logs a next build in the chain whose request threw, and requests one for the same repair of a closed 'editor' document again", async () => {
+      const { probe, repaired, requests, start, lines } = makeRelinkHarness({ syncMode: 'editor', throwOnRequest: 2 });
+      probe.relinkNow(repaired, REPAIR);
+      requests[0].request.stillNeeded();
+      start(repaired);
+      probe.relinkNow(repaired, { from: 'edited', to: 'repaired' });
+      requests[0].resolve();
+      await tick(0);
+      probe.relinkNow(repaired, { from: 'edited', to: 'repaired' });
+
+      expect(lines.filter(line => line.level === 'error').map(line => line.message)).toEqual([
+         expect.stringContaining('Requesting the next build that relinks the dependents of a repaired document failed.')
+      ]);
+      expect(requests).toHaveLength(2);
+   });
+
+   it.each(['silent', 'editor'] as const)('logs a build that failed, and requests one for the same repair again (%s)', async syncMode => {
+      const { probe, repaired, requests, lines } = makeRelinkHarness({ syncMode });
+      probe.relinkNow(repaired, REPAIR);
+      requests[0].reject(new Error('build failed'));
+      await tick(0);
+      probe.relinkNow(repaired, REPAIR);
+
+      expect(lines.filter(line => line.level === 'error').map(line => line.message)).toEqual([
+         expect.stringContaining('The build that relinks the dependents of a repaired document failed.')
+      ]);
+      expect(requests).toHaveLength(2);
+   });
+
+   it("requests no build for a repair a closed 'editor' document repeats from the same text, and one for a repair from other text", async () => {
+      const { probe, repaired, requests } = makeRelinkHarness({ syncMode: 'editor' });
+      probe.relinkNow(repaired, REPAIR);
+      requests[0].resolve();
+      await tick(0);
+      probe.relinkNow(repaired, REPAIR);
+      expect(requests).toHaveLength(1);
+
+      probe.relinkNow(repaired, { from: 'edited', to: 'repaired' });
+      expect(requests).toHaveLength(2);
    });
 });
