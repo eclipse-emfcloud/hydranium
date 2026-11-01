@@ -414,6 +414,24 @@ function makeCopyHarness(settleBeforeCloseMs?: number): CopyHarness {
    return harness;
 }
 
+/**
+ * Type an edit as the restore to `restarted` fires, on the base from before
+ * it, since the write before fails. Resolves to the typed edit's outcome.
+ */
+async function typeOnBaseFromBeforeRestore(
+   harness: CopyHarness,
+   copy: WorkingCopy<ProbeElement>,
+   restarted: ProbeServer
+): Promise<WorkingCopyEditOutcome> {
+   restarted.failNext = new Error('refused');
+   const typed = new Deferred<WorkingCopyEditOutcome>();
+   harness.session.onDidRestoreDocument(() => {
+      copy.edit(root => ({ ...root, name: 'typed' })).then(typed.resolve, typed.reject);
+   });
+   await expect(copy.edit(root => ({ ...root, name: 'ours' }))).rejects.toThrow('refused');
+   return typed.promise;
+}
+
 /** Resolves once the session has heard the next update of the document. */
 function nextUpdate(events: DataEvents<ProbeElement>): Promise<void> {
    const heard = new Deferred<void>();
@@ -1493,7 +1511,8 @@ describe('WorkingCopy', () => {
       answer.resolve();
 
       expect(await first).toEqual({ status: 'applied' });
-      expect((await second).status).toBe('merged');
+      // Made over the other client's edit already shown, so it raced none.
+      expect((await second).status).toBe('applied');
       expect(server.root).toMatchObject({ name: 'theirs', note: 'second' });
    });
 
@@ -2575,17 +2594,8 @@ describe('WorkingCopy', () => {
       const copy = new HeldCopy(harness.session, harness.events, URI_A);
       await copy.open();
       const restarted = harness.restart();
-      // The write before fails, so the typed edit keeps the base from before the reconnect.
-      restarted.failNext = new Error('refused');
-      let typed: Promise<WorkingCopyEditOutcome> | undefined;
-      harness.session.onDidRestoreDocument(() => {
-         typed = copy.edit(root => ({ ...root, name: 'typed' }));
-      });
-      const written = copy.edit(root => ({ ...root, name: 'ours' }));
-      await expect(written).rejects.toThrow('refused');
-      await waitFor(() => typed !== undefined);
 
-      expect(await typed).toEqual({ status: 'applied' });
+      expect(await typeOnBaseFromBeforeRestore(harness, copy, restarted)).toEqual({ status: 'applied' });
       expect(restarted.root.name).toBe('typed');
    });
 
@@ -2602,26 +2612,45 @@ describe('WorkingCopy', () => {
       expect(restarted.root).toMatchObject({ name: 'mine', note: 'theirs' });
    });
 
-   it('sends no edit on the base from before a reconnect that found its text at another model version', async () => {
+   it('sends no edit on the base from before a reconnect that found its text at another model version, and reports it applied', async () => {
       const harness = makeCopyHarness();
       const copy = new HeldCopy(harness.session, harness.events, URI_A);
       await copy.open();
       const restarted = harness.restart();
       restarted.modelOffset = 1;
-      // The write before fails, so the typed edit keeps the base from before the reconnect.
-      restarted.failNext = new Error('refused');
-      let typed: Promise<WorkingCopyEditOutcome> | undefined;
-      harness.session.onDidRestoreDocument(() => {
-         typed = copy.edit(root => ({ ...root, name: 'typed' }));
-      });
-      const written = copy.edit(root => ({ ...root, name: 'ours' }));
-      await expect(written).rejects.toThrow('refused');
-      await waitFor(() => typed !== undefined);
-      await typed;
 
+      expect(await typeOnBaseFromBeforeRestore(harness, copy, restarted)).toEqual({ status: 'applied' });
       // The failed write and the typed edit's, reconciled before it was sent.
       expect(restarted.updates).toBe(2);
       expect(restarted.root.name).toBe('typed');
+   });
+
+   it('reports merged for an edit whose write landed past a foreign edit after a reread that found its text unchanged', async () => {
+      const harness = makeCopyHarness();
+      let race: () => Promise<void> = async () => undefined;
+      // Rereads on its first conflict only, and wins the next without one.
+      class RereadOnce extends ReconcilingConflictResolver {
+         calls = 0;
+         override async resolve<T extends object>(base: T, ours: T, refetch: () => Promise<T | undefined>): Promise<ReconcileOutcome<T>> {
+            this.calls++;
+            if (this.calls > 1) {
+               return { status: 'merged', merged: ours };
+            }
+            const outcome = await super.resolve(base, ours, refetch);
+            await race();
+            return outcome;
+         }
+      }
+      class RereadOnceCopy extends HeldCopy {
+         protected override readonly conflictResolver = new RereadOnce();
+      }
+      const copy = new RereadOnceCopy(harness.session, harness.events, URI_A);
+      await copy.open();
+      const restarted = harness.restart();
+      restarted.modelOffset = 1;
+      race = () => restarted.foreignWrite({ note: 'theirs' });
+
+      expect(await typeOnBaseFromBeforeRestore(harness, copy, restarted)).toEqual({ status: 'merged' });
    });
 
    it('shows the diagnostics its reread after a restore brings', async () => {

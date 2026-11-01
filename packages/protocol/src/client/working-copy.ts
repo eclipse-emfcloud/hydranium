@@ -11,7 +11,7 @@ import { compare } from 'fast-json-patch';
 import { type Disposable, Emitter, type Event } from 'vscode-jsonrpc';
 import { type Clock, SystemClock, TIMED_OUT } from '../clock';
 import { ConflictError, DocumentNotOpenError, SaveFailedError, STALE_BASE_VERSION_SAVE, STALE_BASE_VERSION_UPDATE } from '../errors';
-import { isModelVersion, type ModelVersion, UNRECORDED_VERSION } from '../model-service/base-version';
+import { type BaseVersion, isModelVersion, type ModelVersion, UNRECORDED_VERSION } from '../model-service/base-version';
 import { type ConflictResolver, type ReconcileOutcome, ReconcilingConflictResolver } from '../patch-merge';
 import { PendingWorkTracker } from '../pending-work-tracker';
 import { type ReconcileWriteOutcome, reconcileWrite, type VersionedModel } from '../reconcile-write';
@@ -720,6 +720,10 @@ export class WorkingCopy<TTransfer extends TransferElement> {
     * version could match that server's by chance and the write would land.
     * An unconfirmed base is refused the same way. Only a batch's own write,
     * `whole`, can move the base of the edits queued meanwhile.
+    *
+    * A merged write comes back as `persisted` when it was gated on a reread
+    * that equals the root the edit was made on, since it raced no foreign
+    * edit. It then carries no `conflict` or `writes`.
     */
    protected async reconcile(
       open: WorkingCopyOpen<TTransfer>,
@@ -733,6 +737,8 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    }> {
       let written: TransferDocument<TTransfer> | undefined;
       let theirs: TransferDocument<TTransfer> | undefined;
+      // The version the write that landed was gated on.
+      let landedOn: BaseVersion | undefined;
       let first = true;
       let went = false;
       // The restores heard when the version written next was read.
@@ -752,6 +758,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
             }
             const answer = await this.session.updateDocument({ uri: this.uri, model, baseVersion });
             written = answer;
+            landedOn = baseVersion;
             // Landed unchanged, the answer is what the edits queued meanwhile
             // were made on, so their write needs no reconcile of its own. One
             // that differs may hold a later write too, whose fields they would
@@ -798,6 +805,16 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       }
       if (outcome.status === 'conflict' || outcome.status === 'already-applied' || outcome.status === 'unavailable') {
          return { outcome, answer: theirs, restores };
+      }
+      // Gated on a reread that equals the root the edit was made on, the write
+      // raced no foreign edit, as one the copy refused itself after a restore.
+      if (
+         outcome.status === 'merged' &&
+         theirs?.model &&
+         landedOn === theirs.model.version &&
+         compare(theirs.model.root, base.model).length === 0
+      ) {
+         return { outcome: { status: 'persisted' }, answer: written, restores };
       }
       return { outcome, answer: written, restores };
    }

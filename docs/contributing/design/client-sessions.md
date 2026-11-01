@@ -307,6 +307,14 @@ and reconciled against the restarted server's document. A field changed while
 the connection was down then reports a conflict. Until the copy reads the
 restored document again, it keeps the problems from before.
 
+**A write that raced nobody reports `applied`.** A write refused and then
+written again, by the server or by the copy itself after a restore or on an
+unconfirmed base, reports `merged` when the document it read in between
+differs from the one the edit was made on, or when the write was not gated on
+that read. The two are compared as models, so another client's change to the
+text alone, such as a comment, counts as none, as does a change undone before
+the read.
+
 **An ended open stays ended.** A close, a deletion, a restore that could not
 open the document again, a failed second read of the open or a read that finds
 the file gone ends it. Edits not yet written settle as `unavailable`, and a
