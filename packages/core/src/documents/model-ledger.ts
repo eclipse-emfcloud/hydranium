@@ -13,7 +13,7 @@ import { asModelVersion, type ModelVersion, UNRECORDED_VERSION } from '@hydraniu
 /** What {@link ModelLedger} holds for one root. */
 export interface ModelRecord {
    readonly version: ModelVersion;
-   /** For a root whose CST no longer is the text it describes: changed in place, or shed. */
+   /** For a root whose CST is not the text it describes: changed in place, shed, or built from code. */
    readonly text?: string;
 }
 
