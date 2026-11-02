@@ -18,12 +18,14 @@ import {
    StructureCompartmentView,
    ToolPalette,
    configureModelElement,
+   editLabelFeature,
    initializeDiagramContainer
 } from '@eclipse-glsp/client';
 import { HydraniumGEdge, configureHydraniumModelElements } from '@hydranium/glsp-client';
 import { type Container, ContainerModule } from 'inversify';
 import {
    PROCESS_BRANCH_EDGE_TYPE,
+   PROCESS_EDITABLE_LABEL_TYPE,
    PROCESS_EFFECT_COMPARTMENT_TYPE,
    PROCESS_EFFECT_TYPE,
    PROCESS_GATEWAY_NODE_TYPE,
@@ -44,6 +46,7 @@ import { ProcessEdgeView } from './order-flow-process-views';
 export interface ProcessElementRegistration {
    readonly model: Parameters<typeof configureModelElement>[2];
    readonly view: Parameters<typeof configureModelElement>[3];
+   readonly options?: Parameters<typeof configureModelElement>[4];
 }
 
 /**
@@ -55,10 +58,8 @@ export interface ProcessElementRegistration {
  * matches but has no registration still renders nothing, because sprotty falls
  * back to a featureless generic element plus `MissingView`.
  *
- * GLSP's defaults cover the rest of the tree — the task and gateway name
- * labels and the branch label are plain `DefaultTypes.LABEL`, and the graph
- * root is `DefaultTypes.GRAPH`, all registered by
- * `configureHydraniumModelElements`.
+ * GLSP's defaults cover the graph root. Name and branch labels enable editing;
+ * effect labels keep their own registration without that feature.
  */
 export const PROCESS_ELEMENT_REGISTRATIONS: Readonly<Record<ProcessElementType, ProcessElementRegistration>> = {
    [PROCESS_TASK_NODE_TYPE]: { model: GNode, view: RoundedCornerNodeView },
@@ -68,6 +69,7 @@ export const PROCESS_ELEMENT_REGISTRATIONS: Readonly<Record<ProcessElementType, 
    // from the view. See `ProcessGatewayNode`.
    [PROCESS_GATEWAY_NODE_TYPE]: { model: ProcessGatewayNode, view: DiamondNodeView },
    [PROCESS_EFFECT_COMPARTMENT_TYPE]: { model: GCompartment, view: StructureCompartmentView },
+   [PROCESS_EDITABLE_LABEL_TYPE]: { model: GLabel, view: GLabelView, options: { enable: [editLabelFeature] } },
    [PROCESS_EFFECT_TYPE]: { model: GLabel, view: GLabelView },
    // Both connection types are directed, so both are drawn with an arrowhead;
    // what tells them apart is the stylesheet, keyed on the `transition` /
@@ -104,7 +106,7 @@ export const orderFlowProcessDiagramModule = new ContainerModule((bind, unbind, 
    const context = { bind, unbind, isBound, rebind };
    configureHydraniumModelElements(context);
    for (const [elementTypeId, registration] of Object.entries(PROCESS_ELEMENT_REGISTRATIONS)) {
-      configureModelElement(context, elementTypeId, registration.model, registration.view);
+      configureModelElement(context, elementTypeId, registration.model, registration.view, registration.options);
    }
    rebind(ToolPalette).to(OrderFlowProcessToolPalette).inSingletonScope();
 });

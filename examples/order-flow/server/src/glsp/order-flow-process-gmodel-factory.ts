@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { DefaultTypes, GCompartment, GEdge, GGraph, GLabel, type GModelFactory, GNode, ModelState } from '@eclipse-glsp/server';
+import { GCompartment, GEdge, GGraph, GLabel, type GModelFactory, GNode, ModelState } from '@eclipse-glsp/server';
 import { inject, injectable } from 'inversify';
 import {
    type DiagramNode,
@@ -22,6 +22,7 @@ import {
 } from '../language-server/ast.js';
 import {
    PROCESS_BRANCH_EDGE_TYPE,
+   PROCESS_EDITABLE_LABEL_TYPE,
    PROCESS_EFFECT_COMPARTMENT_TYPE,
    PROCESS_EFFECT_TYPE,
    PROCESS_GATEWAY_NODE_TYPE,
@@ -389,6 +390,7 @@ export class OrderFlowProcessGModelFactory implements GModelFactory {
                      GLabel.builder()
                         .id(`${this.modelState.index.createId(branch)}_label`)
                         .text(branch.label)
+                        .type(PROCESS_EDITABLE_LABEL_TYPE)
                         .build()
                   )
                   .build()
@@ -411,7 +413,7 @@ export class OrderFlowProcessGModelFactory implements GModelFactory {
          .type(PROCESS_TASK_NODE_TYPE)
          .layout('vbox')
          .addLayoutOptions({ ...NODE_LAYOUT_OPTIONS })
-         .add(GLabel.builder().id(`${id}_name`).text(task.name).type(DefaultTypes.LABEL).build());
+         .add(GLabel.builder().id(`${id}_name`).text(task.name).type(PROCESS_EDITABLE_LABEL_TYPE).build());
       this.applyBounds(builder, task, NODE_LAYOUT_OPTIONS);
       if (task.effects.length > 0) {
          const compartment = GCompartment.builder()
@@ -472,7 +474,7 @@ export class OrderFlowProcessGModelFactory implements GModelFactory {
          .type(PROCESS_GATEWAY_NODE_TYPE)
          .layout('vbox')
          .addLayoutOptions({ ...GATEWAY_LAYOUT_OPTIONS })
-         .add(GLabel.builder().id(`${id}_name`).text(gateway.name).type(DefaultTypes.LABEL).build());
+         .add(GLabel.builder().id(`${id}_name`).text(gateway.name).type(PROCESS_EDITABLE_LABEL_TYPE).build());
       this.applyBounds(builder, gateway, GATEWAY_LAYOUT_OPTIONS);
       return builder.build();
    }
