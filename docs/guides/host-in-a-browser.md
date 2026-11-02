@@ -133,7 +133,8 @@ const fileSystem = persistentFileSystem({
 
    The seed is the baseline and the store holds the changes, so a returning
    visitor gets their edits over your latest seed. A save fails when the store
-   refuses the write, as it will when the quota is full. The database is shared
+   refuses the write, as it will when the quota is full. The document stays
+   unsaved, and the next save retries the write. The database is shared
    by every page on the origin, so name it after your app. Once the store can
    differ from the seed, open your editors on the text the worker holds, not on
    the seed in your bundle: an editor opened on the seed overwrites the restored

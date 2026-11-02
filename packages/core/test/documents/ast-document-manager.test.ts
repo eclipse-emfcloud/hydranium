@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { type CanonicalUri, type Logger, UNRECORDED_VERSION } from '@hydranium/protocol';
 import { tick, waitFor } from '@hydranium/protocol/testing';
 import { type AstNode, DocumentState, URI, UriUtils } from '@hydranium/langium';
-import { DefaultFileSystemProviderRegistry } from '../../src/langium/workspace/file-system-provider.js';
+import { DefaultFileSystemProviderRegistry, type WritableFileSystemProvider } from '../../src/langium/workspace/file-system-provider.js';
 import { PersistentFileSystemProvider, type FileSystemStore } from '../../src/langium/workspace/persistent-file-system-provider.js';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { type AstDocumentManagerOptions, DefaultAstDocumentManager } from '../../src/documents/ast-document-manager.js';
@@ -44,7 +44,12 @@ const URI_B = 'file:///B.fake';
  * them as plain slots.
  */
 function makeManagerHarness(
-   opts: { documentUriPolicy?: DocumentUriPolicy; managerOptions?: AstDocumentManagerOptions; logger?: Logger } = {}
+   opts: {
+      documentUriPolicy?: DocumentUriPolicy;
+      managerOptions?: AstDocumentManagerOptions;
+      logger?: Logger;
+      fileSystemProvider?: (services: ServerSharedServices) => WritableFileSystemProvider;
+   } = {}
 ): {
    manager: DefaultAstDocumentManager<FakeRoot>;
    models: DefaultModelService<FakeRoot>;
@@ -67,6 +72,12 @@ function makeManagerHarness(
       ...bundle.services,
       workspace: { ...bundle.services.workspace, TextDocuments: textDocuments }
    } as ServerSharedServices;
+   if (opts.fileSystemProvider) {
+      services.workspace.FileSystemProvider = new DefaultFileSystemProviderRegistry(
+         { ...services, fileSystemProviders: {} },
+         { host: opts.fileSystemProvider(services) }
+      );
+   }
    const sync = new DefaultVersionSyncService(services);
    services.workspace.VersionSyncService = sync;
    const manager = new DefaultAstDocumentManager<FakeRoot>(services, opts.managerOptions);
@@ -706,7 +717,6 @@ describe('AstDocumentManager.update', () => {
 
 describe('AstDocumentManager.save', () => {
    it('retries persistence after a refused save and restores the saved text', async () => {
-      const { services, textDocuments } = makeManagerHarness();
       const contents: Record<string, string> = {};
       let attempts = 0;
       const store: FileSystemStore = {
@@ -722,13 +732,9 @@ describe('AstDocumentManager.save', () => {
          }
       };
       const seed = { [URI_A]: 'original' };
-      services.workspace.FileSystemProvider = new DefaultFileSystemProviderRegistry(
-         { ...services, fileSystemProviders: {} },
-         {
-            host: new PersistentFileSystemProvider(services, { store, seed })
-         }
-      );
-      const manager = new DefaultAstDocumentManager<FakeRoot>(services);
+      const { manager, services, textDocuments } = makeManagerHarness({
+         fileSystemProvider: services => new PersistentFileSystemProvider(services, { store, seed })
+      });
       const saved: string[] = [];
       textDocuments.onDidSave(event => saved.push(event.document.getText()));
       await manager.open({ uri: URI_A, clientId: 'c1', languageId: 'plaintext', version: 0, text: 'edited' });
