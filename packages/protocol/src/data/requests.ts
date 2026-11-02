@@ -79,6 +79,12 @@ export type TransferUpdateDocumentArgs<TTransfer> = TransferDocumentWrite &
        * `DocumentSyntaxError`, a save's even when it sets this.
        */
       restore?: boolean;
+      /**
+       * The write's number, rising per session in the order its writes are
+       * sent, which `heldWrites` on every document the server sends reports
+       * once the text holds the write. Absent, the write is not reported.
+       */
+      write?: number;
    };
 
 /** Update a document the session `clientId` has open, then persist it to disk. */
@@ -150,6 +156,8 @@ export interface TransferUpdateDocumentsArgs<TTransfer> {
    updates: (Omit<TransferDocumentWrite, 'clientId'> &
       BaseVersionGate &
       Pick<TransferUpdateDocumentArgs<TTransfer>, 'model' | 'restore'>)[];
+   /** The set's number, one for all its documents, as `TransferUpdateDocumentArgs.write`. */
+   write?: number;
 }
 
 /**

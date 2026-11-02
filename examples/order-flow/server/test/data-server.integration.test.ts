@@ -221,7 +221,7 @@ describe('order-flow data head', () => {
 
          const answer = await head.harness.proxy.getModelDocument({ uri, includeDiagnostics });
 
-         expect(answer).toEqual({ uri, epoch: head.services.shared.workspace.TextDocuments.epoch });
+         expect(answer).toEqual({ uri, epoch: head.services.shared.workspace.TextDocuments.epoch, heldWrites: {} });
       }
    );
 
@@ -353,6 +353,19 @@ describe('order-flow data head', () => {
       // what it guards is a Langium upgrade that changes the invariant.
       expect(head.harness.events.length).toBe(afterUpdate);
       expect(head.services.shared.workspace.LangiumDocuments.getDocument(URI.parse(uri))).toBeUndefined();
+   });
+
+   it('names the numbered write of a session whose id is __proto__', async () => {
+      const head = await driveDataHead();
+      const uri = head.uri(WORKSPACE_FILES.fulfillmentProcess);
+      const proxy = head.harness.proxy;
+      const clientId = '__proto__';
+      await proxy.createSession({ clientId });
+      const opened = TransferDocument.assertLoaded(await proxy.openModelDocument({ uri, clientId }));
+
+      const answer = await proxy.updateModelDocument({ uri, clientId, model: opened.model.root, baseVersion: 'any', write: 3 });
+
+      expect(Object.entries(answer.heldWrites)).toEqual([[clientId, 3]]);
    });
 
    it("deletes a document, names the deleting session on the deletion, and releases only that session's watch", async () => {

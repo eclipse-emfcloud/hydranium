@@ -235,6 +235,12 @@ export interface CanaryDefects {
    readonly writtenVersionOmitted?: boolean;
    /** `updateModelDocument` answers once later writes landed, naming the latest version as written. */
    readonly writtenFromLatest?: boolean;
+   /** Documents name no session's numbered writes. */
+   readonly heldWritesOmitted?: boolean;
+   /** Documents name each numbered write under every session, not only its writer. */
+   readonly heldWritesUnkeyed?: boolean;
+   /** Documents name the numbered writes of sessions registered on another connection too. */
+   readonly heldWritesUnscoped?: boolean;
    /** A session's save of a document it has not opened opens it. */
    readonly saveOpensImplicitly?: boolean;
    /** A persist writes the text with its trailing whitespace trimmed, as a head re-serialising the model would. */
@@ -311,6 +317,8 @@ export class CanaryDataServer {
    readonly deletions: TransferDocumentDeletedEvent[] = [];
 
    private readonly documents = new Map<string, StoredDocument>();
+   /** Each numbered write per URI, at the version its text took. */
+   private readonly writeNumbers = new Map<string, { readonly clientId: string; readonly write: number; readonly version: number }[]>();
    /** What each save wrote, by URI: the file a last close goes back to. */
    private readonly disk = new Map<string, string>();
    private readonly watched = new Set<string>();
@@ -318,6 +326,8 @@ export class CanaryDataServer {
    private sequence = 0;
    /** Live session ids, and the URIs each has open. */
    private readonly sessions = new Map<string, Set<string>>();
+   /** The ids of the sessions registered on this connection. A connection {@link attach} opens has its own. */
+   private readonly connectionSessions = new Set<string>();
    /** Opens left behind by an ended session, under `sessionOpensSurviveEnd`. */
    private readonly orphanedOpens = new Map<string, Set<string>>();
    /** Ids `closeSession` failed to free, under `sessionIdsKept`. */
@@ -367,9 +377,9 @@ export class CanaryDataServer {
       throw new Error('the canary server does not implement findNextName');
    }
 
-   /** A second connection to this server: shares its state, and closing it ends nothing. */
+   /** A second connection to this server: shares its state but for the sessions registered on it, and closing it ends nothing. */
    attach(): CanaryDataServer {
-      return Object.assign(Object.create(this) as CanaryDataServer, { dispose: () => undefined });
+      return Object.assign(Object.create(this) as CanaryDataServer, { dispose: () => undefined, connectionSessions: new Set<string>() });
    }
 
    dispose(): void {
@@ -384,6 +394,7 @@ export class CanaryDataServer {
       }
       this.orphanedOpens.clear();
       this.keptIds.clear();
+      this.writeNumbers.clear();
    }
 
    async getProjects(): Promise<readonly Project[]> {
@@ -429,6 +440,7 @@ export class CanaryDataServer {
       const inherited = this.orphanedOpens.get(args.clientId);
       this.orphanedOpens.delete(args.clientId);
       this.sessions.set(args.clientId, inherited ?? new Set<string>());
+      this.connectionSessions.add(args.clientId);
       return { epoch: this.defects.sessionEpochDiffers ? randomUuid() : this.epoch };
    }
 
@@ -499,7 +511,7 @@ export class CanaryDataServer {
       }
       const documents: TransferWrittenDocument<CanaryRoot, TransferDiagnostic>[] = [];
       for (const update of args.updates) {
-         documents.push(await this.updateModelDocument({ ...update, clientId: args.clientId }));
+         documents.push(await this.updateModelDocument({ ...update, clientId: args.clientId, write: args.write }));
       }
       return documents;
    }
@@ -568,6 +580,13 @@ export class CanaryDataServer {
       const isEdit = existing !== undefined;
       if (!(isEdit && this.defects.ignoreEdits)) {
          this.documents.set(args.uri, { text, version: (existing?.version ?? 0) + 1 });
+      }
+      if (args.write !== undefined) {
+         const version = this.documents.get(args.uri)?.version ?? 0;
+         this.writeNumbers.set(args.uri, [
+            ...(this.writeNumbers.get(args.uri) ?? []),
+            { clientId: args.clientId, write: args.write, version }
+         ]);
       }
       const document = this.envelope(args.uri);
       const answer =
@@ -700,6 +719,23 @@ export class CanaryDataServer {
       return { ...envelope, persisted: { version: this.documents.get(uri)?.version ?? 0 } };
    }
 
+   /** Per session registered on this connection, the highest of its numbered writes of `uri` that `version` holds. */
+   private heldWrites(uri: string, version: number): Record<string, number> {
+      const held = new Map<string, number>();
+      if (this.defects.heldWritesOmitted) {
+         return {};
+      }
+      for (const record of this.writeNumbers.get(uri) ?? []) {
+         const owners = this.defects.heldWritesUnkeyed ? [...this.sessions.keys()] : [record.clientId];
+         for (const owner of owners.filter(clientId => this.defects.heldWritesUnscoped || this.connectionSessions.has(clientId))) {
+            if (record.version <= version && record.write > (held.get(owner) ?? -Infinity)) {
+               held.set(owner, record.write);
+            }
+         }
+      }
+      return Object.fromEntries(held);
+   }
+
    private envelope(uri: string): TransferDocument<CanaryRoot, TransferDiagnostic> {
       const stored = this.documents.get(uri);
       if (!stored) {
@@ -715,6 +751,7 @@ export class CanaryDataServer {
       return {
          uri,
          epoch: this.epoch,
+         heldWrites: this.heldWrites(uri, stored.version),
          model: {
             root: { $type: this.defects.blankRootType ? '' : 'CanaryRoot', text: stored.text },
             diagnostics,

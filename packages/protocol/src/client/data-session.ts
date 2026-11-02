@@ -119,17 +119,21 @@ export type DataSessionCloseArgs<
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
 > = DataSessionArgs<TServer['closeModelDocument']>;
 
-/** Update a document through a session; the session supplies `clientId`. */
+/**
+ * Update a document through a session. The session supplies `clientId`.
+ * `onWrite` is told the write's number as it is sent, before the write
+ * answers, and goes nowhere else.
+ */
 export type DataSessionUpdateArgs<
    TTransfer extends TransferElement,
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
-> = DataSessionArgs<TServer['updateModelDocument']>;
+> = DataSessionArgs<TServer['updateModelDocument']> & { onWrite?(write: number): void };
 
-/** Update several documents at once through a session; the session supplies `clientId`. */
+/** Update several documents at once through a session. The session supplies `clientId`. `onWrite` as for one. */
 export type DataSessionUpdatesArgs<
    TTransfer extends TransferElement,
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
-> = DataSessionArgs<TServer['updateModelDocuments']>;
+> = DataSessionArgs<TServer['updateModelDocuments']> & { onWrite?(write: number): void };
 
 /** Persist a document through a session; the session supplies `clientId`. */
 export type DataSessionSaveArgs<
@@ -478,6 +482,8 @@ export class DataSession<
    readonly onDidRegister: Event<DataSessionRegisterEvent> = this.registerEmitter.event;
    /** The epoch the last registration answered. */
    protected registeredEpoch?: string;
+   /** The number {@link nextWrite} last gave. */
+   protected writes = 0;
    /**
     * Sent with every registration, so the server lets this session register
     * its id again while the dropped connection's session is still live there:
@@ -781,10 +787,13 @@ export class DataSession<
    updateDocument(args: DataSessionUpdateArgs<TTransfer, TServer>): Promise<TransferWrittenDocument<TTransfer, DiagnosticOf<TServer>>> {
       return this.trackWrite([args.uri], async () => {
          const server = await this.connected();
+         // The callback stays off the wire and out of what a restore sends again.
          const update = { ...args };
+         delete update.onWrite;
          const baseHash = await this.baseHashOf(server, args.uri, args);
          const open = this.opens.get(args.uri);
-         const document = await server.updateModelDocument({ ...args, clientId: this.clientId });
+         const write = this.numberWrite(args);
+         const document = await server.updateModelDocument({ ...update, write, clientId: this.clientId });
          this.recordWrite(args.uri, open, document, baseHash, { update });
          return document;
       });
@@ -802,10 +811,12 @@ export class DataSession<
             // One copy for the whole call: the copy's identity is what ties its
             // records together.
             const updates = { ...args, updates: args.updates.map(update => ({ ...update })) };
+            delete updates.onWrite;
             const server = await this.connected();
             const baseHashes = await Promise.all(args.updates.map(update => this.baseHashOf(server, update.uri, update)));
             const opens = args.updates.map(update => this.opens.get(update.uri));
-            const documents = await server.updateModelDocuments({ ...args, clientId: this.clientId });
+            const write = this.numberWrite(args);
+            const documents = await server.updateModelDocuments({ ...updates, write, clientId: this.clientId });
             args.updates.forEach((update, index) =>
                this.recordWrite(update.uri, opens[index], documents[index], baseHashes[index], { updates, index })
             );
@@ -946,6 +957,29 @@ export class DataSession<
     */
    isOwnEcho(sourceClientId: string): boolean {
       return sourceClientId === this.clientId;
+   }
+
+   /**
+    * A new number for a write of this session, above every one before. Every
+    * update that names no `write` of its own takes one as it is sent. A
+    * caller that needs the number before the write answers passes `onWrite`
+    * instead: one taken earlier can number below a write sent first.
+    */
+   nextWrite(): number {
+      return ++this.writes;
+   }
+
+   /**
+    * The number of an update being sent: the caller's `write`, or else the
+    * next. Called as it is sent, after every wait, so a write sent after
+    * another one numbers above it. Tells `onWrite` before the write answers.
+    */
+   protected numberWrite(args: { readonly write?: number; onWrite?(write: number): void }): number {
+      const write = args.write ?? this.nextWrite();
+      // One the caller numbered moves the count past it, so the next numbers above.
+      this.writes = Math.max(this.writes, write);
+      args.onWrite?.(write);
+      return write;
    }
 
    /**
@@ -1457,6 +1491,7 @@ export class DataSession<
                      baseVersion: resend[0].baseVersion,
                      baseEpoch: resend[0].baseEpoch,
                      restore: true,
+                     write: this.nextWrite(),
                      clientId: this.clientId
                   })
                )
@@ -1466,6 +1501,7 @@ export class DataSession<
             documents = await this.writesInFlight.track(
                server.updateModelDocuments({
                   ...call.updates,
+                  write: this.nextWrite(),
                   clientId: this.clientId,
                   updates: call.updates.updates.flatMap((update, index) => {
                      const base = bases.get(index);

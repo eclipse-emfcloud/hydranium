@@ -152,7 +152,77 @@ describe('DataSession over a widened server', () => {
 
          await panel.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: 'any' });
 
-         expect(received.update).toEqual([{ uri: URI_A, clientId: 'panel', model: { $type: 'TypeOne' }, baseVersion: 'any' }]);
+         expect(received.update).toEqual([{ uri: URI_A, clientId: 'panel', model: { $type: 'TypeOne' }, baseVersion: 'any', write: 1 }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('numbers a write above one the caller numbered, for one document and for a set', async () => {
+      const { connection, received, dispose } = harness<WidenedServer>();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+
+         await panel.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: 'any', write: 7 });
+         await panel.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: 'any' });
+         // The echoing server binds no updateModelDocuments, but the set takes its number as it is sent.
+         await panel
+            .updateDocuments({ updates: [{ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: 'any' }], write: 9 })
+            .catch(() => undefined);
+         await panel.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: 'any' });
+
+         expect(received.update).toMatchObject([{ write: 7 }, { write: 8 }, { write: 10 }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('sends no onWrite key, for one document and for a set', async () => {
+      const { connection, dispose } = harness<WidenedServer>();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const sent: string[][] = [];
+         const connected = panel.connected.bind(panel);
+         panel.connected = async () => {
+            const server = await connected();
+            return new Proxy(server, {
+               get: (target, property, receiver) => {
+                  const member: unknown = Reflect.get(target, property, receiver);
+                  if (typeof member !== 'function' || (property !== 'updateModelDocument' && property !== 'updateModelDocuments')) {
+                     return member;
+                  }
+                  return (args: object) => {
+                     sent.push(Object.keys(args));
+                     return Reflect.apply(member, target, [args]);
+                  };
+               }
+            });
+         };
+         const onWrite = (): void => undefined;
+
+         await panel.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: 'any', onWrite });
+         await panel
+            .updateDocuments({ updates: [{ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: 'any' }], onWrite })
+            .catch(() => undefined);
+
+         expect(sent).toHaveLength(2);
+         expect(sent.filter(keys => keys.includes('onWrite'))).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells onWrite the number each write is sent with', async () => {
+      const { connection, received, dispose } = harness<WidenedServer>();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const told: number[] = [];
+
+         await panel.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: 'any', onWrite: write => told.push(write) });
+         await panel.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: 'any', onWrite: write => told.push(write) });
+
+         expect(received.update).toMatchObject([{ write: 1 }, { write: 2 }]);
+         expect(told).toEqual([1, 2]);
       } finally {
          dispose();
       }

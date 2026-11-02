@@ -33,6 +33,12 @@ import { type AstDiagnostic } from '../validation/document-validator.js';
 import { hasSkippedText } from '../workspace/syntax-errors.js';
 import { type ModelService } from './model-service.js';
 
+/**
+ * The writes of one document a session keeps the version of. A document sent
+ * more writes than this behind the session's last names none of the older.
+ */
+const WRITE_RECORDS_KEPT = 64;
+
 /** What a session's `update` and `save` write into one document; the session supplies its own client id. */
 export interface ClientSessionWriteArgs<TTransfer> {
    uri: string;
@@ -50,6 +56,8 @@ export interface ClientSessionWriteArgs<TTransfer> {
     * text no longer does.
     */
    restore?: boolean;
+   /** The client's number for the write, which {@link ClientSession.heldWrite} reports once a version holds it. */
+   write?: number;
 }
 
 /** What a session's `persist` writes: the text the store holds for `uri`. */
@@ -61,6 +69,8 @@ export type ClientSessionDeleteArgs = Omit<ClientSessionWriteArgs<never>, 'model
 /** What a session's `updateAll` writes, all or none. */
 export interface ClientSessionUpdateAllArgs<TTransfer> {
    updates: ClientSessionWriteArgs<TTransfer>[];
+   /** The set's number, one for all its documents. An update's own `write` is not read. */
+   write?: number;
 }
 
 /**
@@ -184,6 +194,13 @@ export interface ClientSession<
    /** Whether an event's `sourceClientId` names this session, i.e. the event echoes its own write. */
    isOwnEcho(sourceClientId: string): boolean;
    /**
+    * The highest `write` number of this session's numbered writes of `uri`
+    * that text at `version` holds, or `undefined` for none. Kept while this
+    * session has `uri` open and lives, for its last writes of `uri` only, so
+    * a version far behind them may name none.
+    */
+   heldWrite(uri: string, version: TextVersion): number | undefined;
+   /**
     * End the session: close everything it has open and free its id.
     * Idempotent. `cause` is `'lost'` when the session ends because its
     * client's connection went away, which lets each document it was the last
@@ -237,6 +254,8 @@ export class DefaultClientSession<
    protected readonly openOptionsByUri = new Map<string, TOpenOptions | undefined>();
    /** Drops an open's options from {@link openOptionsByUri} when the store closes the open. */
    protected readonly closeListener: Disposable;
+   /** This session's numbered writes per canonical URI, in the order they applied, each at the version its text took. */
+   protected readonly writeNumbers = new Map<string, { readonly write: number; readonly version: TextVersion }[]>();
    protected readonly disposeEmitter = new Emitter<SessionEndCause>();
    /** Logs under `logName`, `ClientSession` when none is given, with this session's id in a bracket of its own, so a line names the session that wrote. */
    protected readonly tracer: Tracer;
@@ -261,6 +280,7 @@ export class DefaultClientSession<
       this.closeListener = services.workspace.TextDocuments.onDidClose(event => {
          if (event.clientId === this.clientId) {
             this.openOptionsByUri.delete(event.document.uri);
+            this.writeNumbers.delete(event.document.uri);
          }
       });
    }
@@ -328,11 +348,40 @@ export class DefaultClientSession<
       return sourceClientId === this.clientId;
    }
 
+   heldWrite(uri: string, version: TextVersion): number | undefined {
+      // A session that ended late may still be asked, for a document sent on its connection.
+      let held: number | undefined;
+      for (const record of this.writeNumbers.get(this.canonicalKey(uri)) ?? []) {
+         if (record.version <= version && (held === undefined || record.write > held)) {
+            held = record.write;
+         }
+      }
+      return held;
+   }
+
+   /**
+    * Keep `write`, when given, at the version the store holds for `uri` now.
+    * Called in the step that applies its text, before any build of it can be
+    * sent, which `AstDocumentManager.update` applying before its first await
+    * makes so.
+    */
+   protected recordWriteNumber(uri: string, write: number | undefined): void {
+      if (write === undefined) {
+         return;
+      }
+      const records = this.writeNumbers.get(uri) ?? [];
+      records.push({ write, version: this.services.workspace.TextDocuments.version(uri) });
+      // Every document sent is checked against them, so they stay few.
+      records.splice(0, records.length - WRITE_RECORDS_KEPT);
+      this.writeNumbers.set(uri, records);
+   }
+
    dispose(cause?: SessionEndCause): void {
       if (this.disposed) {
          return;
       }
       this.disposed = true;
+      this.writeNumbers.clear();
       this.services.workspace.TextDocuments.closeSession(this.clientId, cause);
       this.closeListener.dispose();
       this.disposeEmitter.fire(cause ?? 'closed');
@@ -435,7 +484,9 @@ export class DefaultClientSession<
       const text = await run('serialize', () => service.modelToText(uri, args.model, cancelToken));
       const appliedVersion = await run('apply', () => {
          check();
-         return this.services.workspace.AstDocumentManager.update(uri, text, this.clientId);
+         const applied = this.services.workspace.AstDocumentManager.update(uri, text, this.clientId);
+         this.recordWriteNumber(uri, args.write);
+         return applied;
       });
       // Through the public `rebuild`, so an override of it stays in the path.
       // An override that awaits before calling the base can outlast the build
@@ -500,6 +551,7 @@ export class DefaultClientSession<
       // was checked, and the set then half-applies before a later check fails.
       check();
       const applied = uris.map((uri, i) => this.services.workspace.AstDocumentManager.update(uri, texts[i], this.clientId));
+      uris.forEach(uri => this.recordWriteNumber(uri, args.write));
       const versions = await Promise.all(applied);
       const state = this.services.workspace.DocumentBuilder.finalBuildState();
       const rebuilt = await Promise.allSettled(uris.map(uri => service.rebuild(uri, state, cancelToken)));

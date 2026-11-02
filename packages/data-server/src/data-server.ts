@@ -708,7 +708,8 @@ export class DataServer<
       // Every one before any applies, so a set stays all or none.
       args.updates.forEach(update => this.assertEpoch(update.uri, update));
       const astDocuments = await session.updateAll({
-         updates: args.updates.map(update => this.toSessionWrite(update))
+         updates: args.updates.map(update => this.toSessionWrite(update)),
+         write: args.write
       });
       // A page that reads unsaved work from its editor sees the writes only once their text reaches it.
       await Promise.all(args.updates.map(update => this.modelService.settleLanguageClient(update.uri)));
@@ -721,7 +722,7 @@ export class DataServer<
     * through an override of this.
     */
    protected toSessionWrite(request: Omit<TransferUpdateDocumentArgs<TTransfer>, 'clientId'>): ClientSessionWriteArgs<TTransfer> {
-      return { uri: request.uri, model: request.model, baseVersion: request.baseVersion, restore: request.restore };
+      return { uri: request.uri, model: request.model, baseVersion: request.baseVersion, restore: request.restore, write: request.write };
    }
 
    /**
@@ -1261,11 +1262,25 @@ export class DataServer<
       return {
          uri: encoded.uri,
          epoch: this.epoch,
+         heldWrites: this.heldWrites(encoded.uri, encoded.model.version),
          // The encoder returns the structural base; `TTransfer` is the adopter's
          // declaration of the roots its languages produce, and nothing checks it.
          model: { ...encoded.model, hash } as TransferModelSnapshot<TTransfer, TDiagnostic>,
          ...(text ? { text } : {})
       };
+   }
+
+   /** Per session registered on this connection, the highest of its numbered writes of `uri` that `version` holds. */
+   protected heldWrites(uri: string, version: number): Record<string, number> {
+      const held: [string, number][] = [];
+      for (const [clientId, session] of this.clientSessions) {
+         const write = session.heldWrite(uri, version);
+         if (write !== undefined) {
+            held.push([clientId, write]);
+         }
+      }
+      // Built from entries, so a session named `__proto__` is kept as a key.
+      return Object.fromEntries(held);
    }
 
    /**

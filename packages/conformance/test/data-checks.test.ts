@@ -38,9 +38,9 @@ describe('buildDataChecks', () => {
       expect(skipped[0].skipReason).toContain('`attach`');
    });
 
-   it('plans five server-level checks plus thirty-two grammar-bearing checks per language', () => {
-      expect(buildDataChecks({ connect, attach, languages: [fixture] })).toHaveLength(37);
-      expect(buildDataChecks({ connect, attach, languages: [fixture, fixture] })).toHaveLength(69);
+   it('plans five server-level checks plus thirty-three grammar-bearing checks per language', () => {
+      expect(buildDataChecks({ connect, attach, languages: [fixture] })).toHaveLength(38);
+      expect(buildDataChecks({ connect, attach, languages: [fixture, fixture] })).toHaveLength(71);
    });
 
    it('runs every data check when the fixture supplies an edit and the options expect projects', () => {
@@ -48,18 +48,19 @@ describe('buildDataChecks', () => {
       expect(checks.every(check => typeof check.body === 'function')).toBe(true);
    });
 
-   it('plans the same checks without an edit, but skips the seven that need one', () => {
+   it('plans the same checks without an edit, but skips the eight that need one', () => {
       // The checks are still PLANNED — reported as skipped with a reason —
       // rather than silently absent, which is what distinguishes an opt-out
       // from lost coverage.
       const { edit: _edit, ...withoutEdit } = fixture;
       const checks = buildDataChecks({ connect, attach, languages: [withoutEdit], expectsProjects: true });
 
-      expect(checks).toHaveLength(37);
+      expect(checks).toHaveLength(38);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('updateModelDocument applies an edit'),
          expect.stringContaining('updateModelDocument answers racing writes'),
+         expect.stringContaining('a document names the highest numbered write'),
          expect.stringContaining('updateModelDocument arms the conflict gate'),
          expect.stringContaining('the last close drops a document'),
          expect.stringContaining('updateModelDocuments writes a set all or none'),
@@ -76,7 +77,7 @@ describe('buildDataChecks', () => {
       const { referenceQuery: _query, ...withoutQuery } = fixture;
       const checks = buildDataChecks({ connect, attach, languages: [withoutQuery], expectsProjects: true });
 
-      expect(checks).toHaveLength(37);
+      expect(checks).toHaveLength(38);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([
          expect.stringContaining('findReferenceCandidates answers for a synthetic source')
@@ -88,7 +89,7 @@ describe('buildDataChecks', () => {
       const { breakingEdit: _breakingEdit, ...withoutBreakingEdit } = fixture;
       const checks = buildDataChecks({ connect, attach, languages: [withoutBreakingEdit], expectsProjects: true });
 
-      expect(checks).toHaveLength(37);
+      expect(checks).toHaveLength(38);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([expect.stringContaining('credits the dependent')]);
       expect(skipped[0].skipReason).toContain('`breakingEdit`');
@@ -98,7 +99,7 @@ describe('buildDataChecks', () => {
       const { syntaxError: _syntaxError, ...withoutSyntaxError } = fixture;
       const checks = buildDataChecks({ connect, attach, languages: [withoutSyntaxError], expectsProjects: true });
 
-      expect(checks).toHaveLength(37);
+      expect(checks).toHaveLength(38);
       const skipped = checks.filter(check => check.body === undefined);
       expect(skipped.map(check => check.title)).toEqual([expect.stringContaining('refuses a model write to text with a syntax error')]);
       expect(skipped[0].skipReason).toContain('`syntaxError`');

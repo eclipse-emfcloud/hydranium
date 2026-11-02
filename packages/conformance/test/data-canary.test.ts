@@ -34,6 +34,7 @@ const INVALID_DIAGNOSTICS = 'getModelDocument(invalid) reports at least one diag
 const DIAGNOSTIC_PARAMS = 'a diagnostic carrying a framework message code also carries its params';
 const EDIT_REFLECTED = 'updateModelDocument applies an edit';
 const WRITES_RACED = 'updateModelDocument answers racing writes';
+const HELD_WRITES = 'a document names the highest numbered write of each session it holds';
 const SUBSCRIPTION = 'subscribe + update delivers an onDocumentUpdated event';
 const FOLDER_CANDIDATES = 'findReferenceCandidates answers for a synthetic source at a folder URI';
 const CASCADE = 'editing a document reports its unwatched dependent as built';
@@ -139,12 +140,12 @@ describe('the /data battery discriminates', () => {
       }
    });
 
-   it('plans exactly the thirty-seven checks the must-fail cases below name', () => {
+   it('plans exactly the thirty-eight checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(37);
+      expect(titles).toHaveLength(38);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -182,9 +183,10 @@ describe('the /data battery discriminates', () => {
          DELETE_OTHERS,
          DELETE_UNSAVED,
          SYNTAX_ERROR,
-         EPOCH_GATE
+         EPOCH_GATE,
+         HELD_WRITES
       ];
-      expect(matching(titles, covered)).toHaveLength(37);
+      expect(matching(titles, covered)).toHaveLength(38);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -368,6 +370,9 @@ describe('the /data battery discriminates', () => {
          defects: { writtenFromLatest: true },
          expected: [WRITES_RACED]
       },
+      { label: 'documents naming no numbered write', defects: { heldWritesOmitted: true }, expected: [HELD_WRITES] },
+      { label: 'documents naming a numbered write under every session', defects: { heldWritesUnkeyed: true }, expected: [HELD_WRITES] },
+      { label: "documents naming another connection's numbered writes", defects: { heldWritesUnscoped: true }, expected: [HELD_WRITES] },
       { label: 'sessions outliving their connection', defects: { sessionsOutliveConnection: true }, expected: [CONNECTION_END] },
       { label: 'a write answered before its document is validated', defects: { writeAnswersUnvalidated: true }, expected: [WRITE_ANSWER] },
       { label: 'every document reported clean', defects: { neverDirty: true }, expected: [DIRTY] },

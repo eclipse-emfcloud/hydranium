@@ -113,7 +113,8 @@ export interface DataConformanceOptions<TTransfer extends TransferElement, TDiag
     * Open another connection to the same server as `driver`, for the check
     * that a connection's sessions end with it while the server lives on. That
     * check disposes `driver` and needs its `dispose` to close the connection as
-    * the server sees it. Absent, the check reports skipped.
+    * the server sees it. Absent, the check reports skipped, and the check of
+    * `heldWrites` does not read the document over another connection.
     */
    readonly attach?: (
       driver: DataConformanceDriver<TTransfer, TDiagnostic>
@@ -1256,6 +1257,60 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        second.written?.version,
                        `two racing writes both answered written version ${first.written?.version}`
                     );
+                 } finally {
+                    driver.dispose();
+                 }
+              }
+            : undefined
+      });
+
+      checks.push({
+         title: `a document names the highest numbered write of each session it holds ${tag}`,
+         skipReason: edit ? undefined : editSkipReason,
+         body: edit
+            ? async () => {
+                 const driver = await connect();
+                 try {
+                    const model = resolveModel(valid);
+                    const seeder = await seed(driver, model);
+                    const author = await openAs(driver, model.uri);
+                    const before = await driver.proxy.getModelDocument({ uri: model.uri });
+                    const answer = await driver.proxy.updateModelDocument({
+                       uri: model.uri,
+                       clientId: author,
+                       model: resolveDeferred(edit.to),
+                       baseVersion: 'any',
+                       write: 7
+                    });
+                    const read = await driver.proxy.getModelDocument({ uri: model.uri });
+                    // Back to the text before, so the second write changes it too.
+                    await driver.proxy.updateModelDocument({
+                       uri: model.uri,
+                       clientId: author,
+                       model: TransferDocument.assertLoaded(before).model.root,
+                       baseVersion: 'any',
+                       write: 9
+                    });
+                    const reread = await driver.proxy.getModelDocument({ uri: model.uri });
+                    // A writer tells by it whether a document holds its write before the write answers.
+                    assert.strictEqual(before.heldWrites?.[author], undefined, `a read before write 7 of ${author} names it held`);
+                    assert.strictEqual(answer.heldWrites?.[author], 7, `the answer to write 7 names ${JSON.stringify(answer.heldWrites)}`);
+                    assert.strictEqual(read.heldWrites?.[author], 7, `a read after write 7 names ${JSON.stringify(read.heldWrites)}`);
+                    assert.strictEqual(read.heldWrites?.[seeder], undefined, `a read names a write of ${seeder}, which numbered none`);
+                    assert.strictEqual(reread.heldWrites?.[author], 9, `a read after write 9 names ${JSON.stringify(reread.heldWrites)}`);
+                    if (attach) {
+                       const sibling = await attach(driver);
+                       try {
+                          const elsewhere = await sibling.proxy.getModelDocument({ uri: model.uri });
+                          assert.deepStrictEqual(
+                             elsewhere.heldWrites,
+                             {},
+                             `another connection's read names ${JSON.stringify(elsewhere.heldWrites)}`
+                          );
+                       } finally {
+                          sibling.dispose();
+                       }
+                    }
                  } finally {
                     driver.dispose();
                  }

@@ -71,6 +71,17 @@ export interface TransferDocument<TTransfer extends TransferElement, TDiagnostic
     */
    epoch: string;
    /**
+    * For each session on the receiving connection that wrote the document
+    * and has it open, the highest `write` number of its writes that `model`
+    * holds. A session that sends each write of a document once the one
+    * before answered has them land in number order, so a write of it
+    * numbered at or below this is held too. A server may keep only a
+    * session's recent writes, so one far behind its last may go unnamed.
+    * Empty without a model. A server before it sends none, so a client
+    * reading it allows for its absence.
+    */
+   heldWrites: Record<string, number>;
+   /**
     * Absent when the document does not exist: the server answers an unknown
     * URI with a shaped envelope rather than an error, so absence is an
     * ordinary branch and not a catch.
@@ -179,7 +190,7 @@ export namespace TransferDocument {
       uri: string,
       epoch: string
    ): TransferDocument<TTransfer, TDiagnostic> {
-      return { uri, epoch };
+      return { uri, epoch, heldWrites: {} };
    }
 
    /**
@@ -198,6 +209,7 @@ export namespace TransferDocument {
       return {
          uri,
          epoch,
+         heldWrites: {},
          model: { root, version: asModelVersion(version), hash, ...(diagnostics === undefined ? {} : { diagnostics }) },
          ...(text === undefined ? {} : { text })
       };

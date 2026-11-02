@@ -286,13 +286,27 @@ The adopter's side is in
 edits it, such as a form. Its class doc lists what it does. This section holds
 the contracts behind it.
 
-**An edit is applied once.** A write's edits leave the root before its answer
-is taken, and the documents the server sends while a request is out wait for
-it, since one may already hold the write. The cost is that another client's
-change shows only once the copy's request has answered, or after
-`settleWritesMs`. While a request is out, a dirty flag decided on older text is
-skipped, so an answer built before another client's save does not mark the copy
-unsaved again.
+**An edit is applied once.** Each write a session sends carries a number, taken
+as it is sent, after every wait, so a write sent later numbers higher. The copy
+learns its write's number through `onWrite`. Every document the server sends
+names in `heldWrites` the highest number of each session's writes its model
+holds. The copy writes one batch at a time and a batch lands one write at most,
+so a document holds the batch out once its entry reaches the batch's first
+number. The copy takes every document with `heldWrites` at once, unless it is
+older than the one it shows, and applies the batch's edits on top only while the
+document does not hold it. Another client's change then shows while the copy's
+write is out, and an edit made on a document that holds the write is based on it
+without a reread. A reconnect forgets the number before the restore runs. A
+conflict's reread may wait for it while the batch is out, and the restore writes
+above the refused number. A document without `heldWrites` comes from a server
+that reports no writes, and may hold the write out. The copy holds such
+documents while a request is out, as before `heldWrites`, and takes the newest
+once a request answers with no write out, or once the first has waited
+`settleWritesMs`. While a write is out, it leaves its own echo from such a
+server, and an edit made on another document from it is reconciled rather than
+sent. While a request is out, a dirty flag decided on older text is skipped, so
+an answer built before another client's save does not mark the copy unsaved
+again.
 
 **An edit typed during the copy's own write does not conflict with it**, since
 it is measured against that write as the server answered it, normalized or not.
