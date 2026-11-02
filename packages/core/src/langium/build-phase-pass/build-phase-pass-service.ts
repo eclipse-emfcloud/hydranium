@@ -13,6 +13,7 @@ import { type CancellationToken, type Disposable } from 'vscode-languageserver';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerSharedServices } from '../module.js';
 import { Registry } from '../../util/registry.js';
+import { type RunningBuild } from '../document-builder/document-builder.js';
 import { type BuildPhasePass, type BuildPhasePassRegistry, BuildPassPhase } from './build-phase-pass.js';
 
 /**
@@ -35,9 +36,16 @@ export interface BuildPhasePassService extends BuildPhasePassRegistry {
     * sequentially — each pass is awaited before the next begins. The cancel
     * token is checked before each pass so a preempted build stops cleanly.
     * No-ops when no pass targets the phase. Called by
-    * `BuildPipelineIntegration` from an `onBuildPhase` listener.
+    * `BuildPipelineIntegration` from an `onBuildPhase` listener. Forward
+    * `build` through copies or filters of the batch, or `undefined` for a
+    * standalone run with no owning build.
     */
-   runPasses(documents: readonly LangiumDocument[], phase: DocumentState, cancelToken: CancellationToken): Promise<void>;
+   runPasses(
+      documents: readonly LangiumDocument[],
+      phase: DocumentState,
+      cancelToken: CancellationToken,
+      build: RunningBuild | undefined
+   ): Promise<void>;
    /** The passes declaring `phase`, in the order {@link runPasses} runs them. */
    passesAt(phase: DocumentState): readonly BuildPhasePass[];
 }
@@ -103,7 +111,12 @@ export class DefaultBuildPhasePassService implements BuildPhasePassService {
       return [...this.getPhaseBucket(phase)];
    }
 
-   async runPasses(documents: readonly LangiumDocument[], phase: DocumentState, cancelToken: CancellationToken): Promise<void> {
+   async runPasses(
+      documents: readonly LangiumDocument[],
+      phase: DocumentState,
+      cancelToken: CancellationToken,
+      build: RunningBuild | undefined
+   ): Promise<void> {
       const bucket = this.getPhaseBucket(phase);
       if (bucket.length === 0) {
          return;
@@ -120,9 +133,9 @@ export class DefaultBuildPhasePassService implements BuildPhasePassService {
          // the phase; off the profiling path call directly. `scope` awaits an
          // async `run`, so timing covers the full settle.
          if (session) {
-            await session.scope(pass.id, () => pass.run(documents, cancelToken));
+            await session.scope(pass.id, () => pass.run(documents, cancelToken, build));
          } else {
-            await pass.run(documents, cancelToken);
+            await pass.run(documents, cancelToken, build);
          }
       }
       // One line per pass (count + self-% + self-ms), sorted — only when profiling.

@@ -7,10 +7,15 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { DocumentState } from '@hydranium/langium';
+import { type LangiumDocument, DocumentState } from '@hydranium/langium';
+import { CancellationToken } from 'vscode-languageserver';
 import { describe, expect, it } from 'vitest';
 import { type AstExtension, AstExtensionPhase } from '../../src/langium/ast-extension/ast-extension-service.js';
 import { type BuildPhasePass, BuildPassPhase } from '../../src/langium/build-phase-pass/build-phase-pass.js';
+
+import { type RunningBuild } from '../../src/langium/document-builder/document-builder.js';
+import { DefaultBuildPipelineIntegration } from '../../src/langium/document-builder/build-pipeline-integration.js';
+import { type BuildPhasePassService } from '../../src/langium/build-phase-pass/build-phase-pass-service.js';
 
 describe('AstExtensionPhase', () => {
    it('rejects a phase the pipeline never notifies at compile time', () => {
@@ -48,3 +53,43 @@ describe('BuildPassPhase', () => {
       expect(BuildPassPhase.all()).toContain(DocumentState.Parsed);
    });
 });
+
+// Compile-time refusals must not dispatch runtime build work.
+function checkOwnerArguments(
+   service: BuildPhasePassService,
+   pass: BuildPhasePass,
+   documents: readonly LangiumDocument[],
+   build: RunningBuild | undefined
+): void {
+   void service.runPasses(documents, DocumentState.Linked, CancellationToken.None, build);
+   void pass.run(documents, CancellationToken.None, build);
+   // @ts-expect-error Standalone calls must explicitly pass undefined instead of dropping ownership.
+   void service.runPasses(documents, DocumentState.Linked, CancellationToken.None);
+   // @ts-expect-error Pass wrappers must forward the owner, even when they copy the batch.
+   void pass.run([...documents], CancellationToken.None);
+}
+void checkOwnerArguments;
+
+class ForwardingPipeline extends DefaultBuildPipelineIntegration {
+   protected override runBuildPhase(
+      documents: readonly LangiumDocument[],
+      phase: DocumentState,
+      token: CancellationToken,
+      build: RunningBuild | undefined
+   ): Promise<void> {
+      // @ts-expect-error A wrapping override must forward its owner to the inherited dispatcher.
+      void super.runBuildPhase([...documents], phase, token);
+      return super.runBuildPhase([...documents], phase, token, build);
+   }
+   protected override callIntegrity(
+      documents: readonly LangiumDocument[],
+      phase: DocumentState,
+      token: CancellationToken,
+      build: RunningBuild | undefined
+   ): Promise<void> {
+      // @ts-expect-error A wrapping override must forward its owner to the inherited integrity call.
+      void super.callIntegrity([...documents], phase, token);
+      return super.callIntegrity([...documents], phase, token, build);
+   }
+}
+void ForwardingPipeline;

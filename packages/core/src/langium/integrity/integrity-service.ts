@@ -19,7 +19,7 @@ import {
    UriUtils
 } from '@hydranium/langium';
 import { CancellationToken, type Disposable } from 'vscode-languageserver';
-import { type HydraniumDocumentBuilder } from '../document-builder/document-builder.js';
+import { type HydraniumDocumentBuilder, type RunningBuild } from '../document-builder/document-builder.js';
 import { type TextDocument } from 'vscode-languageserver-textdocument';
 import { type WritableFileSystemProvider } from '../workspace/file-system-provider.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
@@ -143,8 +143,10 @@ export interface IntegrityRun {
    readonly reenforced: Map<LangiumDocument, number>;
    /** Whether build-phase passes ran before this one in its phase, and so read the dependents before their relink. */
    readonly passesBefore: boolean;
-   /** The token of the build, which tells it apart from an overlapping one when it ends. */
+   /** The token used for cancellation and dependent relinking. */
    readonly cancelToken: CancellationToken;
+   /** The owning build. Standalone enforcement has no build completion to lift its guards. */
+   readonly build?: RunningBuild;
 }
 
 /**
@@ -165,7 +167,7 @@ export namespace IntegrityRun {
    /** A run over `documents` in which no rule has run yet. */
    export function create(
       documents: readonly LangiumDocument[],
-      options: { passesBefore?: boolean; cancelToken?: CancellationToken } = {}
+      options: { passesBefore?: boolean; cancelToken?: CancellationToken; build?: RunningBuild } = {}
    ): IntegrityRun {
       return {
          // A copy, as the builder adds a pulled-in dependent to the batch it hands the passes.
@@ -173,7 +175,8 @@ export namespace IntegrityRun {
          enforced: new Set(),
          reenforced: new Map(),
          passesBefore: options.passesBefore ?? false,
-         cancelToken: options.cancelToken ?? CancellationToken.None
+         cancelToken: options.cancelToken ?? CancellationToken.None,
+         build: options.build
       };
    }
 }
@@ -257,12 +260,12 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
    protected readonly rebuildsForPassesBefore = new WeakSet<LangiumDocument>();
    /**
     * The entries of {@link rebuildsAfterThrow} a build clears once it
-    * completes, by its token. A later re-run or relink in the same build may
+    * completes. A later re-run or relink in the same build may
     * still throw.
     */
-   protected readonly rebuildsAfterThrowToClear = new WeakMap<CancellationToken, Set<LangiumDocument>>();
-   /** The entries of {@link rebuildsForPassesBefore} a build clears once it completes, unless it repairs them later, by its token. */
-   protected readonly rebuildsForPassesBeforeToClear = new WeakMap<CancellationToken, Set<LangiumDocument>>();
+   protected readonly rebuildsAfterThrowToClear = new WeakMap<RunningBuild, Set<LangiumDocument>>();
+   /** The entries of {@link rebuildsForPassesBefore} a build clears once it completes, unless it repairs them later. */
+   protected readonly rebuildsForPassesBeforeToClear = new WeakMap<RunningBuild, Set<LangiumDocument>>();
 
    constructor(
       protected readonly services: ServerLanguageServices,
@@ -289,16 +292,12 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       for (const contribution of Object.values(contributions)) {
          contribution.registerIntegrityRules(this);
       }
-      // Each build clears its own entries. Those of a build that throws go with its token at the drain after it,
-      // but builds started with `None` share theirs, so one that throws drops those of another.
-      this.documentBuilder.onBuildEnded(({ completed, cancelToken = CancellationToken.None, cancelTokens = [] }) => {
-         if (completed) {
-            this.rebuildsAfterThrowToClear.get(cancelToken)?.forEach(document => this.rebuildsAfterThrow.delete(document));
-            this.rebuildsForPassesBeforeToClear.get(cancelToken)?.forEach(document => this.rebuildsForPassesBefore.delete(document));
-         }
-         for (const ended of completed ? [cancelToken] : cancelTokens) {
-            this.rebuildsAfterThrowToClear.delete(ended);
-            this.rebuildsForPassesBeforeToClear.delete(ended);
+      this.documentBuilder.onBuildEnded(({ completed, build }) => {
+         if (completed && build !== undefined) {
+            this.rebuildsAfterThrowToClear.get(build)?.forEach(document => this.rebuildsAfterThrow.delete(document));
+            this.rebuildsForPassesBeforeToClear.get(build)?.forEach(document => this.rebuildsForPassesBefore.delete(document));
+            this.rebuildsAfterThrowToClear.delete(build);
+            this.rebuildsForPassesBeforeToClear.delete(build);
          }
       });
    }
@@ -325,6 +324,8 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
    ): Promise<void> {
       const sincePhaseStart = this.services.shared.Clock.stopwatch();
       let mutatedCount = 0;
+      let afterThrow: Set<LangiumDocument> | undefined;
+      let passesBefore: Set<LangiumDocument> | undefined;
       // Per-rule self-time profiling is opt-in: only spin up a session when the
       // debug threshold is active, so the production `info` path allocates
       // nothing and the hot rule loop stays a single const-branch off `session`.
@@ -356,9 +357,11 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
             }
             // Reached only when no reconcile or relink threw, so once the build completes a later throw may ask for a rebuild again.
             if (phase === DocumentState.Linked) {
-               this.toClear(this.rebuildsAfterThrowToClear, run).add(document);
-               if (!mutated) {
-                  this.toClear(this.rebuildsForPassesBeforeToClear, run).add(document);
+               if (this.rebuildsAfterThrow.has(document)) {
+                  (afterThrow ??= this.toClear(this.rebuildsAfterThrowToClear, run))?.add(document);
+               }
+               if (!mutated && this.rebuildsForPassesBefore.has(document)) {
+                  (passesBefore ??= this.toClear(this.rebuildsForPassesBeforeToClear, run))?.add(document);
                }
             }
             await interruptAndCheck(cancelToken);
@@ -721,7 +724,9 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       // Those passes read the dependents before their relink, and a build of `document` as changed runs
       // them again. Once until a build completes without repairing it, so a rule that never settles cannot loop.
       if (run.passesBefore && dependents.length > 0) {
-         this.rebuildsForPassesBeforeToClear.get(run.cancelToken)?.delete(document);
+         if (run.build !== undefined) {
+            this.rebuildsForPassesBeforeToClear.get(run.build)?.delete(document);
+         }
       }
       if (run.passesBefore && dependents.length > 0 && !this.rebuildsForPassesBefore.has(document)) {
          this.rebuildsForPassesBefore.add(document);
@@ -781,7 +786,9 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     * so a throw in that build too ends with its retries.
     */
    protected rebuildAfterThrow(document: LangiumDocument, run: IntegrityRun): void {
-      this.rebuildsAfterThrowToClear.get(run.cancelToken)?.delete(document);
+      if (run.build !== undefined) {
+         this.rebuildsAfterThrowToClear.get(run.build)?.delete(document);
+      }
       if (!this.rebuildsAfterThrow.has(document)) {
          this.rebuildsAfterThrow.add(document);
          this.services.shared.workspace.VersionSyncService.rebuildWhileCurrent(document);
@@ -789,9 +796,15 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
    }
 
    /** The entries of `guard` that the build of `run` clears once it completes. */
-   protected toClear(guard: WeakMap<CancellationToken, Set<LangiumDocument>>, run: IntegrityRun): Set<LangiumDocument> {
-      const documents = guard.get(run.cancelToken) ?? new Set<LangiumDocument>();
-      guard.set(run.cancelToken, documents);
+   protected toClear(guard: WeakMap<RunningBuild, Set<LangiumDocument>>, run: IntegrityRun): Set<LangiumDocument> | undefined {
+      if (run.build === undefined) {
+         return undefined;
+      }
+      let documents = guard.get(run.build);
+      if (documents === undefined) {
+         documents = new Set<LangiumDocument>();
+         guard.set(run.build, documents);
+      }
       return documents;
    }
 

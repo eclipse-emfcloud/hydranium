@@ -28,6 +28,10 @@ type DocumentListener = (document: LangiumDocument, cancelToken: CancellationTok
 
 /** Captures the phase listeners the integration attaches so tests can fire them. */
 class FakeDocumentBuilder {
+   buildForBatch(): undefined {
+      return undefined;
+   }
+
    readonly buildListeners = new Map<DocumentState, BuildListener[]>();
    readonly documentListeners = new Map<DocumentState, DocumentListener[]>();
 

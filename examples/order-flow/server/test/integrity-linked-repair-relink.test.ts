@@ -21,14 +21,20 @@
 
 import {
    DefaultCstResidencyService,
+   DefaultBuildPipelineIntegration,
+   DefaultBuildPhasePassService,
    DefaultIntegrityService,
    HydraniumDocumentBuilder,
    type IntegrityRule,
+   type BuildPhasePass,
+   type RunningBuild,
    IntegrityPhase,
    type IntegritySyncMode,
-   isCstShed
+   isCstShed,
+   isInsideReadLock
 } from '@hydranium/core';
 import { makeCapturingTracer } from '@hydranium/core/testing';
+import { installNodeReadLockScope } from '@hydranium/core/node';
 import { makeFakeClock } from '@hydranium/protocol/testing';
 import {
    type AstNode,
@@ -36,6 +42,7 @@ import {
    Deferred,
    DocumentState,
    OperationCancelled,
+   ReadPriority,
    isMultiReference,
    type LangiumDocument,
    URI
@@ -1235,6 +1242,358 @@ describe('a Linked-phase integrity repair', () => {
       expect(fixture.recovery).toHaveBeenCalledTimes(2);
       expect(stale(fixture.processDocument, fixture.orderDocument)).toEqual([]);
    });
+
+   it.each([
+      ['Parsed', DocumentState.Parsed, false],
+      ['IndexedContent', DocumentState.IndexedContent, false],
+      ['ComputedScopes', DocumentState.ComputedScopes, false],
+      ['Linked', DocumentState.Linked, false],
+      ['IndexedReferences', DocumentState.IndexedReferences, false],
+      ['Validated', DocumentState.Validated, false],
+      ['Linked pass before integrity', DocumentState.Linked, true]
+   ] as const)("keeps a tokenless batch's owner at %s while another build of the same document completes", async (_label, phase, pass) => {
+      const rule = renameRule();
+      rule.armed = false;
+      class CopyingBuilder extends HydraniumDocumentBuilder {
+         protected override async runCancelable(
+            documents: LangiumDocument[],
+            state: DocumentState,
+            token: CancellationToken,
+            callback: (document: LangiumDocument) => unknown,
+            build?: RunningBuild
+         ): Promise<void> {
+            await Promise.resolve();
+            return super.runCancelable([...documents], state, token, callback, build);
+         }
+      }
+      const fixture = setUp(rule, {
+         syncMode: 'silent',
+         harnessOptions: { extraSharedModules: [{ workspace: { DocumentBuilder: services => new CopyingBuilder(services) } }] }
+      });
+      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      const workspace = fixture.harness.shared.workspace;
+      const builder = workspace.DocumentBuilder;
+      const paused = new Deferred<void>();
+      const resume = new Deferred<void>();
+      let first: RunningBuild | undefined;
+      let batch: readonly LangiumDocument[] = [];
+      const ended: RunningBuild[] = [];
+      const owners: (RunningBuild | undefined)[] = [];
+      builder.onBuildEnded(event => {
+         if (event.completed && event.build !== undefined) {
+            ended.push(event.build);
+         }
+      });
+      const enforce = fixture.harness.domain.integrity.IntegrityService;
+      const enforceBatch = enforce.enforceBatch.bind(enforce);
+      vi.spyOn(enforce, 'enforceBatch').mockImplementation(async (documents, state, token, run) => {
+         if (state === phase && documents.includes(fixture.orderDocument)) {
+            owners.push(run?.build);
+         }
+         await enforceBatch(documents, state, token, run);
+      });
+      const pause = async (documents: readonly LangiumDocument[], token: CancellationToken): Promise<void> => {
+         if (first !== undefined || !documents.includes(fixture.orderDocument)) {
+            return;
+         }
+         first = builder.buildForBatch(documents);
+         batch = documents;
+         expect(first).toBeDefined();
+         expect(token).toBe(CancellationToken.None);
+         paused.resolve();
+         await resume.promise;
+         expect(builder.buildForBatch(documents)).toBe(first);
+      };
+      if (pass) {
+         workspace.BuildPhasePassService.register({
+            id: 'test-pause-before-integrity',
+            phase,
+            priority: -2000,
+            run: pause
+         });
+      } else {
+         builder.onBuildPhase(phase, pause);
+      }
+      const initial = builder.update([fixture.orderDocument.uri], []);
+      try {
+         await Promise.race([
+            paused.promise,
+            initial.then(() => {
+               throw new Error('Build ended before the pause');
+            })
+         ]);
+         await builder.update([fixture.orderDocument.uri], []);
+         expect(ended).toHaveLength(1);
+         expect(ended[0]).not.toBe(first);
+      } finally {
+         resume.resolve();
+         await initial;
+      }
+      expect(ended).toEqual([ended[0], first]);
+      expect(builder.buildForBatch(batch)).toBeUndefined();
+      if (pass) {
+         expect(owners).toEqual([ended[0], first]);
+      }
+   });
+
+   it.each(['throws', 'completes'])('keeps ownership after an overlapping build using the same input array %s', async outcome => {
+      const rule = renameRule();
+      rule.armed = false;
+      const fixture = setUp(rule, { syncMode: 'silent' });
+      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      const builder = fixture.harness.shared.workspace.DocumentBuilder;
+      builder.resetToState(fixture.orderDocument, DocumentState.Parsed);
+      const input = [fixture.orderDocument];
+      const entered = new Deferred<void>();
+      const resume = new Deferred<void>();
+      let first: RunningBuild | undefined;
+      let second = false;
+      const seen: { phase: DocumentState; build: RunningBuild | undefined }[] = [];
+      for (const phase of [DocumentState.Parsed, DocumentState.IndexedContent, DocumentState.ComputedScopes]) {
+         builder.onBuildPhase(phase, async documents => {
+            if (!documents.includes(fixture.orderDocument)) return;
+            if (phase === DocumentState.Parsed && first === undefined) {
+               first = builder.buildForBatch(documents);
+               expect(first).toBeDefined();
+               entered.resolve();
+               await resume.promise;
+            } else if (second && phase === DocumentState.Parsed && outcome === 'throws') {
+               throw new Error('shared input build failed');
+            } else if (!second) {
+               seen.push({ phase, build: builder.buildForBatch(documents) });
+            }
+         });
+      }
+      const initial = builder.build(input, { validation: true });
+      try {
+         await Promise.race([
+            entered.promise,
+            initial.then(() => {
+               throw new Error('Build ended before the hold');
+            })
+         ]);
+         second = true;
+         const overlapping = builder.build(input, { validation: true });
+         if (outcome === 'throws') {
+            await expect(overlapping).rejects.toThrow('shared input build failed');
+         } else {
+            await overlapping;
+            builder.resetToState(fixture.orderDocument, DocumentState.Parsed);
+         }
+         second = false;
+      } finally {
+         resume.resolve();
+         await initial;
+      }
+      expect(seen).toEqual([
+         { phase: DocumentState.IndexedContent, build: first },
+         { phase: DocumentState.ComputedScopes, build: first }
+      ]);
+   });
+
+   it('names a failed tokenless build outside the read that started it', async () => {
+      installNodeReadLockScope();
+      const rule = renameRule();
+      rule.armed = false;
+      const fixture = setUp(rule, { syncMode: 'silent' });
+      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      const { DocumentBuilder: builder, WorkspaceLock: lock } = fixture.harness.shared.workspace;
+      const other = fixture.create('throwing.domain', 'entity Other {}');
+      const drained = new Deferred<readonly CancellationToken[] | undefined>();
+      const listenerScopes: boolean[] = [];
+      const queued: { insideRead: boolean; priority: ReadPriority }[] = [];
+      let record = false;
+      const read = lock.read.bind(lock);
+      vi.spyOn(lock, 'read').mockImplementation((action, priority) => {
+         if (record) {
+            queued.push({ insideRead: isInsideReadLock(), priority: priority ?? ReadPriority.Normal });
+         }
+         return read(action, priority);
+      });
+      builder.onBuildPhase(DocumentState.IndexedContent, documents => {
+         if (documents.includes(other)) {
+            throw new Error('tokenless build failed inside a read');
+         }
+      });
+      builder.onBuildEnded(event => {
+         if (!event.completed) {
+            listenerScopes.push(isInsideReadLock());
+            drained.resolve(event.cancelTokens);
+         }
+      });
+      let ended: readonly CancellationToken[] | undefined;
+      await lock.read(async () => {
+         expect(isInsideReadLock()).toBe(true);
+         record = true;
+         await expect(builder.build([other])).rejects.toThrow('tokenless build failed inside a read');
+         ended = await drained.promise;
+      }, ReadPriority.Immediate);
+
+      expect(queued).toEqual([{ insideRead: false, priority: ReadPriority.Normal }]);
+      expect(listenerScopes).toEqual([false]);
+      expect(ended).toEqual([CancellationToken.None]);
+   });
+
+   it.each(
+      ['throw', 'passes before'].flatMap(guard =>
+         ['direct', 'runner', 'notification', 'phase', 'passes', 'pass', 'integrity'].flatMap(seam =>
+            (seam === 'direct' ? ['original'] : seam === 'runner' ? ['copy'] : ['copy', 'filter']).map(
+               shape => [guard, seam, shape] as const
+            )
+         )
+      )
+   )(
+      "lifts a clean tokenless build's %s guard after an overlapping tokenless build throws through %s with %s",
+      async (guard, seam, shape) => {
+         const rule = renameRule();
+         rule.armed = false;
+         const transform = (documents: readonly LangiumDocument[]): readonly LangiumDocument[] =>
+            shape === 'filter' ? documents.filter(document => document.uri.path.endsWith('.domain')) : [...documents];
+         class WrappedBuilder extends HydraniumDocumentBuilder {
+            override async notifyBuildPhase(
+               documents: LangiumDocument[],
+               phase: DocumentState,
+               token: CancellationToken,
+               build?: RunningBuild
+            ): Promise<void> {
+               await Promise.resolve();
+               return super.notifyBuildPhase(seam === 'notification' ? [...transform(documents)] : documents, phase, token, build);
+            }
+            protected override async runCancelable(
+               documents: LangiumDocument[],
+               phase: DocumentState,
+               token: CancellationToken,
+               callback: (document: LangiumDocument) => unknown,
+               build?: RunningBuild
+            ): Promise<void> {
+               await Promise.resolve();
+               return super.runCancelable(seam === 'runner' ? [...documents] : documents, phase, token, callback, build);
+            }
+         }
+         class WrappedPipeline extends DefaultBuildPipelineIntegration {
+            protected override async runBuildPhase(
+               documents: readonly LangiumDocument[],
+               phase: DocumentState,
+               token: CancellationToken,
+               build: RunningBuild | undefined
+            ): Promise<void> {
+               await Promise.resolve();
+               return super.runBuildPhase(seam === 'phase' ? transform(documents) : documents, phase, token, build);
+            }
+            protected override async callIntegrity(
+               documents: readonly LangiumDocument[],
+               phase: DocumentState,
+               token: CancellationToken,
+               build: RunningBuild | undefined
+            ): Promise<void> {
+               await Promise.resolve();
+               return super.callIntegrity(seam === 'integrity' ? transform(documents) : documents, phase, token, build);
+            }
+         }
+         class WrappedPasses extends DefaultBuildPhasePassService {
+            override register(pass: BuildPhasePass) {
+               if (seam !== 'pass' || !pass.id.startsWith('framework:integrity:')) {
+                  return super.register(pass);
+               }
+               return super.register({
+                  ...pass,
+                  run: async (documents, token, build) => {
+                     await Promise.resolve();
+                     return pass.run(transform(documents), token, build);
+                  }
+               });
+            }
+            override async runPasses(
+               documents: readonly LangiumDocument[],
+               phase: DocumentState,
+               token: CancellationToken,
+               build: RunningBuild | undefined
+            ): Promise<void> {
+               await Promise.resolve();
+               return super.runPasses(seam === 'passes' ? transform(documents) : documents, phase, token, build);
+            }
+         }
+         const fixture = setUp(rule, {
+            syncMode: 'silent',
+            harnessOptions:
+               seam === 'direct'
+                  ? undefined
+                  : {
+                       extraSharedModules: [
+                          {
+                             workspace: {
+                                DocumentBuilder: services => new WrappedBuilder(services),
+                                BuildPipelineIntegration: services => new WrappedPipeline(services),
+                                BuildPhasePassService: services => new WrappedPasses(services)
+                             }
+                          }
+                       ]
+                    }
+         });
+         await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+         const workspace = fixture.harness.shared.workspace;
+         const builder = workspace.DocumentBuilder;
+         fixture.recovery.mockResolvedValue(undefined);
+         if (guard === 'passes before') {
+            workspace.BuildPhasePassService.register({
+               id: 'test-before-integrity',
+               phase: DocumentState.Linked,
+               priority: -2000,
+               run: () => {}
+            });
+         }
+         const relink = vi.spyOn(builder, 'relinkInRunningBuild');
+         const failRepair = async (): Promise<void> => {
+            rule.armed = true;
+            writeFileSync(fixture.orderDocument.uri.fsPath, REPAIRABLE_SOURCE);
+            if (guard === 'throw') {
+               relink.mockRejectedValueOnce(new Error('dependent relink failed'));
+               await expect(builder.update([fixture.orderDocument.uri], [])).rejects.toThrow('dependent relink failed');
+            } else {
+               await builder.update([fixture.orderDocument.uri], []);
+            }
+            rule.armed = false;
+         };
+         await failRepair();
+         expect(fixture.recovery).toHaveBeenCalledTimes(1);
+
+         const cleanLinked = new Deferred<void>();
+         const resumeClean = new Deferred<void>();
+         const thrownDrained = new Deferred<void>();
+         const other = fixture.create('other.domain', 'entity Other { value: string }');
+         const seenTokens: CancellationToken[] = [];
+         const linked = builder.onBuildPhase(DocumentState.Linked, async (documents, token) => {
+            seenTokens.push(token);
+            if (documents.includes(fixture.orderDocument)) {
+               cleanLinked.resolve();
+               await resumeClean.promise;
+            } else if (documents.includes(other)) {
+               throw new Error('overlapping build failed');
+            }
+         });
+         const ended = builder.onBuildEnded(event => {
+            if (!event.completed && event.cancelTokens?.includes(CancellationToken.None)) {
+               thrownDrained.resolve();
+            }
+         });
+         const clean = builder.update([fixture.orderDocument.uri], []);
+         try {
+            await cleanLinked.promise;
+            await expect(builder.build([other], { validation: true })).rejects.toThrow('overlapping build failed');
+            await thrownDrained.promise;
+            expect(seenTokens).toEqual([CancellationToken.None, CancellationToken.None]);
+         } finally {
+            resumeClean.resolve();
+            await clean;
+            linked.dispose();
+            ended.dispose();
+         }
+
+         await failRepair();
+         expect(rule.repairs).toBe(2);
+         expect(fixture.recovery).toHaveBeenCalledTimes(2);
+      }
+   );
 
    it.each([0, 1.5, Number.NaN])('rejects %s as the maxRepeatRepairs option', maxRepeatRepairs => {
       const fixture = setUp(renameRule(), { syncMode: 'silent' });

@@ -21,7 +21,7 @@ import {
    type URI
 } from '@hydranium/langium';
 import { type ApplyWorkspaceEditParams, CancellationToken, CancellationTokenSource, type TextEdit } from 'vscode-languageserver';
-import type { BuildEndedEvent, BuildEndedListener } from '../../../src/langium/document-builder/document-builder.js';
+import type { BuildEndedEvent, BuildEndedListener, RunningBuild } from '../../../src/langium/document-builder/document-builder.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { HydraniumTextDocuments } from '../../../src/documents/hydranium-text-documents.js';
 import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
@@ -1667,7 +1667,106 @@ describe('IntegrityService relink of the dependents of a Linked-phase repair', (
       expect(rebuilds).toEqual(['a']);
    });
 
-   it('lifts the once-guard of a document only when the build in which it ran cleanly completes, not when another build ends', async () => {
+   it.each(['throw', 'passes before'])(
+      "keeps a tokenless build's %s guard when another build completes before it repairs again",
+      async guard => {
+         const { probe, documents, rebuilds, endBuild } = makeRelinkHarness({ throws: guard === 'throw' ? ['b'] : [] });
+         const { a } = documents;
+         let repairs = true;
+         probe.register({
+            id: 'repair-a',
+            nodeType: 'Foo',
+            phase: DocumentState.Linked,
+            enforce: node => repairs && (node as FakeNode).id === 'a'
+         });
+         const [first, active, other, clean, last] = [1, 2, 3, 4, 5].map((): RunningBuild => ({
+            documents: [a],
+            documentSet: new Set([a]),
+            options: {},
+            cancelToken: CancellationToken.None
+         }));
+         const enforceIn = async (build: RunningBuild): Promise<void> => {
+            const result = probe.enforceBatch(
+               [a],
+               DocumentState.Linked,
+               build.cancelToken,
+               IntegrityRun.create([a], { build, passesBefore: guard === 'passes before' })
+            );
+            if (repairs && guard === 'throw') {
+               await expect(result).rejects.toThrow('relink of b');
+            } else {
+               await result;
+            }
+         };
+
+         await enforceIn(first);
+         expect(rebuilds).toEqual(['a']);
+         endBuild({ completed: false, cancelTokens: [CancellationToken.None] });
+         repairs = false;
+         await enforceIn(active);
+         endBuild({ completed: true, build: other });
+         repairs = true;
+         await enforceIn(active);
+         expect(rebuilds).toEqual(['a']);
+         // A listener may catch the fault and let its build complete.
+         endBuild({ completed: true, build: active });
+         await enforceIn(last);
+         expect(rebuilds).toEqual(['a']);
+
+         repairs = false;
+         await enforceIn(clean);
+         endBuild({ completed: true, build: clean });
+         repairs = true;
+         await enforceIn(last);
+         expect(rebuilds).toEqual(['a', 'a']);
+      }
+   );
+
+   it.each(['throw', 'passes before'])(
+      "keeps a tokenless build's pending %s guard lift when another tokenless build throws",
+      async guard => {
+         const { probe, documents, rebuilds, endBuild } = makeRelinkHarness({ throws: guard === 'throw' ? ['b'] : [] });
+         const { a } = documents;
+         let repairs = true;
+         probe.register({
+            id: 'repair-a',
+            nodeType: 'Foo',
+            phase: DocumentState.Linked,
+            enforce: node => repairs && (node as FakeNode).id === 'a'
+         });
+         const [first, clean, last] = [1, 2, 3].map((): RunningBuild => ({
+            documents: [a],
+            documentSet: new Set([a]),
+            options: {},
+            cancelToken: CancellationToken.None
+         }));
+         const enforceIn = async (build: RunningBuild): Promise<void> => {
+            const result = probe.enforceBatch(
+               [a],
+               DocumentState.Linked,
+               build.cancelToken,
+               IntegrityRun.create([a], { build, passesBefore: guard === 'passes before' })
+            );
+            if (repairs && guard === 'throw') {
+               await expect(result).rejects.toThrow('relink of b');
+            } else {
+               await result;
+            }
+         };
+
+         await enforceIn(first);
+         expect(rebuilds).toEqual(['a']);
+         repairs = false;
+         await enforceIn(clean);
+         endBuild({ completed: false, cancelTokens: [CancellationToken.None] });
+         endBuild({ completed: true, build: clean });
+         repairs = true;
+         await enforceIn(last);
+         expect(rebuilds).toEqual(['a', 'a']);
+      }
+   );
+
+   it('keeps standalone guards when an unrelated builder completes', async () => {
       const { probe, documents, rebuilds, endBuild } = makeRelinkHarness({ throws: ['b'] });
       const { a } = documents;
       let repairs = true;
@@ -1677,47 +1776,13 @@ describe('IntegrityService relink of the dependents of a Linked-phase repair', (
          phase: DocumentState.Linked,
          enforce: node => repairs && (node as FakeNode).id === 'a'
       });
-      const enforceIn = (token: CancellationToken): Promise<void> => probe.enforceBatch([a], DocumentState.Linked, token);
-      const [clean, other, throwing, last] = [1, 2, 3, 4].map(() => new CancellationTokenSource().token);
-
-      await expect(enforceIn(CancellationToken.None)).rejects.toThrow('relink of b');
+      await expect(probe.enforceBatch([a], DocumentState.Linked, CancellationToken.None)).rejects.toThrow('relink of b');
       repairs = false;
-      await enforceIn(clean);
-      // A build outside the lock that throws drains, and an overlapping one completes, before `clean` does.
-      endBuild({ completed: false, cancelTokens: [CancellationToken.None] });
-      endBuild({ completed: true, cancelToken: other });
-      repairs = true;
-      await expect(enforceIn(throwing)).rejects.toThrow('relink of b');
-      expect(rebuilds).toEqual(['a']);
-      endBuild({ completed: true, cancelToken: clean });
-      await expect(enforceIn(last)).rejects.toThrow('relink of b');
-
-      expect(rebuilds).toEqual(['a', 'a']);
-   });
-
-   it('keeps the pending once-guard lift of a build without a token when a build with its own token throws', async () => {
-      const { probe, documents, rebuilds, endBuild } = makeRelinkHarness({ throws: ['b'] });
-      const { a } = documents;
-      let repairs = true;
-      probe.register({
-         id: 'repair-a',
-         nodeType: 'Foo',
-         phase: DocumentState.Linked,
-         enforce: node => repairs && (node as FakeNode).id === 'a'
-      });
-      const enforceIn = (token: CancellationToken): Promise<void> => probe.enforceBatch([a], DocumentState.Linked, token);
-      const [first, throwing, last] = [1, 2, 3].map(() => new CancellationTokenSource().token);
-
-      await expect(enforceIn(first)).rejects.toThrow('relink of b');
-      repairs = false;
-      // Clean under `None`, as the workspace's initial build runs outside the lock.
-      await enforceIn(CancellationToken.None);
-      endBuild({ completed: false, cancelTokens: [throwing] });
+      await probe.enforceBatch([a], DocumentState.Linked, CancellationToken.None);
       endBuild({ completed: true, cancelToken: CancellationToken.None });
       repairs = true;
-      await expect(enforceIn(last)).rejects.toThrow('relink of b');
-
-      expect(rebuilds).toEqual(['a', 'a']);
+      await expect(probe.enforceBatch([a], DocumentState.Linked, CancellationToken.None)).rejects.toThrow('relink of b');
+      expect(rebuilds).toEqual(['a']);
    });
 
    it("warns naming the repairing rule instead of running a dependent's rules again past maxRepeatRepairs in one run", async () => {

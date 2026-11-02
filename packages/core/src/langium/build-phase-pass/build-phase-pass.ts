@@ -9,6 +9,7 @@
 
 import { DocumentState, type LangiumCoreServices, type LangiumDocument, type URI } from '@hydranium/langium';
 import { type CancellationToken, type Disposable } from 'vscode-languageserver';
+import { type RunningBuild } from '../document-builder/document-builder.js';
 import { type RegistryItem } from '../../util/registry.js';
 
 /**
@@ -51,8 +52,7 @@ export namespace BuildPassPhase {
  * **Granularity.** This is the batch-level (`documents[]`) sibling of the
  * node-level registries `AstExtension` (per node, `onDocumentPhase`) and
  * `IntegrityRule` (per node, dispatched from a framework-registered pass of this
- * kind). A `BuildPhasePass` rides Langium's native `onBuildPhase` signature
- * directly — it is handed the whole built batch and owns its own walk, for work
+ * kind). A `BuildPhasePass` is handed the built batch and owns its own walk, for work
  * that needs cross-document ordering, rather than having the framework drive a
  * per-node `streamAllContents` walk.
  *
@@ -87,9 +87,10 @@ export interface BuildPhasePass extends RegistryItem {
     * state. Honour `cancelToken` for long walks; the dispatcher already checks
     * it between passes. A `Linked`-phase repair adds the documents it relinks
     * to `documents` while later passes run, so a pass that keeps the array sees
-    * it grow.
+    * it grow. Forward `build` separately when wrapping a pass, so a copy or
+    * filter of the batch retains its owner. A standalone run has no owner.
     */
-   run(documents: readonly LangiumDocument[], cancelToken: CancellationToken): void | Promise<void>;
+   run(documents: readonly LangiumDocument[], cancelToken: CancellationToken, build: RunningBuild | undefined): void | Promise<void>;
 }
 
 /**

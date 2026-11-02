@@ -89,6 +89,7 @@ export interface StubDocumentBuilder
          | 'scheduleUpdate'
          | 'finalBuildState'
          | 'onBuildEnded'
+         | 'buildForBatch'
          | 'isInsideBuildUpdate'
          | 'relinkInRunningBuild'
          | 'activeBuild'
@@ -295,6 +296,7 @@ export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocu
             reraise(listener(changed, deleted));
          }
       },
+      buildForBatch: () => undefined,
       onBuildEnded(listener: BuildEndedListener) {
          buildEndedListeners.push(listener);
          return Disposable.create(() => {

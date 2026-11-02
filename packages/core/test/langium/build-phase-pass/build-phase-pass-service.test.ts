@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { DocumentState, type LangiumDocument } from '@hydranium/langium';
 import { CancellationToken } from 'vscode-languageserver';
-import { Disposable, Logger } from '@hydranium/protocol';
+import { Disposable, Logger, Deferred } from '@hydranium/protocol';
 import { makeFakeClock } from '@hydranium/protocol/testing';
 import type { ServerSharedServices } from '../../../src/langium/module.js';
 import {
@@ -18,6 +18,7 @@ import {
    DefaultBuildPhasePassService
 } from '../../../src/langium/build-phase-pass/build-phase-pass-service.js';
 import { type CapturedLine, makeCapturingTracer, makeNoopSharedServices } from '../../../src/testing/index.js';
+import { type RunningBuild } from '../../../src/langium/document-builder/document-builder.js';
 import { type BuildPhasePass } from '../../../src/langium/build-phase-pass/build-phase-pass.js';
 
 function makeService(buildPhasePasses?: unknown): BuildPhasePassService {
@@ -33,7 +34,7 @@ describe('BuildPhasePassService dispatch', () => {
       service.register({ id: 'linked', phase: DocumentState.Linked, run: () => void ran.push('linked') });
       service.register({ id: 'parsed', phase: DocumentState.Parsed, run: () => void ran.push('parsed') });
 
-      await service.runPasses([], DocumentState.Linked, CancellationToken.None);
+      await service.runPasses([], DocumentState.Linked, CancellationToken.None, undefined);
       expect(ran).toEqual(['linked']);
    });
 
@@ -44,7 +45,7 @@ describe('BuildPhasePassService dispatch', () => {
       service.register({ id: 'early', priority: -1, phase: DocumentState.Linked, run: () => void ran.push('early') });
       service.register({ id: 'mid', priority: 5, phase: DocumentState.Linked, run: () => void ran.push('mid') });
 
-      await service.runPasses([], DocumentState.Linked, CancellationToken.None);
+      await service.runPasses([], DocumentState.Linked, CancellationToken.None, undefined);
       expect(ran).toEqual(['early', 'mid', 'late']);
    });
 
@@ -54,7 +55,7 @@ describe('BuildPhasePassService dispatch', () => {
       service.register({ id: 'first', phase: DocumentState.Linked, run: () => void ran.push('first') });
       service.register({ id: 'second', phase: DocumentState.Linked, run: () => void ran.push('second') });
 
-      await service.runPasses([], DocumentState.Linked, CancellationToken.None);
+      await service.runPasses([], DocumentState.Linked, CancellationToken.None, undefined);
       expect(ran).toEqual(['first', 'second']);
    });
 
@@ -73,7 +74,7 @@ describe('BuildPhasePassService dispatch', () => {
       });
       service.register({ id: 'sync', priority: 1, phase: DocumentState.Linked, run: () => void events.push('sync') });
 
-      await service.runPasses([], DocumentState.Linked, CancellationToken.None);
+      await service.runPasses([], DocumentState.Linked, CancellationToken.None, undefined);
       expect(events).toEqual(['async:start', 'async:end', 'sync']);
    });
 
@@ -87,7 +88,7 @@ describe('BuildPhasePassService dispatch', () => {
          run: (docs, token) => void (received = { documents: docs, token })
       });
 
-      await service.runPasses(documents, DocumentState.Linked, CancellationToken.None);
+      await service.runPasses(documents, DocumentState.Linked, CancellationToken.None, undefined);
       expect(received?.documents).toBe(documents);
       expect(received?.token).toBe(CancellationToken.None);
    });
@@ -99,7 +100,7 @@ describe('BuildPhasePassService cancellation', () => {
       const ran: string[] = [];
       service.register({ id: 'a', phase: DocumentState.Linked, run: () => void ran.push('a') });
 
-      await service.runPasses([], DocumentState.Linked, CancellationToken.Cancelled);
+      await service.runPasses([], DocumentState.Linked, CancellationToken.Cancelled, undefined);
       expect(ran).toEqual([]);
    });
 
@@ -125,7 +126,7 @@ describe('BuildPhasePassService cancellation', () => {
       });
       service.register({ id: 'b', priority: 1, phase: DocumentState.Linked, run: () => void ran.push('b') });
 
-      await service.runPasses([], DocumentState.Linked, token);
+      await service.runPasses([], DocumentState.Linked, token, undefined);
       expect(ran).toEqual(['a']);
    });
 });
@@ -151,9 +152,9 @@ describe('BuildPhasePassService registration', () => {
       const ran: string[] = [];
       const handle = service.register({ id: 'x', phase: DocumentState.Linked, run: () => void ran.push('x') });
 
-      await service.runPasses([], DocumentState.Linked, CancellationToken.None);
+      await service.runPasses([], DocumentState.Linked, CancellationToken.None, undefined);
       handle.dispose();
-      await service.runPasses([], DocumentState.Linked, CancellationToken.None);
+      await service.runPasses([], DocumentState.Linked, CancellationToken.None, undefined);
 
       expect(ran).toEqual(['x']);
    });
@@ -173,7 +174,7 @@ describe('BuildPhasePassService registration', () => {
          }
       });
 
-      await service.runPasses([], DocumentState.Linked, CancellationToken.None);
+      await service.runPasses([], DocumentState.Linked, CancellationToken.None, undefined);
       expect(ran).toEqual(['alpha', 'beta']);
    });
 });
@@ -187,13 +188,56 @@ describe('BuildPhasePassService profiling', () => {
       return { service: new DefaultBuildPhasePassService(services), lines };
    }
 
+   it.each(['info', 'debug'] as const)('keeps ownership across overlapping tokenless runs at %s', async level => {
+      const { service } = capturingService();
+      Logger.setLevel(level);
+      const first: RunningBuild = { documents: [], documentSet: new Set(), options: {}, cancelToken: CancellationToken.None };
+      const second: RunningBuild = { documents: [], documentSet: new Set(), options: {}, cancelToken: CancellationToken.None };
+      const entered = new Deferred<void>();
+      const resume = new Deferred<void>();
+      const seen: (RunningBuild | undefined)[] = [];
+      service.register({
+         id: 'hold',
+         phase: DocumentState.Linked,
+         run: async (_documents, token, build) => {
+            expect(token).toBe(CancellationToken.None);
+            expect(build).toBeDefined();
+            if (build === first) {
+               entered.resolve();
+               await resume.promise;
+            }
+         }
+      });
+      service.register({
+         id: 'capture',
+         phase: DocumentState.Linked,
+         run: (_documents, _token, build) => {
+            seen.push(build);
+         }
+      });
+      const held = service.runPasses(first.documents, DocumentState.Linked, CancellationToken.None, first);
+      try {
+         await Promise.race([
+            entered.promise,
+            held.then(() => {
+               throw new Error('Run ended before the hold');
+            })
+         ]);
+         await service.runPasses(second.documents, DocumentState.Linked, CancellationToken.None, second);
+      } finally {
+         resume.resolve();
+         await held;
+      }
+      expect(seen).toEqual([second, first]);
+   });
+
    it('profiles per-pass self-time and reports it line-based at debug level', async () => {
       const { service, lines } = capturingService();
       service.register({ id: 'passA', phase: DocumentState.Linked, run: () => undefined });
       service.register({ id: 'passB', phase: DocumentState.Linked, run: () => undefined });
       Logger.setLevel('debug');
 
-      await service.runPasses([], DocumentState.Linked, CancellationToken.None);
+      await service.runPasses([], DocumentState.Linked, CancellationToken.None, undefined);
 
       const profileLines = lines.map(line => line.message).filter(message => message.includes('[profile build-phase-pass'));
       expect(profileLines.some(message => message.includes('passA'))).toBe(true);
@@ -204,7 +248,7 @@ describe('BuildPhasePassService profiling', () => {
       const { service, lines } = capturingService();
       service.register({ id: 'passA', phase: DocumentState.Linked, run: () => undefined });
 
-      await service.runPasses([], DocumentState.Linked, CancellationToken.None);
+      await service.runPasses([], DocumentState.Linked, CancellationToken.None, undefined);
       expect(lines.map(line => line.message).filter(message => message.includes('[profile'))).toHaveLength(0);
    });
 });

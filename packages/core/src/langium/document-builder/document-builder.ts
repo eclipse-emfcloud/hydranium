@@ -160,10 +160,12 @@ export interface BuildEndedEvent {
     * share one event.
     */
    readonly completed: boolean;
+   /** The completed build, distinct even when overlapping builds use `None`. */
+   readonly build?: RunningBuild;
    /**
-    * The token the completed build gave its build-phase listeners, so one can
-    * tell its own build from an overlapping one. Builds started with `None`
-    * share it. Unset when `completed` is `false`.
+    * The token the completed build gave its build-phase listeners. Builds
+    * started with `None` share it. Use `build` for identity. Unset when
+    * `completed` is `false`.
     */
    readonly cancelToken?: CancellationToken;
    /**
@@ -327,6 +329,8 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected runningBuildsEnded?: Deferred<void>;
    /** Each running {@link buildDocuments} call. Read by {@link relinkInRunningBuild}, which adds to all three arrays. */
    protected readonly runningBuildDocuments = new Set<RunningBuild>();
+   /** Phase arrays retain their owner across awaits, including passes before integrity. */
+   protected readonly buildsByBatch = new WeakMap<readonly LangiumDocument[], RunningBuild>();
    /**
     * `traceId` of the last build that ended in cancellation, for the successor's
     * "cancels #N" tag. Held here rather than on a session because the session
@@ -797,27 +801,57 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * linking.
     */
    protected linkingBuild(cancelToken: CancellationToken, state: DocumentState): RunningBuild | undefined {
+      if (state !== DocumentState.Linked) {
+         return undefined;
+      }
       const builds = [...this.runningBuildDocuments].filter(running => running.cancelToken === cancelToken);
-      return state === DocumentState.Linked && builds.length === 1 ? builds[0] : undefined;
+      return builds.length === 1 ? builds[0] : undefined;
    }
 
+   /**
+    * Mirrors DefaultDocumentBuilder.runCancelable to attach each notification
+    * batch to its owner before listeners await. Keep its phase progression
+    * and cancellation checks in step with upstream. Forward `build` when
+    * overriding this method with a copied or filtered batch.
+    */
    protected override async runCancelable(
       documents: LangiumDocument[],
       targetState: DocumentState,
       cancelToken: CancellationToken,
-      callback: (document: LangiumDocument) => unknown
+      callback: (document: LangiumDocument) => unknown,
+      build?: RunningBuild
    ): Promise<void> {
-      const build = this.linkingBuild(cancelToken, targetState);
-      if (build === undefined) {
-         await super.runCancelable(documents, targetState, cancelToken, callback);
-      } else {
-         build.linking = documents;
+      const owner = build ?? this.buildForBatch(documents);
+      const linking = this.linkingBuild(cancelToken, targetState);
+      if (linking !== undefined) {
+         linking.linking = documents;
+      }
+      try {
+         for (const document of documents) {
+            if (document.state < targetState) {
+               await interruptAndCheck(cancelToken);
+               await callback(document);
+               document.state = targetState;
+               await this.notifyDocumentPhase(document, targetState, cancelToken);
+            }
+         }
+         const targetStateDocs = documents.filter(document => document.state === targetState);
+         if (owner !== undefined) {
+            this.buildsByBatch.set(targetStateDocs, owner);
+         }
          try {
-            await super.runCancelable(documents, targetState, cancelToken, callback);
+            await this.notifyBuildPhase(targetStateDocs, targetState, cancelToken, owner);
          } finally {
-            build.linking = undefined;
-            build.linked = undefined;
-            build.linkedSet = undefined;
+            if (owner !== undefined) {
+               this.buildsByBatch.delete(targetStateDocs);
+            }
+         }
+         this.currentState = targetState;
+      } finally {
+         if (linking !== undefined) {
+            linking.linking = undefined;
+            linking.linked = undefined;
+            linking.linkedSet = undefined;
          }
       }
       for (const wait of this.builderStateWaits) {
@@ -1040,15 +1074,98 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
          }
       });
       this.runningBuildDocuments.add(running);
+      this.buildsByBatch.set(documents, running);
       try {
-         await super.buildDocuments(documents, options, token);
+         await this.buildPhases(running);
       } catch (err: unknown) {
          this.thrownBuildTokens.add(token);
          throw err;
       } finally {
+         this.buildsByBatch.delete(documents);
          this.runningBuildDocuments.delete(running);
       }
-      this.notifyBuildEnded({ completed: true, cancelToken: token });
+      this.notifyBuildEnded({ completed: true, build: running, cancelToken: token });
+   }
+
+   /** The owner while a build-phase batch is being delivered, including across listener awaits. */
+   buildForBatch(documents: readonly LangiumDocument[]): RunningBuild | undefined {
+      return this.buildsByBatch.get(documents);
+   }
+
+   /**
+    * Mirrors DefaultDocumentBuilder.buildDocuments to associate its filtered
+    * arrays with one build. Keep its phase order and hooks in step with
+    * upstream, since inferring ownership from `None` mixes overlaps.
+    */
+   protected async buildPhases(build: RunningBuild): Promise<void> {
+      const { documents, options, cancelToken } = build;
+      this.prepareBuild(documents, options);
+      await this.runCancelable(
+         documents,
+         DocumentState.Parsed,
+         cancelToken,
+         document => this.langiumDocumentFactory.update(document, cancelToken),
+         build
+      );
+      await this.runCancelable(
+         documents,
+         DocumentState.IndexedContent,
+         cancelToken,
+         document => this.indexManager.updateContent(document, cancelToken),
+         build
+      );
+      await this.runCancelable(
+         documents,
+         DocumentState.ComputedScopes,
+         cancelToken,
+         async document => {
+            const computation = this.serviceRegistry.getServices(document.uri).references.ScopeComputation;
+            document.localSymbols = await computation.collectLocalSymbols(document, cancelToken);
+         },
+         build
+      );
+      const toBeLinked = documents.filter(document => this.shouldLink(document));
+      this.buildsByBatch.set(toBeLinked, build);
+      try {
+         await this.runCancelable(
+            toBeLinked,
+            DocumentState.Linked,
+            cancelToken,
+            document => this.serviceRegistry.getServices(document.uri).references.Linker.link(document, cancelToken),
+            build
+         );
+         await this.runCancelable(
+            toBeLinked,
+            DocumentState.IndexedReferences,
+            cancelToken,
+            document => this.indexManager.updateReferences(document, cancelToken),
+            build
+         );
+      } finally {
+         this.buildsByBatch.delete(toBeLinked);
+      }
+      const toBeValidated = documents.filter(document => {
+         if (this.shouldValidate(document)) {
+            return true;
+         }
+         this.markAsCompleted(document);
+         return false;
+      });
+      this.buildsByBatch.set(toBeValidated, build);
+      try {
+         await this.runCancelable(
+            toBeValidated,
+            DocumentState.Validated,
+            cancelToken,
+            async document => {
+               await this.validate(document, cancelToken);
+               this.markAsCompleted(document);
+            },
+            build
+         );
+      } finally {
+         this.buildsByBatch.delete(toBeValidated);
+      }
    }
 
    /**
@@ -1889,22 +2006,44 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    // Logging — slow build-phase total on notifyBuildPhase
    // ============================================================
 
-   override async notifyBuildPhase(documents: LangiumDocument[], state: DocumentState, cancelToken: CancellationToken): Promise<void> {
-      const build = this.linkingBuild(cancelToken, state);
-      if (build !== undefined) {
-         build.linked = documents;
-         build.linkedSet = new Set(documents);
+   /**
+    * Forward `build` when copying or filtering the batch, so its listeners retain their owner.
+    * A batch already owned by another delivery is copied to isolate their lifetimes.
+    */
+   override async notifyBuildPhase(
+      documents: LangiumDocument[],
+      state: DocumentState,
+      cancelToken: CancellationToken,
+      build?: RunningBuild
+   ): Promise<void> {
+      const previous = this.buildForBatch(documents);
+      if (build !== undefined && build !== previous) {
+         if (previous !== undefined) {
+            documents = [...documents];
+         }
+         this.buildsByBatch.set(documents, build);
       }
-      if (this.logLevel === 'off') {
-         return super.notifyBuildPhase(documents, state, cancelToken);
-      }
-      const listeners = this.buildPhaseListeners.get(state);
-      if (documents.length === 0 || listeners.length === 0) {
-         return super.notifyBuildPhase(documents, state, cancelToken);
-      }
-      const { elapsedMs: totalMs } = await this.clock.measure(() => super.notifyBuildPhase(documents, state, cancelToken));
-      if (totalMs >= this.slowBuildMs.value) {
-         this.log(this.slowBuildPhaseLine(state, listeners.length, documents, totalMs));
+      try {
+         const linking = this.linkingBuild(cancelToken, state);
+         if (linking !== undefined) {
+            linking.linked = documents;
+            linking.linkedSet = new Set(documents);
+         }
+         if (this.logLevel === 'off') {
+            return await super.notifyBuildPhase(documents, state, cancelToken);
+         }
+         const listeners = this.buildPhaseListeners.get(state);
+         if (documents.length === 0 || listeners.length === 0) {
+            return await super.notifyBuildPhase(documents, state, cancelToken);
+         }
+         const { elapsedMs: totalMs } = await this.clock.measure(() => super.notifyBuildPhase(documents, state, cancelToken));
+         if (totalMs >= this.slowBuildMs.value) {
+            this.log(this.slowBuildPhaseLine(state, listeners.length, documents, totalMs));
+         }
+      } finally {
+         if (build !== undefined && build !== previous) {
+            this.buildsByBatch.delete(documents);
+         }
       }
    }
 

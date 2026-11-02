@@ -15,6 +15,7 @@ import { AstExtensionPhase } from '../ast-extension/ast-extension-service.js';
 import { BuildPassPhase, groupDocumentsByLanguage } from '../build-phase-pass/build-phase-pass.js';
 import { type ServerSharedServices } from '../module.js';
 import { builtLocalSymbols } from '../scope/built-local-symbols.js';
+import { type RunningBuild } from './document-builder.js';
 import { labelPhaseListener } from './labeled-phase-listener.js';
 
 /**
@@ -108,7 +109,7 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
             id: this.integrityPassId(phase),
             phase,
             priority: integrityPriority,
-            run: (documents, cancelToken) => this.callIntegrity(documents, phase, cancelToken)
+            run: (documents, cancelToken, build) => this.callIntegrity(documents, phase, cancelToken, build)
          });
       }
 
@@ -122,7 +123,7 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
          builder.onBuildPhase(
             phase,
             labelPhaseListener(
-               (documents, cancelToken) => this.runBuildPhase(documents, phase, cancelToken),
+               (documents, cancelToken) => this.runBuildPhase(documents, phase, cancelToken, builder.buildForBatch(documents)),
                `BuildPipeline.runBuildPhase.${DocumentState[phase]}`
             )
          );
@@ -172,6 +173,7 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
     * Run integrity enforcement for the batch at `phase`. The batch may span
     * grammars, so group documents by their language's `IntegrityService`
     * and enforce each group — preserving the per-language batch timing log.
+    * Forward `build` when wrapping a copied batch, so completion can lift its guards.
     *
     * As a side effect of resolving each document's language services tree,
     * this routing helper also forces construction of that language's
@@ -182,7 +184,8 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
    protected async callIntegrity(
       documents: readonly LangiumDocument[],
       phase: DocumentState,
-      cancelToken: CancellationToken
+      cancelToken: CancellationToken,
+      build: RunningBuild | undefined
    ): Promise<void> {
       // The same fan-out `groupDocumentsByLanguage` offers adopter passes —
       // shared rather than parallel, so the exported helper is proven by the
@@ -190,7 +193,11 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
       // One run across the languages, so a repair in one re-runs the rules of a dependent in another.
       const passes = this.services.workspace.BuildPhasePassService.passesAt(phase);
       const passesBefore = passes.findIndex(registered => registered.id === this.integrityPassId(phase)) > 0;
-      const run = IntegrityRun.create(documents, { passesBefore, cancelToken });
+      const run = IntegrityRun.create(documents, {
+         passesBefore,
+         cancelToken,
+         build
+      });
       for (const [languageServices, group] of groupDocumentsByLanguage(this.services, documents)) {
          // Force construction of the language's ValidationContributionCollector
          // on first touch; cached by Langium's DI proxy after that.
@@ -235,9 +242,15 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
     * `BuildPhasePassService`: adopters subclass to gate, instrument, or wrap
     * the batch-level pass run (the build-phase analog of {@link extendAst} for the
     * document-phase AST run). Returns the dispatch promise so the build pipeline
-    * awaits a mutating pass (integrity) before advancing.
+    * awaits a mutating pass (integrity) before advancing. Forward `build`
+    * through copies or filters of `documents`, so integrity keeps its owner.
     */
-   protected runBuildPhase(documents: readonly LangiumDocument[], phase: DocumentState, cancelToken: CancellationToken): Promise<void> {
-      return this.services.workspace.BuildPhasePassService.runPasses(documents, phase, cancelToken);
+   protected runBuildPhase(
+      documents: readonly LangiumDocument[],
+      phase: DocumentState,
+      cancelToken: CancellationToken,
+      build: RunningBuild | undefined
+   ): Promise<void> {
+      return this.services.workspace.BuildPhasePassService.runPasses(documents, phase, cancelToken, build);
    }
 }
