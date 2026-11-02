@@ -25,6 +25,56 @@ test.describe('order-flow adopter feedback', () => {
       await expect(name).toHaveValue('TypedVersion');
    });
 
+   test('a draft submitted by saving times out while its response is held', async ({ page }) => {
+      await page.goto('/');
+      const name = page.locator('#properties-body #field-name');
+      await expect(name).toHaveValue('Fulfillment');
+      const worker = page.workers().find(candidate => candidate.url().includes('order-flow-worker'))!;
+      // Hold actual replies after the worker has applied the write. Requests
+      // and notifications still flow, including the edit sent to Monaco.
+      await worker.evaluate(() => {
+         const replies: Array<() => void> = [];
+         const post = MessagePort.prototype.postMessage;
+         MessagePort.prototype.postMessage = function (this: MessagePort, ...args: unknown[]) {
+            const message = args[0];
+            if (message && typeof message === 'object' && 'id' in message && ('result' in message || 'error' in message)) {
+               replies.push(() => Reflect.apply(post, this, args));
+            } else {
+               Reflect.apply(post, this, args);
+            }
+         };
+         Object.assign(globalThis, {
+            heldSaveReplies: replies,
+            releaseSaveReplies: () => {
+               MessagePort.prototype.postMessage = post;
+               replies.splice(0).forEach(reply => reply());
+            }
+         });
+      });
+      await page.clock.install();
+      await name.fill('DelayedDraft');
+      await name.press('Control+s');
+      await expect.poll(() => worker.evaluate(() => Reflect.get(globalThis, 'heldSaveReplies').length)).toBeGreaterThan(0);
+      const report = page.locator('[data-report="workspace"]');
+      await expect(report).toHaveAttribute('title', 'saving…');
+      await page.clock.fastForward(31_000);
+      await expect(report).toHaveAttribute('title', /save failed:.*not answered/);
+      expect(
+         await page.evaluate(() => {
+            const event = new Event('beforeunload', { cancelable: true });
+            window.dispatchEvent(event);
+            return event.defaultPrevented;
+         })
+      ).toBe(true);
+
+      await worker.evaluate(() => Reflect.get(globalThis, 'releaseSaveReplies')());
+      await expect(page.locator('#properties-body [data-pending]')).toHaveCount(0);
+      await name.press('Control+s');
+      await expect(report).toHaveAttribute('title', /^saved 1 document/);
+      await page.reload();
+      await expect(name).toHaveValue('DelayedDraft');
+   });
+
    test('a draft without a submitted write prevents unloading', async ({ page }) => {
       await page.goto('/');
       const name = page.locator('#properties-body #field-name');

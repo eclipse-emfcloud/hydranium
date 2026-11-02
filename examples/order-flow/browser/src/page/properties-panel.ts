@@ -92,9 +92,13 @@ export class PropertiesPanel {
       return this.form.hasDrafts ? this.documentUri : undefined;
    }
 
-   /** Apply drafts before persisting the document they belong to. */
-   applyDrafts(): Promise<boolean> {
-      return this.form.applyDrafts();
+   /** Apply drafts within the model's write bound before persisting their document. */
+   async applyDrafts(): Promise<boolean> {
+      const applied = this.form.applyDrafts();
+      if (!(await this.documents.whenWritesSettled())) {
+         throw new Error('the server has not answered a Properties edit yet, so nothing was saved');
+      }
+      return applied;
    }
 
    /** The documents with a field edit not answered yet, one shown before included, for the unload guard. */
