@@ -23,6 +23,7 @@ export * from './glsp-client';
 export * from './glsp-connection';
 export * from './glsp-client-module';
 export * from './hidden-bounds-updater';
+export * from './label-edit-ui';
 export * from './message-overlay';
 export * from './select-mouse-listener';
 export * from './sprotty-logger-adapter';
