@@ -39,6 +39,17 @@ if ([negativeMissingPackageFile, publishedPrerelease, upgradeFromPublished, init
    );
 }
 
+/** `--shapes=<start>:<end>` checks that slice of the scaffold shapes, read as `Array.prototype.slice` reads it. An empty end runs to the last. */
+const shapesArguments = process.argv.filter(argument => argument === '--shapes' || argument.startsWith('--shapes='));
+const shapesArgument = shapesArguments[0]?.slice('--shapes='.length);
+
+if (shapesArguments.length > 1 || shapesArguments[0] === '--shapes') {
+   throw new Error('--shapes takes one value, written as --shapes=<start>:<end>');
+}
+if (shapesArgument !== undefined && !initScaffold) {
+   throw new Error('--shapes needs --init-scaffold');
+}
+
 /** The npm bundled with the oldest Node the scaffold declares, which its first install has to survive. */
 const SCAFFOLD_NPM = '10.9.2';
 
@@ -388,6 +399,7 @@ interface ScaffoldShape {
    readonly hosts?: string;
 }
 
+// The first entry stays the four-host shape: CI's two scaffold legs slice this list at 1.
 const SCAFFOLD_SHAPES: readonly ScaffoldShape[] = [
    {
       label: 'standalone, all heads',
@@ -634,11 +646,23 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
    process.stdout.write(`init scaffold, ${shape.label}: passed.\n`);
 }
 
-/** Every scaffold shape, each scaffolded by the packed CLI. */
+/** The shapes `--shapes` selects, all of them without it, each with its index in {@link SCAFFOLD_SHAPES}. */
+function selectedShapes(): [ScaffoldShape, number][] {
+   const indexed = SCAFFOLD_SHAPES.map((shape, index): [ScaffoldShape, number] => [shape, index]);
+   if (shapesArgument === undefined) return indexed;
+   const range = /^(\d+):(\d*)$/.exec(shapesArgument);
+   if (range === null) throw new Error(`--shapes takes <start>:<end>, got "${shapesArgument}"`);
+   const selected = indexed.slice(Number(range[1]), range[2] === '' ? undefined : Number(range[2]));
+   if (selected.length === 0) throw new Error(`--shapes=${shapesArgument} selects none of the ${SCAFFOLD_SHAPES.length} shapes`);
+   return selected;
+}
+
+/** Every scaffold shape `--shapes` selects, each scaffolded by the packed CLI. */
 function checkInitScaffold(): void {
+   const shapes = selectedShapes();
    const candidates = packCandidates();
    const cli = installPackedCli(candidates);
-   SCAFFOLD_SHAPES.forEach((shape, index) => checkScaffoldShape(shape, index, cli, candidates));
+   shapes.forEach(([shape, index]) => checkScaffoldShape(shape, index, cli, candidates));
 }
 
 /** Install the bookstore consumer, optionally from the published prerelease, then compile and smoke it. */

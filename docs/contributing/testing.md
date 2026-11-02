@@ -260,8 +260,9 @@ install. `HYDRANIUM_KEEP_PACKED_CONSUMER=1` keeps the disposable project.
   in the VS Code it downloads, under `xvfb-run` when there is no display, and
   a shape with the Theia host builds the Theia application and runs its smoke
   test in that Chromium. It shows what an adopter's first install meets, which
-  the hand-assembled bookstore consumer cannot. CI runs it as its own job on
-  every pull request that changes more than prose.
+  the hand-assembled bookstore consumer cannot. CI runs it on every pull
+  request that changes more than prose, split into two jobs that each build
+  and pack. `-- --shapes=<start>:<end>` checks only that slice of the shapes.
 - `check:published-baseline` runs the consumer smoke against the published
   prerelease. The consumer is this tree's bookstore server, so an example
   already using an unpublished API fails it with no published package at fault.
