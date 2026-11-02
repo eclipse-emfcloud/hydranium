@@ -86,23 +86,56 @@ depends on who holds the URI:
   disk while the AST carries the repair until a first open consumes the
   stage. `IntegrityService.SettledState` guarantees the AST, not the text.
 
-A `Linked`-phase repair relinks only the repaired document within its build.
-The documents that reference it were linked before the repair, so the repair
-requests a build after it that relinks them. That build is skipped when no
-other document would be relinked, which needs a workspace without linking
-errors and without documents an interrupted build left unindexed, because
-Langium relinks every document with a linking error and the builder every
-unindexed one. A repair of a document that build relinked gets another, in
-any language, up to `maxRelinkChain` in a row. An explicit
-`DocumentBuilder.build` relinks no dependents, so it does not count as such a
-build. A build is requested only while no build outside the lock runs, such
-as an explicit one, so the two never overlap. A build that overlaps another,
-as a reentrant one does, ends none of the chains running. A repair that a
-closed `'editor'` document replays from disk requests no build, because the
-build that re-read the document relinked the dependents, even when that is
-the build the repair asked for. The [concepts
-page](../../concepts/document-layers.md) gives what an adopter sees past the
-bound and the stale name a replay leaves.
+A `Linked`-phase repair relinks the documents that reference the repaired one
+within the same build, so they settle against the repair. A dependent that
+resolves its references lazily is unlinked instead, so its next read resolves
+into the repair. When it was validated, it joins the build unlinked and is
+validated again, and its `Linked` rules do not run, as in its own builds. A
+document with a linking error counts as a dependent of every repair, as in
+Langium's relink selection. Within a language's batch a dependent is relinked
+once for all the repairs that select it until then: just before its own rules
+run when they are yet to, otherwise when the outermost `enforceBatch` ends.
+Until then it holds the links from before the repairs. A repair after its
+relink selects it again.
+
+Dependents the build is not linking join it, and the build indexes and validates
+them with its own documents, because Langium reuses the arrays it links and
+validates. They keep their own build options, and the build-phase passes after
+integrity get them too. Every relinked dependent is validated in every category
+it ran and every one the build requests for it. One that has validated nothing
+takes the build's validation. A dependent another running build still carries
+is left to it, also one below `Linked`, as an unlink or a reset would drop its
+references from that build's linking or indexing, and the repaired document is
+built again as changed after them.
+
+A dependent whose rules already ran in the build has them run again, since a
+rule may read the links the repair changed. A re-run that repairs nothing
+relinks nothing, so the build counts only the re-runs that repair, per document,
+up to `maxRepeatRepairs`. The [concepts page](../../concepts/document-layers.md)
+gives what an adopter sees past the bound. A `Linked` pass before integrity read
+the dependents before the relink, so when one is registered the repaired
+document is built again as changed after the build, once until a build
+completes without repairing it.
+
+A closed `'editor'` document skips the re-parse of a repair and keeps its AST,
+so a rule's rename in place keeps its nodes. The name caches are therefore
+evicted whenever a document is parsed, and the repaired document is indexed by
+its new names before its dependents are relinked. The link takes no cancellation
+token, so it runs no macrotask. Between its reset and the link a shed dependent,
+or one without a CST to graft, reads its text, and a request in that window
+resolves its references lazily. When its graft fails it is re-parsed and indexed
+within the build, and the build-phase listeners of each phase it passes get it,
+so its `Parsed` rules repair the new nodes. Its own dependents are relinked too,
+and it is built again as changed after the build.
+
+A relink or re-run that throws fails the build, and the repaired document is
+built again as changed after it, which relinks its dependents. A repaired
+document whose reconcile throws is left unindexed, so its dependents would link
+back to the replaced nodes. It is built again as changed after the build
+instead, which relinks them. That build is requested once, until a build
+completes in which nothing threw for the document, a relink or re-run later in
+the build included. A repair an edit superseded is discarded by a reconcile too,
+and its dependents are relinked the same way.
 
 A server's first `'silent'` write, from either route and whichever language
 makes it, is logged at `info` with the file and the `syncMode` option, so an

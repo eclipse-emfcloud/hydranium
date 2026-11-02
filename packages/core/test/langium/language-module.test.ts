@@ -54,7 +54,7 @@ function servicesWithNameProvider(): LangiumCoreServices {
       shared: {
          workspace: {
             ProjectManager: { getProject: () => undefined },
-            DocumentBuilder: { onUpdate: () => Disposable.EMPTY }
+            DocumentBuilder: { onUpdate: () => Disposable.EMPTY, onDocumentPhase: () => Disposable.EMPTY }
          },
          Logger: noopLogger,
          Tracer: makeNoopTracer()
@@ -101,7 +101,7 @@ describe('createServerLanguageModule', () => {
             shared: {
                workspace: {
                   ProjectManager: { getProject: () => undefined },
-                  DocumentBuilder: { onUpdate: () => Disposable.EMPTY }
+                  DocumentBuilder: { onUpdate: () => Disposable.EMPTY, onDocumentPhase: () => Disposable.EMPTY }
                }
             }
          } as unknown as LangiumCoreServices;

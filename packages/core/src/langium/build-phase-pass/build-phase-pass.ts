@@ -85,7 +85,9 @@ export interface BuildPhasePass extends RegistryItem {
     * Run this pass against the whole built batch. May mutate and reparse
     * documents — the framework's integrity pass does — or derive cross-document
     * state. Honour `cancelToken` for long walks; the dispatcher already checks
-    * it between passes.
+    * it between passes. A `Linked`-phase repair adds the documents it relinks
+    * to `documents` while later passes run, so a pass that keeps the array sees
+    * it grow.
     */
    run(documents: readonly LangiumDocument[], cancelToken: CancellationToken): void | Promise<void>;
 }

@@ -47,7 +47,7 @@ function makeServicesStub(
          workspace: {
             ProjectManager: { getProject: () => (projectId ? { id: projectId } : undefined) },
             // `DefaultNameProvider` subscribes here to evict its per-document cache.
-            DocumentBuilder: { onUpdate: () => Disposable.EMPTY }
+            DocumentBuilder: { onUpdate: () => Disposable.EMPTY, onDocumentPhase: () => Disposable.EMPTY }
          },
          Logger: noopLogger,
          Tracer: makeNoopTracer()

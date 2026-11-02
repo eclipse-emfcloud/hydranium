@@ -73,7 +73,7 @@ function buildBuilder(visibilityMatrix: Record<string, readonly string[]> = { pr
                   return visibilityMatrix[source]?.includes(target) ?? false;
                }
             },
-            DocumentBuilder: { onUpdate: () => Disposable.EMPTY }
+            DocumentBuilder: { onUpdate: () => Disposable.EMPTY, onDocumentPhase: () => Disposable.EMPTY }
          }
       }
    } as unknown as HydraniumLanguageServices;

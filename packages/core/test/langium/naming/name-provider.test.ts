@@ -22,7 +22,7 @@ type AnyNode = AstNode & Record<string, unknown>;
  * {@link DefaultNameProvider} reaches for on the paths exercised here:
  * `ProjectManager.getProject(uri)` (via
  * {@link DefaultNameProvider.getProjectReferenceName}) and
- * `DocumentBuilder.onUpdate` (the qualified-name memos). Tests whose
+ * `DocumentBuilder.onUpdate` and `onDocumentPhase` (the qualified-name memos). Tests whose
  * fixture never traverses to a document root never reach the former, so it
  * may report no owning project. The `findNext*` fixtures need
  * `IndexManager` and `DocumentUriPolicy` on top and build their own stub.
@@ -44,9 +44,9 @@ function makeServices(projectFor: (uri: URI) => Project | undefined = () => unde
                getProject: (uri: URI | string) => projectFor(typeof uri === 'string' ? URI.parse(uri) : uri)
             },
             // DocumentCache (used by the qualified-name memos) subscribes
-            // to DocumentBuilder.onUpdate; no-op stub keeps tests
-            // independent of workspace lifecycle.
-            DocumentBuilder: { onUpdate: () => Disposable.EMPTY }
+            // to DocumentBuilder.onUpdate and onDocumentPhase. No-op stubs
+            // keep tests independent of workspace lifecycle.
+            DocumentBuilder: { onUpdate: () => Disposable.EMPTY, onDocumentPhase: () => Disposable.EMPTY }
          }
       }
    } as unknown as HydraniumLanguageServices;
@@ -479,7 +479,7 @@ describe('DefaultNameProvider', () => {
                      }
                   },
                   DocumentUriPolicy: { canonicalUri: (uri: string) => uri },
-                  DocumentBuilder: { onUpdate: () => Disposable.EMPTY }
+                  DocumentBuilder: { onUpdate: () => Disposable.EMPTY, onDocumentPhase: () => Disposable.EMPTY }
                }
             }
          } as unknown as HydraniumLanguageServices;
@@ -579,7 +579,7 @@ describe('DefaultNameProvider', () => {
                   // No project owns the orphan's URI -> getProject returns undefined.
                   ProjectManager: { getProject: () => undefined },
                   DocumentUriPolicy: { canonicalUri: (uri: string) => uri },
-                  DocumentBuilder: { onUpdate: () => Disposable.EMPTY }
+                  DocumentBuilder: { onUpdate: () => Disposable.EMPTY, onDocumentPhase: () => Disposable.EMPTY }
                }
             }
          } as unknown as HydraniumLanguageServices;
@@ -615,7 +615,7 @@ describe('DefaultNameProvider', () => {
                   },
                   ProjectManager: { getProject: () => undefined },
                   DocumentUriPolicy: { canonicalUri: (uri: string) => uri },
-                  DocumentBuilder: { onUpdate: () => Disposable.EMPTY }
+                  DocumentBuilder: { onUpdate: () => Disposable.EMPTY, onDocumentPhase: () => Disposable.EMPTY }
                }
             }
          } as unknown as HydraniumLanguageServices;

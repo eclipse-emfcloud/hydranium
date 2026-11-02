@@ -48,20 +48,21 @@ So read a repair from the AST, never from the text:
 `IntegrityService.SettledState` is the phase after which repairs are in the
 AST. A document that does not parse gets no repair until it does.
 
-A repair at the `Linked` phase also changes what other documents link to. They
-are relinked in a build after the repair, so until it runs, a document that
-references a repaired one can still resolve to its old nodes. If your rule
-keeps repairing its own output, the chain of such builds stops at the
-`maxRelinkChain` option of `DefaultIntegrityService`, and a `warn` names your
-rule. Langium relinks a document with a linking error in every build, so
-documents with linking errors that your rules repair one after another can
-reach the bound too.
-
-In `'editor'` mode a closed document whose CST was shed re-reads its
-unrepaired text from disk in every build that parses it, including the build
-its repair asked for, and repeats its repair without a build after it. A
-reference to an element the repair renamed then resolves by its old name until
-the next change.
+A repair at the `Linked` phase also changes what other documents link to. The
+same build relinks them, so at `SettledState` they resolve into the repaired
+AST, and a build-phase pass after integrity gets them too. They join the array
+the passes were handed, so a pass that keeps that array sees it grow. A
+dependent the relink re-reads from its text reaches the `Parsed`,
+`IndexedContent` and `ComputedScopes` listeners and passes again, alone, while
+the build is at `Linked`. A `Linked` pass that runs before integrity has read
+the dependents already, so it reads the repair in a build after it. A listener
+on the `Linked` phase itself, through `onBuildPhase` or `onModelsBuilt`, sees
+the relink only when it registers after `BuildPipelineIntegration`. It does
+unless your eager services register theirs first, and then no later build shows
+it the repair. The dependents' own `Linked` rules run against the repair, again
+if they ran before it. If your rules keep repairing each other's output, they
+stop once they have repaired one document again `maxRepeatRepairs` times in a
+build, an option of `DefaultIntegrityService`, and a `warn` names the rule.
 
 ### Layer 3 — `AstDocument`, the live AST with its version
 

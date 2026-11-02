@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { describeErrorWithStack, isPromiseLike, Logger, type ProfileSession, textHash, type Tracer } from '@hydranium/protocol';
+import { isPromiseLike, Logger, type ProfileSession, type Tracer } from '@hydranium/protocol';
 import {
    type AstNode,
    AstUtils,
@@ -16,7 +16,6 @@ import {
    isMultiReference,
    isOperationCancelled,
    type LangiumDocument,
-   type URI,
    UriUtils
 } from '@hydranium/langium';
 import { CancellationToken, type Disposable } from 'vscode-languageserver';
@@ -28,6 +27,7 @@ import { type HydraniumTextDocuments } from '../../documents/hydranium-text-docu
 import { Registry } from '../../util/registry.js';
 import { type ServerLanguageServices } from '../language-module.js';
 import { type ServerSharedServices } from '../module.js';
+import { type ExtendedServiceRegistry } from '../service-registry.js';
 import { hasSkippedText } from '../workspace/syntax-errors.js';
 import { isVirtualUri } from '../workspace/virtual-document.js';
 import { type IntegrityRuleRegistry } from './integrity-contribution.js';
@@ -56,8 +56,19 @@ export interface IntegrityService<TRoot extends AstNode = AstNode> extends Integ
     * mutated the AST, resync the document text and propagate corrections.
     * Driven by the framework integrity pass `BuildPipelineIntegration`
     * registers on the build-phase-pass registry; not for general adopter use.
+    *
+    * `run` is shared by every language's call for the same build phase, so
+    * a repair here can re-run the rules of a dependent another language
+    * enforced. Without it the run is `documents` alone. An implementation
+    * adds each document to `run.enforced` before its rules run, and adds one
+    * to its `run.reenforced` count when they repair it after that.
     */
-   enforceBatch(documents: readonly LangiumDocument<TRoot>[], phase: DocumentState, cancelToken: CancellationToken): Promise<void>;
+   enforceBatch(
+      documents: readonly LangiumDocument<TRoot>[],
+      phase: DocumentState,
+      cancelToken: CancellationToken,
+      run?: IntegrityRun
+   ): Promise<void>;
    /**
     * Run all rules for `phase` against one document's matching nodes, returning
     * `true` if any rule mutated the AST. The single-document half of
@@ -96,12 +107,10 @@ export namespace IntegrityService {
     * `textDocument` still mirrors disk — read the repair off the AST, or from
     * the staged content the next open consumes.
     *
-    * A `Linked`-phase repair settles the documents that reference the repaired
-    * one in the same build against what the repair replaced. A build after it
-    * relinks them, and they settle again. Past `maxRelinkChain` such builds in
-    * a row they keep stale links. A closed `'editor'` document whose CST was
-    * shed re-reads its unrepaired text in that build and repeats the repair,
-    * so they resolve a renamed element by its old name until the next change.
+    * A `Linked`-phase repair relinks the documents that reference the
+    * repaired one within the same build, so they settle against the repair.
+    * A dependent whose rules already ran has them run again, until they have
+    * repaired it again `maxRepeatRepairs` times in the build.
     *
     * Invariant: integrity rules only register at Parsed or Linked, so the build
     * is guaranteed post-integrity once it advances past `onBuildPhase(Linked)`
@@ -120,8 +129,54 @@ export namespace IntegrityService {
  */
 const silentWriteReported = new WeakSet<ServerSharedServices>();
 
-/** The running builds that relink dependents, per server, because a repair in one language can extend a chain in another. */
-const runningRelinksByServer = new WeakMap<ServerSharedServices, Set<DependentRelink>>();
+/**
+ * One run of the integrity pass over a build phase's batch, shared by the
+ * {@link IntegrityService.enforceBatch} call of every language in it. A
+ * `Linked`-phase repair reads it to decide whose rules run again.
+ */
+export interface IntegrityRun {
+   /** The batch, across languages. */
+   readonly documents: ReadonlySet<LangiumDocument>;
+   /** The documents whose rules have started in this run. */
+   readonly enforced: Set<LangiumDocument>;
+   /** How often each document's rules repaired it again in this run, after they ran once. */
+   readonly reenforced: Map<LangiumDocument, number>;
+   /** Whether build-phase passes ran before this one in its phase, and so read the dependents before their relink. */
+   readonly passesBefore: boolean;
+   /** The token of the build, which tells it apart from an overlapping one when it ends. */
+   readonly cancelToken: CancellationToken;
+}
+
+/**
+ * Per run, how deeply its `enforceBatch` calls nest, and the dependents
+ * repairs selected with the repair that selected them last. Each is relinked
+ * once for all the repairs that selected it until then: before its rules run
+ * when they are yet to, otherwise when the outermost call, one per language's
+ * batch, ends. A repair after its relink selects it again. The outermost
+ * call of a run adds its entry and deletes it when it ends, so nested calls
+ * share it. Kept here and not on the run, which is a public type.
+ */
+const deferredRelinks = new WeakMap<
+   IntegrityRun,
+   { depth: number; dependents: Map<LangiumDocument, { cause: LangiumDocument; service: DefaultIntegrityService }> }
+>();
+
+export namespace IntegrityRun {
+   /** A run over `documents` in which no rule has run yet. */
+   export function create(
+      documents: readonly LangiumDocument[],
+      options: { passesBefore?: boolean; cancelToken?: CancellationToken } = {}
+   ): IntegrityRun {
+      return {
+         // A copy, as the builder adds a pulled-in dependent to the batch it hands the passes.
+         documents: new Set(documents),
+         enforced: new Set(),
+         reenforced: new Map(),
+         passesBefore: options.passesBefore ?? false,
+         cancelToken: options.cancelToken ?? CancellationToken.None
+      };
+   }
+}
 
 /**
  * Construction options for {@link DefaultIntegrityService}. All fields
@@ -137,25 +192,12 @@ export interface IntegrityServiceOptions extends LogNameOptions {
     */
    readonly syncMode?: IntegritySyncMode;
    /**
-    * How many builds in a row may relink the dependents of `Linked`-phase
-    * repairs before a repair only warns. A rule that settles within it gets
-    * every build it needs. An integer of at least 1, 3 by default.
+    * How often a document's `Linked`-phase rules may repair it again in one
+    * build, after a document it references was repaired, before a repair only
+    * warns. Rules that settle within it get every run they need. An integer of
+    * at least 1, 3 by default.
     */
-   readonly maxRelinkChain?: number;
-}
-
-/** The text a `Linked`-phase repair was computed from, and the text it produced. */
-export interface IntegrityRepairTexts {
-   readonly from: string;
-   readonly to: string;
-}
-
-/** The build a repaired document has requested to relink its dependents. */
-export interface DependentRelink {
-   /** The repaired document, whose dependents the build relinks. */
-   readonly document: LangiumDocument;
-   /** Its place in a chain of such builds, each requested by a repair of a document the one before relinked. */
-   readonly chain: number;
+   readonly maxRepeatRepairs?: number;
 }
 
 /**
@@ -205,25 +247,22 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     * Linked-phase correction (see {@link resyncDocument}).
     */
    protected readonly documentBuilder: HydraniumDocumentBuilder;
-   /** Each document's {@link DependentRelink}, from its request until it settles. See {@link relinkDependents}. */
-   protected readonly relinkBuilds = new WeakMap<LangiumDocument, DependentRelink>();
-   /** The {@link replayKey} of the latest repair of each document that {@link stagesRepairs}, with the hash of the text it came from. */
-   protected readonly replayKeys = new WeakMap<LangiumDocument, { readonly key: string; readonly fromHash: string }>();
-   /** The relinks the check inside the lock found needed, until their build starts. */
-   protected readonly scheduledRelinks = new WeakSet<DependentRelink>();
-   /** The relinks of every language whose build runs, from its start until it settles or the next build starts. */
-   protected readonly runningRelinks: Set<DependentRelink>;
-   /** The rules of a repair while a relink's build waited or ran. Only one while it ran gets the next build in the chain. */
-   protected readonly repairedAgain = new WeakMap<DependentRelink, readonly IntegrityRule[]>();
-   /**
-    * Marks {@link scheduledRelinks} running as their builds start. Set on the
-    * first request only so it subscribes once, and never disposed.
-    */
-   protected relinkStarts?: Disposable;
-   /** See {@link IntegrityServiceOptions.maxRelinkChain}. */
-   protected readonly maxRelinkChain: number;
+   /** See {@link IntegrityServiceOptions.maxRepeatRepairs}. */
+   protected readonly maxRepeatRepairs: number;
    /** The rules that mutated each document in its latest `Linked`-phase {@link enforceIntegrity} pass, so a warning can name them. */
    protected readonly mutatingRules = new WeakMap<LangiumDocument, Set<IntegrityRule>>();
+   /** The documents whose reconcile or relink threw and requested a rebuild, until a build completes in which nothing threw for them. */
+   protected readonly rebuildsAfterThrow = new WeakSet<LangiumDocument>();
+   /** The repaired documents that requested a build for the passes before integrity, until a build completes without repairing them. */
+   protected readonly rebuildsForPassesBefore = new WeakSet<LangiumDocument>();
+   /**
+    * The entries of {@link rebuildsAfterThrow} a build clears once it
+    * completes, by its token. A later re-run or relink in the same build may
+    * still throw.
+    */
+   protected readonly rebuildsAfterThrowToClear = new WeakMap<CancellationToken, Set<LangiumDocument>>();
+   /** The entries of {@link rebuildsForPassesBefore} a build clears once it completes, unless it repairs them later, by its token. */
+   protected readonly rebuildsForPassesBeforeToClear = new WeakMap<CancellationToken, Set<LangiumDocument>>();
 
    constructor(
       protected readonly services: ServerLanguageServices,
@@ -234,14 +273,12 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       this.tracer = services.shared.Tracer.for(options.logName ?? 'Integrity').trace('instantiated');
       this.documentBuilder = services.shared.workspace.DocumentBuilder;
       this.syncMode = options.syncMode ?? 'silent';
-      this.maxRelinkChain = options.maxRelinkChain ?? 3;
-      if (!Number.isInteger(this.maxRelinkChain) || this.maxRelinkChain < 1) {
+      this.maxRepeatRepairs = options.maxRepeatRepairs ?? 3;
+      if (!Number.isInteger(this.maxRepeatRepairs) || this.maxRepeatRepairs < 1) {
          throw new RangeError(
-            `The integrity service's maxRelinkChain option must be an integer of at least 1, not ${this.maxRelinkChain}.`
+            `The integrity service's maxRepeatRepairs option must be an integer of at least 1, not ${this.maxRepeatRepairs}.`
          );
       }
-      this.runningRelinks = runningRelinksByServer.get(services.shared) ?? new Set();
-      runningRelinksByServer.set(services.shared, this.runningRelinks);
 
       // Read the language's IntegrityRuleContribution group and let each
       // contribution register one or many rules through this service (the
@@ -252,6 +289,18 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       for (const contribution of Object.values(contributions)) {
          contribution.registerIntegrityRules(this);
       }
+      // Each build clears its own entries. Those of a build that throws go with its token at the drain after it,
+      // but builds started with `None` share theirs, so one that throws drops those of another.
+      this.documentBuilder.onBuildEnded(({ completed, cancelToken = CancellationToken.None, cancelTokens = [] }) => {
+         if (completed) {
+            this.rebuildsAfterThrowToClear.get(cancelToken)?.forEach(document => this.rebuildsAfterThrow.delete(document));
+            this.rebuildsForPassesBeforeToClear.get(cancelToken)?.forEach(document => this.rebuildsForPassesBefore.delete(document));
+         }
+         for (const ended of completed ? [cancelToken] : cancelTokens) {
+            this.rebuildsAfterThrowToClear.delete(ended);
+            this.rebuildsForPassesBeforeToClear.delete(ended);
+         }
+      });
    }
 
    /**
@@ -268,26 +317,73 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     * concurrent write lock interrupts cleanly rather than running the
     * rule set to completion against a doomed build.
     */
-   async enforceBatch(documents: readonly LangiumDocument[], phase: DocumentState, cancelToken: CancellationToken): Promise<void> {
+   async enforceBatch(
+      documents: readonly LangiumDocument[],
+      phase: DocumentState,
+      cancelToken: CancellationToken,
+      run: IntegrityRun = IntegrityRun.create(documents, { cancelToken })
+   ): Promise<void> {
       const sincePhaseStart = this.services.shared.Clock.stopwatch();
       let mutatedCount = 0;
       // Per-rule self-time profiling is opt-in: only spin up a session when the
       // debug threshold is active, so the production `info` path allocates
       // nothing and the hot rule loop stays a single const-branch off `session`.
       const session = Logger.isLevelEnabled('debug') ? this.tracer.profile(`integrity ${DocumentState[phase]}`) : undefined;
-      // Before any skip or cancel, so text with parse errors also ends a replay.
-      for (const document of documents) {
-         this.forgetReplayOfOtherText(document);
-      }
-      for (const document of documents) {
-         if (this.isStructurallyBroken(document)) {
-            this.tracer.with(document.uri.toString()).debug('Parse errors: rules skipped until the document parses');
-         } else if (await this.enforceIntegrity(document, phase, cancelToken, session)) {
-            mutatedCount++;
-            // Not cancellable: see `resyncDocument`.
-            await this.resyncDocument(document, CancellationToken.None);
+      const deferred = deferredRelinks.get(run) ?? { depth: 0, dependents: new Map() };
+      deferredRelinks.set(run, deferred);
+      deferred.depth++;
+      try {
+         for (const document of documents) {
+            const again = run.enforced.has(document);
+            const selected = again ? undefined : deferred.dependents.get(document);
+            if (selected !== undefined) {
+               // Before its rules run, so they read every repair so far.
+               await selected.service.relinkEach(selected.cause, [document], run);
+            }
+            // Before its rules run, so a repair they cause in turn runs them again.
+            run.enforced.add(document);
+            let mutated = false;
+            if (this.isStructurallyBroken(document)) {
+               this.tracer.with(document.uri.toString()).debug('Parse errors: rules skipped until the document parses');
+            } else if (await this.enforceIntegrity(document, phase, cancelToken, session)) {
+               mutated = true;
+               mutatedCount++;
+               if (again) {
+                  run.reenforced.set(document, (run.reenforced.get(document) ?? 0) + 1);
+               }
+               // Not cancellable: see `resyncDocument`.
+               await this.resyncDocument(document, CancellationToken.None, run);
+            }
+            // Reached only when no reconcile or relink threw, so once the build completes a later throw may ask for a rebuild again.
+            if (phase === DocumentState.Linked) {
+               this.toClear(this.rebuildsAfterThrowToClear, run).add(document);
+               if (!mutated) {
+                  this.toClear(this.rebuildsForPassesBeforeToClear, run).add(document);
+               }
+            }
+            await interruptAndCheck(cancelToken);
          }
-         await interruptAndCheck(cancelToken);
+         if (deferred.depth === 1) {
+            await this.relinkDeferred(run);
+         }
+      } catch (error: unknown) {
+         if (deferred.depth === 1) {
+            // A cancelled build ends before the batch does, and its next build relinks only the changed documents' dependents.
+            // A relink that throws there leaves the rest to the builds below, so the cancel is what the caller sees.
+            if (isOperationCancelled(error)) {
+               await this.relinkDeferred(run).catch(() => undefined);
+            }
+            // Whatever threw, the dependents still queued hold the replaced nodes, so a build of each repair relinks them.
+            new Map([...deferred.dependents.values()].map(({ cause, service }) => [cause, service])).forEach((service, cause) =>
+               service.rebuildAfterThrow(cause, run)
+            );
+         }
+         throw error;
+      } finally {
+         deferred.depth--;
+         if (deferred.depth === 0) {
+            deferredRelinks.delete(run);
+         }
       }
       const totalMs = Math.round(sincePhaseStart.elapsedMs);
       // A repair is the operator's to know of; the timing alone is diagnosis.
@@ -434,8 +530,15 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     * Runs to the end whatever `cancelToken` says: the AST is already mutated,
     * and skipping the resync leaves it against unchanged text that the next
     * build does not re-parse. `cancelToken` reaches only the re-parse.
+    *
+    * A `Linked`-phase repair then relinks the document's dependents, as
+    * {@link relinkDependents} describes, within `run`.
     */
-   protected async resyncDocument(document: LangiumDocument, cancelToken?: CancellationToken): Promise<void> {
+   protected async resyncDocument(
+      document: LangiumDocument,
+      cancelToken?: CancellationToken,
+      run: IntegrityRun = IntegrityRun.create([document])
+   ): Promise<void> {
       const root = document.parseResult.value as TRoot;
       // Extracted while `document` still holds the text being replaced — the
       // resync that follows overwrites it with `newText`. Absent on a test
@@ -486,8 +589,14 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          // parse of text nobody has. Reconciling discards it by re-reading the
          // store, which is what the document now has to agree with.
          //
-         // No dependents are relinked, because the edit's build relinks them.
+         // The re-parse replaces its nodes, so its dependents are relinked now
+         // rather than in the edit's build. A reconcile that throws requests no
+         // build, as the edit's own build re-reads the document and relinks them.
+         const linked = document.state > DocumentState.Parsed;
          await this.reconcileDocument(document, cancelToken);
+         if (linked) {
+            await this.relinkDependents(document, run);
+         }
          return;
       }
 
@@ -501,17 +610,17 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
 
       await this.syncCorrections(textDocument, parsedFrom);
 
-      if (document.state > DocumentState.Parsed) {
-         // Requested before the in-place relink, and an error logged, so neither skips the other.
-         try {
-            this.relinkDependents(document, { from: parsedFrom, to: newText });
-         } catch (error: unknown) {
-            this.tracer
-               .with(document.uri.toString())
-               .error(`Relinking the dependents of a repaired document failed. ${describeErrorWithStack(error)}`);
+      const linked = document.state > DocumentState.Parsed;
+      try {
+         await this.reconcileDocument(document, cancelToken);
+      } catch (error: unknown) {
+         // Left unindexed, the document would relink its dependents to the nodes
+         // its re-parse replaced. A build of it as changed relinks them.
+         if (linked) {
+            this.rebuildAfterThrow(document, run);
          }
+         throw error;
       }
-      await this.reconcileDocument(document, cancelToken);
 
       // Re-version against the REPAIRED text, after either branch. The repair is
       // a content change the store has not seen: whatever reconciliation ran
@@ -531,6 +640,12 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          // syncing read waits for a build nothing requests. The CST is still
          // the unrepaired text, so the repair is reported as the parsed text.
          this.services.shared.workspace.VersionSyncService.modelProduced(document, { text: newText });
+      }
+
+      // Last, so a dependent's repair that resyncs this document again, or a
+      // relink that throws, finds it re-versioned already.
+      if (linked) {
+         await this.relinkDependents(document, run);
       }
    }
 
@@ -572,46 +687,112 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
    }
 
    /**
-    * Relink the documents that reference `document` in a build after this
-    * one, where it counts as changed. They were linked before the repair, so
-    * they hold nodes a re-parse replaced, or names the repair changed.
+    * Relink the documents that reference `document` within the running build,
+    * once a `Linked`-phase repair replaced its nodes or changed its names.
+    * They were linked before the repair, so they hold what it replaced.
     *
-    * Each document has at most one such build, its {@link DependentRelink},
-    * which goes through four steps.
+    * A dependent the build was not linking joins it. Its rules run again
+    * through its own language's {@link IntegrityService.enforceBatch} when
+    * they have run in `run` or when no language's batch holds it, since a
+    * rule may read the links the repair changed. Within {@link enforceBatch}
+    * each is relinked once for all the repairs that select it until then:
+    * just before its rules run when they are yet to in `run`, otherwise in
+    * {@link relinkDeferred}. A dependent that resolves its references lazily
+    * is unlinked, so its next read resolves into the repair, and validated
+    * again when it was, without its rules, as in its own builds. A dependent
+    * re-read from its text has its own dependents relinked too.
+    * When build-phase passes ran before integrity, a build of `document` as
+    * changed after this one runs them on the dependents again.
     *
-    * 1. Requested here, and kept in {@link relinkBuilds}. A repair while it
-    *    waits is relinked by it.
-    * 2. Checked inside the lock, which skips it unless {@link isRelinkNeeded}.
-    *    A needed one joins {@link scheduledRelinks}. While a build outside the
-    *    lock runs, it is requested again once that build ends.
-    * 3. Started, when `onUpdate` reports its build. An explicit `build` starts
-    *    none. It is in {@link runningRelinks} until it settles or the next
-    *    build starts that overlaps no other. A repair while it runs is kept in
-    *    {@link repairedAgain} and gets the next build.
-    * 4. Settled, when its request resolves, which drops it from every record.
-    *
-    * A repair of a document that a running build relinked continues that
-    * build's chain, which {@link maxRelinkChain} bounds. A repair with the
-    * {@link replayKey} of the one before requests none.
+    * Without a running build nothing is relinked, as for a document built
+    * outside one. When a relink or a re-run throws, a build of `document` as
+    * changed after this one relinks them.
     */
-   protected relinkDependents(document: LangiumDocument, repair: IntegrityRepairTexts): void {
-      const key = this.replayKey(document, repair);
-      if (key !== undefined && this.replayKeys.get(document)?.key === key) {
+   protected async relinkDependents(document: LangiumDocument, run: IntegrityRun): Promise<void> {
+      const dependents = this.services.shared.workspace.LangiumDocuments.all
+         .filter(other => other !== document && other.state >= DocumentState.ComputedScopes && this.isRelinkedBy(other, document))
+         .toArray();
+      const deferred = deferredRelinks.get(run)?.dependents;
+      if (deferred === undefined) {
+         await this.relinkEach(document, dependents, run);
+      } else {
+         dependents.forEach(dependent => deferred.set(dependent, { cause: document, service: this }));
+      }
+      // Those passes read the dependents before their relink, and a build of `document` as changed runs
+      // them again. Once until a build completes without repairing it, so a rule that never settles cannot loop.
+      if (run.passesBefore && dependents.length > 0) {
+         this.rebuildsForPassesBeforeToClear.get(run.cancelToken)?.delete(document);
+      }
+      if (run.passesBefore && dependents.length > 0 && !this.rebuildsForPassesBefore.has(document)) {
+         this.rebuildsForPassesBefore.add(document);
+         this.services.shared.workspace.VersionSyncService.rebuildWhileCurrent(document);
+      }
+   }
+
+   /**
+    * Relink, once each, the dependents that repairs in `run` selected and
+    * that no turn of their rules relinked. Deferred to the end of the
+    * outermost {@link enforceBatch} of `run`, one per language's batch, so
+    * k repairs in a batch cost one relink of each, not k.
+    */
+   protected async relinkDeferred(run: IntegrityRun): Promise<void> {
+      const deferred = deferredRelinks.get(run)?.dependents;
+      if (deferred === undefined) {
          return;
       }
-      const rules = [...(this.mutatingRules.get(document) ?? [])];
-      const pending = this.relinkBuilds.get(document);
-      let requested = true;
-      if (pending !== undefined) {
-         this.repairedAgain.set(pending, rules);
-      } else {
-         const causes = [...this.runningRelinks].filter(relink => this.isRelinkedBy(document, relink.document));
-         requested = this.relinkInChain(document, Math.max(0, ...causes.map(relink => relink.chain)) + 1, rules);
+      // Visits the entries the relinks add, and skips those they relink directly.
+      for (const [dependent, { cause, service }] of deferred) {
+         deferred.delete(dependent);
+         await service.relinkEach(cause, [dependent], run);
       }
-      // Recorded after the request, so one that throws or is past the bound leaves no key that skips the next repair.
-      if (key !== undefined && requested) {
-         this.replayKeys.set(document, { key, fromHash: textHash(repair.from) });
+   }
+
+   /** Relink `dependents` of the repaired `document` within the running build, and run their rules again where they read it. */
+   protected async relinkEach(document: LangiumDocument, dependents: readonly LangiumDocument[], run: IntegrityRun): Promise<void> {
+      try {
+         for (const dependent of dependents) {
+            // Relinked now, it resolves its linking errors against every repair so far.
+            deferredRelinks.get(run)?.dependents.delete(dependent);
+            const root = dependent.parseResult.value;
+            const relinked = await this.documentBuilder.relinkInRunningBuild(dependent, document, run.cancelToken);
+            // Re-read from its text, also when left to resolve lazily, so its nodes are new and its own dependents hold the old ones.
+            const reread = dependent.parseResult.value !== root;
+            if (relinked && (run.enforced.has(dependent) || !run.documents.has(dependent))) {
+               await this.reenforce(dependent, document, run);
+            }
+            if (reread) {
+               const registry: ExtendedServiceRegistry<ServerLanguageServices> = this.services.shared.ServiceRegistry;
+               const service = registry.getServices(dependent.uri).integrity.IntegrityService;
+               // Through its own language's service, which holds its once-guards and rules.
+               await (service instanceof DefaultIntegrityService ? service : this).relinkDependents(dependent, run);
+            }
+         }
+      } catch (error: unknown) {
+         // The dependents after the one that threw still hold the replaced nodes.
+         // A build of `document` as changed relinks them all.
+         this.rebuildAfterThrow(document, run);
+         throw error;
       }
+   }
+
+   /**
+    * Build `document` again as changed after the build, which relinks its
+    * dependents, once until a build completes in which nothing threw for it,
+    * so a throw in that build too ends with its retries.
+    */
+   protected rebuildAfterThrow(document: LangiumDocument, run: IntegrityRun): void {
+      this.rebuildsAfterThrowToClear.get(run.cancelToken)?.delete(document);
+      if (!this.rebuildsAfterThrow.has(document)) {
+         this.rebuildsAfterThrow.add(document);
+         this.services.shared.workspace.VersionSyncService.rebuildWhileCurrent(document);
+      }
+   }
+
+   /** The entries of `guard` that the build of `run` clears once it completes. */
+   protected toClear(guard: WeakMap<CancellationToken, Set<LangiumDocument>>, run: IntegrityRun): Set<LangiumDocument> {
+      const documents = guard.get(run.cancelToken) ?? new Set<LangiumDocument>();
+      guard.set(run.cancelToken, documents);
+      return documents;
    }
 
    /**
@@ -622,179 +803,50 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
    protected isRelinkedBy(document: LangiumDocument, changed: LangiumDocument): boolean {
       const target = changed.uri.toString();
       return document.references.some(reference => {
+         if (reference.error !== undefined) {
+            return true;
+         }
+         // Read through the field, as `items` would resolve an unresolved one, which links nothing.
+         if (isMultiReference(reference) && '_items' in reference && !Array.isArray(reference._items)) {
+            return false;
+         }
          const descriptions = isMultiReference(reference)
             ? reference.items.map(item => item.$nodeDescription)
             : [reference.$nodeDescription];
-         return reference.error !== undefined || descriptions.some(description => description?.documentUri.toString() === target);
+         return descriptions.some(description => description?.documentUri.toString() === target);
       });
    }
 
    /**
-    * Request the build at `chain`, or warn naming `rules` past
-    * {@link maxRelinkChain} and drop the {@link replayKey} of `document`.
-    * Returns whether it requested the build.
+    * Run the `Linked`-phase rules of `dependent` again after `repaired` was
+    * repaired, or warn once naming the rules of that repair when they have
+    * repaired `dependent` again {@link maxRepeatRepairs} times in `run`, as
+    * the integrity service of `dependent`'s language sets it.
     */
-   protected relinkInChain(document: LangiumDocument, chain: number, rules: readonly IntegrityRule[]): boolean {
-      if (chain > this.maxRelinkChain) {
-         this.replayKeys.delete(document);
-         const builds = this.maxRelinkChain === 1 ? '1 build in a row that relinks' : `${this.maxRelinkChain} builds in a row that relink`;
+   protected async reenforce(dependent: LangiumDocument, repaired: LangiumDocument, run: IntegrityRun): Promise<void> {
+      // Read through the registry's server type, which the intersected `shared` type hides.
+      const registry: ExtendedServiceRegistry<ServerLanguageServices> = this.services.shared.ServiceRegistry;
+      const service = registry.getServices(dependent.uri).integrity.IntegrityService;
+      // Another implementation keeps no bound this service can read, so this one's applies.
+      const maxRepeatRepairs = service instanceof DefaultIntegrityService ? service.maxRepeatRepairs : this.maxRepeatRepairs;
+      const repairs = run.reenforced.get(dependent) ?? 0;
+      if (repairs >= maxRepeatRepairs) {
+         if (repairs > maxRepeatRepairs) {
+            return;
+         }
+         // One past the bound marks the warning given.
+         run.reenforced.set(dependent, repairs + 1);
+         const times = maxRepeatRepairs === 1 ? 'once' : `${maxRepeatRepairs} times`;
          this.tracer
-            .with(document.uri.toString())
+            .with(dependent.uri.toString())
             .warn(
-               `${this.formatRules(rules)} repaired documents in ${builds} their dependents, ` +
-                  'which keep stale links until the next change. A rule that does not settle causes this, ' +
-                  'or documents with linking errors that rules repair one after another.'
+               `${this.formatRules([...(this.mutatingRules.get(repaired) ?? [])])} repaired a document this one references ` +
+                  `after its rules repaired it again ${times} in one build, so they keep their last result until the next change. ` +
+                  'A rule that does not settle causes this, or rules that repair documents referencing each other.'
             );
-         return false;
-      }
-      this.requestRelink(document, chain);
-      return true;
-   }
-
-   /** Request the build {@link relinkInChain} decided on, skipped unless {@link isRelinkNeeded}. */
-   protected requestRelink(document: LangiumDocument, chain: number): void {
-      const uri = document.uri;
-      this.relinkStarts ??= this.documentBuilder.onUpdate(changed => this.startRelinks(changed));
-      const relink: DependentRelink = { document, chain };
-      let unlockedBuild: Promise<void> | undefined;
-      const stillNeeded = (): boolean => {
-         // No locked build runs during the lock read, so one seen here runs outside the lock.
-         unlockedBuild = this.documentBuilder.activeBuild;
-         if (unlockedBuild !== undefined) {
-            return false;
-         }
-         // Marked before the deferral check, so a deferred relink stays scheduled until it settles.
-         const needed = this.isRelinkNeeded(document);
-         if (needed) {
-            this.scheduledRelinks.add(relink);
-         }
-         return needed;
-      };
-      const settled = (): void => {
-         this.relinkBuilds.delete(document);
-         this.scheduledRelinks.delete(relink);
-         this.runningRelinks.delete(relink);
-      };
-      const requestFailed = (error: unknown): void => {
-         // No build relinks the dependents, so the same repair again needs one.
-         this.replayKeys.delete(document);
-         this.tracer
-            .with(uri.toString())
-            .error(`Requesting the next build that relinks the dependents of a repaired document failed. ${describeErrorWithStack(error)}`);
-      };
-      const request = this.services.shared.workspace.VersionSyncService.requestRecoveryBuild(uri, { stillNeeded });
-      // Recorded after the request, so one that throws leaves no relink that never settles.
-      this.relinkBuilds.set(document, relink);
-      request
-         .then(
-            () => {
-               if (unlockedBuild !== undefined) {
-                  // Requested again once that build ends, so the two never overlap. A repair meanwhile waits for it.
-                  unlockedBuild
-                     .then(() => {
-                        settled();
-                        this.requestRelink(document, chain);
-                     })
-                     .catch(requestFailed);
-                  return;
-               }
-               // A build that never started, or was cancelled and not run again,
-               // leaves the repair to the build that held it back. Read before the
-               // next build's `onUpdate` clears it, which the lock's queue orders later.
-               const ran = this.runningRelinks.has(relink);
-               settled();
-               const again = this.repairedAgain.get(relink);
-               if (ran && again !== undefined) {
-                  this.relinkInChain(document, chain + 1, again);
-               }
-            },
-            (error: unknown) => {
-               settled();
-               // The dependents were not relinked, so the same repair again needs its build.
-               this.replayKeys.delete(document);
-               this.tracer
-                  .with(uri.toString())
-                  .error(`The build that relinks the dependents of a repaired document failed. ${describeErrorWithStack(error)}`);
-            }
-         )
-         .catch(requestFailed);
-   }
-
-   /** Mark the {@link scheduledRelinks} of the `changed` documents running, as the build that carries them starts. */
-   protected startRelinks(changed: readonly URI[]): void {
-      // An explicit build relinks no dependents and ends no build it overlaps.
-      if (this.documentBuilder.isInsideBuildUpdate()) {
          return;
       }
-      // The build before this one ended, done or cancelled, so its relinks run no more,
-      // unless this one overlaps it, as a reentrant build does.
-      // The set is shared by every language. Each service clears only its own,
-      // because another's listener may already have marked this build's relinks running.
-      if (!this.documentBuilder.overlapsRunningBuild()) {
-         for (const relink of this.runningRelinks) {
-            if (this.relinkBuilds.get(relink.document) === relink) {
-               this.runningRelinks.delete(relink);
-            }
-         }
-      }
-      const documents = this.services.shared.workspace.LangiumDocuments;
-      for (const uri of changed) {
-         const document = documents.getDocument(uri);
-         const relink = document === undefined ? undefined : this.relinkBuilds.get(document);
-         if (relink !== undefined && this.scheduledRelinks.delete(relink)) {
-            // The starting build relinks any repair while it waited.
-            this.repairedAgain.delete(relink);
-            this.runningRelinks.add(relink);
-         }
-      }
-   }
-
-   /**
-    * Whether a build where `document` counts as changed relinks another
-    * document, by the builder's own test, which counts a document a cancelled
-    * build left unindexed as relinked.
-    */
-   protected isRelinkNeeded(document: LangiumDocument): boolean {
-      const documents = this.services.shared.workspace.LangiumDocuments;
-      const changed = new Set([document.uri.toString()]);
-      return (
-         documents.getDocument(document.uri) === document &&
-         documents.all.some(other => other !== document && this.documentBuilder.shouldRelink(other, changed))
-      );
-   }
-
-   /**
-    * Whether `document` stages its repairs rather than writing them, as a
-    * closed document does in `'editor'` mode, so its source keeps the
-    * unrepaired text.
-    */
-   protected stagesRepairs(document: LangiumDocument): boolean {
-      return this.syncMode === 'editor' && !this.textDocuments.isOpen(document.textDocument.uri);
-   }
-
-   /**
-    * What tells `repair` made again from the same text apart from a new one,
-    * for a document that {@link stagesRepairs}, which reads the unrepaired
-    * text again in every build that re-parses it after its CST was shed. Such
-    * a repair requests no build, because the build that re-parsed the
-    * document relinked its dependents, and another would replay it again.
-    * Hashes, so the record keeps no text the shed freed.
-    */
-   protected replayKey(document: LangiumDocument, repair: IntegrityRepairTexts): string | undefined {
-      return this.stagesRepairs(document) ? textHash(repair.from) + textHash(repair.to) : undefined;
-   }
-
-   /**
-    * Drop the {@link replayKey} of `document` once it was parsed from other
-    * text than its repair came from, such as a save and a revert. A repair of
-    * that text again is a new one, whose dependents need their build.
-    */
-   protected forgetReplayOfOtherText(document: LangiumDocument): void {
-      const recorded = this.replayKeys.get(document);
-      const parsedFrom = document.parseResult.value.$cstNode?.root.fullText;
-      if (recorded !== undefined && parsedFrom !== undefined && recorded.fromHash !== textHash(parsedFrom)) {
-         this.replayKeys.delete(document);
-      }
+      await service.enforceBatch([dependent], DocumentState.Linked, CancellationToken.None, run);
    }
 
    /**

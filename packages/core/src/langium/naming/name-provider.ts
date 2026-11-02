@@ -13,6 +13,7 @@ import {
    AstUtils,
    type CstNode,
    DocumentCache,
+   DocumentState,
    GrammarUtils,
    type NameProvider as LangiumNameProvider,
    type URI
@@ -332,8 +333,8 @@ export class DefaultNameProvider implements NameProvider {
     * Eliminates the redundant container-chain walk that arises when
     * {@link getProjectQualifiedName} (and other consumers) repeatedly
     * query the document-qualified name for the same node within a
-    * document's lifetime. Evicted automatically when Langium rebuilds
-    * the document.
+    * document's lifetime. Evicted automatically when Langium parses
+    * the document again.
     *
     * So a built node renamed in memory reads its old name until the rebuild,
     * as {@link NameProvider.getDocumentQualifiedName} warns.
@@ -353,9 +354,8 @@ export class DefaultNameProvider implements NameProvider {
     * **Project-rename caveat.** If `Project.referenceName` mutates without
     * a corresponding document rebuild, cached entries become stale. Adopters
     * renaming projects at runtime should clear the cache explicitly; the
-    * default workspace lifecycle (descriptor file edits trigger
-    * `DocumentBuilder.onUpdate` → `DocumentCache` evicts) covers the
-    * common case.
+    * default workspace lifecycle (a descriptor file edit rebuilds the
+    * documents, and their parse evicts them) covers the common case.
     */
    protected readonly projectQualifiedNameCache: DocumentCache<AstNode, string>;
 
@@ -365,8 +365,9 @@ export class DefaultNameProvider implements NameProvider {
    ) {
       this.nameSeparator = options.nameSeparator ?? '.';
       this.nameProperties = options.nameProperties ?? ['name'];
-      this.documentQualifiedNameCache = new DocumentCache(services.shared);
-      this.projectQualifiedNameCache = new DocumentCache(services.shared);
+      // Evicted when a document is parsed, which an in-build re-parse does too, so a node a rule renamed in place reads its new name.
+      this.documentQualifiedNameCache = new DocumentCache(services.shared, DocumentState.Parsed);
+      this.projectQualifiedNameCache = new DocumentCache(services.shared, DocumentState.Parsed);
    }
 
    /**

@@ -10,6 +10,7 @@
 import { type LangiumDocument, DocumentState } from '@hydranium/langium';
 import { type CancellationToken } from 'vscode-languageserver';
 import { IntegrityPhase } from '../integrity/integrity-rule.js';
+import { IntegrityRun } from '../integrity/integrity-service.js';
 import { AstExtensionPhase } from '../ast-extension/ast-extension-service.js';
 import { BuildPassPhase, groupDocumentsByLanguage } from '../build-phase-pass/build-phase-pass.js';
 import { type ServerSharedServices } from '../module.js';
@@ -37,7 +38,9 @@ export interface BuildPipelineIntegrationOptions {
     * {@link IntegrityPhase}. A single value covers all integrity phases: priority
     * only orders passes WITHIN one phase bucket, and integrity at `Parsed` vs
     * `Linked` lives in different buckets, so per-phase values would never
-    * interact. Default {@link INTEGRITY_PASS_PRIORITY}.
+    * interact. Default {@link INTEGRITY_PASS_PRIORITY}. A `Linked` pass before
+    * integrity reads the dependents of a repair before their relink, and sees
+    * the repair only in a build after it.
     */
    readonly integrityPriority?: number;
 }
@@ -102,7 +105,7 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
       const integrityPriority = options.integrityPriority ?? INTEGRITY_PASS_PRIORITY;
       for (const phase of IntegrityPhase.all()) {
          passes.register({
-            id: `framework:integrity:${IntegrityPhase.toString(phase).toLowerCase()}`,
+            id: this.integrityPassId(phase),
             phase,
             priority: integrityPriority,
             run: (documents, cancelToken) => this.callIntegrity(documents, phase, cancelToken)
@@ -160,6 +163,11 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
    // Feature seams — one overridable helper per framework feature
    // ============================================================
 
+   /** The id of the integrity pass at `phase`. */
+   protected integrityPassId(phase: DocumentState): string {
+      return `framework:integrity:${IntegrityPhase.toString(phase).toLowerCase()}`;
+   }
+
    /**
     * Run integrity enforcement for the batch at `phase`. The batch may span
     * grammars, so group documents by their language's `IntegrityService`
@@ -179,11 +187,15 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
       // The same fan-out `groupDocumentsByLanguage` offers adopter passes —
       // shared rather than parallel, so the exported helper is proven by the
       // framework's own use of it rather than only by its tests.
+      // One run across the languages, so a repair in one re-runs the rules of a dependent in another.
+      const passes = this.services.workspace.BuildPhasePassService.passesAt(phase);
+      const passesBefore = passes.findIndex(registered => registered.id === this.integrityPassId(phase)) > 0;
+      const run = IntegrityRun.create(documents, { passesBefore, cancelToken });
       for (const [languageServices, group] of groupDocumentsByLanguage(this.services, documents)) {
          // Force construction of the language's ValidationContributionCollector
          // on first touch; cached by Langium's DI proxy after that.
          void languageServices.validation.ValidationContributionCollector;
-         await languageServices.integrity.IntegrityService.enforceBatch(group, phase, cancelToken);
+         await languageServices.integrity.IntegrityService.enforceBatch(group, phase, cancelToken, run);
       }
    }
 

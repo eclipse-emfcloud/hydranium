@@ -23,7 +23,7 @@ function makeNameProvider(options: NameProviderOptions = {}): DefaultNameProvide
       shared: {
          workspace: {
             ProjectManager: { getProject: () => undefined },
-            DocumentBuilder: { onUpdate: () => Disposable.EMPTY }
+            DocumentBuilder: { onUpdate: () => Disposable.EMPTY, onDocumentPhase: () => Disposable.EMPTY }
          }
       }
    } as unknown as ServerLanguageServices;

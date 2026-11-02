@@ -32,13 +32,17 @@ import { type DocumentUriPolicy } from '../../../src/langium/workspace/document-
 import { HydraniumWorkspaceLock } from '../../../src/langium/workspace/hydranium-workspace-lock.js';
 import { BuildSession, type BuildSessionContext } from '../../../src/langium/document-builder/build-session.js';
 import {
+   type BuildEndedEvent,
    DEFAULT_LOGGED_PHASES,
    type DocumentBuilderOptions,
-   HydraniumDocumentBuilder
+   HydraniumDocumentBuilder,
+   type RunningBuild
 } from '../../../src/langium/document-builder/document-builder.js';
 import {
    type CapturedLine,
    makeCapturingLogger,
+   makeFakeAstNode,
+   makeFakeDocument,
    makeNoopLanguageServices,
    makeNoopLogger,
    makeNoopSharedServices,
@@ -786,6 +790,43 @@ describe('HydraniumDocumentBuilder', () => {
          }
       }
 
+      /** The builds in flight, which only `buildDocuments` records. */
+      function runningBuilds(builder: HydraniumDocumentBuilder): Set<RunningBuild> {
+         return (builder as unknown as { runningBuildDocuments: Set<RunningBuild> }).runningBuildDocuments;
+      }
+      function running(documents: LangiumDocument[], cancelToken: CancellationToken, linking?: LangiumDocument[]): RunningBuild {
+         return { documents, documentSet: new Set(documents), options: {}, cancelToken, linking };
+      }
+
+      it('relinks no document within a build that links the repaired document under another token than the repair, and builds it after', async () => {
+         const rebuilds: LangiumDocument[] = [];
+         const builder = rehydrateBuilder({ rebuilds });
+         const repaired = doc(DocumentState.Linked, makeFakeAstNode({ $type: 'Root' }), '/a.a');
+         const dependent = doc(DocumentState.Validated, makeFakeAstNode({ $type: 'Root' }), '/b.a');
+         runningBuilds(builder).add(running([repaired], new CancellationTokenSource().token, [repaired]));
+
+         await expect(builder.relinkInRunningBuild(dependent, repaired, new CancellationTokenSource().token)).resolves.toBe(false);
+
+         expect(dependent.state).toBe(DocumentState.Validated);
+         expect(rebuilds).toEqual([repaired]);
+      });
+
+      it('leaves a dependent another build is still linking to that build instead of unlinking it, and builds the repaired document after', async () => {
+         const rebuilds: LangiumDocument[] = [];
+         const unlinked: LangiumDocument[] = [];
+         const builder = rehydrateBuilder({ rebuilds, unlinked });
+         const repaired = doc(DocumentState.Linked, makeFakeAstNode({ $type: 'Root' }), '/a.a');
+         const dependent = doc(DocumentState.ComputedScopes, makeFakeAstNode({ $type: 'Root' }), '/b.a');
+         const token = new CancellationTokenSource().token;
+         runningBuilds(builder).add(running([repaired], token, [repaired]));
+         runningBuilds(builder).add(running([dependent], new CancellationTokenSource().token, [dependent]));
+
+         await expect(builder.relinkInRunningBuild(dependent, repaired, token)).resolves.toBe(false);
+
+         expect(unlinked).toEqual([]);
+         expect(rebuilds).toEqual([repaired]);
+      });
+
       it('a build grafts a shed document an update relinked before its phases, keeping the relink state', async () => {
          const shed = doc(DocumentState.Validated, { $type: 'Model' });
          const rebuilds: LangiumDocument[] = [];
@@ -797,6 +838,25 @@ describe('HydraniumDocumentBuilder', () => {
          expect(shed.parseResult.value.$cstNode).toBeDefined();
          expect(shed.state).toBe(DocumentState.ComputedScopes);
          expect(rebuilds).toEqual([]);
+      });
+
+      it("hands the phases a token of its own that still follows a cancel of the caller's token after the build", async () => {
+         const builder = rehydrateBuilder();
+         const tokens: CancellationToken[] = [];
+         const phases = vi
+            .spyOn(DefaultDocumentBuilder.prototype as unknown as { buildDocuments(...args: unknown[]): Promise<void> }, 'buildDocuments')
+            .mockImplementation(async (...args: unknown[]) => void tokens.push(args[2] as CancellationToken));
+         const source = new CancellationTokenSource();
+         try {
+            await builder.build([], {}, source.token);
+         } finally {
+            phases.mockRestore();
+         }
+         source.cancel();
+
+         expect(tokens).toHaveLength(1);
+         expect(tokens[0]).not.toBe(source.token);
+         expect(tokens[0].isCancellationRequested).toBe(true);
       });
 
       it('a build resuming a validation category grafts a shed document first', async () => {
@@ -937,6 +997,25 @@ describe('HydraniumDocumentBuilder', () => {
          drained(): Promise<void> {
             return this.workspaceLock.read(() => undefined);
          }
+         /** The token each phase ran with. */
+         readonly phaseTokens: CancellationToken[] = [];
+         /** Whether a phase throws. */
+         throws = false;
+         /** Run a build over no documents with `cancelToken`. */
+         buildWith(cancelToken: CancellationToken): Promise<void> {
+            return this.buildDocuments([], {}, cancelToken);
+         }
+         protected override runCancelable(
+            documents: LangiumDocument[],
+            targetState: DocumentState,
+            cancelToken: CancellationToken,
+            callback: (document: LangiumDocument) => unknown
+         ): Promise<void> {
+            this.phaseTokens.push(cancelToken);
+            return this.throws
+               ? Promise.reject(new Error('phase failed'))
+               : super.runCancelable(documents, targetState, cancelToken, callback);
+         }
       }
 
       it('tells a listener a build completed, one that validated nothing included', async () => {
@@ -957,6 +1036,27 @@ describe('HydraniumDocumentBuilder', () => {
          builder.failBuild();
          await builder.drained();
          expect(events).toEqual([false]);
+      });
+
+      it('names the token of each build that threw once the lock drains, and only those', async () => {
+         const builder = new EndingBuilder(makeNoopLogger());
+         const events: BuildEndedEvent[] = [];
+         builder.onBuildEnded(event => events.push(event));
+
+         builder.throws = true;
+         await expect(builder.buildWith(new CancellationTokenSource().token)).rejects.toThrow('phase failed');
+         await expect(builder.buildWith(CancellationToken.None)).rejects.toThrow('phase failed');
+         builder.throws = false;
+         await builder.buildWith(new CancellationTokenSource().token);
+         builder.failBuild();
+         await builder.drained();
+
+         const [thrownOwn, thrownNone, completed] = builder.phaseTokens;
+         expect(thrownNone).toBe(CancellationToken.None);
+         expect(events.map(({ completed: done, cancelToken, cancelTokens }) => ({ done, cancelToken, cancelTokens }))).toEqual([
+            { done: true, cancelToken: completed, cancelTokens: undefined },
+            { done: false, cancelToken: undefined, cancelTokens: [thrownOwn, CancellationToken.None] }
+         ]);
       });
 
       it('logs a listener that throws, and goes on with the build and the other listeners', async () => {
@@ -1682,15 +1782,12 @@ describe('HydraniumDocumentBuilder', () => {
          expect(seen).toEqual(['before await true', 'before await false', 'after await false', 'after await false']);
       });
 
-      it('tell an update listener whether its build overlaps another that still runs', async () => {
+      it('relink no document within a build when no build is linking', async () => {
          const builder = new HydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
-         const seen: boolean[] = [];
-         builder.onUpdate(() => void seen.push(builder.overlapsRunningBuild()));
+         const document = makeFakeDocument('file:///a.x', makeFakeAstNode({ $type: 'Root' }), { state: DocumentState.Validated });
 
-         await builder.update([], []);
-         await Promise.all([builder.build([]), builder.update([], [])]);
-
-         expect(seen).toEqual([false, false, true]);
+         await expect(builder.relinkInRunningBuild(document, document, CancellationToken.None)).resolves.toBe(false);
+         expect(document.state).toBe(DocumentState.Validated);
       });
 
       it('report a build in progress until the last of two overlapping builds has ended', async () => {
