@@ -42,7 +42,7 @@ npm install --global @hydranium/cli
 | `@hydranium/protocol`    | `^1.0.0-next` |
 | `@memlab/core`           | `^2.0.3`      |
 | `@memlab/heap-analysis`  | `^2.0.3`      |
-| `vscode-jsonrpc`         | `^9.0.0`      |
+| `vscode-jsonrpc`         | `^9.0.3`      |
 
 The two memlab packages are optional peers that only `analyze-heap` loads:
 install them with `npm install @memlab/core @memlab/heap-analysis` before its

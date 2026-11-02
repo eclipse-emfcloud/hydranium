@@ -43,10 +43,9 @@ declare module 'langium' {
        * comparison to be meaningful — different schemes always return `false`.
        *
        * **vs. `UriUtils.contains`**: `contains(parent, child)` does the
-       * same path-prefix check but **ignores scheme and authority** — a
-       * `file:` URI can "contain" an `untitled:` URI. Use this stricter
-       * variant when scheme correctness matters, and `contains` where
-       * scheme equality is already implied by context.
+       * same path-prefix check and rejects a different scheme, but
+       * **ignores authority**. Use this stricter variant when authority
+       * matters, and `contains` where it is already implied by context.
        */
       function isAncestorOrEqual(ancestor: URI, descendant: URI): boolean;
    }

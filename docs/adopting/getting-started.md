@@ -62,10 +62,6 @@ Three flags shape it:
 
 ## Build and test
 
-Build on the Node version in the scaffold's `.nvmrc`.
-[Requirements](requirements.md#node-2213-or-newer) says why and how to switch
-with nvm.
-
 ```bash
 cd my-lang
 npm install

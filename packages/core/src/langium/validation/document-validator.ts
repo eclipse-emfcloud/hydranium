@@ -354,7 +354,7 @@ export class HydraniumDocumentValidator extends DefaultDocumentValidator {
     *
     * Correlating the finished diagnostics back to the `ParseResult`'s error
     * lists positionally is the alternative, and it is unsound for the parsing
-    * half: `processParsingErrors` DROPS an error whose token offsets are `NaN`
+    * half: `processParsingErrors` DROPS an error whose token has no valid range
     * and whose exception carries no `previousToken`, so the two lists differ in
     * length exactly when recovery has been at work.
     *

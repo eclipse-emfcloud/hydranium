@@ -34,6 +34,7 @@ import {
    type TextEdit
 } from 'vscode-languageserver';
 import { type TextDocument } from 'vscode-languageserver-textdocument';
+import { runInReadLockScope } from '../langium/workspace/read-lock-scope.js';
 
 export { HYDRANIUM_BUILD_REASONS };
 
@@ -502,7 +503,7 @@ export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler
       const reason = this.pendingReason;
       this.pendingReason = undefined;
       this.workspaceManager.ready
-         .then(() => this.documentBuilder.scheduleUpdate(changed, deleted, reason))
+         .then(() => runInReadLockScope(() => this.documentBuilder.scheduleUpdate(changed, deleted, reason), undefined))
          .catch(err => {
             // A deferred rebuild can finish after the LSP peer has gone away.
             // Unless the head was started through `startLanguageServer`, whose

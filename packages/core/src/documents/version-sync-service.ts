@@ -14,6 +14,7 @@ import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { type ServerSharedServices } from '../langium/module.js';
 import { HydraniumWorkspaceLock } from '../langium/workspace/hydranium-workspace-lock.js';
 import { HydraniumTextDocuments } from './hydranium-text-documents.js';
+import { refuseWaitInRead, runInReadLockScope } from '../langium/workspace/read-lock-scope.js';
 
 /** A build {@link VersionSyncService.requestRecoveryBuild} schedules. */
 export interface RecoveryBuildRequest {
@@ -160,8 +161,12 @@ export class DefaultVersionSyncService implements VersionSyncService {
          ledger.record(root, version, origin.text);
       }
       // Nothing waits on this build, so its failure ends here.
-      this.syncTo(document.uri, store.version(uri))?.catch((error: unknown) =>
-         this.tracer.withUri(uri).error(`The build that would sync the root to its text failed. ${describeErrorWithStack(error)}`)
+      runInReadLockScope(
+         () =>
+            this.syncTo(document.uri, store.version(uri))?.catch((error: unknown) =>
+               this.tracer.withUri(uri).error(`The build that would sync the root to its text failed. ${describeErrorWithStack(error)}`)
+            ),
+         undefined
       );
       this.recordedEmitter.fire(document);
    }
@@ -173,13 +178,26 @@ export class DefaultVersionSyncService implements VersionSyncService {
 
    rebuildWhileCurrent(document: LangiumDocument): void {
       const uri = document.uri;
-      this.requestRecoveryBuild(uri, { stillNeeded: () => this.services.workspace.LangiumDocuments.getDocument(uri) === document }).catch(
-         (error: unknown) =>
-            this.tracer.withUri(uri.toString()).error(`The rebuild of a current document failed. ${describeErrorWithStack(error)}`)
+      // Not awaited, so also fine inside a read.
+      runInReadLockScope(
+         () =>
+            this.requestRecoveryBuild(uri, { stillNeeded: () => this.services.workspace.LangiumDocuments.getDocument(uri) === document }),
+         undefined
+      ).catch((error: unknown) =>
+         this.tracer.withUri(uri.toString()).error(`The rebuild of a current document failed. ${describeErrorWithStack(error)}`)
       );
    }
 
    requestRecoveryBuild(uri: URI, request: RecoveryBuildRequest): Promise<void> {
+      return refuseWaitInRead(
+         `A recovery build of ${uri.toString()}`,
+         this.queueRecoveryBuild(uri, request),
+         this.services.workspace.WorkspaceLock
+      );
+   }
+
+   /** {@link requestRecoveryBuild} without the read check. */
+   protected queueRecoveryBuild(uri: URI, request: RecoveryBuildRequest): Promise<void> {
       return new Promise<void>((resolve, reject) => {
          const key = uri.toString();
          const queued: QueuedRecoveryBuild = { request, failures: 0, resolve, reject };
@@ -191,7 +209,8 @@ export class DefaultVersionSyncService implements VersionSyncService {
          }
          const entry: PendingRecoveryBuilds = { queued: [queued] };
          this.pendingBuilds.set(key, entry);
-         const run = this.runBuilds(key, uri, entry);
+         // Later requests join it, so it runs outside the read that started it.
+         const run = runInReadLockScope(() => this.runBuilds(key, uri, entry), undefined);
          this.buildRuns.add(run);
          void run.finally(() => this.buildRuns.delete(run));
       });

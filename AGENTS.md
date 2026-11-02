@@ -36,7 +36,11 @@ For documentation changes, follow
 For heap investigations, follow
 [analyzing heap snapshots](.claude/skills/analyzing-heap-snapshots/SKILL.md).
 The [Langium reference](.claude/skills/langium/SKILL.md) covers
-upstream grammar, generation and runtime behaviour.
+upstream grammar, generation and runtime behaviour. It is vendored unedited,
+and its workspace lock section is out of date: Langium runs each request in an
+immediate read, which starts beside a running write and holds a queued write
+off until it ends. [Document layers](docs/concepts/document-layers.md) covers
+what that means for code that waits or writes.
 
 ## Which package a change belongs in
 

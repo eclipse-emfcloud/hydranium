@@ -21,8 +21,8 @@ import { CancellationToken } from 'vscode-jsonrpc';
  *   connection one of them creates rejects the typed messages another builds.
  *   GLSP's upgrade to 9.x, which could let it share the framework's copy, is
  *   open as https://github.com/eclipse-glsp/glsp/issues/1720.
- * - `vscode-languageserver@10.0.1` pins `vscode-languageserver-protocol`
- *   `3.18.1`, which pins `vscode-jsonrpc` `9.0.0`.
+ * - `vscode-languageserver@10.1.2` pins `vscode-languageserver-protocol`
+ *   `3.18.4`, which pins `vscode-jsonrpc` `9.0.3`.
  * - Theia brings protocol `3.17.5` and with it `vscode-jsonrpc` 8.
  *
  * npm hoists one version per name and nests the rest. `overrides` are read from

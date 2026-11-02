@@ -4,10 +4,6 @@ A Hydranium language project scaffolded by `hydranium-cli init`.
 
 ## Getting started
 
-`langium generate` fails on Node 24.20 and later with `TypeError: Invalid URL`
-([tdegrunt/jsonschema#423](https://github.com/tdegrunt/jsonschema/issues/423)),
-so build on Node 22.
-
 ```bash
 npm install
 npm run langium:generate   # generate the AST from the grammar
@@ -86,15 +82,12 @@ ranged: the framework treats `langium` and its `vscode-*` chain as one
 atomic set and depends on a single physical copy, so a floating range can
 silently resolve a second one.
 
-`vscode-languageserver` is pinned to `10.0.1`, and
-`vscode-languageserver-protocol` and `vscode-jsonrpc` to the `3.18.1` and
-`9.0.0` it pins, so Langium, the LSP connection and the framework share one
+`vscode-languageserver` is pinned to `10.1.2`, and
+`vscode-languageserver-protocol` and `vscode-jsonrpc` to the `3.18.4` and
+`9.0.3` it pins, so Langium, the LSP connection and the framework share one
 copy of each. With two, an error a Langium handler returns, such as a request
 for a document the server does not have, reaches the client as a result, and a
-framework error your own LSP handler throws loses its code. The Langium 4.4
-upgrade
-([eclipse-emfcloud/hydranium#142](https://github.com/eclipse-emfcloud/hydranium/issues/142))
-replaces these pins.
+framework error your own LSP handler throws loses its code.
 
 ## If your repo gates license headers
 

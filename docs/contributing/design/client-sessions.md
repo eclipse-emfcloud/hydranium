@@ -528,7 +528,11 @@ the document lives on with every open but the deleting session's, which the
 delete closes, since its client takes the document as gone. A delete from
 inside a holder of the write lock fails with `ReentrantWriteLockError` whatever
 `ModelServiceOptions.allowReentrantBuilds` says, since its builds take that
-lock and would wait for the holder.
+lock and would wait for the holder. On Node, one from inside a request's lock
+read rejects with `ReadLockWaitError` once its deletion build has waited past
+the lock's grace period. The deleting session's open ends at the refusal, so
+an open it makes afterwards stays. The build runs once the read ends, and the
+mark lasts until that build ends.
 
 A file watcher reports a deletion late, the server's own included, so a
 report applies only where the disk agrees: the file is gone, and the document

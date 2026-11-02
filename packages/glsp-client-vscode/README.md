@@ -35,7 +35,7 @@ npm install @hydranium/glsp-client-vscode
 | `@hydranium/glsp-client`                   | `^1.0.0-next` |
 | `@hydranium/protocol`                      | `^1.0.0-next` |
 | `inversify`                                | `^6.1.3`      |
-| `vscode-jsonrpc`                           | `^9.0.0`      |
+| `vscode-jsonrpc`                           | `^9.0.3`      |
 
 ## Wiring
 

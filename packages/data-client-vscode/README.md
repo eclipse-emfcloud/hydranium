@@ -28,7 +28,7 @@ npm install @hydranium/data-client-vscode
 | Peer                       | Range         |
 | -------------------------- | ------------- |
 | `@hydranium/protocol`      | `^1.0.0-next` |
-| `vscode-jsonrpc`           | `^9.0.0`      |
+| `vscode-jsonrpc`           | `^9.0.3`      |
 | `vscode-messenger`         | `^0.4.5`      |
 | `vscode-messenger-common`  | `^0.4.5`      |
 | `vscode-messenger-webview` | `^0.4.5`      |

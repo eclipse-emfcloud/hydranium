@@ -8,11 +8,10 @@
  ********************************************************************************/
 
 import { type AstNodeDescription, type LangiumDocument, type ReferenceInfo, type Stream } from '@hydranium/langium';
-import { DefaultCompletionProvider, type CompletionContext, type CompletionValueItem } from '@hydranium/langium/lsp';
+import { DefaultCompletionProvider, type CompletionContext } from '@hydranium/langium/lsp';
 import {
    CompletionList,
    type CancellationToken,
-   type CompletionItem,
    type CompletionParams,
    type InsertReplaceEdit,
    type Position
@@ -21,36 +20,26 @@ import { type ReferenceCandidateProvider } from '../../langium/scope/reference-c
 import { type ServerLanguageServices } from '../../langium/language-module.js';
 
 /**
- * Completion provider that upgrades Langium's default `TextEdit` to
- * {@link InsertReplaceEdit} so accepting a suggestion over an existing token
- * replaces that token rather than inserting alongside it.
+ * Completion provider whose {@link InsertReplaceEdit} replaces the name the
+ * cursor sits at the start of, not only the token the cursor is inside.
  *
- * **Why this exists.** `DefaultCompletionProvider.buildCompletionTextEdit`
- * returns a range ending at the cursor position, so accepting a suggestion
- * with the caret inside a token leaves the token's tail standing after the
- * inserted text. By widening the `replace` range to the token's end while
- * keeping the original `insert` range at the cursor, LSP clients honour the
- * user's `editor.suggest.insertMode` preference (`insert` = Langium's narrow
- * range, `replace` = overwrite the whole token).
+ * **Why this exists.** For a client advertising
+ * `completionItem.insertReplaceSupport`, Langium emits an `insert` range ending
+ * at the cursor and a `replace` range ending at the completion token's end, so
+ * the user's `editor.suggest.insertMode` picks between them. Langium's context
+ * only describes the token the cursor is inside. Sitting at a token's START —
+ * right after `= ` in `writes Order.status = PAID`, say — the cursor is on
+ * whitespace as far as the context is concerned, so `tokenEndOffset` describes
+ * the whitespace and not the name that follows it. Langium's `replace` range
+ * then ends at or behind the cursor, and accepting the item produces `SHIPPEDPAID`:
+ * the suggestion inserted in front of the word it was meant to replace.
+ * {@link getReplaceEndOffset} measures that name instead. A `tsserver` in the
+ * same position returns a range covering the following word, which is the
+ * behaviour matched here.
  *
- * **Two cursor positions need widening and Langium's context only describes
- * one of them.** Inside a token, `tokenEndOffset` points past the token and the
- * widening reads straight off it. Sitting at a token's START — right after `= `
- * in `writes Order.status = PAID`, say — the cursor is on whitespace as far as
- * the completion context is concerned, so `tokenEndOffset` describes the
- * whitespace and not the name that follows it. Without {@link getReplaceEndOffset}
- * the item goes out with an EMPTY range and accepting it produces
- * `SHIPPEDPAID`: the suggestion inserted in front of the word it was meant to
- * replace. A `tsserver` in the same position returns a range covering the
- * following word, which is the behaviour matched here.
- *
- * **Capability gating.** {@link InsertReplaceEdit} requires LSP 3.16+
- * (`completionItem.insertReplaceSupport`). Older clients that ignore the
- * wider range fall back to the narrower `insert` range, which matches
- * Langium's original behaviour. A defensive capability check is
- * intentionally not added so the framework default stays simple —
- * consumers that need to support pre-3.16 clients can override and emit a
- * plain `TextEdit`.
+ * **Capability gating is Langium's.** A client without `insertReplaceSupport`
+ * gets Langium's plain `TextEdit` ending at the cursor, and an item that brings
+ * its own `textEdit` keeps it as given.
  *
  * **Candidate gathering is delegated.** Cross-reference completion reuses
  * the {@link ReferenceCandidateProvider} pipeline (filter, canonical
@@ -58,7 +47,7 @@ import { type ServerLanguageServices } from '../../langium/language-module.js';
  * {@link getReferenceCandidates} to return the candidate provider's scope
  * elements. The provider owns that pipeline in one place, so the
  * text-editor dropdown and the protocol candidate picker stay in sync; this
- * class keeps only the LSP-specific {@link fillCompletionItem} upgrade.
+ * class keeps only the LSP-specific `replace` range widening.
  *
  * **A comment is not a completion site.** Langium's context builder reads the
  * non-hidden token stream alone, so a cursor in a comment is indistinguishable
@@ -153,26 +142,17 @@ export class HydraniumCompletionProvider extends DefaultCompletionProvider {
       return this.candidateProvider.getCandidateScope(refInfo).elementScope.getAllElements();
    }
 
-   protected override fillCompletionItem(context: CompletionContext, item: CompletionValueItem): CompletionItem | undefined {
-      const completionItem = super.fillCompletionItem(context, item);
-      if (!completionItem?.textEdit || 'insert' in completionItem.textEdit) {
-         return completionItem;
+   protected override buildCompletionTextEditWithInsertReplace(
+      context: CompletionContext,
+      label: string,
+      newText: string
+   ): InsertReplaceEdit | undefined {
+      const edit = super.buildCompletionTextEditWithInsertReplace(context, label, newText);
+      if (edit) {
+         // Langium ends `replace` at `tokenEndOffset`, short of a name that starts at the cursor.
+         edit.replace.end = context.textDocument.positionAt(this.getReplaceEndOffset(context));
       }
-      const replaceEndOffset = this.getReplaceEndOffset(context);
-      // Nothing to the right of the cursor that a suggestion would stand in for
-      // (completion on whitespace, on punctuation, at end of file) — the
-      // parent's narrow range is already correct.
-      if (replaceEndOffset <= context.offset) {
-         return completionItem;
-      }
-      const baseEdit = completionItem.textEdit;
-      const insertReplaceEdit: InsertReplaceEdit = {
-         newText: baseEdit.newText,
-         insert: baseEdit.range,
-         replace: { start: baseEdit.range.start, end: context.textDocument.positionAt(replaceEndOffset) }
-      };
-      completionItem.textEdit = insertReplaceEdit;
-      return completionItem;
+      return edit;
    }
 
    /**
@@ -187,13 +167,14 @@ export class HydraniumCompletionProvider extends DefaultCompletionProvider {
     *   whitespace, so `tokenEndOffset` is at or behind the cursor and the name
     *   to the right has to be measured from the document text.
     *
-    * Scanning stops at the first character `GrammarConfig.nameRegexp` rejects, so
-    * a run only ever covers one name: a cursor before `Order` in `Order.status`
-    * widens to the end of `Order` and not through the dot.
+    * The scan stops at the first character `GrammarConfig.nameRegexp` rejects,
+    * so it only ever covers one name: from a cursor before `Order` in
+    * `Order.status`, it ends at `Order` and not through the dot. Where Langium's
+    * token already reaches past the cursor, its end is kept as it is.
     *
     * Adopters whose grammar has a wider notion of a replaceable token than
     * "consecutive name characters" — a quoted or dotted identifier — override
-    * this rather than {@link fillCompletionItem}.
+    * this rather than {@link buildCompletionTextEditWithInsertReplace}.
     */
    protected getReplaceEndOffset(context: CompletionContext): number {
       if (context.tokenEndOffset > context.offset) {

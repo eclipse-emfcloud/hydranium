@@ -25,6 +25,7 @@ import {
    type DocumentPhaseDeliveredListener,
    HydraniumDocumentBuilder
 } from '../langium/document-builder/document-builder.js';
+import { refuseWaitInRead } from '../langium/workspace/read-lock-scope.js';
 
 /** Recorded call to a stubbed {@link DocumentBuilder} method. */
 export interface RecordedBuilderCall<TArgs extends unknown[]> {
@@ -214,7 +215,10 @@ export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocu
          waitUntilCalls.push({ args: [state, uri] });
          const gate = gates.shift();
          if (gate) {
-            await new Promise<void>(resolve => gate.take(resolve));
+            // A held call waits, as the real one does for a state not reached yet.
+            // Without a lock, no read holds off the stub's builds, so none is refused.
+            const held = new Promise<void>(resolve => gate.take(resolve));
+            await (workspaceLock ? refuseWaitInRead('A held waitUntil', held, workspaceLock) : held);
          }
          return uri;
       },

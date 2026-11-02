@@ -67,7 +67,7 @@ describe('makeStubServiceRegistry', () => {
 
       it('does not fall back to the sole registered language for an unroutable URI', () => {
          // Langium's ServiceRegistry INTERFACE doc claims a single registered
-         // language may serve any URI; the 4.3.1 implementation has no such
+         // language may serve any URI. Its implementation has no such
          // fallback. Pinned because callers — the data-server's reference-source
          // router among them — are built around the throw, not around a fallback.
          const registry = makeStubServiceRegistry([FAKE]);

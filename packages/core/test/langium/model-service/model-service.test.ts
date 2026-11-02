@@ -50,6 +50,7 @@ import {
    makeTestServices,
    type StubHydraniumTextDocuments
 } from '../../../src/testing/index.js';
+import { type ReadLockMark, ReadLockWaitError, runInReadLockScope } from '../../../src/langium/workspace/read-lock-scope.js';
 import { ReentrantWriteLockError, setWriteLockScope } from '../../../src/langium/workspace/write-lock-scope.js';
 import { nodeWriteLockScope } from '../../../src/node/write-lock-scope-node.js';
 
@@ -728,6 +729,23 @@ describe('ModelService write-lock reentrancy detection', () => {
       ]);
    });
 
+   it('logs nothing for a sync build refused after its wait was cancelled, since a refused build still runs', async () => {
+      const { logger, lines } = makeCapturingLogger();
+      const bundle = makeTestServices<FakeRoot>({ logger, modelService: services => new ProbeModelService<FakeRoot>(services) });
+      const service = bundle.modelService as ProbeModelService<FakeRoot>;
+      const source = new CancellationTokenSource();
+      let refuseBuild!: (error: Error) => void;
+      const build = new Promise<void>((_resolve, reject) => (refuseBuild = reject));
+
+      const waiting = service.waitForParse(UriUtils.toUri(URI_A), source.token, build);
+      source.cancel();
+      await expect(waiting).rejects.toBe(OperationCancelled);
+      refuseBuild(new ReadLockWaitError('A recovery build of x'));
+      await tick(5);
+
+      expect(lines.filter(line => line.message.includes('A recovery build of x'))).toEqual([]);
+   });
+
    it('logs a sync build given up after its wait was cancelled midway, since the waiter has gone', async () => {
       const { logger, lines } = makeCapturingLogger();
       const bundle = makeTestServices<FakeRoot>({ logger, modelService: services => new ProbeModelService<FakeRoot>(services) });
@@ -743,6 +761,37 @@ describe('ModelService write-lock reentrancy detection', () => {
       await waitFor(() => lines.some(line => line.message.includes('given up')));
 
       expect(lines.filter(line => line.message.includes('given up')).map(line => line.level)).toEqual(['error']);
+   });
+
+   it('drops its listeners when a read refuses it', async () => {
+      const bundle = makeTestServices<FakeRoot>({ modelService: services => new ProbeModelService<FakeRoot>(services) });
+      const service = bundle.modelService as ProbeModelService<FakeRoot>;
+      const onUpdate = bundle.documentBuilder.onUpdate.bind(bundle.documentBuilder);
+      let registered = 0;
+      vi.spyOn(bundle.documentBuilder, 'onUpdate').mockImplementation(listener => {
+         registered++;
+         const registration = onUpdate(listener);
+         return { dispose: () => (registered--, registration.dispose()) };
+      });
+      let refuse = (): void => undefined;
+      const read: ReadLockMark = {
+         running: true,
+         ended: new Deferred<void>().promise,
+         startGrace: onEnd => {
+            refuse = onEnd;
+            return { dispose: () => undefined };
+         }
+      };
+
+      const waiting = runInReadLockScope(
+         () => service.waitForParse(UriUtils.toUri(URI_A), CancellationToken.None, new Deferred<void>().promise),
+         read
+      );
+      expect(registered).toBe(1);
+      refuse();
+
+      await expect(waiting).rejects.toBeInstanceOf(ReadLockWaitError);
+      expect(registered).toBe(0);
    });
 
    it('logs a sync build given up after a deletion ended its wait at debug, since the waiter goes on and reports its own outcome', async () => {

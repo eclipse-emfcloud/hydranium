@@ -49,10 +49,11 @@ is the order to read the report in, and that structure.
    closed, file-backed document only when constructed with the
    `shed-closed-when-idle` strategy, and then only a document `canShed`
    and `isSheddable` admit. Shedding nulls `$cstNode` and `$refNode`, which
-   frees the CST and the ranges and positions only the CST holds. Each
-   `referenceIndex` segment, and a description's segments once read, share
-   the CST's `Range` objects and keep them. The AST and the descriptions
-   stay.
+   frees the CST and the ranges and positions only the CST holds. A
+   description's selection segment, once read, shares its node's cached
+   `Range` and keeps it. A leaf CST node builds a new `Range` on every
+   read, so the name and `referenceIndex` segments of single-token names
+   hold their own copies. The AST and the descriptions stay.
 7. **Check every claim against the code before stating it.** A holder in the
    report is a heap edge name; find the field with `git grep` in `packages/`
    or in `node_modules/langium/lib` before naming the class that owns it.

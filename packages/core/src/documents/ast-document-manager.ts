@@ -24,6 +24,7 @@ import { type AstNode, DocumentState, type LangiumDocument, type LangiumDocument
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { type AstDiagnostic } from '../langium/validation/document-validator.js';
 import { type WritableFileSystemProvider } from '../langium/workspace/file-system-provider.js';
+import { captureReadLockScope, refuseWaitInRead, runInReadLockScope } from '../langium/workspace/read-lock-scope.js';
 import { ReentrantWriteLockError, isInsideWriteLock } from '../langium/workspace/write-lock-scope.js';
 import { Disposable } from 'vscode-languageserver';
 import { TextDocumentIdentifier, type TextDocumentItem } from 'vscode-languageserver-protocol';
@@ -515,8 +516,13 @@ export class DefaultAstDocumentManager<
             }
             // Without an LSP head nothing else builds the opened text. Nothing
             // waits on the build either, so its failure ends here.
-            this.services.workspace.VersionSyncService.syncTo(built.uri, this.textDocuments.version(args.uri))?.catch((error: unknown) =>
-               this.tracer.with(args.uri).error(`The build of the opened text failed. ${describeErrorWithStack(error)}`)
+            runInReadLockScope(
+               () =>
+                  this.services.workspace.VersionSyncService.syncTo(built.uri, this.textDocuments.version(args.uri))?.catch(
+                     (error: unknown) =>
+                        this.tracer.with(args.uri).error(`The build of the opened text failed. ${describeErrorWithStack(error)}`)
+                  ),
+               undefined
             );
          }
       }
@@ -600,6 +606,7 @@ export class DefaultAstDocumentManager<
    async delete(uri: string, clientId: string): Promise<void> {
       const canonical = this.uriPolicy.canonicalUri(uri);
       const target = UriUtils.toUri(canonical);
+      const inCallerRead = captureReadLockScope();
       // The builds below wait for a holder of the write lock, which would be
       // waiting for this delete.
       if (isInsideWriteLock()) {
@@ -611,6 +618,7 @@ export class DefaultAstDocumentManager<
          throw new Error(`Cannot delete ${uri}: a delete of it is under way`);
       }
       this.deletions.set(canonical, clientId);
+      let refusedBuild: Promise<void> | undefined;
       try {
          // A document no build has reached yet is not registered, and the
          // deletion build would remove nothing and leave every open of it.
@@ -620,20 +628,38 @@ export class DefaultAstDocumentManager<
          await this.services.workspace.FileSystemTaskQueue.enqueue(canonical, () => this.fileSystemProvider.deleteFile(target));
          // Langium removes the document before the build's first await, so a
          // failure is the dependents' build, and reaches no one else.
-         await this.documentBuilder
-            .scheduleUpdate([], [target])
-            .catch((error: unknown) =>
-               this.tracer.with(canonical).error(`The build after a deletion failed. ${describeErrorWithStack(error)}`)
-            );
+         // Started outside the caller's read, so a refused wait still holds the build's own end.
+         const deletionBuild = runInReadLockScope(() => this.documentBuilder.scheduleUpdate([], [target]), undefined).catch(
+            (error: unknown) => this.reportDeletionBuildFailure(canonical, error)
+         );
          // A change requested before that build started merges over the
-         // deletion, and the document lives on; the deleting client takes it as
+         // deletion, and the document lives on. The deleting client takes it as
          // gone, so its open ends here.
-         if (this.textDocuments.isOpenInClient(canonical, clientId)) {
-            await this.close({ uri: canonical, clientId });
-         }
+         const closeDeletingOpen = (): Promise<void> =>
+            this.textDocuments.isOpenInClient(canonical, clientId) ? this.close({ uri: canonical, clientId }) : Promise.resolve();
+         await inCallerRead(() =>
+            refuseWaitInRead(`A build after deleting ${canonical}`, deletionBuild, this.services.workspace.WorkspaceLock)
+         ).catch((error: unknown) => {
+            // The build runs once the caller's read ends. The open ends now,
+            // outside that read, so one the client makes later stays.
+            refusedBuild = deletionBuild;
+            void runInReadLockScope(closeDeletingOpen, undefined).catch((closeError: unknown) => {
+               this.tracer.with(canonical).error(`Closing the deleting open failed. ${describeErrorWithStack(closeError)}`);
+            });
+            throw error;
+         });
+         await closeDeletingOpen();
       } finally {
-         this.deletions.delete(canonical);
+         if (refusedBuild) {
+            void refusedBuild.finally(() => this.deletions.delete(canonical));
+         } else {
+            this.deletions.delete(canonical);
+         }
       }
+   }
+
+   protected reportDeletionBuildFailure(canonical: string, error: unknown): void {
+      this.tracer.with(canonical).error(`The build after a deletion failed. ${describeErrorWithStack(error)}`);
    }
 
    isDeleting(uri: string): boolean {

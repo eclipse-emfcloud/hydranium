@@ -25,10 +25,20 @@
  * what is pinned.
  */
 
-import { describe, expect, it, vi } from 'vitest';
-import { DocumentState, OperationCancelled, URI, type DocumentBuilder, type LangiumDocument } from '@hydranium/langium';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DocumentState, OperationCancelled, ReadPriority, URI, type DocumentBuilder, type LangiumDocument } from '@hydranium/langium';
+import { makeFakeClock, tick } from '@hydranium/protocol/testing';
+import { HydraniumWorkspaceLock } from '../../src/langium/workspace/hydranium-workspace-lock.js';
+import { createSynchronousReadLockScope, ReadLockWaitError, setReadLockScope } from '../../src/langium/workspace/read-lock-scope.js';
+import { nodeReadLockScope } from '../../src/node/write-lock-scope-node.js';
 import { CancellationToken, CancellationTokenSource } from 'vscode-languageserver';
-import { makeFakeAstNode, makeFakeDocument, makeStubDocumentBuilder, type StubDocumentBuilder } from '../../src/testing/index.js';
+import {
+   makeCapturingTracer,
+   makeFakeAstNode,
+   makeFakeDocument,
+   makeStubDocumentBuilder,
+   type StubDocumentBuilder
+} from '../../src/testing/index.js';
 
 const URI_ONE = URI.parse('file:///a.x');
 const URI_TWO = URI.parse('file:///b.x');
@@ -104,6 +114,37 @@ describe('makeStubDocumentBuilder waitUntil gate', () => {
       gate.resolve();
       await held;
       expect(settled).toBe(true);
+   });
+
+   describe('inside a lock read', () => {
+      afterEach(() => setReadLockScope(createSynchronousReadLockScope()));
+
+      it.each([
+         ["goes on past the grace period in another lock's read", false],
+         ["is refused past the grace period in its own lock's read", true]
+      ])('a held call %s, as the real builder', async (_title, ownLock) => {
+         setReadLockScope(nodeReadLockScope);
+         const clock = makeFakeClock();
+         const lock = new HydraniumWorkspaceLock({ Clock: clock, Tracer: makeCapturingTracer(clock).tracer });
+         const builder = makeStubDocumentBuilder(
+            ownLock ? lock : new HydraniumWorkspaceLock({ Clock: clock, Tracer: makeCapturingTracer(clock).tracer })
+         );
+         const gate = builder.gateNextWaitUntil();
+
+         const outcome = lock
+            .read(() => builder.waitUntil(DocumentState.Validated, URI_ONE), ReadPriority.Immediate)
+            .catch((error: unknown) => error);
+         await tick(1);
+         // Past the lock's default grace period.
+         clock.advance(3_000);
+         gate.resolve();
+
+         if (ownLock) {
+            expect(await outcome).toBeInstanceOf(ReadLockWaitError);
+         } else {
+            expect(await outcome).toBe(URI_ONE);
+         }
+      });
    });
 
    it('refuses a resolve that held nothing, and does not leave the gate queued for a later call', async () => {

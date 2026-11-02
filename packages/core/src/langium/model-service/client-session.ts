@@ -24,6 +24,7 @@ import {
 } from '@hydranium/protocol';
 import { type AstNode, isOperationCancelled, UriUtils } from '@hydranium/langium';
 import { type CancellationToken, type Disposable, Emitter, type Event } from 'vscode-languageserver';
+import { captureReadLockScope } from '../workspace/read-lock-scope.js';
 import { type SavedAstDocument, type WrittenAstDocument } from '../../documents/ast-document-manager.js';
 import { DocumentNotOpenError, DocumentSyntaxError, SessionClosedError } from '../../documents/client-session-errors.js';
 import { type OpenOptions, type SessionEndCause } from '../../documents/client-session-registry.js';
@@ -340,7 +341,9 @@ export class DefaultClientSession<
 
    withOpen<T>(uri: string, fn: () => MaybePromise<T>): Promise<T> {
       this.assertLive();
-      return this.runWithOpen(uri, fn);
+      // `fn` runs after the open's await, which loses the caller's read without async context.
+      const inCallerRead = captureReadLockScope();
+      return this.runWithOpen(uri, () => inCallerRead(fn));
    }
 
    isOwnEcho(sourceClientId: string): boolean {
@@ -467,6 +470,7 @@ export class DefaultClientSession<
       message: typeof STALE_BASE_VERSION_UPDATE | typeof STALE_BASE_VERSION_SAVE = STALE_BASE_VERSION_UPDATE
    ): Promise<WrittenAstDocument<TAst, TDiagnostic>> {
       const service = this.modelService;
+      const inCallerRead = captureReadLockScope();
       const slowWarn = this.slowUpdateWarn && { threshold: this.slowUpdateWarn, stopwatch: this.services.Clock.stopwatch() };
       const uri = this.canonicalKey(args.uri);
       const profile = Logger.isLevelEnabled('debug') ? this.tracer.profile(`model-update ${uri}`) : undefined;
@@ -492,7 +496,9 @@ export class DefaultClientSession<
       // An override that awaits before calling the base can outlast the build
       // this write already has, and then builds it twice; see
       // `ModelService.rebuild`.
-      const doc = await run('rebuild', () => service.rebuild(uri, this.services.workspace.DocumentBuilder.finalBuildState(), cancelToken));
+      const doc = await run('rebuild', () =>
+         inCallerRead(() => service.rebuild(uri, this.services.workspace.DocumentBuilder.finalBuildState(), cancelToken))
+      );
       const finalVersion = textDocuments.version(uri);
       if (finalVersion > appliedVersion) {
          this.tracer.debug(`Update to v${appliedVersion} ready at v${finalVersion} (changed again before it settled)`);
@@ -526,6 +532,7 @@ export class DefaultClientSession<
       cancelToken?: CancellationToken
    ): Promise<WrittenAstDocument<TAst, TDiagnostic>[]> {
       const service = this.modelService;
+      const inCallerRead = captureReadLockScope();
       const { updates } = args;
       const textDocuments = this.services.workspace.TextDocuments;
       const uris = updates.map(update => this.canonicalKey(update.uri));
@@ -554,7 +561,7 @@ export class DefaultClientSession<
       uris.forEach(uri => this.recordWriteNumber(uri, args.write));
       const versions = await Promise.all(applied);
       const state = this.services.workspace.DocumentBuilder.finalBuildState();
-      const rebuilt = await Promise.allSettled(uris.map(uri => service.rebuild(uri, state, cancelToken)));
+      const rebuilt = await Promise.allSettled(uris.map(uri => inCallerRead(() => service.rebuild(uri, state, cancelToken))));
       const failures = rebuilt.flatMap((result, i) => (result.status === 'rejected' ? [{ uri: uris[i], reason: result.reason }] : []));
       if (failures.length === 0) {
          return rebuilt.flatMap((result, i) =>

@@ -70,6 +70,7 @@ import { DefaultLanguageClientShadow, type LanguageClientChangeVerdict, type Lan
 import { DefaultTextLedger, type TextLedger } from './text-ledger.js';
 import { isDocumentReleaseSkippedError, type ReleasedDocument } from './document-release-handler.js';
 import { DefaultDocumentReleaseScheduler, type DocumentReleaseScheduler } from './document-release-scheduler.js';
+import { runInReadLockScope } from '../langium/workspace/read-lock-scope.js';
 import {
    type CleanAnnouncement,
    DefaultDirtyStateTracker,
@@ -642,7 +643,8 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
          settled =
             handler === undefined
                ? Promise.reject(new Error('no workspace.DocumentReleaseHandler bound'))
-               : Promise.resolve(handler.didReleaseDocument(released));
+               : // Nothing the releasing caller awaits, so it runs outside the caller's read.
+                 Promise.resolve(runInReadLockScope(() => handler.didReleaseDocument(released), undefined));
       } catch (err: unknown) {
          settled = Promise.reject(err);
       }

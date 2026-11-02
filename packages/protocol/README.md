@@ -27,7 +27,7 @@ npm install @hydranium/protocol vscode-jsonrpc
 
 | Peer             | Range    |
 | ---------------- | -------- |
-| `vscode-jsonrpc` | `^9.0.0` |
+| `vscode-jsonrpc` | `^9.0.3` |
 
 ## The RPC pattern
 

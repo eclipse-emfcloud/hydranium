@@ -7,13 +7,14 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { beforeEach, describe, expect, it, onTestFinished } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
    DefaultWorkspaceLock,
    type DocumentBuilder,
    DocumentState,
    type DocumentUpdateListener,
    OperationCancelled,
+   ReadPriority,
    type FileSystemProvider,
    type LangiumDocument,
    type LangiumDocuments,
@@ -23,9 +24,20 @@ import {
 } from '@hydranium/langium';
 import { CancellationToken, Disposable } from 'vscode-languageserver';
 import { Deferred, type Logger, type Project, UNQUALIFIED_PROJECT_REFERENCE } from '@hydranium/protocol';
+import { makeFakeClock } from '@hydranium/protocol/testing';
 import { AbstractProjectManager, type ProjectManagerOptions } from '../../../src/langium/project/abstract-project-manager.js';
 import type { ProjectChangeEvent } from '../../../src/langium/project/project-change-event.js';
-import { makeCapturingLogger, makeFakeAstNode, makeFakeDocument, makeNoopSharedServices } from '../../../src/testing/index.js';
+import { notFound } from '../../../src/langium/workspace/file-not-found.js';
+import { HydraniumWorkspaceLock } from '../../../src/langium/workspace/hydranium-workspace-lock.js';
+import {
+   makeCapturingLogger,
+   makeFakeAstNode,
+   makeFakeDocument,
+   makeNoopSharedServices,
+   makeNoopTracer
+} from '../../../src/testing/index.js';
+import { createSynchronousReadLockScope, ReadLockWaitError, setReadLockScope } from '../../../src/langium/workspace/read-lock-scope.js';
+import { nodeReadLockScope } from '../../../src/node/write-lock-scope-node.js';
 
 // ============================================================
 // Test fixtures
@@ -233,7 +245,7 @@ class TestProjectManager extends AbstractProjectManager {
    descriptors = new Map<string, FakeDescriptor>();
    discoveryUris: URI[] = [];
 
-   constructor(stubs: Stubs, options: ProjectManagerOptions = {}) {
+   constructor(stubs: Stubs, options: ProjectManagerOptions = {}, lock: WorkspaceLock = new DefaultWorkspaceLock()) {
       // The default Tracer wraps the Logger slot, so the manager's log lines
       // flow into stubs.logger (a capturing logger, asserted via stubs.logs).
       const services = makeNoopSharedServices({
@@ -243,7 +255,7 @@ class TestProjectManager extends AbstractProjectManager {
             LangiumDocuments: stubs.langiumDocuments,
             DocumentBuilder: stubs.documentBuilder,
             WorkspaceManager: stubs.workspaceManager,
-            WorkspaceLock: new DefaultWorkspaceLock()
+            WorkspaceLock: lock
          }
       });
       super(services, options);
@@ -553,6 +565,37 @@ describe('AbstractProjectManager incremental updates', () => {
       expect(mgr.events[0].removed[0].snapshot.id).toBe('B@1');
       expect(mgr.events[0].removed[0].snapshot.version).toBe('3.0');
       expect(mgr.getProjects().map(p => p.id)).toEqual(['A@1']);
+   });
+
+   it('drops a project whose descriptor file was deleted before the build that reloads it, logging no error', async () => {
+      const stubs = makeStubs([URI_DESCRIPTOR_A, URI_DESCRIPTOR_B]);
+      const mgr = new TestProjectManager(stubs);
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1' });
+      mgr.descriptors.set(URI_DESCRIPTOR_B.toString(), { id: 'B@1' });
+      mgr.discoveryUris = [URI_DESCRIPTOR_A, URI_DESCRIPTOR_B];
+      await mgr.discoverProjects([]);
+      mgr.events.length = 0;
+      stubs.logs.length = 0;
+      vi.spyOn(stubs.langiumDocuments, 'getOrCreateDocument').mockRejectedValue(notFound('gone', URI_DESCRIPTOR_B));
+
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_B], []);
+
+      expect(stubs.logs.filter(line => line.level === 'error')).toEqual([]);
+      expect(mgr.events[0].removed.map(entry => entry.id)).toEqual(['B@1']);
+      expect(mgr.getProjects().map(p => p.id)).toEqual(['A@1']);
+   });
+
+   it('still logs a descriptor whose read fails for a missing file of another document', async () => {
+      const stubs = makeStubs([URI_DESCRIPTOR_B]);
+      const mgr = new TestProjectManager(stubs);
+      mgr.descriptors.set(URI_DESCRIPTOR_B.toString(), { id: 'B@1' });
+      vi.spyOn(stubs.langiumDocuments, 'getOrCreateDocument').mockRejectedValue(notFound('gone', URI_DESCRIPTOR_A));
+
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_B], []);
+
+      expect(stubs.logs.filter(line => line.level === 'error').map(line => line.message)).toEqual([
+         expect.stringContaining(`Failed to parse project descriptor at ${URI_DESCRIPTOR_B.toString()}`)
+      ]);
    });
 
    it('treats a descriptor id change as remove-old + add-new', async () => {
@@ -1215,9 +1258,9 @@ describe('AbstractProjectManager change logging', () => {
 // ============================================================
 
 describe('AbstractProjectManager with deferMemberRelink', () => {
-   async function setup(): Promise<{ stubs: Stubs; mgr: TestProjectManager; log: string[] }> {
+   async function setup(lock?: WorkspaceLock): Promise<{ stubs: Stubs; mgr: TestProjectManager; log: string[] }> {
       const stubs = makeStubs([URI_DESCRIPTOR_A, URI_DESCRIPTOR_B, URI_MEMBER_A1, URI_MEMBER_A2, URI_MEMBER_B1]);
-      const mgr = new TestProjectManager(stubs, { deferMemberRelink: true });
+      const mgr = new TestProjectManager(stubs, { deferMemberRelink: true }, lock);
       mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1' });
       mgr.descriptors.set(URI_DESCRIPTOR_B.toString(), { id: 'B@1' });
       mgr.discoveryUris = [URI_DESCRIPTOR_A, URI_DESCRIPTOR_B];
@@ -1265,6 +1308,42 @@ describe('AbstractProjectManager with deferMemberRelink', () => {
       ]);
       expect(stubs.updates).toBe(1);
       expect(log).toEqual(['started Element1.a,Element2.a', 'finished completed=true']);
+   });
+
+   it('refuses a wait inside a request for a relink, which waits for the request, once the grace period has passed', async () => {
+      setReadLockScope(nodeReadLockScope);
+      try {
+         const clock = makeFakeClock();
+         const { stubs, mgr } = await setup(
+            new HydraniumWorkspaceLock({ Clock: clock, Tracer: makeNoopTracer() }, { readWaitGraceMs: 10 })
+         );
+         await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
+
+         const settled = mgr.lock.read(() => mgr.memberRelinkSettled(), ReadPriority.Immediate);
+         const refused = expect(settled).rejects.toBeInstanceOf(ReadLockWaitError);
+         // A macrotask, so the wait has started its grace period.
+         await new Promise(resolve => setTimeout(resolve, 0));
+         clock.advance(10);
+
+         await refused;
+         await mgr.memberRelinkSettled();
+         expect(stubs.updates).toBe(1);
+      } finally {
+         setReadLockScope(createSynchronousReadLockScope());
+      }
+   });
+
+   it('waits inside a request for no relink once none is pending', async () => {
+      setReadLockScope(nodeReadLockScope);
+      try {
+         const { mgr } = await setup(new HydraniumWorkspaceLock({ Clock: makeFakeClock(), Tracer: makeNoopTracer() }));
+
+         await expect(mgr.lock.read(() => mgr.memberRelinkSettled().then(() => 'settled'), ReadPriority.Immediate)).resolves.toBe(
+            'settled'
+         );
+      } finally {
+         setReadLockScope(createSynchronousReadLockScope());
+      }
    });
 
    it('leaves out of the follow-up build a member the build of the change was given', async () => {

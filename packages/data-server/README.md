@@ -28,7 +28,7 @@ npm install @hydranium/data-server
 | `@hydranium/core`                    | `^1.0.0-next` |
 | `@hydranium/langium`                 | `^1.0.0-next` |
 | `@hydranium/protocol`                | `^1.0.0-next` |
-| `vscode-jsonrpc`                     | `^9.0.0`      |
+| `vscode-jsonrpc`                     | `^9.0.3`      |
 | `vscode-languageserver-textdocument` | `^1.0.12`     |
 
 ## Wiring

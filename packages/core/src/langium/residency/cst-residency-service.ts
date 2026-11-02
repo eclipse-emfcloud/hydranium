@@ -127,9 +127,10 @@ export function isCstShed(document: LangiumDocument, ledger: ModelLedger): boole
  *
  * **Identity-preserving graft.** For each AST node (paired by pre-order index
  * with the fresh parse) the fresh `$cstNode` is moved onto the resident node and
- * its CST→AST back-pointer (`cstNode.astNode`) is repointed to the resident node,
- * so CST→AST readers (`findDeclarationNodeAtOffset(root.$cstNode, …).astNode`)
- * reach the real, linked node rather than the throwaway parse. Each
+ * its CST→AST back-pointer (`cstNode.astNode`), where the parse set one to that
+ * node, is repointed to the resident node, so CST→AST readers
+ * (`findDeclarationNodeAtOffset(root.$cstNode, …).astNode`) reach the real,
+ * linked node rather than the throwaway parse. Each
  * `reference.$refNode` is restored the same way (paired over
  * {@link AstUtils.streamReferences}).
  *
@@ -196,10 +197,10 @@ function rehydrateCst(document: LangiumDocument, factory: LangiumDocumentFactory
       const freshNode = freshNodes[index];
       const freshCst = freshNode.$cstNode;
       asMutable(residentNode).$cstNode = freshCst;
-      if (freshCst) {
-         // The fresh composite CST node's `astNode` points at the throwaway parse;
-         // repoint it (and thus the leaf nodes that inherit via `container.astNode`)
-         // at the resident node so CST→AST navigation reaches the linked AST.
+      // Repoint only the links the parse made, so each CST node, and the nodes
+      // below it that read theirs from a container, resolve as in a fresh parse.
+      // A node an infix rule shares stays with the outermost expression.
+      if (freshCst && freshCst.astNode === freshNode) {
          asMutable(freshCst).astNode = residentNode;
       }
       // Restore each reference's `$refNode` from the fresh parse. The resolved
@@ -246,9 +247,10 @@ function sameGrammarValue(value: unknown, freshValue: unknown): boolean {
  * Each build refreshes the idle window of the documents in its batch. When a
  * closed, sheddable document's window elapses, every AST node's `$cstNode` and
  * every reference's `$refNode` are nulled, and the CST becomes unreachable with
- * the `Range`s and `Position`s only it holds. The reference index's segments, and a
- * description's segments once read, share the CST's `Range` objects, so
- * those stay.
+ * the `Range`s and `Position`s only it holds. A description's selection
+ * segment, once read, shares the cached `Range` of its node's CST, so that one
+ * stays. A leaf CST node builds a new `Range` on every read, so the name and
+ * reference index segments of single-token names hold copies of their own.
  *
  * **Terminology.** *Residency* is the state axis (is the CST in memory? —
  * `resident` vs `shed`); *shed* is both the act and the policy vocabulary (drop

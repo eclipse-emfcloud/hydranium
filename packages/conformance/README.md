@@ -29,7 +29,7 @@ npm install --save-dev @hydranium/conformance
 | `@hydranium/protocol` | `^1.0.0-next` |
 | `@jest/globals`       | `^29.0.0`     |
 | `vitest`              | `^4.0.0`      |
-| `vscode-jsonrpc`      | `^9.0.0`      |
+| `vscode-jsonrpc`      | `^9.0.3`      |
 
 `vitest` and `@jest/globals` are optional peers: install the runner you use.
 

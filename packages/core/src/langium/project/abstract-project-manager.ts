@@ -26,6 +26,7 @@ import type { WorkspaceFolder } from 'vscode-languageserver-types';
 import type { LogNameOptions } from '../diagnostics/logger.js';
 import { HYDRANIUM_BUILD_REASONS, type HydraniumDocumentBuilder } from '../document-builder/document-builder.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
+import { isFileNotFound } from '../workspace/file-not-found.js';
 import { isVirtualUri } from '../workspace/virtual-document.js';
 import type {
    MemberRelinkFinishedEvent,
@@ -35,6 +36,7 @@ import type {
    ProjectChangeListener
 } from './project-change-event.js';
 import type { ProjectManager } from './project-manager.js';
+import { captureReadLockScope, refuseWaitInRead, runInReadLockScope } from '../workspace/read-lock-scope.js';
 
 /** Constructor options for {@link AbstractProjectManager}. */
 export interface ProjectManagerOptions extends LogNameOptions {
@@ -486,6 +488,7 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     * Parse a single descriptor URI and register the resulting project.
     * Returns the parsed project, or `undefined` if parsing failed (errors
     * are logged, not thrown — the rest of discovery / update continues).
+    * A file gone meanwhile also returns `undefined`, logged at debug.
     */
    protected async loadDescriptor(uri: URI): Promise<TProject | undefined> {
       try {
@@ -506,7 +509,12 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
             this.logProjectChange('Add/Update', project.id, uri);
          }
          return project;
-      } catch (error) {
+      } catch (error: unknown) {
+         // A file deleted before the build that reloads it is a race, and the delete's own update follows.
+         if (isFileNotFound(error, uri)) {
+            this.tracer.debug(`The ${this.conceptName()} descriptor at ${uri.toString()} is gone, so it describes no project`);
+            return undefined;
+         }
          this.tracer.error(`Failed to parse ${this.conceptName()} descriptor at ${uri.toString()}: ${describeErrorWithStack(error)}`);
          return undefined;
       }
@@ -701,8 +709,9 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
    }
 
    async memberRelinkSettled(): Promise<void> {
+      const inCallerRead = captureReadLockScope();
       while (this.memberRelinks.size > 0) {
-         await Promise.all(this.memberRelinks);
+         await inCallerRead(() => refuseWaitInRead('A wait for member relinks', Promise.all(this.memberRelinks), this.workspaceLock));
       }
    }
 
@@ -728,7 +737,8 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
          return;
       }
       this.memberRelinkQueued = true;
-      const settled = this.runMemberRelink();
+      // Later queues feed it, so it runs outside the read it was queued from.
+      const settled = runInReadLockScope(() => this.runMemberRelink(), undefined);
       this.memberRelinks.add(settled);
       void settled.finally(() => this.memberRelinks.delete(settled));
    }
