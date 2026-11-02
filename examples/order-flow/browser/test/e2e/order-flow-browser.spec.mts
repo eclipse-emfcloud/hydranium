@@ -2531,7 +2531,7 @@ test.describe('order-flow in a web worker', () => {
       await name.press('Enter');
       await expect(page.locator('#properties-body .status')).toContainText('draft refused by test');
       await expect(page.locator('#properties-body [data-pending]')).toHaveCount(1);
-      await page.locator('#save-workspace').evaluate((button: HTMLButtonElement) => button.click());
+      await page.locator('#save-workspace').click();
       await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /saved 1 document.*fulfillment.process.*not saved/);
       await expect(page.locator('#selected-editor-title')).not.toHaveClass(/is-dirty/);
       await expect(page.locator('#properties-body [data-pending]')).toHaveCount(1);
