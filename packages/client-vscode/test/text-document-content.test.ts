@@ -7,9 +7,9 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { CancellationToken, Uri } from 'vscode';
+import type { CancellationToken, TextDocument, TextDocumentChangeEvent, TextDocumentWillSaveEvent, TextEdit, Uri } from 'vscode';
 import { describe, expect, it } from 'vitest';
-import { textDocumentContentMiddleware } from '../src/node/text-document-content';
+import { textDocumentContentMiddleware, textDocumentSyncMiddleware } from '../src/node/text-document-content';
 
 const token: CancellationToken = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => undefined }) };
 const uri = { toString: () => 'virtual:lib/a.one' } as Uri;
@@ -62,5 +62,51 @@ describe('textDocumentContentMiddleware', () => {
       const text = await middlewareAnswering(error, asked).provideTextDocumentContent(uri, token);
 
       expect({ text, failed: asked[1] }).toEqual({ text: undefined, failed: { failed: 'workspace/textDocumentContent', error } });
+   });
+});
+
+describe('textDocumentSyncMiddleware', () => {
+   it.each(['virtual', 'library', 'file'])('filters sync for configured content schemes with %s', async scheme => {
+      const middleware = textDocumentSyncMiddleware(() => ({
+         initializeResult: { capabilities: { workspace: { textDocumentContent: { schemes: ['virtual', 'library'] } } } }
+      }));
+      const document = { uri: { scheme } } as TextDocument;
+      const change = { document } as TextDocumentChangeEvent;
+      const save = { document } as TextDocumentWillSaveEvent;
+      const calls: unknown[] = [];
+      const next = async (value: unknown): Promise<void> => {
+         calls.push(value);
+      };
+      await middleware.didOpen(document, next);
+      await middleware.didChange(change, next);
+      await middleware.didClose(document, next);
+      await middleware.didSave(document, next);
+      await middleware.willSave(save, next);
+      const forwardedEdits = [{ newText: 'saved' } as TextEdit];
+      const edits = await middleware.willSaveWaitUntil(save, async event => {
+         calls.push(event);
+         return forwardedEdits;
+      });
+      expect(edits).toEqual(scheme === 'file' ? forwardedEdits : []);
+      expect(calls).toEqual(scheme === 'file' ? [document, change, document, document, save, save] : []);
+   });
+   it('reads current capabilities after initialization and restart', async () => {
+      let schemes: string[] | undefined;
+      const middleware = textDocumentSyncMiddleware(() => ({
+         initializeResult: schemes ? { capabilities: { workspace: { textDocumentContent: { schemes } } } } : undefined
+      }));
+      const document = { uri: { scheme: 'library' } } as TextDocument;
+      let sent = 0;
+      const next = async (): Promise<void> => {
+         sent++;
+      };
+      await middleware.didOpen(document, next);
+      expect(sent).toBe(1);
+      schemes = ['library'];
+      await middleware.didOpen(document, next);
+      expect(sent).toBe(1);
+      schemes = ['other'];
+      await middleware.didOpen(document, next);
+      expect(sent).toBe(2);
    });
 });

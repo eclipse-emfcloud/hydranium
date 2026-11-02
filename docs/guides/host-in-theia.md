@@ -47,7 +47,9 @@ outside Theia's backend and announces its ports.
    `bindLogLevelPreference`. Call `bindEditorDiskSync` as soon as any head can
    save a file an editor has open: without it, Theia keeps the editor dirty
    after the server saves, and the editor's next save applies its edits a
-   second time.
+   second time. Call `bindReadOnlyContentResources(rebind)` to default content
+   resources without a save operation or an explicit read-only policy to
+   read-only, including libraries supplied by your language server.
 
 3. **Connect the data head.** In the frontend, subclass `ChannelDataPort` with
    your service path, bind it as a singleton, and bind the connection over it

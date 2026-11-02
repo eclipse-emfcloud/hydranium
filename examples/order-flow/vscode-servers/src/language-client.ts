@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { textDocumentContentMiddleware } from '@hydranium/client-vscode/node';
+import { textDocumentContentMiddleware, textDocumentSyncMiddleware } from '@hydranium/client-vscode/node';
 import { ALL_LANGUAGES } from '@hydranium/example-order-flow-protocol';
 import type { ExtensionContext } from 'vscode';
 import { workspace } from 'vscode';
@@ -69,12 +69,18 @@ export async function startOrderFlowLanguageClient(context: ExtensionContext): P
    };
 
    const clientOptions: LanguageClientOptions = {
-      documentSelector: ALL_LANGUAGES.map(({ languageId }) => ({ scheme: 'file', language: languageId })),
+      documentSelector: ALL_LANGUAGES.flatMap(({ languageId }) => [
+         { scheme: 'file', language: languageId },
+         { scheme: 'virtual', language: languageId }
+      ]),
       synchronize: {
          fileEvents: workspace.createFileSystemWatcher(`**/*{${ALL_LANGUAGES.flatMap(language => language.fileExtensions).join(',')}}`)
       },
       // The text of a document only the server holds, such as a built-in library.
-      middleware: textDocumentContentMiddleware(() => client)
+      middleware: {
+         ...textDocumentContentMiddleware(() => client),
+         ...textDocumentSyncMiddleware(() => client)
+      }
    };
 
    const client: LanguageClient = new LanguageClient('order-flow', ORDER_FLOW_LANGUAGE_CLIENT_NAME, serverOptions, clientOptions);

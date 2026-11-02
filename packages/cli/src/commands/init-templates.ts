@@ -3073,13 +3073,13 @@ function vscodeLanguageClientFile(composition: InitComposition): string {
    return `// Starts the ${composition.name} server for VS Code, and for a Theia app that sideloads
 // this extension: one launch, so both hand the server the same documents.
 
-import { textDocumentContentMiddleware } from '@hydranium/client-vscode/node';
+import { textDocumentContentMiddleware, textDocumentSyncMiddleware } from '@hydranium/client-vscode/node';
 import { ALL_LANGUAGES } from '${memberPackageName(composition, 'protocol')}';
 import { type ExtensionContext, workspace } from 'vscode';
-import { LanguageClient, TransportKind } from 'vscode-languageclient/node';
+import { LanguageClient, type ServerOptions, TransportKind } from 'vscode-languageclient/node';
 
 /** Fork the server, start its language client and return it once started. */
-export async function start${composition.name}LanguageClient(context: ExtensionContext): Promise<LanguageClient> {
+export async function start${composition.name}LanguageClient(context: ExtensionContext, serverOptions?: ServerOptions): Promise<LanguageClient> {
    // Resolved through the package, so it works from the workspace and from an
    // installed extension alike. Over IPC, which keeps the server's stdout free.
    const serverModule = require.resolve('${memberPackageName(composition, 'server')}/lib/main.js');
@@ -3087,13 +3087,19 @@ export async function start${composition.name}LanguageClient(context: ExtensionC
    const client: LanguageClient = new LanguageClient(
       '${composition.projectId}',
       '${composition.name}',
-      { module: serverModule, transport: TransportKind.ipc },
+      serverOptions ?? { module: serverModule, transport: TransportKind.ipc },
       {
-         documentSelector: ALL_LANGUAGES.map(({ languageId }) => ({ scheme: 'file', language: languageId })),
+         documentSelector: ALL_LANGUAGES.flatMap(({ languageId }) => [
+            { scheme: 'file', language: languageId },
+            { scheme: 'virtual', language: languageId }
+         ]),
          // Changes on disk the editor does not hold, such as a file another tool writes.
          synchronize: { fileEvents: workspace.createFileSystemWatcher(\`**/*{\${extensions}}\`) },
          // The text of a document only the server holds, such as a built-in library.
-         middleware: textDocumentContentMiddleware(() => client)
+         middleware: {
+            ...textDocumentContentMiddleware(() => client),
+            ...textDocumentSyncMiddleware(() => client)
+         }
       }
    );
    context.subscriptions.push(client);
@@ -3101,6 +3107,65 @@ export async function start${composition.name}LanguageClient(context: ExtensionC
 
    return client;
 }
+`;
+}
+
+/** The generated launcher exercised in a real extension host against a content server. */
+function hostVscodeVirtualTest(composition: InitComposition): string {
+   return `const assert = require('node:assert/strict');
+const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
+const { TransportKind } = require('vscode-languageclient/node');
+const vscode = require('vscode');
+const { start${composition.name}LanguageClient } = require('${memberPackageName(composition, 'vscode-servers')}/out/language-client.js');
+
+module.exports.run = async () => {
+   const subscriptions = [];
+   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'content-host-'));
+   const client = await start${composition.name}LanguageClient(
+      { subscriptions },
+      {
+         module: path.join(__dirname, 'content-server.cjs'),
+         transport: TransportKind.ipc
+      }
+   );
+   try {
+      const file = path.join(scratch, 'file.${composition.grammars[0].extensions[0]}');
+      fs.writeFileSync(file, 'node Local');
+      await vscode.window.showTextDocument(vscode.Uri.file(file));
+      const uri = vscode.Uri.parse('virtual:fixture/library.${composition.grammars[0].extensions[0]}');
+      const editor = await vscode.window.showTextDocument(uri);
+      const position = new vscode.Position(0, 5);
+      const hover = await vscode.commands.executeCommand('vscode.executeHoverProvider', uri, position);
+      assert.ok(
+         hover.some(value => value.contents.some(content => content.value === 'fixture hover')),
+         'virtual hover'
+      );
+      const tokens = await vscode.commands.executeCommand('vscode.provideDocumentSemanticTokens', uri);
+      assert.ok(tokens?.data.length, 'virtual semantic tokens');
+      const definitions = await vscode.commands.executeCommand('vscode.executeDefinitionProvider', uri, position);
+      assert.ok(definitions.length, 'virtual definition');
+      const before = editor.document.getText();
+      await editor.edit(builder => builder.insert(position, 'changed'));
+      assert.equal(editor.document.getText(), before);
+      await vscode.languages.setTextDocumentLanguage(editor.document, 'plaintext');
+      const received = await client.sendRequest('fixture/sync');
+      assert.ok(
+         received.some(event => event.method === 'textDocument/didOpen' && event.uri.startsWith('file:')),
+         'file sync reaches the server'
+      );
+      assert.deepEqual(
+         received.filter(event => event.uri.startsWith('virtual:')),
+         [],
+         'no virtual document synchronization reaches the server'
+      );
+   } finally {
+      await client.stop();
+      for (const subscription of subscriptions) subscription.dispose();
+      fs.rmSync(scratch, { recursive: true, force: true });
+   }
+};
 `;
 }
 
@@ -3590,7 +3655,11 @@ function hostVscodeReadme(composition: InitComposition): string {
          (composition.heads.includes('data') ? 'Show Model names the model, ' : '') +
          (diagrams.length > 0 ? 'the diagram draws, ' : '') +
          'and the server reports a broken reference',
-      '- `test/vscode-version.mts` — the VS Code release the smoke test runs',
+      '- `test/virtual-documents.spec.mts` — the generated launcher serves a',
+      '  content document in the extension host without sending its text back',
+      '- `test/virtual-documents.cjs` and `test/content-server.cjs` — the host',
+      '  assertions and the content-owning LSP fixture they drive',
+      '- `test/vscode-version.mts` — the VS Code release the smoke tests run',
       ''
    ];
    return project(lines.join('\n'), composition);
@@ -3617,7 +3686,10 @@ function hostVscodeFiles(composition: InitComposition): InitFile[] {
       ]),
       { path: 'host-vscode/test/smoke.spec.mts', content: hostVscodeSmokeSpec(composition) },
       fixed('test/vscode-version.mts'),
-      fixed('test/install-vscode.mts')
+      fixed('test/install-vscode.mts'),
+      { path: 'host-vscode/test/virtual-documents.cjs', content: hostVscodeVirtualTest(composition) },
+      fixed('test/content-server.cjs'),
+      fixed('test/virtual-documents.spec.mts')
    ];
 }
 
@@ -3787,7 +3859,11 @@ function theiaFrontendModuleFile(composition: InitComposition): string {
    const glsp = composition.heads.includes('glsp');
    const imports = [
       ...(glsp ? ["import { GLSPClientContribution } from '@eclipse-glsp/theia-integration';"] : []),
-      "import { bindChannelLogger, bindConnectionDiagnostics, bindEditorDiskSync } from '@hydranium/client-theia/browser';",
+      importList(
+         ['bindChannelLogger', 'bindConnectionDiagnostics', 'bindEditorDiskSync', 'bindReadOnlyContentResources'],
+         '@hydranium/client-theia/browser',
+         columnsFor(composition)
+      ),
       ...(data
          ? [
               "import { bindDataConnection } from '@hydranium/data-client-theia/browser';",
@@ -3836,7 +3912,8 @@ export default new ContainerModule((bind, _unbind, isBound, rebind) => {
    bindChannelLogger(bind, { channelName: '${name} Connection' });
    bindConnectionDiagnostics(bind);
    // Keeps an editor from writing over a file a head saved while it held the same text unsaved.
-   bindEditorDiskSync(bind, isBound, rebind);${dataBlock}${glspBlock}
+   bindEditorDiskSync(bind, isBound, rebind);
+   bindReadOnlyContentResources(rebind);${dataBlock}${glspBlock}
 });
 `;
 }

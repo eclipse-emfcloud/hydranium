@@ -7,7 +7,12 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { bindChannelLogger, bindConnectionDiagnostics, bindEditorDiskSync } from '@hydranium/client-theia/browser';
+import {
+   bindChannelLogger,
+   bindConnectionDiagnostics,
+   bindEditorDiskSync,
+   bindReadOnlyContentResources
+} from '@hydranium/client-theia/browser';
 import { ContainerModule } from '@theia/core/shared/inversify';
 
 /**
@@ -35,4 +40,5 @@ export default new ContainerModule((bind, _unbind, isBound, rebind) => {
    bindChannelLogger(bind, { channelName: 'Order Flow Connection' });
    bindConnectionDiagnostics(bind);
    bindEditorDiskSync(bind, isBound, rebind);
+   bindReadOnlyContentResources(rebind);
 });

@@ -13,7 +13,12 @@
 // GLSP client the diagrams share.
 
 import { GLSPClientContribution } from '@eclipse-glsp/theia-integration';
-import { bindChannelLogger, bindConnectionDiagnostics, bindEditorDiskSync } from '@hydranium/client-theia/browser';
+import {
+   bindChannelLogger,
+   bindConnectionDiagnostics,
+   bindEditorDiskSync,
+   bindReadOnlyContentResources
+} from '@hydranium/client-theia/browser';
 import { bindDataConnection } from '@hydranium/data-client-theia/browser';
 import { CommandContribution } from '@theia/core';
 import { ContainerModule } from '@theia/core/shared/inversify';
@@ -27,6 +32,7 @@ export default new ContainerModule((bind, _unbind, isBound, rebind) => {
    bindConnectionDiagnostics(bind);
    // Keeps an editor from writing over a file a head saved while it held the same text unsaved.
    bindEditorDiskSync(bind, isBound, rebind);
+   bindReadOnlyContentResources(rebind);
 
    // The data head: one connection, opened when the command first runs.
    bind(BookstoreDataPort).toSelf().inSingletonScope();

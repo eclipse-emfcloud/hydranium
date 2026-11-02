@@ -17,3 +17,4 @@ export * from './connection-diagnostics-contribution';
 export * from './connection-reporter';
 export * from './editor-disk-sync';
 export * from './hydranium-file-service';
+export * from './read-only-content-resources';

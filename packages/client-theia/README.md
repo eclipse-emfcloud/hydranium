@@ -44,7 +44,9 @@ This package is a library, not a Theia extension: it declares no
 
 - In a frontend module, call `bindChannelLogger` and `bindLogLevelPreference`.
   Call `bindEditorDiskSync` whenever a server writes files an editor can have
-  open.
+  open. Call `bindReadOnlyContentResources(rebind)` to default content-only
+  resources to read-only. Resources with a save operation or an explicit
+  read-only policy keep their own behavior.
 - For the diagnostics commands, bind `MemoryDiagnosticsService` to your own
   data-server frontend, then call `bindMemoryDiagnostics`.
 - For the websocket, call `bindConnectionResilience` in a `frontendPreload`

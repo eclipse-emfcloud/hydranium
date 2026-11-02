@@ -28,4 +28,8 @@ npm run test:e2e           # the smoke test; under `xvfb-run -a` on Linux withou
 - `esbuild.mjs` — bundles each webview into `out/webview/`
 - `start.mjs` — `npm start`: VS Code with this extension, on `../workspace`
 - `test/smoke.spec.mts` — VS Code opens the workspace, Show Model names the model, the diagram draws, and the server reports a broken reference
-- `test/vscode-version.mts` — the VS Code release the smoke test runs
+- `test/virtual-documents.spec.mts` — the generated launcher serves a
+  content document in the extension host without sending its text back
+- `test/virtual-documents.cjs` and `test/content-server.cjs` — the host
+  assertions and the content-owning LSP fixture they drive
+- `test/vscode-version.mts` — the VS Code release the smoke tests run
