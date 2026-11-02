@@ -15,6 +15,7 @@ import type { ServerSharedServices } from '../../../src/langium/module.js';
 import { DefaultBuildPipelineIntegration } from '../../../src/langium/document-builder/build-pipeline-integration.js';
 import { DefaultBuildPhasePassService } from '../../../src/langium/build-phase-pass/build-phase-pass-service.js';
 import { builtLocalSymbols } from '../../../src/langium/scope/built-local-symbols.js';
+import type { IntegrityRun } from '../../../src/langium/integrity/integrity-service.js';
 import { makeNoopSharedServices, makeStubServiceRegistry, type NoopLanguageServicesOverrides } from '../../../src/testing/index.js';
 
 /** Real registry — integrity dispatches through it, so the routing tests exercise the true path. */
@@ -211,7 +212,7 @@ describe('BuildPipelineIntegration routing', () => {
    });
 });
 
-type IntegrityCalls = Array<{ documents: readonly LangiumDocument[]; phase: DocumentState }>;
+type IntegrityCalls = Array<{ documents: readonly LangiumDocument[]; phase: DocumentState; run?: IntegrityRun }>;
 
 /**
  * Two-language registry: `.b` documents resolve to language B, `.a` documents
@@ -222,15 +223,24 @@ type IntegrityCalls = Array<{ documents: readonly LangiumDocument[]; phase: Docu
  * ({@link makeStubServiceRegistry}), so the grouping under test is driven by
  * the same extension lookup a booted two-grammar server uses.
  */
-function setupMultiLanguage(): { builder: FakeDocumentBuilder; integrityCallsA: IntegrityCalls; integrityCallsB: IntegrityCalls } {
+function setupMultiLanguage(): {
+   builder: FakeDocumentBuilder;
+   integrityCallsA: IntegrityCalls;
+   integrityCallsB: IntegrityCalls;
+} {
    const builder = new FakeDocumentBuilder();
    const integrityCallsA: IntegrityCalls = [];
    const integrityCallsB: IntegrityCalls = [];
    const languageSlots = (calls: IntegrityCalls): NoopLanguageServicesOverrides => ({
       integrity: {
          IntegrityService: {
-            enforceBatch: (documents: readonly LangiumDocument[], phase: DocumentState) => {
-               calls.push({ documents, phase });
+            enforceBatch: (
+               documents: readonly LangiumDocument[],
+               phase: DocumentState,
+               _cancelToken: CancellationToken,
+               run?: IntegrityRun
+            ) => {
+               calls.push(run === undefined ? { documents, phase } : { documents, phase, run });
                return Promise.resolve();
             }
          }
@@ -264,8 +274,22 @@ describe('BuildPipelineIntegration multi-grammar routing', () => {
       await builder.fireBuild(DocumentState.Parsed, [docA1, docB1, docA2]);
       // Each language's IntegrityService is called exactly once, with only its
       // own documents, in their original batch order.
-      expect(integrityCallsA).toEqual([{ documents: [docA1, docA2], phase: DocumentState.Parsed }]);
-      expect(integrityCallsB).toEqual([{ documents: [docB1], phase: DocumentState.Parsed }]);
+      expect(integrityCallsA.map(({ documents, phase }) => ({ documents, phase }))).toEqual([
+         { documents: [docA1, docA2], phase: DocumentState.Parsed }
+      ]);
+      expect(integrityCallsB.map(({ documents, phase }) => ({ documents, phase }))).toEqual([
+         { documents: [docB1], phase: DocumentState.Parsed }
+      ]);
+   });
+
+   it('hands every language the same integrity run over the whole batch', async () => {
+      const { builder, integrityCallsA, integrityCallsB } = setupMultiLanguage();
+      const batch = [doc('a1.a'), doc('b1.b')];
+
+      await builder.fireBuild(DocumentState.Linked, batch);
+
+      expect(integrityCallsA[0].run?.documents).toEqual(new Set(batch));
+      expect(integrityCallsB[0].run).toBe(integrityCallsA[0].run);
    });
 });
 

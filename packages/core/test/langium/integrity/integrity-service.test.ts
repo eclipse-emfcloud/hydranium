@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { asMutable, Disposable, Logger } from '@hydranium/protocol';
-import { type Harness, makeFakeClock, tick } from '@hydranium/protocol/testing';
+import { makeFakeClock } from '@hydranium/protocol/testing';
 import {
    AbstractAstReflection,
    type AstMetaData,
@@ -17,14 +17,15 @@ import {
    DocumentState,
    isOperationCancelled,
    type LangiumDocument,
+   stream,
    type URI
 } from '@hydranium/langium';
-import type { ApplyWorkspaceEditParams, CancellationToken, TextEdit } from 'vscode-languageserver';
+import { type ApplyWorkspaceEditParams, CancellationToken, CancellationTokenSource, type TextEdit } from 'vscode-languageserver';
+import type { BuildEndedEvent, BuildEndedListener } from '../../../src/langium/document-builder/document-builder.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { HydraniumTextDocuments } from '../../../src/documents/hydranium-text-documents.js';
 import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
-import { DefaultIntegrityService, type IntegrityRepairTexts } from '../../../src/langium/integrity/integrity-service.js';
-import type { RecoveryBuildRequest } from '../../../src/documents/version-sync-service.js';
+import { DefaultIntegrityService, IntegrityRun } from '../../../src/langium/integrity/integrity-service.js';
 import { virtualUri } from '../../../src/langium/workspace/virtual-document.js';
 import type { ServerLanguageServices } from '../../../src/langium/language-module.js';
 import type { ServerSharedServices } from '../../../src/langium/module.js';
@@ -103,6 +104,7 @@ class FixedReflection extends AbstractAstReflection {
 function makeIntegrityServices(overrides: NoopLanguageServicesOverrides = {}): ServerLanguageServices {
    const { shared, ...rest } = overrides;
    const { workspace, ...sharedRest } = shared ?? {};
+   const workspaceOverrides = (workspace as Record<string, unknown>) ?? {};
    return makeNoopLanguageServices({
       shared: {
          AstReflection: new FixedReflection(),
@@ -111,7 +113,9 @@ function makeIntegrityServices(overrides: NoopLanguageServicesOverrides = {}): S
             TextDocuments: new FakeTextDocuments(),
             FileSystemProvider: {},
             WorkspaceManager: { wsRelativePath: () => 'doc.fake' },
-            ...((workspace as Record<string, unknown>) ?? {})
+            ...workspaceOverrides,
+            // The service subscribes to build ends at construction.
+            DocumentBuilder: { onBuildEnded: () => ({ dispose: () => undefined }), ...(workspaceOverrides.DocumentBuilder ?? {}) }
          }
       },
       ...rest
@@ -411,6 +415,45 @@ function makeProbeService(): ProbeService {
    return new ProbeService(makeIntegrityServices());
 }
 
+class RelinkedByProbe extends DefaultIntegrityService<FakeNode> {
+   relinkedBy(document: LangiumDocument, changed: LangiumDocument): boolean {
+      return this.isRelinkedBy(document, changed);
+   }
+}
+
+describe('IntegrityService dependents of a changed document', () => {
+   /** A multi-reference whose `items` read counts in `reads`, as a read resolves it. */
+   const multiReference = (items: unknown, reads: string[]): object => ({
+      $refText: 'x',
+      _items: items,
+      get items() {
+         reads.push('items');
+         return Array.isArray(items) ? items : [];
+      }
+   });
+
+   it('reads no unresolved multi-reference, as the read would resolve one that links nothing', () => {
+      const probe = new RelinkedByProbe(makeIntegrityServices());
+      const changed = makeFakeDocument('file:///changed.fake', makeFakeAstNode<FakeNode>({ $type: 'Foo' }));
+      const dependent = makeFakeDocument('file:///dependent.fake', makeFakeAstNode<FakeNode>({ $type: 'Foo' }));
+      const reads: string[] = [];
+      asMutable(dependent).references = [multiReference(undefined, reads) as LangiumDocument['references'][number]];
+
+      expect(probe.relinkedBy(dependent, changed)).toBe(false);
+      expect(reads).toEqual([]);
+   });
+
+   it('counts a resolved multi-reference into the changed document', () => {
+      const probe = new RelinkedByProbe(makeIntegrityServices());
+      const changed = makeFakeDocument('file:///changed.fake', makeFakeAstNode<FakeNode>({ $type: 'Foo' }));
+      const dependent = makeFakeDocument('file:///dependent.fake', makeFakeAstNode<FakeNode>({ $type: 'Foo' }));
+      const items = [{ $nodeDescription: { documentUri: changed.uri } }];
+      asMutable(dependent).references = [multiReference(items, []) as LangiumDocument['references'][number]];
+
+      expect(probe.relinkedBy(dependent, changed)).toBe(true);
+   });
+});
+
 describe('IntegrityService phase buckets', () => {
    it('invalidates the cached bucket on unregister, leaving only the surviving rule', () => {
       const service = makeProbeService();
@@ -606,16 +649,14 @@ function makeCorrectionsProbe(
                },
                reparseAndRelink: async (document: LangiumDocument) => {
                   builderCalls.reparseAndRelink.push(document.uri.toString());
-               },
-               // A Linked-phase correction watches for the start of the build it asks for.
-               onUpdate: () => ({ dispose: () => undefined })
+               }
             },
+            // A Linked-phase correction looks for the documents that reference the repaired one.
+            LangiumDocuments: { all: stream([]) },
             VersionSyncService: {
                modelProduced: (document: LangiumDocument, origin?: { text?: string }) => {
                   produced.push({ uri: document.uri.toString(), text: origin?.text });
-               },
-               // A Linked-phase correction asks for a build that relinks its dependents.
-               requestRecoveryBuild: async () => undefined
+               }
             },
             FileSystemTaskQueue: {
                enqueue: async <T>(uri: string, task: () => Promise<T>): Promise<T> => {
@@ -1416,226 +1457,390 @@ describe('IntegrityService phase-bucket cache identity', () => {
    });
 });
 
-/** Probe exposing the steps of the build that relinks a repaired document's dependents. */
+/** Relinks a repaired document's dependents in place of the resync, and counts every other document as one. */
 class RelinkProbe extends DefaultIntegrityService<FakeNode> {
-   /** Whether every running build relinks the repaired document, as one that links into it would. */
-   relinkedByRunning = false;
-   protected override isRelinkedBy(document: LangiumDocument, changed: LangiumDocument): boolean {
-      return this.relinkedByRunning || super.isRelinkedBy(document, changed);
+   /** The documents whose dependents this service relinked. */
+   readonly relinkedFor: LangiumDocument[] = [];
+   protected override async relinkDependents(document: LangiumDocument, run: IntegrityRun): Promise<void> {
+      this.relinkedFor.push(document);
+      await super.relinkDependents(document, run);
    }
-   relinkNow(document: LangiumDocument, repair: IntegrityRepairTexts): void {
-      this.relinkDependents(document, repair);
+   protected override async resyncDocument(
+      document: LangiumDocument,
+      _cancelToken?: CancellationToken,
+      run: IntegrityRun = IntegrityRun.create([document])
+   ): Promise<void> {
+      await this.relinkDependents(document, run);
    }
-   recordRules(document: LangiumDocument, rules: IntegrityRule[]): void {
-      this.mutatingRules.set(document, new Set(rules));
-   }
-   chainOf(document: LangiumDocument): number | undefined {
-      return this.relinkBuilds.get(document)?.chain;
+   protected override isRelinkedBy(): boolean {
+      return true;
    }
 }
 
-interface RequestedBuild {
-   readonly uri: string;
-   readonly request: RecoveryBuildRequest;
-   readonly resolve: () => void;
-   readonly reject: (error: unknown) => void;
-}
-
-interface RelinkHarness extends Harness {
+interface RelinkHarness {
    probe: RelinkProbe;
-   repaired: LangiumDocument;
-   dependent: LangiumDocument;
-   /** Every build the service requested, held until the test settles it. */
-   requests: RequestedBuild[];
-   /** Report `document`'s build starting, from an update or, when `explicit`, an explicit build. */
-   start(document: LangiumDocument, explicit?: boolean): void;
+   /** `a`, `b`, `c` and `d`, all linked. */
+   documents: Record<'a' | 'b' | 'c' | 'd', LangiumDocument>;
+   /** Each relink the builder was asked for, as `cause>document`. */
+   relinked: string[];
    lines: CapturedLine[];
+   /** Each document a build after this one was requested for. */
+   rebuilds: string[];
+   /** Tell the services that a build ended, as the builder does. */
+   endBuild(event: BuildEndedEvent): void;
 }
 
 function makeRelinkHarness(
-   options: { syncMode?: IntegritySyncMode; maxRelinkChain?: number; throwOnRequest?: number } = {}
-): RelinkHarness {
+   options: { maxRepeatRepairs?: number; linking?: boolean; maxRepeatRepairsOfB?: number; rereads?: string[]; throws?: string[] } = {}
+): RelinkHarness & { probeOfB: RelinkProbe } {
    const { tracer, lines } = makeCapturingTracer();
-   const requests: RequestedBuild[] = [];
-   const listeners: ((changed: URI[]) => void)[] = [];
-   let explicitBuild = false;
-   let requested = 0;
-   const repaired = makeResyncDocument('file:///repaired.fake', 'repaired', DocumentState.Linked);
-   const dependent = makeResyncDocument('file:///dependent.fake', 'dependent', DocumentState.Validated);
-   const documents = [repaired, dependent];
+   const nameOf = (document: LangiumDocument): string => document.uri.path.slice(1, -'.fake'.length);
+   const make = (name: string): LangiumDocument => {
+      const document = batchDocument(`file:///${name}.fake`, [makeFakeAstNode<FakeNode>({ $type: 'Foo', id: name })]);
+      document.state = DocumentState.Linked;
+      return document;
+   };
+   const documents = { a: make('a'), b: make('b'), c: make('c'), d: make('d') };
+   const relinked: string[] = [];
+   const rebuilds: string[] = [];
+   const buildEnded: BuildEndedListener[] = [];
+   const reread = new Set<LangiumDocument>();
    const services = makeIntegrityServices({
       shared: {
          Tracer: tracer,
+         // `b` is of another language when `maxRepeatRepairsOfB` is set.
+         ServiceRegistry: {
+            getServices: (uri: URI) => ({ integrity: { IntegrityService: uri.path === '/b.fake' ? probeOfB : probe } })
+         },
          workspace: {
-            TextDocuments: { isOpen: () => false },
-            LangiumDocuments: {
-               getDocument: (uri: URI) => documents.find(document => document.uri.toString() === uri.toString()),
-               all: documents
-            },
+            LangiumDocuments: { all: stream(Object.values(documents)) },
+            VersionSyncService: { rebuildWhileCurrent: (document: LangiumDocument) => void rebuilds.push(nameOf(document)) },
             DocumentBuilder: {
-               onUpdate: (listener: (changed: URI[]) => void) => {
-                  listeners.push(listener);
+               onBuildEnded: (listener: BuildEndedListener) => {
+                  buildEnded.push(listener);
                   return { dispose: () => undefined };
                },
-               isInsideBuildUpdate: () => explicitBuild,
-               overlapsRunningBuild: () => false,
-               // Every other document is a dependent.
-               shouldRelink: () => true
-            },
-            VersionSyncService: {
-               requestRecoveryBuild: (uri: URI, request: RecoveryBuildRequest): Promise<void> => {
-                  if (++requested === options.throwOnRequest) {
-                     throw new Error('request failed');
+               relinkInRunningBuild: async (document: LangiumDocument, cause: LangiumDocument) => {
+                  relinked.push(`${nameOf(cause)}>${nameOf(document)}`);
+                  if (options.throws?.includes(nameOf(document))) {
+                     throw new Error(`relink of ${nameOf(document)}`);
                   }
-                  return new Promise<void>((resolve, reject) => requests.push({ uri: uri.toString(), request, resolve, reject }));
+                  if (options.rereads?.includes(nameOf(document)) && !reread.has(document)) {
+                     // Re-read once, which replaces its root as a re-parse does.
+                     reread.add(document);
+                     Object.assign(document.parseResult, { value: makeFakeAstNode<FakeNode>({ $type: 'Foo', id: nameOf(document) }) });
+                  }
+                  return options.linking ?? true;
                }
             }
          }
       }
    });
-   const probe = new RelinkProbe(services, { syncMode: options.syncMode, maxRelinkChain: options.maxRelinkChain });
-   const start = (document: LangiumDocument, explicit = false): void => {
-      explicitBuild = explicit;
-      listeners.forEach(listener => listener([document.uri]));
-      explicitBuild = false;
-   };
-   return { probe, repaired, dependent, requests, start, lines, dispose: () => undefined };
+   const probe = new RelinkProbe(services, { maxRepeatRepairs: options.maxRepeatRepairs });
+   const probeOfB =
+      options.maxRepeatRepairsOfB === undefined ? probe : new RelinkProbe(services, { maxRepeatRepairs: options.maxRepeatRepairsOfB });
+   const endBuild = (event: BuildEndedEvent): void => buildEnded.forEach(listener => listener(event));
+   return { probe, probeOfB, documents, relinked, lines, rebuilds, endBuild };
 }
 
-const REPAIR: IntegrityRepairTexts = { from: 'unrepaired', to: 'repaired' };
+describe('IntegrityService relink of the dependents of a Linked-phase repair', () => {
+   it('runs the rules again of a relinked dependent that ran them already, or that no batch of the run holds', async () => {
+      const { probe, documents, relinked } = makeRelinkHarness();
+      const { a, b, c } = documents;
+      const runs: string[] = [];
+      probe.register({
+         id: 'once',
+         nodeType: 'Foo',
+         phase: DocumentState.Linked,
+         enforce: node => {
+            const id = (node as FakeNode).id!;
+            runs.push(id);
+            return id === 'a' && runs.filter(run => run === 'a').length === 1;
+         }
+      });
 
-describe('IntegrityService build that relinks the dependents of a Linked-phase repair', () => {
-   it('requests one build, which relinks a repair made while it waits', async () => {
-      const { probe, repaired, requests, start } = makeRelinkHarness();
-      probe.relinkNow(repaired, REPAIR);
-      probe.relinkNow(repaired, REPAIR);
-      expect(requests[0].request.stillNeeded()).toBe(true);
-      start(repaired);
-      requests[0].resolve();
-      await tick(0);
+      await probe.enforceBatch([b, a, c], DocumentState.Linked, CancellationToken.None);
 
-      expect(requests.map(requested => requested.uri)).toEqual(['file:///repaired.fake']);
+      // `c` at its own turn, `b` and `d` after the batch.
+      expect(relinked).toEqual(['a>c', 'a>b', 'a>d']);
+      expect(runs).toEqual(['b', 'a', 'c', 'b', 'd']);
    });
 
-   it('requests the next build in the chain for a repair made while the build runs', async () => {
-      const { probe, repaired, requests, start } = makeRelinkHarness();
-      probe.relinkNow(repaired, REPAIR);
-      requests[0].request.stillNeeded();
-      start(repaired);
-      probe.relinkNow(repaired, REPAIR);
-      requests[0].resolve();
-      await tick(0);
+   it("relinks the dependents of a dependent the relink re-read through its own language's service", async () => {
+      const { probe, probeOfB, documents, relinked } = makeRelinkHarness({ maxRepeatRepairsOfB: 3, rereads: ['b'] });
+      const { a, b } = documents;
+      probe.register({
+         id: 'once',
+         nodeType: 'Foo',
+         phase: DocumentState.Linked,
+         enforce: node => (node as FakeNode).id === 'a' && probe.relinkedFor.length === 0
+      });
 
-      expect(requests).toHaveLength(2);
-      expect(probe.chainOf(repaired)).toBe(2);
+      await probe.enforceBatch([a], DocumentState.Linked, CancellationToken.None);
+
+      expect(probe.relinkedFor).toEqual([a]);
+      expect(probeOfB.relinkedFor).toEqual([b]);
+      // `c` and `d` once, by the re-read `b` that selected them last.
+      expect(relinked).toEqual(['a>b', 'b>c', 'b>d', 'b>a']);
    });
 
-   it.each([
-      ['never started', false],
-      ['an explicit build reported', true]
-   ])('continues no chain from a build that %s', async (_label, explicit) => {
-      const { probe, repaired, requests, start } = makeRelinkHarness();
-      probe.relinkNow(repaired, REPAIR);
-      requests[0].request.stillNeeded();
-      if (explicit) {
-         start(repaired, true);
-      }
-      probe.relinkNow(repaired, REPAIR);
-      requests[0].resolve();
-      await tick(0);
+   it('relinks a dependent once for all the repairs that select it before its own turn, or before the batch ends', async () => {
+      const { probe, documents, relinked } = makeRelinkHarness();
+      const { a, b } = documents;
+      const runs: string[] = [];
+      probe.register({
+         id: 'once-each',
+         nodeType: 'Foo',
+         phase: DocumentState.Linked,
+         enforce: node => {
+            const id = (node as FakeNode).id!;
+            runs.push(id);
+            return (id === 'a' || id === 'b') && runs.filter(run => run === id).length === 1;
+         }
+      });
 
-      expect(requests).toHaveLength(1);
+      await probe.enforceBatch([a, b], DocumentState.Linked, CancellationToken.None);
+
+      // `b` before its own turn, so its rules run once. The rest after the batch, by the repair that selected them last.
+      expect(relinked).toEqual(['a>b', 'b>c', 'b>d', 'b>a']);
+      expect(runs).toEqual(['a', 'b', 'c', 'd', 'a']);
    });
 
-   it('warns naming the rules instead of requesting a build past maxRelinkChain', async () => {
-      const { probe, repaired, requests, start, lines } = makeRelinkHarness({ maxRelinkChain: 1 });
-      probe.relinkNow(repaired, REPAIR);
-      requests[0].request.stillNeeded();
-      start(repaired);
-      probe.recordRules(repaired, [{ id: 'rule-unsettled', nodeType: 'Root', phase: DocumentState.Linked, enforce: () => true }]);
-      probe.relinkNow(repaired, REPAIR);
-      requests[0].resolve();
-      await tick(0);
+   it('relinks the dependents a repair selected before a cancel ends the batch, as the next build relinks only those of its changes', async () => {
+      const { probe, documents, relinked } = makeRelinkHarness();
+      const { a, b, c } = documents;
+      const source = new CancellationTokenSource();
+      probe.register({
+         id: 'repair-a',
+         nodeType: 'Foo',
+         phase: DocumentState.Linked,
+         enforce: node => {
+            source.cancel();
+            return (node as FakeNode).id === 'a';
+         }
+      });
 
-      expect(requests).toHaveLength(1);
+      await expect(probe.enforceBatch([a, b, c], DocumentState.Linked, source.token)).rejects.toThrow();
+
+      expect(relinked).toEqual(['a>b', 'a>c', 'a>d']);
+   });
+
+   it('requests a build of a repaired document whose dependents a later throw in the batch left unrelinked', async () => {
+      const { probe, documents, relinked, rebuilds } = makeRelinkHarness();
+      const { a, b, c } = documents;
+      probe.register({
+         id: 'repair-a-throw-b',
+         nodeType: 'Foo',
+         phase: DocumentState.Linked,
+         enforce: node => {
+            if ((node as FakeNode).id === 'b') {
+               throw new Error('rule of b');
+            }
+            return (node as FakeNode).id === 'a';
+         }
+      });
+
+      await expect(probe.enforceBatch([a, b, c], DocumentState.Linked, CancellationToken.None)).rejects.toThrow('rule of b');
+
+      // `b` at its own turn, `c` and `d` left to the build.
+      expect(relinked).toEqual(['a>b']);
+      expect(rebuilds).toEqual(['a']);
+   });
+
+   it('rejects with the cancel when a relink after it throws, and requests a build for the dependents still unrelinked', async () => {
+      const { probe, documents, relinked, rebuilds } = makeRelinkHarness({ throws: ['c'] });
+      const { a, b } = documents;
+      const source = new CancellationTokenSource();
+      probe.register({
+         id: 'repair-a',
+         nodeType: 'Foo',
+         phase: DocumentState.Linked,
+         enforce: node => {
+            source.cancel();
+            return (node as FakeNode).id === 'a';
+         }
+      });
+
+      await expect(probe.enforceBatch([a, b], DocumentState.Linked, source.token)).rejects.toSatisfy(isOperationCancelled);
+
+      expect(relinked).toEqual(['a>b', 'a>c']);
+      expect(rebuilds).toEqual(['a']);
+   });
+
+   it('lifts the once-guard of a document only when the build in which it ran cleanly completes, not when another build ends', async () => {
+      const { probe, documents, rebuilds, endBuild } = makeRelinkHarness({ throws: ['b'] });
+      const { a } = documents;
+      let repairs = true;
+      probe.register({
+         id: 'repair-a',
+         nodeType: 'Foo',
+         phase: DocumentState.Linked,
+         enforce: node => repairs && (node as FakeNode).id === 'a'
+      });
+      const enforceIn = (token: CancellationToken): Promise<void> => probe.enforceBatch([a], DocumentState.Linked, token);
+      const [clean, other, throwing, last] = [1, 2, 3, 4].map(() => new CancellationTokenSource().token);
+
+      await expect(enforceIn(CancellationToken.None)).rejects.toThrow('relink of b');
+      repairs = false;
+      await enforceIn(clean);
+      // A build outside the lock that throws drains, and an overlapping one completes, before `clean` does.
+      endBuild({ completed: false, cancelTokens: [CancellationToken.None] });
+      endBuild({ completed: true, cancelToken: other });
+      repairs = true;
+      await expect(enforceIn(throwing)).rejects.toThrow('relink of b');
+      expect(rebuilds).toEqual(['a']);
+      endBuild({ completed: true, cancelToken: clean });
+      await expect(enforceIn(last)).rejects.toThrow('relink of b');
+
+      expect(rebuilds).toEqual(['a', 'a']);
+   });
+
+   it('keeps the pending once-guard lift of a build without a token when a build with its own token throws', async () => {
+      const { probe, documents, rebuilds, endBuild } = makeRelinkHarness({ throws: ['b'] });
+      const { a } = documents;
+      let repairs = true;
+      probe.register({
+         id: 'repair-a',
+         nodeType: 'Foo',
+         phase: DocumentState.Linked,
+         enforce: node => repairs && (node as FakeNode).id === 'a'
+      });
+      const enforceIn = (token: CancellationToken): Promise<void> => probe.enforceBatch([a], DocumentState.Linked, token);
+      const [first, throwing, last] = [1, 2, 3].map(() => new CancellationTokenSource().token);
+
+      await expect(enforceIn(first)).rejects.toThrow('relink of b');
+      repairs = false;
+      // Clean under `None`, as the workspace's initial build runs outside the lock.
+      await enforceIn(CancellationToken.None);
+      endBuild({ completed: false, cancelTokens: [throwing] });
+      endBuild({ completed: true, cancelToken: CancellationToken.None });
+      repairs = true;
+      await expect(enforceIn(last)).rejects.toThrow('relink of b');
+
+      expect(rebuilds).toEqual(['a', 'a']);
+   });
+
+   it("warns naming the repairing rule instead of running a dependent's rules again past maxRepeatRepairs in one run", async () => {
+      const { probe, documents, lines } = makeRelinkHarness({ maxRepeatRepairs: 1 });
+      const { a, b } = documents;
+      const runs: string[] = [];
+      // `a` and `b` repair each other without end.
+      probe.register({
+         id: 'ping',
+         nodeType: 'Foo',
+         phase: DocumentState.Linked,
+         enforce: node => {
+            const id = (node as FakeNode).id!;
+            runs.push(id);
+            return id === 'a' || id === 'b';
+         }
+      });
+
+      await probe.enforceBatch([a, b], DocumentState.Linked, CancellationToken.None);
+
+      expect(runs.filter(run => run === 'a')).toHaveLength(2);
+      expect(runs.filter(run => run === 'b')).toHaveLength(2);
       const warnings = lines.filter(line => line.level === 'warn').map(line => line.message);
+      // Once, for the run of `a` it skips, which ends the cycle.
       expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain("'rule-unsettled' repaired documents in 1 build in a row that relinks");
+      expect(warnings.every(warning => warning.includes("Integrity rule 'ping'"))).toBe(true);
    });
 
-   it('requests a build for the next repair after a request that threw', () => {
-      const { probe, repaired, requests } = makeRelinkHarness({ throwOnRequest: 1 });
+   it("bounds a dependent's repeat repairs by the maxRepeatRepairs of its own language", async () => {
+      const { probe, probeOfB, documents, lines } = makeRelinkHarness({ maxRepeatRepairs: 3, maxRepeatRepairsOfB: 1 });
+      const { a, b } = documents;
+      const runs: string[] = [];
+      // `a` and `b` repair each other without end, each by its own language's rule.
+      const ping = (id: string): IntegrityRule => ({
+         id: `ping-${id}`,
+         nodeType: 'Foo',
+         phase: DocumentState.Linked,
+         enforce: node => {
+            runs.push((node as FakeNode).id!);
+            return (node as FakeNode).id === id;
+         }
+      });
+      probe.register(ping('a'));
+      probeOfB.register(ping('b'));
+      const run = IntegrityRun.create([a, b]);
 
-      expect(() => probe.relinkNow(repaired, REPAIR)).toThrow('request failed');
-      probe.relinkNow(repaired, REPAIR);
-      expect(requests).toHaveLength(1);
+      await probe.enforceBatch([a], DocumentState.Linked, CancellationToken.None, run);
+      await probeOfB.enforceBatch([b], DocumentState.Linked, CancellationToken.None, run);
+
+      expect(runs.filter(run => run === 'b')).toHaveLength(2);
+      expect(runs.filter(run => run === 'a')).toHaveLength(3);
+      expect(lines.filter(line => line.level === 'warn')).toHaveLength(1);
    });
 
-   it("requests a build for the same repair of a closed 'editor' document after the one before went past maxRelinkChain", async () => {
-      const { probe, repaired, requests, start } = makeRelinkHarness({ syncMode: 'editor', maxRelinkChain: 1 });
-      probe.relinkNow(repaired, REPAIR);
-      requests[0].request.stillNeeded();
-      start(repaired);
-      probe.relinkNow(repaired, { from: 'edited', to: 'repaired' });
-      requests[0].resolve();
-      await tick(0);
-      probe.relinkNow(repaired, { from: 'edited', to: 'repaired' });
+   it('warns once for a document whose rules run again no more, however many repairs relink it after', async () => {
+      const { probe, documents, lines } = makeRelinkHarness({ maxRepeatRepairs: 1 });
+      const { a, b, c } = documents;
+      const runs: string[] = [];
+      // `a` and `b` repair each other without end, and `c`'s one repair in a batch after relinks both again.
+      probe.register({
+         id: 'ping',
+         nodeType: 'Foo',
+         phase: DocumentState.Linked,
+         enforce: node => {
+            const id = (node as FakeNode).id!;
+            runs.push(id);
+            return id === 'a' || id === 'b' || (id === 'c' && runs.filter(run => run === 'c').length === 1);
+         }
+      });
 
-      expect(requests).toHaveLength(2);
+      const run = IntegrityRun.create([a, b, c]);
+
+      await probe.enforceBatch([a, b], DocumentState.Linked, CancellationToken.None, run);
+      await probe.enforceBatch([c], DocumentState.Linked, CancellationToken.None, run);
+
+      const warnings = lines.filter(line => line.level === 'warn').map(line => line.message);
+      // One for each of `a` and `b`, the first time each is skipped.
+      expect(warnings).toHaveLength(2);
    });
 
-   it("requests a build for the same repair of a closed 'editor' document after the chain it continued was past maxRelinkChain", async () => {
-      const { probe, repaired, dependent, requests, start } = makeRelinkHarness({ syncMode: 'editor', maxRelinkChain: 1 });
-      probe.relinkNow(dependent, REPAIR);
-      requests[0].request.stillNeeded();
-      start(dependent);
-      probe.relinkedByRunning = true;
-      probe.relinkNow(repaired, REPAIR);
-      requests[0].resolve();
-      await tick(0);
-      probe.relinkNow(repaired, REPAIR);
+   it("runs the rules of a dependent again for every language's batch whose repairs select it when they repair nothing", async () => {
+      const { probe, documents, lines } = makeRelinkHarness({ maxRepeatRepairs: 1 });
+      const { a, b, c, d } = documents;
+      const runs: string[] = [];
+      probe.register({
+         id: 'first-run',
+         nodeType: 'Foo',
+         phase: DocumentState.Linked,
+         enforce: node => {
+            const id = (node as FakeNode).id!;
+            runs.push(id);
+            return id !== 'd' && runs.filter(run => run === id).length === 1;
+         }
+      });
 
-      expect(requests.map(requested => requested.uri)).toEqual(['file:///dependent.fake', 'file:///repaired.fake']);
+      const run = IntegrityRun.create([d, a, b, c]);
+
+      for (const document of [d, a, b, c]) {
+         await probe.enforceBatch([document], DocumentState.Linked, CancellationToken.None, run);
+      }
+
+      // Its own run, then one after each of the three batches that repair.
+      expect(runs.filter(run => run === 'd')).toHaveLength(4);
+      expect(lines.filter(line => line.level === 'warn')).toEqual([]);
    });
 
-   it("logs a next build in the chain whose request threw, and requests one for the same repair of a closed 'editor' document again", async () => {
-      const { probe, repaired, requests, start, lines } = makeRelinkHarness({ syncMode: 'editor', throwOnRequest: 2 });
-      probe.relinkNow(repaired, REPAIR);
-      requests[0].request.stillNeeded();
-      start(repaired);
-      probe.relinkNow(repaired, { from: 'edited', to: 'repaired' });
-      requests[0].resolve();
-      await tick(0);
-      probe.relinkNow(repaired, { from: 'edited', to: 'repaired' });
+   it('runs no rule again when no running build links the repaired document', async () => {
+      const { probe, documents, relinked } = makeRelinkHarness({ linking: false });
+      const { a, b } = documents;
+      const runs: string[] = [];
+      probe.register({
+         id: 'always-a',
+         nodeType: 'Foo',
+         phase: DocumentState.Linked,
+         enforce: node => {
+            runs.push((node as FakeNode).id!);
+            return (node as FakeNode).id === 'a';
+         }
+      });
 
-      expect(lines.filter(line => line.level === 'error').map(line => line.message)).toEqual([
-         expect.stringContaining('Requesting the next build that relinks the dependents of a repaired document failed.')
-      ]);
-      expect(requests).toHaveLength(2);
-   });
+      await probe.enforceBatch([b, a], DocumentState.Linked, CancellationToken.None);
 
-   it.each(['silent', 'editor'] as const)('logs a build that failed, and requests one for the same repair again (%s)', async syncMode => {
-      const { probe, repaired, requests, lines } = makeRelinkHarness({ syncMode });
-      probe.relinkNow(repaired, REPAIR);
-      requests[0].reject(new Error('build failed'));
-      await tick(0);
-      probe.relinkNow(repaired, REPAIR);
-
-      expect(lines.filter(line => line.level === 'error').map(line => line.message)).toEqual([
-         expect.stringContaining('The build that relinks the dependents of a repaired document failed.')
-      ]);
-      expect(requests).toHaveLength(2);
-   });
-
-   it("requests no build for a repair a closed 'editor' document repeats from the same text, and one for a repair from other text", async () => {
-      const { probe, repaired, requests } = makeRelinkHarness({ syncMode: 'editor' });
-      probe.relinkNow(repaired, REPAIR);
-      requests[0].resolve();
-      await tick(0);
-      probe.relinkNow(repaired, REPAIR);
-      expect(requests).toHaveLength(1);
-
-      probe.relinkNow(repaired, { from: 'edited', to: 'repaired' });
-      expect(requests).toHaveLength(2);
+      expect(relinked).toEqual(['a>b', 'a>c', 'a>d']);
+      expect(runs).toEqual(['b', 'a']);
    });
 });

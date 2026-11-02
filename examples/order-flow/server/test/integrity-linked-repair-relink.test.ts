@@ -9,42 +9,45 @@
 
 /**
  * Whether a document that references one an integrity rule repaired at the
- * `Linked` phase resolves into the repaired document's current AST.
+ * `Linked` phase resolves into the repaired document's current AST once the
+ * build reaches `IntegrityService.SettledState`.
  *
- * The repair relinks only the repaired document within the build, so its
- * dependents are relinked by a build after it. Every sync mode and open state
- * is covered, because they decide whether the repair reaches the text the
- * re-parse reads. A re-parse replaces the document's nodes. A closed document
- * in `'editor'` mode keeps its AST, where the repair renames in place, and the
- * build after the repair re-reads its unrepaired disk text, which must not
- * repair it again.
+ * The repair relinks its dependents within the build, and adds those the
+ * build was not linking. Every sync mode and open state is covered, because
+ * they decide whether the repair reaches the text the re-parse reads. A
+ * re-parse replaces the document's nodes. A closed document in `'editor'`
+ * mode keeps its AST, where the repair renames in place.
  */
 
 import {
    DefaultCstResidencyService,
    DefaultIntegrityService,
-   type IntegrityRepairTexts,
+   HydraniumDocumentBuilder,
    type IntegrityRule,
    IntegrityPhase,
    type IntegritySyncMode,
-   type VersionSyncService
+   isCstShed
 } from '@hydranium/core';
 import { makeCapturingTracer } from '@hydranium/core/testing';
 import { makeFakeClock } from '@hydranium/protocol/testing';
-import { type AstNode, AstUtils, DocumentState, type LangiumDocument, URI } from '@hydranium/langium';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+   type AstNode,
+   AstUtils,
+   Deferred,
+   DocumentState,
+   OperationCancelled,
+   isMultiReference,
+   type LangiumDocument,
+   URI
+} from '@hydranium/langium';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 import { type DomainModel, type Entity, isEntity, type ProcessModel } from '../src/language-server/ast.js';
+import { CancellationToken, CancellationTokenSource } from 'vscode-languageserver';
 import { makeServices, type OrderFlowHarness } from './order-flow-harness.js';
 
-const CLEAN_SOURCE = `enum OrderStatus { NEW, PAID }
-
-entity Order {
-   status: OrderStatus
-}
-`;
 /** The `extra` field is what the rules below rename. */
 const REPAIRABLE_SOURCE = `enum OrderStatus { NEW, PAID }
 
@@ -53,42 +56,47 @@ entity Order {
    extra: string
 }
 `;
-/** An edit after a repair: the field to repair, and one more. */
-const EDITED_SOURCE = `enum OrderStatus { NEW, PAID }
-
-entity Order {
-   status: OrderStatus
-   extra: string
-   note: string
-}
-`;
 const FULFILLMENT_SOURCE = `process Fulfillment for Order {
    task Ship reads Order.status
 }
 `;
+// Every reference resolves, so the document may shed its CST.
+const RESOLVING_REPAIRABLE = REPAIRABLE_SOURCE.replace('extra: string', 'extra: OrderStatus');
 
-/**
- * Counts its repairs. `again` makes it rename its own repair on every pass, a
- * rule that never settles. `onRepaired` runs when it meets its repair.
- */
-function renameRule(
-   options: { again?: boolean; onRepaired?: () => void } = {}
-): IntegrityRule & { repairs: number; enforce(node: AstNode): boolean } {
+/** Counts its repairs. `again` makes it rename its own repair on every pass, a rule that never settles. */
+function renameRule(options: { again?: boolean } = {}): IntegrityRule & { repairs: number; armed: boolean } {
    return {
       id: 'test-linked-rename',
       nodeType: 'Field',
       phase: IntegrityPhase.Linked,
       repairs: 0,
+      armed: true,
       enforce(node: AstNode): boolean {
          const named = node as AstNode & { name?: string };
-         if (named.name === 'extraRepaired') {
-            options.onRepaired?.();
-         }
          const repairable = options.again ? named.name?.startsWith('extra') : named.name === 'extra';
-         if (!repairable) {
+         if (!this.armed || !repairable) {
             return false;
          }
          named.name = `${named.name}Repaired`;
+         this.repairs++;
+         return true;
+      }
+   };
+}
+
+/** Renames the `nodeType` node named `from` to `to`, and counts its repairs. */
+function renameTarget(nodeType: string, from: string, to: string): IntegrityRule & { repairs: number } {
+   return {
+      id: `test-linked-rename-${from}`,
+      nodeType,
+      phase: IntegrityPhase.Linked,
+      repairs: 0,
+      enforce(node: AstNode): boolean {
+         const named = node as AstNode & { name?: string };
+         if (named.name !== from) {
+            return false;
+         }
+         named.name = to;
          this.repairs++;
          return true;
       }
@@ -99,8 +107,10 @@ interface Fixture {
    readonly harness: OrderFlowHarness;
    readonly orderDocument: LangiumDocument<DomainModel>;
    readonly processDocument: LangiumDocument<ProcessModel>;
-   /** Every follow-up build requested so far, so a test can wait them out. */
-   readonly recovery: MockInstance<VersionSyncService['requestRecoveryBuild']>;
+   /** Every build requested after one, which none of these repairs needs. */
+   readonly recovery: MockInstance;
+   /** Add a document backed by a real file. */
+   create<T extends AstNode>(name: string, text: string): LangiumDocument<T>;
 }
 
 let folder = '';
@@ -117,20 +127,15 @@ function setUp(
       open?: boolean;
       orderSource?: string;
       harnessOptions?: Parameters<typeof makeServices>[0];
-      maxRelinkChain?: number;
-      integrityService?: typeof DefaultIntegrityService;
+      maxRepeatRepairs?: number;
    }
 ): Fixture {
-   const {
-      syncMode,
-      maxRelinkChain,
-      open = false,
-      orderSource = REPAIRABLE_SOURCE,
-      integrityService: Service = DefaultIntegrityService
-   } = options;
+   const { syncMode, maxRepeatRepairs, open = false, orderSource = REPAIRABLE_SOURCE } = options;
    const harness = makeServices({
       ...options.harnessOptions,
-      extraLanguageModules: [{ integrity: { IntegrityService: services => new Service(services, { syncMode, maxRelinkChain }) } }]
+      extraLanguageModules: [
+         { integrity: { IntegrityService: services => new DefaultIntegrityService(services, { syncMode, maxRepeatRepairs }) } }
+      ]
    });
    harness.domain.integrity.IntegrityService.register(rule);
    const workspace = harness.shared.workspace;
@@ -148,7 +153,7 @@ function setUp(
       });
    }
    const recovery = vi.spyOn(workspace.VersionSyncService, 'requestRecoveryBuild');
-   return { harness, orderDocument, processDocument, recovery };
+   return { harness, orderDocument, processDocument, recovery, create };
 }
 
 async function build(fixture: Fixture, documents: LangiumDocument[]): Promise<void> {
@@ -156,35 +161,52 @@ async function build(fixture: Fixture, documents: LangiumDocument[]): Promise<vo
    await workspace.WorkspaceLock.write(token => workspace.DocumentBuilder.build(documents, { validation: true }, token));
 }
 
-/** Wait out every requested build, and the builds those request, failing rather than hanging on a chain that does not end. */
+/** Wait out every build in progress. */
 async function settle(fixture: Fixture): Promise<void> {
    const builder = fixture.harness.shared.workspace.DocumentBuilder;
-   let waited = 0;
-   for (let round = 0; round < 10; round++) {
-      const pending = fixture.recovery.mock.results.slice(waited).map(result => result.value);
-      if (pending.length === 0) {
-         // A build held back by one outside the lock is requested again once that one ends.
-         const running = builder.activeBuild;
-         if (running === undefined) {
-            return;
-         }
-         await running;
-         continue;
-      }
-      waited += pending.length;
-      await Promise.all(pending);
+   for (let round = 0; round < 10 && builder.activeBuild !== undefined; round++) {
+      await builder.activeBuild;
    }
-   // Builds nothing more, so a runaway chain does not starve the tests after this one.
-   fixture.recovery.mockResolvedValue(undefined);
-   throw new Error(`Builds still requested after ${waited} of them`);
+}
+
+/** What `read` returns at `IntegrityService.SettledState` in every build from now on. */
+function atSettled<T>(fixture: Fixture, read: (documents: readonly LangiumDocument[]) => T): T[] {
+   const seen: T[] = [];
+   fixture.harness.shared.workspace.DocumentBuilder.onBuildPhase(DocumentState.IndexedReferences, documents => {
+      seen.push(read(documents));
+   });
+   return seen;
 }
 
 function order(document: LangiumDocument<DomainModel>): Entity {
-   const declaration = document.parseResult.value.declarations.find(candidate => candidate.name === 'Order');
-   if (!isEntity(declaration)) {
-      throw new Error(`Expected an entity named Order, got ${declaration?.$type ?? 'nothing'}`);
+   const declaration = document.parseResult.value.declarations.find(isEntity);
+   if (declaration === undefined) {
+      throw new Error('Expected an entity');
    }
    return declaration;
+}
+
+/** The references of `dependent` into `repaired` that resolve to a node outside its current AST. */
+function stale(dependent: LangiumDocument, repaired: LangiumDocument): string[] {
+   const root = repaired.parseResult.value;
+   const found: string[] = [];
+   for (const reference of dependent.references) {
+      if (isMultiReference(reference) || reference.error !== undefined) {
+         continue;
+      }
+      if (reference.$nodeDescription?.documentUri.toString() !== repaired.uri.toString()) {
+         continue;
+      }
+      const target = reference.ref;
+      if (target === undefined || AstUtils.findRootNode(target) !== root) {
+         found.push(reference.$refText);
+      }
+   }
+   return found;
+}
+
+function unresolved(document: LangiumDocument): string[] {
+   return document.references.filter(reference => reference.error !== undefined).map(reference => reference.$refText);
 }
 
 const MODES = [
@@ -194,852 +216,799 @@ const MODES = [
    ['editor', true]
 ] as const;
 const MODE_ROWS = MODES.map(([syncMode, open]) => [`${syncMode}, ${open ? 'open' : 'closed'}`, syncMode, open] as const);
-// A closed document in `'editor'` mode keeps its AST, so its row would pass without the build after the repair.
+// A closed document in `'editor'` mode keeps its AST, so its row would pass without the relink.
 const REPARSED_ROWS = MODE_ROWS.filter(([, syncMode, open]) => syncMode === 'silent' || open);
-// Every reference resolves, so the document may shed its CST.
-const RESOLVING_REPAIRABLE = REPAIRABLE_SOURCE.replace('extra: string', 'extra: OrderStatus');
-const RESOLVING_EDITED = EDITED_SOURCE.replace('extra: string', 'extra: OrderStatus').replace('note: string', 'note: OrderStatus');
-
-/** Sheds a closed document's CST whenever `clock` moves on. */
-function shedWhenIdle(
-   tracer: ReturnType<typeof makeCapturingTracer>['tracer'],
-   clock: ReturnType<typeof makeFakeClock>
-): Parameters<typeof makeServices>[0] {
-   return {
-      extraSharedModules: [
-         {
-            Tracer: () => tracer,
-            Clock: () => clock,
-            workspace: {
-               CstResidencyService: services =>
-                  new DefaultCstResidencyService(services, { strategy: { kind: 'shed-closed-when-idle', idleMs: 1 } })
-            }
-         }
-      ]
-   };
-}
 
 describe('a Linked-phase integrity repair', () => {
-   it.each(REPARSED_ROWS)('leaves a dependent resolving into the re-parsed AST (%s)', async (_label, syncMode, open) => {
-      const rule = renameRule();
-      const fixture = setUp(rule, { syncMode, open });
+   it.each(REPARSED_ROWS)(
+      'leaves a dependent resolving into the re-parsed AST at the settled state, with no build after it (%s)',
+      async (_label, syncMode, open) => {
+         const rule = renameRule();
+         const fixture = setUp(rule, { syncMode, open });
+         const staleAtSettled = atSettled(fixture, () => stale(fixture.processDocument, fixture.orderDocument));
+         await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+         await settle(fixture);
+
+         expect(rule.repairs).toBe(1);
+         expect(staleAtSettled).toEqual([[]]);
+         expect(order(fixture.orderDocument).fields.map(field => field.name)).toEqual(['status', 'extraRepaired']);
+         expect(fixture.processDocument.parseResult.value.subject.ref).toBe(order(fixture.orderDocument));
+         expect(fixture.recovery).not.toHaveBeenCalled();
+      }
+   );
+
+   it.each(MODE_ROWS)('leaves a dependent of a renamed target unresolved at the settled state (%s)', async (_label, syncMode, open) => {
+      const fixture = setUp(renameTarget('Field', 'status', 'state'), { syncMode, open });
+      const unresolvedAtSettled = atSettled(fixture, () => unresolved(fixture.processDocument));
       await build(fixture, [fixture.orderDocument, fixture.processDocument]);
       await settle(fixture);
 
-      expect(rule.repairs).toBe(1);
-      expect(order(fixture.orderDocument).fields.map(field => field.name)).toEqual(['status', 'extraRepaired']);
-      expect(fixture.processDocument.parseResult.value.subject.ref).toBe(order(fixture.orderDocument));
+      expect(unresolvedAtSettled).toEqual([['status']]);
+      expect(fixture.recovery).not.toHaveBeenCalled();
    });
 
-   it.each(MODE_ROWS)('leaves a dependent of a renamed target unresolved (%s)', async (_label, syncMode, open) => {
-      const renameStatus: IntegrityRule = {
-         id: 'test-linked-rename-target',
-         nodeType: 'Field',
+   it.each(MODE_ROWS)(
+      'indexes a renamed entity by its new name at the settled state, for dependents of either name (%s)',
+      async (_label, syncMode, open) => {
+         const fixture = setUp(renameTarget('Entity', 'Order', 'Purchase'), { syncMode, open });
+         const billing = fixture.create<ProcessModel>(
+            'billing.process',
+            'process Billing for Purchase {\n   task Bill reads Purchase.status\n}\n'
+         );
+         const atSettledState = atSettled(fixture, () => ({
+            fulfillment: unresolved(fixture.processDocument),
+            billing: unresolved(billing),
+            billingTarget: billing.parseResult.value.subject.ref === order(fixture.orderDocument)
+         }));
+         await build(fixture, [fixture.orderDocument, fixture.processDocument, billing]);
+         await settle(fixture);
+
+         expect(atSettledState).toEqual([{ fulfillment: ['Order', 'Order', 'status'], billing: [], billingTarget: true }]);
+      }
+   );
+
+   it.each(['run to the end', 'cancelled before validation'])(
+      'adds a dependent the build was not linking, when an update relinks the repaired document only (%s)',
+      async label => {
+         const cancelled = label === 'cancelled before validation';
+         const rule = renameRule();
+         rule.armed = false;
+         const fixture = setUp(rule, { syncMode: 'silent', orderSource: REPAIRABLE_SOURCE.replace('extra: string', 'extra: Kind') });
+         const kind = fixture.create('kind.domain', 'enum Kind { X }\n');
+         const builder = fixture.harness.shared.workspace.DocumentBuilder;
+         await build(fixture, [fixture.orderDocument, fixture.processDocument, kind]);
+         let retry: Promise<void> | undefined;
+         const atSettledState = atSettled(fixture, documents => {
+            if (cancelled && retry === undefined) {
+               // A queued write cancels the update before it validates.
+               retry = builder.scheduleUpdate([kind.uri], []);
+            }
+            return { inBuild: documents.includes(fixture.processDocument), stale: stale(fixture.processDocument, fixture.orderDocument) };
+         });
+
+         rule.armed = true;
+         writeFileSync(kind.uri.fsPath, 'enum Kind { X, Y }\n');
+         await builder.scheduleUpdate([kind.uri], []);
+         await retry;
+         await settle(fixture);
+
+         expect(rule.repairs).toBe(1);
+         expect(atSettledState[0]).toEqual({ inBuild: true, stale: [] });
+         expect(fixture.processDocument.state).toBe(DocumentState.Validated);
+         expect(fixture.processDocument.parseResult.value.subject.ref).toBe(order(fixture.orderDocument));
+         expect(fixture.recovery).not.toHaveBeenCalled();
+      }
+   );
+
+   it.each([
+      ['inside the lock', false, true],
+      ['inside the lock, with the dependent built before', true, true],
+      ['outside the lock', false, false],
+      ['outside the lock, with the dependent built before', true, false]
+   ])(
+      'adds a dependent to an explicit build of a new copy of the repaired document %s, leaving the caller array alone',
+      async (_label, withDependent, locked) => {
+         const rule = renameRule();
+         rule.armed = false;
+         const fixture = setUp(rule, { syncMode: 'silent' });
+         const workspace = fixture.harness.shared.workspace;
+         await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+         workspace.LangiumDocuments.deleteDocument(fixture.orderDocument.uri);
+         const copy = fixture.create<DomainModel>('order.domain', REPAIRABLE_SOURCE);
+         const staleAtSettled = atSettled(fixture, () => stale(fixture.processDocument, copy));
+         const documents: LangiumDocument[] = withDependent ? [copy, fixture.processDocument] : [copy];
+
+         rule.armed = true;
+         if (locked) {
+            await build(fixture, documents);
+         } else {
+            await workspace.DocumentBuilder.build(documents, { validation: true });
+         }
+         await settle(fixture);
+
+         expect(rule.repairs).toBe(1);
+         expect(staleAtSettled).toEqual([[]]);
+         expect(documents).toHaveLength(withDependent ? 2 : 1);
+         expect(fixture.processDocument.state).toBe(DocumentState.Validated);
+         expect(fixture.recovery).not.toHaveBeenCalled();
+      }
+   );
+
+   /** A fixture built once, with a new copy of the repaired document whose build the rule repairs. */
+   async function setUpCopy(
+      harnessOptions?: Parameters<typeof makeServices>[0],
+      syncMode: IntegritySyncMode = 'silent'
+   ): Promise<{ fixture: Fixture; copy: LangiumDocument<DomainModel>; rule: ReturnType<typeof renameRule> }> {
+      const rule = renameRule();
+      rule.armed = false;
+      const fixture = setUp(rule, { syncMode, harnessOptions });
+      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      await settle(fixture);
+      fixture.harness.shared.workspace.LangiumDocuments.deleteDocument(fixture.orderDocument.uri);
+      const copy = fixture.create<DomainModel>('order.domain', REPAIRABLE_SOURCE);
+      rule.armed = true;
+      return { fixture, copy, rule };
+   }
+
+   it('hands a dependent the repair adds to the build to the build-phase passes after integrity', async () => {
+      const { fixture, copy, rule } = await setUpCopy();
+      const passed: LangiumDocument[][] = [];
+      fixture.harness.shared.workspace.BuildPhasePassService.register({
+         id: 'test-after-integrity',
+         phase: DocumentState.Linked,
+         run: async documents => {
+            passed.push([...documents]);
+         }
+      });
+      await build(fixture, [copy]);
+
+      expect(rule.repairs).toBe(1);
+      expect(passed).toEqual([[copy, fixture.processDocument]]);
+   });
+
+   it('validates a dependent the repair adds to the build in every category it ran, after a build that added one', async () => {
+      const rule = renameRule();
+      rule.armed = false;
+      const fixture = setUp(rule, { syncMode: 'silent' });
+      const workspace = fixture.harness.shared.workspace;
+      const builder = workspace.DocumentBuilder;
+      const broken = fixture.create('broken.process', 'process Broken for Order {\n   task Pay reads Order.missing\n}\n');
+      const messages = (): string[] => (broken.diagnostics ?? []).map(diagnostic => String(diagnostic.message));
+      await workspace.WorkspaceLock.write(token =>
+         builder.build([fixture.orderDocument, broken], { validation: { categories: ['built-in', 'fast'] } }, token)
+      );
+      // Langium stores only the category this build adds as the document's options.
+      await workspace.WorkspaceLock.write(token => builder.build([broken], { validation: { categories: ['slow'] } }, token));
+      const validated = messages();
+      expect(validated.some(message => message.includes('missing'))).toBe(true);
+      workspace.LangiumDocuments.deleteDocument(fixture.orderDocument.uri);
+      const copy = fixture.create<DomainModel>('order.domain', REPAIRABLE_SOURCE);
+
+      rule.armed = true;
+      await workspace.WorkspaceLock.write(token => builder.build([copy], { validation: true }, token));
+
+      expect(rule.repairs).toBe(1);
+      expect(stale(broken, copy)).toEqual([]);
+      expect(messages()).toEqual(validated);
+   });
+
+   it.each<[string, { validation: false | { categories: string[] } }, string[]]>([
+      ['a category it did not run', { validation: { categories: ['slow'] } }, ['missing', 'slow check']],
+      ['no validation', { validation: false }, ['missing']]
+   ])(
+      'validates a dependent in the build that requests %s in the categories it ran and those the build requests',
+      async (_label, options, expected) => {
+         const rule = renameRule();
+         rule.armed = false;
+         const fixture = setUp(rule, { syncMode: 'silent' });
+         const workspace = fixture.harness.shared.workspace;
+         const builder = workspace.DocumentBuilder;
+         fixture.harness.process.validation.ValidationRegistry.register<{ ProcessModel: ProcessModel }>(
+            { ProcessModel: (node, accept) => accept('warning', 'slow check', { node }) },
+            undefined,
+            'slow'
+         );
+         const broken = fixture.create('broken.process', 'process Broken for Order {\n   task Pay reads Order.missing\n}\n');
+         const messages = (): string[] => (broken.diagnostics ?? []).map(diagnostic => String(diagnostic.message));
+         await workspace.WorkspaceLock.write(token =>
+            builder.build([fixture.orderDocument, broken], { validation: { categories: ['built-in', 'fast'] } }, token)
+         );
+         workspace.LangiumDocuments.deleteDocument(fixture.orderDocument.uri);
+         const copy = fixture.create<DomainModel>('order.domain', REPAIRABLE_SOURCE);
+
+         rule.armed = true;
+         await workspace.WorkspaceLock.write(token => builder.build([copy, broken], options, token));
+
+         expect(rule.repairs).toBe(1);
+         expect(stale(broken, copy)).toEqual([]);
+         expect(expected.every(text => messages().some(message => message.includes(text)))).toBe(true);
+         expect(messages().some(message => message.includes('slow check'))).toBe(expected.includes('slow check'));
+      }
+   );
+
+   it('validates a dependent that has validated nothing as the build requests, when the repair adds it to the build', async () => {
+      const rule = renameRule();
+      rule.armed = false;
+      const fixture = setUp(rule, { syncMode: 'silent' });
+      const workspace = fixture.harness.shared.workspace;
+      const builder = workspace.DocumentBuilder;
+      const broken = fixture.create('broken.process', 'process Broken for Order {\n   task Pay reads Order.missing\n}\n');
+      await workspace.WorkspaceLock.write(token => builder.build([fixture.orderDocument, broken], {}, token));
+      expect(broken.diagnostics).toBeUndefined();
+      workspace.LangiumDocuments.deleteDocument(fixture.orderDocument.uri);
+      const copy = fixture.create<DomainModel>('order.domain', REPAIRABLE_SOURCE);
+
+      rule.armed = true;
+      await workspace.WorkspaceLock.write(token => builder.build([copy], { validation: true }, token));
+
+      expect(rule.repairs).toBe(1);
+      expect((broken.diagnostics ?? []).some(diagnostic => String(diagnostic.message).includes('missing'))).toBe(true);
+   });
+
+   it('runs the rules of a dependent the repair adds to the build, against the repair', async () => {
+      const { fixture, copy } = await setUpCopy();
+      const seen: (Entity | undefined)[] = [];
+      fixture.harness.process.integrity.IntegrityService.register({
+         id: 'test-read-subject',
+         nodeType: 'ProcessModel',
          phase: IntegrityPhase.Linked,
          enforce(node: AstNode): boolean {
-            const named = node as AstNode & { name?: string };
-            if (named.name !== 'status') {
-               return false;
-            }
-            named.name = 'state';
-            return true;
+            seen.push((node as ProcessModel).subject.ref);
+            return false;
          }
-      };
-      const fixture = setUp(renameStatus, { syncMode, open });
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-      await settle(fixture);
+      });
+      await build(fixture, [copy]);
 
-      const unresolved = fixture.processDocument.references.filter(reference => reference.error !== undefined);
-      expect(unresolved.map(reference => reference.$refText)).toEqual(['status']);
+      expect(seen).toEqual([order(copy)]);
    });
 
-   it.each(MODE_ROWS)('asks for one build after it, which repairs nothing (%s)', async (_label, syncMode, open) => {
-      const rule = renameRule();
-      const fixture = setUp(rule, { syncMode, open });
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-      await settle(fixture);
-
-      expect(fixture.recovery).toHaveBeenCalledTimes(1);
-      expect(rule.repairs).toBe(1);
-   });
-
-   it.each(MODE_ROWS)(
-      'stops after three builds in a row, with a warning, when a rule never settles (%s)',
-      async (_label, syncMode, open) => {
-         const { tracer, lines } = makeCapturingTracer();
-         const rule = renameRule({ again: true });
-         const fixture = setUp(rule, { syncMode, open, harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] } });
-         await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-         await settle(fixture);
-
-         expect(rule.repairs).toBe(4);
-         expect(fixture.recovery).toHaveBeenCalledTimes(3);
-         const warnings = lines.filter(line => line.level === 'warn').map(line => line.message);
-         expect(warnings).toHaveLength(1);
-         expect(warnings[0]).toContain("Integrity rule 'test-linked-rename' repaired documents in 3 builds in a row");
-      }
-   );
-
-   it('continues the chain of a build that ran when an explicit build starts before the build settles its request', async () => {
-      const { tracer, lines } = makeCapturingTracer();
-      const rule = renameRule({ again: true });
-      const fixture = setUp(rule, { syncMode: 'silent', harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] } });
+   it('relinks the dependents of a repair in a build after it when another build without a token overlaps its linking', async () => {
+      const { fixture, copy, rule } = await setUpCopy();
       const workspace = fixture.harness.shared.workspace;
-      const service = workspace.VersionSyncService;
-      const requestBuild = (Object.getPrototypeOf(service) as typeof service).requestRecoveryBuild;
-      // An explicit build, which does not wait for the lock, starts between the end of each relink build and its settling.
-      fixture.recovery.mockImplementation(async (uri, request) => {
-         await requestBuild.call(service, uri, request);
-         void workspace.DocumentBuilder.build([fixture.processDocument]);
-      });
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-      await settle(fixture);
-
-      expect(rule.repairs).toBe(4);
-      // Three builds, and two requests the explicit build held back, made again once it ended.
-      expect(fixture.recovery).toHaveBeenCalledTimes(5);
-      expect(lines.filter(line => line.level === 'warn')).toHaveLength(1);
-   });
-
-   it('relinks the dependents of a repair in an explicit build outside the lock once that build ends, not alongside it', async () => {
-      const fixture = setUp(renameRule(), { syncMode: 'silent' });
-      const builder = fixture.harness.shared.workspace.DocumentBuilder;
-      let explicitRunning = true;
-      let overlapped = false;
-      builder.onUpdate(() => {
-         overlapped ||= explicitRunning && !builder.isInsideBuildUpdate();
-      });
-      await builder.build<AstNode>([fixture.orderDocument, fixture.processDocument], { validation: true });
-      explicitRunning = false;
-      await settle(fixture);
-
-      expect(overlapped).toBe(false);
-      expect(fixture.recovery).toHaveBeenCalledTimes(2);
-      expect(fixture.processDocument.parseResult.value.subject.ref).toBe(order(fixture.orderDocument));
-   });
-
-   it('continues the chain of a build that an update outside the lock overlaps, as a reentrant build does', async () => {
-      const { tracer, lines } = makeCapturingTracer();
-      const rule = renameRule({ again: true });
-      const fixture = setUp(rule, { syncMode: 'silent', harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] } });
-      const builder = fixture.harness.shared.workspace.DocumentBuilder;
-      let parsedPasses = 0;
-      // In the first relink build, before its repair, as a listener under `allowReentrantBuilds` builds.
-      builder.onBuildPhase(DocumentState.Parsed, async () => {
-         if (++parsedPasses === 2) {
-            await builder.update([], []);
+      const builder = workspace.DocumentBuilder;
+      const otherLinked = new Deferred<void>();
+      const otherReleased = new Deferred<void>();
+      let paused = false;
+      // Holds the first build at its `Linked` phase, so the second links while it runs.
+      builder.onBuildPhase(DocumentState.Linked, async () => {
+         if (!paused) {
+            paused = true;
+            otherLinked.resolve();
+            await otherReleased.promise;
          }
       });
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      const relink = vi.spyOn(builder, 'relinkInRunningBuild');
+      const unrelated = fixture.create('other.domain', 'entity Other {\n   status: string\n}\n');
+      const other = builder.build([unrelated], { validation: true });
+      await otherLinked.promise;
+      await builder.build([copy], { validation: true });
+      otherReleased.resolve();
+      await other;
+      await workspace.VersionSyncService.recoveryBuildsSettled();
       await settle(fixture);
 
-      expect(fixture.recovery).toHaveBeenCalledTimes(3);
-      expect(lines.filter(line => line.level === 'warn')).toHaveLength(1);
+      const relinked = await Promise.all(relink.mock.results.map(result => result.value));
+      expect(rule.repairs).toBe(1);
+      expect(relinked).toContain(false);
+      expect(relinked).not.toContain(true);
+      expect(stale(fixture.processDocument, copy)).toEqual([]);
+      expect(fixture.recovery.mock.calls.map(call => String(call[0]))).toContain(copy.uri.toString());
    });
 
-   it.each([
-      ['repaired', REPAIRABLE_SOURCE.replace('status:', 'state:')],
-      ['with a parse error', `${REPAIRABLE_SOURCE}\nentity {\n`]
-   ])(
-      'leaves a dependent of a renamed target unresolved after the file is saved %s and reverted (editor, closed)',
-      async (_label, saved) => {
-         const renameStatus: IntegrityRule = {
-            id: 'test-linked-rename-target',
-            nodeType: 'Field',
-            phase: IntegrityPhase.Linked,
-            enforce(node: AstNode): boolean {
-               const named = node as AstNode & { name?: string };
-               if (named.name !== 'status') {
-                  return false;
-               }
-               named.name = 'state';
-               return true;
-            }
-         };
-         const fixture = setUp(renameStatus, { syncMode: 'editor' });
-         const builder = fixture.harness.shared.workspace.DocumentBuilder;
-         const unresolved = (): string[] =>
-            fixture.processDocument.references.filter(reference => reference.error !== undefined).map(reference => reference.$refText);
-         await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-         await settle(fixture);
-         expect(unresolved()).toEqual(['status']);
+   it('relinks the dependents of a repair in a build after it when another build without a token starts during its link', async () => {
+      const { fixture, copy, rule } = await setUpCopy();
+      const workspace = fixture.harness.shared.workspace;
+      const builder = workspace.DocumentBuilder;
+      const unrelated = fixture.create('other.domain', 'entity Other {\n   status: string\n}\n');
+      const [inLink, releaseLink, otherHeld, releaseOther] = [0, 1, 2, 3].map(() => new Deferred<void>());
+      let [linkHeld, otherStarted] = [false, false];
+      // Holds the repairing build inside its link, before integrity runs, until the other build has started.
+      builder.onDocumentPhase(DocumentState.Linked, async document => {
+         if (document === copy && !linkHeld) {
+            linkHeld = true;
+            inLink.resolve();
+            await releaseLink.promise;
+         }
+      });
+      // Holds the other build until the repairing one has ended.
+      builder.onBuildPhase(DocumentState.IndexedContent, async documents => {
+         if (documents.includes(unrelated) && !otherStarted) {
+            otherStarted = true;
+            otherHeld.resolve();
+            await releaseOther.promise;
+         }
+      });
+      const relink = vi.spyOn(builder, 'relinkInRunningBuild');
+      const repairing = builder.build([copy], { validation: true });
+      await inLink.promise;
+      const other = builder.build([unrelated], { validation: true });
+      await otherHeld.promise;
+      releaseLink.resolve();
+      await repairing;
+      releaseOther.resolve();
+      await other;
+      await workspace.VersionSyncService.recoveryBuildsSettled();
+      await settle(fixture);
 
-         writeFileSync(fixture.orderDocument.uri.fsPath, saved);
-         await builder.scheduleUpdate([fixture.orderDocument.uri], []);
-         await settle(fixture);
-         writeFileSync(fixture.orderDocument.uri.fsPath, REPAIRABLE_SOURCE);
-         await builder.scheduleUpdate([fixture.orderDocument.uri], []);
-         await settle(fixture);
+      const relinked = await Promise.all(relink.mock.results.map(result => result.value));
+      expect(rule.repairs).toBe(1);
+      expect(relinked).not.toContain(true);
+      expect(stale(fixture.processDocument, copy)).toEqual([]);
+      expect(fixture.recovery.mock.calls.map(call => String(call[0]))).toContain(copy.uri.toString());
+   });
 
-         expect(unresolved()).toEqual(['status']);
-      }
-   );
-
-   it('asks for a build after the next repair when the request for the one before threw', async () => {
-      const { tracer, lines } = makeCapturingTracer();
+   it('leaves a dependent that resolves its references lazily resolving into the repair', async () => {
       const rule = renameRule();
-      const fixture = setUp(rule, { syncMode: 'silent', harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] } });
-      fixture.recovery.mockImplementationOnce(() => {
-         throw new Error('request failed');
-      });
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-      await settle(fixture);
-      writeFileSync(fixture.orderDocument.uri.fsPath, REPAIRABLE_SOURCE);
-      await fixture.harness.shared.workspace.DocumentBuilder.scheduleUpdate([fixture.orderDocument.uri], []);
-      await settle(fixture);
+      rule.armed = false;
+      const fixture = setUp(rule, { syncMode: 'silent' });
+      const workspace = fixture.harness.shared.workspace;
+      await build(fixture, [fixture.orderDocument]);
+      await workspace.WorkspaceLock.write(token =>
+         workspace.DocumentBuilder.build([fixture.processDocument], { eagerLinking: false }, token)
+      );
+      const subject = fixture.processDocument.parseResult.value.subject;
+      expect(subject.ref).toBe(order(fixture.orderDocument));
 
-      expect(rule.repairs).toBe(2);
-      expect(fixture.recovery).toHaveBeenCalledTimes(2);
-      expect(lines.filter(line => line.level === 'error')).toHaveLength(1);
+      rule.armed = true;
+      // Built again explicitly, so no update resets the lazy dependent first.
+      workspace.DocumentBuilder.resetToState(fixture.orderDocument, DocumentState.Changed);
+      fixture.orderDocument.state = DocumentState.Changed;
+      await build(fixture, [fixture.orderDocument]);
+
+      expect(rule.repairs).toBe(1);
+      expect(fixture.processDocument.state).toBeLessThan(DocumentState.Linked);
+      expect(subject.ref).toBe(order(fixture.orderDocument));
+   });
+
+   it('validates a validated dependent that resolves its references lazily again, without linking it or running its rules', async () => {
+      const rule = renameRule();
+      rule.armed = false;
+      const fixture = setUp(rule, { syncMode: 'silent' });
+      const workspace = fixture.harness.shared.workspace;
+      let processRuns = 0;
+      fixture.harness.process.integrity.IntegrityService.register({
+         id: 'test-linked-process-runs',
+         nodeType: 'ProcessModel',
+         phase: IntegrityPhase.Linked,
+         enforce(): boolean {
+            processRuns++;
+            return false;
+         }
+      });
+      await build(fixture, [fixture.orderDocument]);
+      await workspace.WorkspaceLock.write(token =>
+         workspace.DocumentBuilder.build([fixture.processDocument], { eagerLinking: false, validation: true }, token)
+      );
+      expect(fixture.processDocument.state).toBe(DocumentState.Validated);
+      const linked: LangiumDocument[] = [];
+      workspace.DocumentBuilder.onDocumentPhase(DocumentState.Linked, document => {
+         linked.push(document);
+      });
+      const validate = vi.spyOn(fixture.harness.process.validation.DocumentValidator, 'validateDocument');
+
+      rule.armed = true;
+      workspace.DocumentBuilder.resetToState(fixture.orderDocument, DocumentState.Changed);
+      fixture.orderDocument.state = DocumentState.Changed;
+      await build(fixture, [fixture.orderDocument]);
+
+      expect(rule.repairs).toBe(1);
+      expect(validate.mock.calls.map(call => call[0])).toEqual([fixture.processDocument]);
+      expect(fixture.processDocument.state).toBe(DocumentState.Validated);
+      expect(linked).not.toContain(fixture.processDocument);
+      expect(processRuns).toBe(0);
+      expect(stale(fixture.processDocument, fixture.orderDocument)).toEqual([]);
       expect(fixture.processDocument.parseResult.value.subject.ref).toBe(order(fixture.orderDocument));
    });
 
-   it('stops after the number of builds the maxRelinkChain option gives', async () => {
-      const { tracer, lines } = makeCapturingTracer();
-      const rule = renameRule({ again: true });
-      const fixture = setUp(rule, {
-         syncMode: 'silent',
-         maxRelinkChain: 1,
-         harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] }
-      });
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-      await settle(fixture);
-
-      expect(rule.repairs).toBe(2);
-      expect(fixture.recovery).toHaveBeenCalledTimes(1);
-      const warnings = lines.filter(line => line.level === 'warn').map(line => line.message);
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain('in 1 build in a row that relinks their dependents');
-   });
-
-   it.each(MODE_ROWS)('asks for no build after a Parsed-phase repair (%s)', async (_label, syncMode, open) => {
-      const rule: IntegrityRule = { ...renameRule(), phase: IntegrityPhase.Parsed };
-      const fixture = setUp(rule, { syncMode, open });
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-      await settle(fixture);
-
-      expect(order(fixture.orderDocument).fields.map(field => field.name)).toEqual(['status', 'extraRepaired']);
-      expect(fixture.recovery).not.toHaveBeenCalled();
-   });
-
-   it.each([0, 1.5, Number.NaN])('rejects %s as the maxRelinkChain option', maxRelinkChain => {
-      const fixture = setUp(renameRule(), { syncMode: 'silent' });
-
-      expect(() => new DefaultIntegrityService(fixture.harness.domain, { maxRelinkChain })).toThrow(RangeError);
-   });
-
-   it('re-parses the repaired document in place, and logs an error, when its replay key throws', async () => {
-      const { tracer, lines } = makeCapturingTracer();
-      class ThrowingReplayKey extends DefaultIntegrityService {
-         protected override replayKey(): string | undefined {
-            throw new Error('replay key failed');
-         }
-      }
-      const fixture = setUp(renameRule(), {
-         syncMode: 'silent',
-         integrityService: ThrowingReplayKey,
-         harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] }
-      });
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-      await settle(fixture);
-
-      expect(fixture.orderDocument.parseResult.value.$cstNode?.text).toContain('extraRepaired');
-      expect(fixture.recovery).not.toHaveBeenCalled();
-      const errors = lines.filter(line => line.level === 'error').map(line => line.message);
-      expect(errors).toHaveLength(1);
-      expect(errors[0]).toContain('Relinking the dependents of a repaired document failed. Error: replay key failed');
-   });
-
-   it.each(MODE_ROWS)(
-      'relinks every build a rule needs, with no warning, when it settles on its second pass (%s)',
-      async (_label, syncMode, open) => {
-         const { tracer, lines } = makeCapturingTracer();
-         const twoStep = { extra: 'extraRepaired', extraRepaired: 'extraDone' } as Record<string, string | undefined>;
-         let repairs = 0;
-         const rule: IntegrityRule = {
-            id: 'test-two-step',
-            nodeType: 'Field',
-            phase: IntegrityPhase.Linked,
-            enforce(node: AstNode): boolean {
-               const named = node as AstNode & { name?: string };
-               const next = named.name === undefined ? undefined : twoStep[named.name];
-               if (next === undefined) {
-                  return false;
-               }
-               named.name = next;
-               repairs++;
-               return true;
+   it('runs a Linked pass that runs before integrity on the dependents again, in a build after the repair', async () => {
+      const rule = renameRule();
+      const fixture = setUp(rule, { syncMode: 'silent' });
+      const seen: (Entity | undefined)[] = [];
+      fixture.harness.shared.workspace.BuildPhasePassService.register({
+         id: 'test-before-integrity',
+         phase: DocumentState.Linked,
+         priority: -2000,
+         run: async documents => {
+            if (documents.includes(fixture.processDocument)) {
+               seen.push(fixture.processDocument.parseResult.value.subject.ref);
             }
-         };
-         const fixture = setUp(rule, { syncMode, open, harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] } });
-         await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-         await settle(fixture);
+         }
+      });
+      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      await Promise.all(fixture.recovery.mock.results.map(result => result.value));
+      await settle(fixture);
 
-         expect(repairs).toBe(2);
-         expect(fixture.recovery).toHaveBeenCalledTimes(2);
-         expect(lines.filter(line => line.level === 'warn')).toHaveLength(0);
-         expect(fixture.processDocument.parseResult.value.subject.ref).toBe(order(fixture.orderDocument));
-      }
-   );
+      expect(rule.repairs).toBe(1);
+      expect(fixture.recovery.mock.calls.map(call => String(call[0]))).toEqual([fixture.orderDocument.uri.toString()]);
+      expect(seen.at(-1)).toBe(order(fixture.orderDocument));
+   });
 
-   // A request held back by an explicit build is made again once that build ends. That shifts
-   // the two chains apart, so the other document is repaired past the bound in both.
+   it('requests one build for a Linked pass before integrity after a rule that repairs in every build', async () => {
+      const fixture = setUp(renameRule({ again: true }), { syncMode: 'silent' });
+      const workspace = fixture.harness.shared.workspace;
+      workspace.BuildPhasePassService.register({
+         id: 'test-before-integrity',
+         phase: DocumentState.Linked,
+         priority: -2000,
+         run: async () => {}
+      });
+      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      // Never settles while each build requests the next.
+      await workspace.VersionSyncService.recoveryBuildsSettled();
+      await settle(fixture);
+
+      expect(fixture.recovery).toHaveBeenCalledTimes(1);
+   });
+
+   it('requests no build after the repair when no Linked pass runs before integrity', async () => {
+      const fixture = setUp(renameRule(), { syncMode: 'silent' });
+      fixture.harness.shared.workspace.BuildPhasePassService.register({
+         id: 'test-after-integrity',
+         phase: DocumentState.Linked,
+         run: async () => {}
+      });
+      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+
+      expect(fixture.recovery).not.toHaveBeenCalled();
+   });
+
+   it('links nothing in a build whose token was cancelled before it started', async () => {
+      const { fixture, copy, rule } = await setUpCopy();
+      const source = new CancellationTokenSource();
+      source.cancel();
+      await expect(fixture.harness.shared.workspace.DocumentBuilder.build([copy], { validation: true }, source.token)).rejects.toBe(
+         OperationCancelled
+      );
+
+      expect(copy.state).toBe(DocumentState.Parsed);
+      expect(rule.repairs).toBe(0);
+   });
+
+   it('relinks a dependent the repair adds to the build when it refreshes cross-document computed scopes', async () => {
+      const { fixture, copy, rule } = await setUpCopy({
+         extraSharedModules: [
+            {
+               workspace: {
+                  DocumentBuilder: services => new HydraniumDocumentBuilder(services, { refreshCrossDocumentComputedScopes: true })
+               }
+            }
+         ]
+      });
+      const staleAtSettled = atSettled(fixture, () => stale(fixture.processDocument, copy));
+      await build(fixture, [copy]);
+
+      expect(rule.repairs).toBe(1);
+      expect(staleAtSettled).toEqual([[]]);
+      expect(fixture.processDocument.state).toBe(DocumentState.Validated);
+      expect(fixture.processDocument.localSymbols).toBeDefined();
+   });
+
    it.each([
-      ['', false, 5, 2],
-      [' and an explicit build of each document starts before its relink build', true, 8, 3]
-   ])(
-      'stops a chain across two documents that reference each other, with a warning, when their rules never settle%s',
-      async (_label, explicit, requests, warnings) => {
-         const { tracer, lines } = makeCapturingTracer();
-         const rule = renameRule({ again: true });
-         const fixture = setUp(rule, {
-            syncMode: 'silent',
-            orderSource: REPAIRABLE_SOURCE.replace('extra: string', 'extra: Other'),
-            harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] }
+      ['links eagerly', { validation: true }],
+      ['resolves its references lazily', { eagerLinking: false, validation: true }]
+   ] as const)(
+      're-reads a shed dependent that %s whose CST it cannot graft within the build, and relinks the documents that reference it',
+      async (_label, lineOptions) => {
+         const clock = makeFakeClock();
+         const { fixture, copy, rule } = await setUpCopy({
+            extraSharedModules: [
+               {
+                  Clock: () => clock,
+                  workspace: {
+                     CstResidencyService: services =>
+                        new DefaultCstResidencyService(services, { strategy: { kind: 'shed-closed-when-idle', idleMs: 1 } })
+                  }
+               }
+            ]
          });
          const workspace = fixture.harness.shared.workspace;
-         const otherText = 'entity Other {\n   back: Order\n}\n';
-         writeFileSync(join(folder, 'other.domain'), otherText);
-         const other = workspace.LangiumDocumentFactory.fromString(otherText, URI.file(join(folder, 'other.domain')));
-         workspace.LangiumDocuments.addDocument(other);
-         // Repairs the other document only once the first build is over, so each document's build relinks the other's repair.
-         let otherRepairs = 0;
-         fixture.harness.domain.integrity.IntegrityService.register({
-            id: 'test-other-rename',
-            nodeType: 'Field',
-            phase: IntegrityPhase.Linked,
-            enforce(node: AstNode, document: LangiumDocument): boolean {
-               const named = node as AstNode & { name?: string };
-               if (rule.repairs < 2 || document !== other || !named.name?.startsWith('back')) {
-                  return false;
-               }
-               named.name = `${named.name}Again`;
-               otherRepairs++;
-               return true;
+         const line = fixture.create('line.domain', 'entity Line {\n   order: Order\n}\n');
+         const cart = fixture.create('cart.domain', 'entity Cart {\n   line: Line\n}\n');
+         await workspace.WorkspaceLock.write(token => workspace.DocumentBuilder.build([line, cart], { validation: true }, token));
+         // Validated again under its own options, which a lazy dependent keeps along with its links.
+         await workspace.WorkspaceLock.write(token => workspace.DocumentBuilder.build([line], lineOptions, token));
+         clock.advance(1);
+         expect(isCstShed(line, workspace.ModelLedger)).toBe(true);
+         const residency = workspace.CstResidencyService;
+         const rehydrate = residency.rehydrate.bind(residency);
+         let refusals = 0;
+         // Both grafts of the relink fail, so it re-parses the dependent and replaces its nodes.
+         vi.spyOn(residency, 'rehydrate').mockImplementation(document => {
+            if (document === line && refusals < 2) {
+               refusals++;
+               return;
             }
+            rehydrate(document);
          });
-         if (explicit) {
-            const service = workspace.VersionSyncService;
-            const requestBuild = (Object.getPrototypeOf(service) as typeof service).requestRecoveryBuild;
-            // An explicit build, which does not wait for the lock, starts once the check inside the lock passes.
-            fixture.recovery.mockImplementation((uri, request) =>
-               requestBuild.call(service, uri, {
-                  stillNeeded: () => {
-                     const needed = request.stillNeeded();
-                     const document = workspace.LangiumDocuments.getDocument(uri);
-                     if (needed && document !== undefined) {
-                        void workspace.DocumentBuilder.build([document]);
-                     }
-                     return needed;
-                  }
-               })
-            );
-         }
-         await build(fixture, [fixture.orderDocument, other, fixture.processDocument]);
-         await settle(fixture);
+         const indexed = atSettled(fixture, () => ({
+            exports: workspace.IndexManager.allElements()
+               .filter(description => description.documentUri.toString() === line.uri.toString())
+               .count(),
+            stale: [...stale(line, copy), ...stale(cart, line)]
+         }));
+         await build(fixture, [copy]);
 
-         expect(otherRepairs).toBeGreaterThan(0);
-         expect(fixture.recovery).toHaveBeenCalledTimes(requests);
-         expect(lines.filter(line => line.level === 'warn' && line.message.includes('builds in a row'))).toHaveLength(warnings);
+         expect(rule.repairs).toBe(1);
+         expect(indexed[0]).toEqual({ exports: 1, stale: [] });
+         expect(refusals).toBe(2);
       }
    );
 
-   it('stops a chain across two languages, with a warning, when their rules never settle', async () => {
+   it('runs the Parsed rules of a shed dependent it re-reads within the build, so a repair staged for it holds (editor, closed)', async () => {
+      const clock = makeFakeClock();
+      const { fixture, copy, rule } = await setUpCopy(
+         {
+            extraSharedModules: [
+               {
+                  Clock: () => clock,
+                  workspace: {
+                     CstResidencyService: services =>
+                        new DefaultCstResidencyService(services, { strategy: { kind: 'shed-closed-when-idle', idleMs: 1 } })
+                  }
+               }
+            ]
+         },
+         'editor'
+      );
+      const workspace = fixture.harness.shared.workspace;
+      // The Parsed rule renames the second `Spare`, a repair `'editor'` mode stages and disk never sees.
+      const line = fixture.create<DomainModel>('line.domain', 'entity Line {\n   order: Order\n}\nentity Spare {\n}\nentity Spare {\n}\n');
+      await workspace.WorkspaceLock.write(token => workspace.DocumentBuilder.build([line], { validation: true }, token));
+      const repaired = line.parseResult.value.declarations.map(declaration => declaration.name);
+      expect(repaired).not.toEqual(['Line', 'Spare', 'Spare']);
+      clock.advance(1);
+      expect(isCstShed(line, workspace.ModelLedger)).toBe(true);
+      const residency = workspace.CstResidencyService;
+      const rehydrate = residency.rehydrate.bind(residency);
+      let refused = false;
+      // The graft of the relink fails, so it re-reads the dependent from disk.
+      vi.spyOn(residency, 'rehydrate').mockImplementation(document => {
+         if (document === line && !refused) {
+            refused = true;
+            return;
+         }
+         rehydrate(document);
+      });
+      const names = atSettled(fixture, () => line.parseResult.value.declarations.map(declaration => declaration.name));
+      await build(fixture, [copy]);
+      await settle(fixture);
+
+      expect(refused).toBe(true);
+      expect(rule.repairs).toBe(1);
+      expect(names[0]).toEqual(repaired);
+   });
+
+   it('validates a dependent the repair adds to an explicit build that validates nothing', async () => {
+      const { fixture, copy, rule } = await setUpCopy();
+      const workspace = fixture.harness.shared.workspace;
+      const before = fixture.processDocument.diagnostics;
+      await workspace.WorkspaceLock.write(token => workspace.DocumentBuilder.build([copy], { validation: false }, token));
+
+      expect(rule.repairs).toBe(1);
+      expect(stale(fixture.processDocument, copy)).toEqual([]);
+      // Validated again, so not the diagnostics of the links from before the repair.
+      expect(fixture.processDocument.diagnostics).toBeDefined();
+      expect(fixture.processDocument.diagnostics).not.toBe(before);
+   });
+
+   it('leaves a dependent of a renamed target unresolved when a shed CST replays the repair from disk (editor, closed)', async () => {
       const { tracer, lines } = makeCapturingTracer();
-      // Each rule moves its name one step once the other document has caught up, so neither settles alone.
-      const workspace = () => fixture.harness.shared.workspace;
-      const step = (uri: URI, prefix: string): number | undefined => {
-         const document = workspace().LangiumDocuments.getDocument(uri);
-         const name =
-            document === undefined
-               ? undefined
-               : AstUtils.streamAst(document.parseResult.value)
-                    .map(node => (node as AstNode & { name?: string }).name)
-                    .find(candidate => candidate?.startsWith(prefix));
-         return name === undefined ? undefined : Number(name.slice(prefix.length) || 0);
-      };
-      let repairs = 0;
-      const follow = (nodeType: string, prefix: string, caughtUp: (own: number) => boolean): IntegrityRule => ({
-         id: `test-${nodeType.toLowerCase()}-follow`,
-         nodeType,
-         phase: IntegrityPhase.Linked,
-         enforce(node: AstNode): boolean {
-            const named = node as AstNode & { name?: string };
-            const own = named.name?.startsWith(prefix) ? Number(named.name.slice(prefix.length) || 0) : undefined;
-            if (own === undefined || !caughtUp(own)) {
-               return false;
-            }
-            named.name = `${prefix}${own + 1}`;
-            repairs++;
-            return true;
+      const clock = makeFakeClock();
+      const rule = renameTarget('Field', 'status', 'state');
+      const fixture = setUp(rule, {
+         syncMode: 'editor',
+         orderSource: RESOLVING_REPAIRABLE,
+         harnessOptions: {
+            extraSharedModules: [
+               {
+                  Tracer: () => tracer,
+                  Clock: () => clock,
+                  workspace: {
+                     CstResidencyService: services =>
+                        new DefaultCstResidencyService(services, { strategy: { kind: 'shed-closed-when-idle', idleMs: 1 } })
+                  }
+               }
+            ]
          }
       });
-      // `broken` never resolves, and Langium relinks a document with a linking error in every build.
-      const fixture = setUp(
-         follow('Field', 'extra', own => own === step(fixture.processDocument.uri, 'Ship')),
-         {
-            syncMode: 'silent',
-            orderSource: REPAIRABLE_SOURCE.replace('extra: string', 'extra: string\n   broken: Missing'),
-            harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] }
+      const builder = fixture.harness.shared.workspace.DocumentBuilder;
+      // Idle after every build, so the document sheds its CST before the next one re-reads disk.
+      builder.onBuildEnded(() => clock.advance(1));
+      const unresolvedAtSettled = atSettled(fixture, () => unresolved(fixture.processDocument));
+      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      await settle(fixture);
+      // A later build re-reads the unchanged disk text, as a watcher event would.
+      await builder.scheduleUpdate([fixture.orderDocument.uri], []);
+      await settle(fixture);
+
+      expect(rule.repairs).toBe(2);
+      expect(unresolvedAtSettled).toEqual([['status'], ['status']]);
+      expect(unresolved(fixture.processDocument)).toEqual(['status']);
+      expect(lines.filter(line => line.level === 'warn')).toHaveLength(0);
+   });
+
+   it('runs the rules of a dependent again when they ran before the repair, so they read its links into the repair', async () => {
+      const rule = renameRule();
+      const fixture = setUp(rule, { syncMode: 'silent' });
+      const seen: (Entity | undefined)[] = [];
+      fixture.harness.process.integrity.IntegrityService.register({
+         id: 'test-read-subject',
+         nodeType: 'ProcessModel',
+         phase: IntegrityPhase.Linked,
+         enforce(node: AstNode): boolean {
+            seen.push((node as ProcessModel).subject.ref);
+            return false;
          }
-      );
-      fixture.harness.process.integrity.IntegrityService.register(
-         follow('Task', 'Ship', own => step(fixture.orderDocument.uri, 'extra') === own + 1)
-      );
+      });
+      // The process language's batch runs first, before the repair.
       await build(fixture, [fixture.processDocument, fixture.orderDocument]);
       await settle(fixture);
 
-      expect(repairs).toBeGreaterThan(3);
-      expect(fixture.recovery).toHaveBeenCalledTimes(4);
-      // One for each document's chain.
-      expect(lines.filter(line => line.level === 'warn' && line.message.includes('builds in a row'))).toHaveLength(2);
+      expect(rule.repairs).toBe(1);
+      // The first run read the entity the repair's re-parse replaced.
+      expect(seen.map(entity => entity === order(fixture.orderDocument))).toEqual([false, true]);
    });
 
-   it('relinks every dependent, with no warning, when unrelated documents are repaired while the builds of the others run', async () => {
-      const { tracer, lines } = makeCapturingTracer();
-      const rule = renameRule();
-      const fixture = setUp(rule, {
-         syncMode: 'silent',
-         orderSource: CLEAN_SOURCE,
-         harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] }
-      });
-      const workspace = fixture.harness.shared.workspace;
-      const add = (name: string, text: string): LangiumDocument<DomainModel> => {
-         writeFileSync(join(folder, name), text);
-         const document = workspace.LangiumDocumentFactory.fromString<DomainModel>(text, URI.file(join(folder, name)));
-         workspace.LangiumDocuments.addDocument(document);
-         return document;
-      };
-      // Every reference resolves, as a linking error would relink a document in every build.
-      const targetText = (index: number, extra = ''): string =>
-         `enum S${index} { A }\n\nentity T${index} {\n   status: S${index}\n${extra}}\n`;
-      const targets = [0, 1, 2, 3, 4].map(index => add(`t${index}.domain`, targetText(index)));
-      const dependents = targets.map((_target, index) => add(`u${index}.domain`, `entity U${index} {\n   up: T${index}\n}\n`));
-      await build(fixture, [...targets, ...dependents]);
-      const builder = workspace.DocumentBuilder;
-      const edit = (index: number): Promise<void> => {
-         writeFileSync(targets[index].uri.fsPath, targetText(index, `   extra: S${index}\n`));
-         return builder.scheduleUpdate([targets[index].uri], []);
-      };
-      // Each target is edited as the build that relinks the previous one's dependents starts.
-      let next = 1;
-      const update = builder.update.bind(builder);
-      vi.spyOn(builder, 'update').mockImplementation((changed, deleted, token) => {
-         const previous = fixture.recovery.mock.calls.some(([uri]) => uri.toString() === targets[next - 1]?.uri.toString());
-         if (next < targets.length && previous && changed.some(uri => uri.toString() === targets[next - 1].uri.toString())) {
-            edits.push(edit(next++));
-         }
-         return update(changed, deleted, token);
-      });
-      const edits = [edit(0)];
-      for (let waited = 0; waited < edits.length;) {
-         const pending = edits.slice(waited);
-         waited = edits.length;
-         await Promise.all(pending);
-         await settle(fixture);
-      }
-
-      expect(rule.repairs).toBe(5);
-      expect(lines.filter(line => line.level === 'warn')).toHaveLength(0);
-      const up = (dependent: LangiumDocument<DomainModel>): AstNode | undefined => {
-         const entity = dependent.parseResult.value.declarations.find(isEntity);
-         const field = entity?.fields.find(candidate => candidate.name === 'up');
-         return field?.type.declared?.ref;
-      };
-      expect(dependents.map(dependent => up(dependent)?.$container)).toEqual(targets.map(target => target.parseResult.value));
-   });
-
-   it('extends no chain with a build that relinks dependents while that build waits to start', async () => {
-      const { tracer, lines } = makeCapturingTracer();
-      // A chain of one, so a repair that continues the waiting build's chain warns.
-      const fixture = setUp(renameRule(), {
-         syncMode: 'silent',
-         maxRelinkChain: 1,
-         harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] }
-      });
-      // Every requested build passes its check and then waits, so none starts.
-      const waiting: Array<() => void> = [];
-      fixture.recovery.mockImplementation((_uri, request) => {
-         request.stillNeeded();
-         return new Promise<void>(resolve => waiting.push(resolve));
-      });
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-      fixture.harness.process.integrity.IntegrityService.register({
-         id: 'test-task-rename',
-         nodeType: 'Task',
-         phase: IntegrityPhase.Linked,
-         enforce(node: AstNode): boolean {
-            const named = node as AstNode & { name?: string };
-            if (named.name !== 'Ship') {
-               return false;
-            }
-            named.name = 'Shipped';
-            return true;
-         }
-      });
-      // Repairs the process document, which references the order document whose build waits.
-      await fixture.harness.shared.workspace.DocumentBuilder.scheduleUpdate([fixture.processDocument.uri], []);
-
-      expect(fixture.recovery.mock.calls.map(([uri]) => uri.toString())).toEqual([
-         fixture.orderDocument.uri.toString(),
-         fixture.processDocument.uri.toString()
-      ]);
-      expect(lines.filter(line => line.level === 'warn')).toHaveLength(0);
-      // Settles the held builds, so nothing waits past the test.
-      waiting.forEach(resolve => resolve());
-   });
-
-   it('starts no chain from a build that relinks dependents once an edit cancels it', async () => {
-      const { tracer, lines } = makeCapturingTracer();
-      // A chain of one, so a repair that continues the cancelled build's chain warns.
-      const fixture = setUp(renameRule(), {
-         syncMode: 'silent',
-         maxRelinkChain: 1,
-         harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] }
-      });
-      const workspace = fixture.harness.shared.workspace;
-      const otherText = 'entity Other {\n   back: Order\n}\n';
-      const otherUri = URI.file(join(folder, 'other.domain'));
-      writeFileSync(otherUri.fsPath, otherText);
-      const other = workspace.LangiumDocumentFactory.fromString(otherText, otherUri);
-      workspace.LangiumDocuments.addDocument(other);
-      // The build that relinks the order document's dependents starts, and an edit of the other document cancels it.
-      const update = workspace.DocumentBuilder.update.bind(workspace.DocumentBuilder);
-      let edit: Promise<void> | undefined;
-      vi.spyOn(workspace.DocumentBuilder, 'update').mockImplementation((changed, deleted, token) => {
-         if (edit === undefined && changed.some(uri => uri.toString() === fixture.orderDocument.uri.toString())) {
-            writeFileSync(otherUri.fsPath, otherText.replace('back: Order', 'back: Order\n   extra: string'));
-            edit = workspace.DocumentBuilder.scheduleUpdate([otherUri], []);
-         }
-         return update(changed, deleted, token);
-      });
-      await build(fixture, [fixture.orderDocument, fixture.processDocument, other]);
-      await settle(fixture);
-      await edit;
-      await settle(fixture);
-
-      expect(edit).toBeDefined();
-      expect(lines.filter(line => line.level === 'warn')).toHaveLength(0);
-      expect(fixture.recovery.mock.calls.map(([uri]) => uri.toString())).toContain(otherUri.toString());
-   });
-
-   it.each(['silent', 'editor'] as const)(
-      'asks for no build after a repair abandoned because an edit replaced the text it came from, which the edit relinks (%s, open)',
-      async syncMode => {
-         const { tracer, lines } = makeCapturingTracer();
-         const rule = renameRule();
-         const fixture = setUp(rule, { syncMode, open: true, harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] } });
-         const workspace = fixture.harness.shared.workspace;
-         const uri = fixture.orderDocument.uri;
-         // The edit lands after the parse the repair comes from, and its own build follows.
-         workspace.TextDocuments.applyContentChange(uri.toString(), CLEAN_SOURCE, 'test-client');
-         await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-         await workspace.DocumentBuilder.scheduleUpdate([uri], []);
-         await settle(fixture);
-         const current = workspace.LangiumDocuments.getDocument(uri) as LangiumDocument<DomainModel>;
-
-         expect(rule.repairs).toBe(1);
-         expect(order(current).fields.map(field => field.name)).toEqual(['status']);
-         expect(fixture.recovery).not.toHaveBeenCalled();
-         expect(lines.filter(line => line.level === 'warn')).toHaveLength(0);
-         expect(fixture.processDocument.parseResult.value.subject.ref).toBe(order(current));
-      }
-   );
-
-   it('names no rule in the warning when an override of the Linked pass records none', async () => {
-      const { tracer, lines } = makeCapturingTracer();
-      const linked = renameRule({ again: true });
-      // Named in the warning if rules were recorded at every phase. It changes nothing.
-      const parsed: IntegrityRule = { id: 'test-parsed-noop', nodeType: 'Entity', phase: IntegrityPhase.Parsed, enforce: () => true };
-      class UnrecordedLinkedPass extends DefaultIntegrityService {
-         override async enforceIntegrity(...args: Parameters<DefaultIntegrityService['enforceIntegrity']>): Promise<boolean> {
-            const [document, phase] = args;
-            if (phase !== DocumentState.Linked) {
-               return super.enforceIntegrity(...args);
-            }
-            let mutated = false;
-            for (const node of AstUtils.streamAst(document.parseResult.value)) {
-               mutated = linked.enforce(node) || mutated;
-            }
-            return mutated;
-         }
-      }
-      const fixture = setUp(parsed, {
-         syncMode: 'editor',
-         open: true,
-         integrityService: UnrecordedLinkedPass,
-         harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] }
-      });
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-      await settle(fixture);
-
-      expect(linked.repairs).toBe(4);
-      const warnings = lines.filter(line => line.level === 'warn').map(line => line.message);
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toMatch(/^An integrity rule repaired documents in 3 builds in a row/);
-   });
-
-   it('leaves a second repair, of edited text, to the build the first one asked for, while that build waits', async () => {
-      const { tracer, lines } = makeCapturingTracer();
-      const rule = renameRule();
-      const fixture = setUp(rule, {
-         syncMode: 'silent',
-         orderSource: CLEAN_SOURCE,
-         harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] }
-      });
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-      const workspace = fixture.harness.shared.workspace;
-      const uri = fixture.orderDocument.uri;
-
-      // Both builds in one write, so the requested build waits behind them.
-      await workspace.WorkspaceLock.write(async token => {
-         for (const source of [REPAIRABLE_SOURCE, EDITED_SOURCE]) {
-            writeFileSync(uri.fsPath, source);
-            await workspace.DocumentBuilder.update([uri], [], token);
-         }
-      });
-      await settle(fixture);
-
-      expect(rule.repairs).toBe(2);
-      expect(fixture.recovery).toHaveBeenCalledTimes(1);
-      expect(lines.filter(line => line.level === 'warn')).toHaveLength(0);
-      expect(fixture.processDocument.parseResult.value.subject.ref).toBe(order(fixture.orderDocument));
-   });
-
-   it('leaves a repair to the build it asked for, with no warning, when an edit cancels that build and repairs again', async () => {
-      const { tracer, lines } = makeCapturingTracer();
-      let fixture: Fixture | undefined = undefined;
-      let edited = false;
-      // Met first in the build that relinks the dependents, where an edit that brings the field back cancels it.
-      const rule = renameRule({
-         onRepaired: () => {
-            if (!edited && fixture !== undefined) {
-               edited = true;
-               writeFileSync(fixture.orderDocument.uri.fsPath, REPAIRABLE_SOURCE);
-               void fixture.harness.shared.workspace.DocumentBuilder.scheduleUpdate([fixture.orderDocument.uri], []);
-            }
-         }
-      });
-      fixture = setUp(rule, { syncMode: 'silent', harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] } });
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-      await settle(fixture);
-
-      expect(edited).toBe(true);
-      expect(rule.repairs).toBe(2);
-      expect(fixture.recovery).toHaveBeenCalledTimes(1);
-      expect(lines.filter(line => line.level === 'warn')).toHaveLength(0);
-      expect(fixture.processDocument.parseResult.value.subject.ref).toBe(order(fixture.orderDocument));
-   });
-
-   // A closed document in `'editor'` mode still has the unrepaired text on disk, so a revert there changes nothing.
    it.each([
-      ['changes', 'silent', EDITED_SOURCE, ['status', 'extraRepaired', 'note']],
-      ['changes', 'editor', EDITED_SOURCE, ['status', 'extraRepaired', 'note']],
-      ['reverts', 'silent', REPAIRABLE_SOURCE, ['status', 'extraRepaired']]
-   ] as const)(
-      'asks for another build, with no warning, when the text %s while the build after it runs (%s, closed)',
-      async (_change, syncMode, source, fields) => {
+      [3, undefined],
+      [1, 1]
+   ])(
+      'stops two documents whose rules repair each other within one build, with a warning, after %s repairs again',
+      async (repairs, maxRepeatRepairs) => {
          const { tracer, lines } = makeCapturingTracer();
-         const rule = renameRule();
-         const fixture = setUp(rule, { syncMode, harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] } });
-         const builder = fixture.harness.shared.workspace.DocumentBuilder;
-         // The build after the repair is the first update. The file changes once it runs, before it parses.
-         const update = builder.update.bind(builder);
-         vi.spyOn(builder, 'update').mockImplementationOnce((changed, deleted, token) => {
-            writeFileSync(fixture.orderDocument.uri.fsPath, source);
-            return update(changed, deleted, token);
+         const rule = renameRule({ again: true });
+         const fixture = setUp(rule, {
+            syncMode: 'silent',
+            maxRepeatRepairs,
+            orderSource: REPAIRABLE_SOURCE.replace('extra: string', 'extra: Other'),
+            harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] }
          });
-         await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+         const other = fixture.create('other.domain', 'entity Other {\n   extraBack: Order\n}\n');
+         await build(fixture, [fixture.orderDocument, other, fixture.processDocument]);
          await settle(fixture);
 
-         expect(rule.repairs).toBe(2);
-         expect(order(fixture.orderDocument).fields.map(field => field.name)).toEqual(fields);
-         expect(fixture.recovery).toHaveBeenCalledTimes(2);
-         expect(lines.filter(line => line.level === 'warn')).toHaveLength(0);
-         expect(fixture.processDocument.parseResult.value.subject.ref).toBe(order(fixture.orderDocument));
+         // Each document's first repair, then `repairs` more for each.
+         expect(rule.repairs).toBe(2 * (repairs + 1));
+         const warnings = lines.filter(line => line.level === 'warn').map(line => line.message);
+         expect(warnings).toHaveLength(1);
+         expect(warnings.every(warning => warning.startsWith("Integrity rule 'test-linked-rename' repaired a document"))).toBe(true);
+         expect(fixture.recovery).not.toHaveBeenCalled();
       }
    );
 
-   it('asks for another build, with no warning, when the client reverts the text while the build after it runs (editor, open)', async () => {
-      const { tracer, lines } = makeCapturingTracer();
-      const rule = renameRule();
-      const fixture = setUp(rule, { syncMode: 'editor', open: true, harnessOptions: { extraSharedModules: [{ Tracer: () => tracer }] } });
-      const workspace = fixture.harness.shared.workspace;
-      const uri = fixture.orderDocument.uri.toString();
-      // The build after the repair is the first update. The client undoes the repair once it runs, before it parses.
-      const update = workspace.DocumentBuilder.update.bind(workspace.DocumentBuilder);
-      vi.spyOn(workspace.DocumentBuilder, 'update').mockImplementationOnce((changed, deleted, token) => {
-         const version = workspace.TextDocuments.get(uri)!.version + 1;
-         workspace.TextDocuments.notifyDidChangeTextDocument({
-            textDocument: { uri, version },
-            contentChanges: [{ text: REPAIRABLE_SOURCE }]
-         });
-         return update(changed, deleted, token);
+   it('reports the last repair of each of two documents whose rules repair each other to the version sequence last', async () => {
+      const rule = renameRule({ again: true });
+      const fixture = setUp(rule, { syncMode: 'silent', orderSource: REPAIRABLE_SOURCE.replace('extra: string', 'extra: Other') });
+      const other = fixture.create('other.domain', 'entity Other {\n   extraBack: Order\n}\n');
+      const produced = new Map<string, string>();
+      const versionSync = fixture.harness.shared.workspace.VersionSyncService;
+      const modelProduced = versionSync.modelProduced.bind(versionSync);
+      vi.spyOn(versionSync, 'modelProduced').mockImplementation((document, origin) => {
+         if (origin?.text !== undefined) {
+            produced.set(document.uri.toString(), origin.text);
+         }
+         modelProduced(document, origin);
       });
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      await build(fixture, [fixture.orderDocument, other]);
       await settle(fixture);
 
-      expect(rule.repairs).toBe(2);
-      expect(fixture.recovery).toHaveBeenCalledTimes(2);
-      expect(lines.filter(line => line.level === 'warn')).toHaveLength(0);
-      expect(fixture.processDocument.parseResult.value.subject.ref).toBe(order(fixture.orderDocument));
+      for (const document of [fixture.orderDocument, other]) {
+         expect(produced.get(document.uri.toString())).toBe(readFileSync(document.uri.fsPath, 'utf8'));
+      }
    });
 
-   it('asks for no build after it when no other document references the repaired one', async () => {
-      const rule = renameRule();
-      const fixture = setUp(rule, { syncMode: 'silent' });
+   it('re-versions a repaired document when the relink of its dependents throws', async () => {
+      const fixture = setUp(renameRule(), { syncMode: 'silent' });
       const workspace = fixture.harness.shared.workspace;
-      workspace.LangiumDocuments.deleteDocument(fixture.processDocument.uri);
-      const update = vi.spyOn(workspace.DocumentBuilder, 'update');
-      await build(fixture, [fixture.orderDocument]);
+      vi.spyOn(workspace.DocumentBuilder, 'relinkInRunningBuild').mockRejectedValueOnce(new Error('relink failed'));
+      const modelProduced = vi.spyOn(workspace.VersionSyncService, 'modelProduced');
+      await expect(build(fixture, [fixture.orderDocument, fixture.processDocument])).rejects.toThrow('relink failed');
+
+      expect(modelProduced).toHaveBeenCalledWith(fixture.orderDocument, {
+         text: readFileSync(fixture.orderDocument.uri.fsPath, 'utf8')
+      });
+   });
+
+   it('relinks the dependents of a repair within its build when a build outside the lock linked them meanwhile', async () => {
+      const otherBuildEnded = new Deferred<void>();
+      const rule = renameRule();
+      let stage: 'locked' | 'other' | 'after' = 'locked';
+      const fixture = setUp(
+         {
+            ...rule,
+            // The locked build waits at its first node until the other build, which links the same documents, ends.
+            async enforce(...args: Parameters<IntegrityRule['enforce']>): Promise<boolean> {
+               if (stage === 'locked') {
+                  stage = 'other';
+                  await otherBuildEnded.promise;
+                  stage = 'after';
+               }
+               return stage === 'after' && (await rule.enforce(...args));
+            }
+         },
+         { syncMode: 'silent' }
+      );
+      const builder = fixture.harness.shared.workspace.DocumentBuilder;
+      const locked = build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      await vi.waitUntil(() => stage === 'other');
+      await builder.update([fixture.processDocument.uri], [], CancellationToken.None);
+      otherBuildEnded.resolve();
+      await locked;
       await settle(fixture);
 
       expect(rule.repairs).toBe(1);
-      expect(fixture.recovery).toHaveBeenCalledTimes(1);
-      expect(update).not.toHaveBeenCalled();
+      expect(stale(fixture.processDocument, fixture.orderDocument)).toEqual([]);
    });
 
-   /** A replay key in a format of its own. */
-   class PrefixedReplayKey extends DefaultIntegrityService {
-      protected override replayKey(document: LangiumDocument, repair: IntegrityRepairTexts): string | undefined {
-         const key = super.replayKey(document, repair);
-         return key === undefined ? undefined : `prefixed:${key}`;
-      }
-   }
-
-   it.each([
-      ['its own replay key', DefaultIntegrityService],
-      ['a replay key an override formats', PrefixedReplayKey]
-   ])(
-      'asks for no build when a shed CST replays the repair from disk, after the build it asked for or a later one, with %s (editor, closed)',
-      async (_label, integrityService) => {
-         const { tracer, lines } = makeCapturingTracer();
-         const clock = makeFakeClock();
-         const rule = renameRule();
-         const fixture = setUp(rule, {
-            syncMode: 'editor',
-            orderSource: RESOLVING_REPAIRABLE,
-            integrityService,
-            harnessOptions: shedWhenIdle(tracer, clock)
-         });
-         // Idle after every build, so the document sheds its CST before the next one re-reads disk.
-         const ended = fixture.harness.shared.workspace.DocumentBuilder.onBuildEnded(() => clock.advance(1));
-         await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-         await settle(fixture);
-         // A later build re-reads the unchanged disk text, as a watcher event would.
-         await fixture.harness.shared.workspace.DocumentBuilder.scheduleUpdate([fixture.orderDocument.uri], []);
-         await settle(fixture);
-         ended.dispose();
-
-         expect(rule.repairs).toBe(3);
-         expect(fixture.recovery).toHaveBeenCalledTimes(1);
-         expect(lines.filter(line => line.level === 'warn')).toHaveLength(0);
-         expect(fixture.processDocument.parseResult.value.subject.ref).toBe(order(fixture.orderDocument));
-      }
-   );
-
-   it('asks for another build when the client reverts to the unrepaired text after opening a document whose repair was staged (editor)', async () => {
-      const { tracer, lines } = makeCapturingTracer();
-      const clock = makeFakeClock();
+   it('leaves a dependent that a build outside the lock is still building to it, and relinks it in a build after both', async () => {
+      const repairAllowed = new Deferred<void>();
       const rule = renameRule();
-      const fixture = setUp(rule, { syncMode: 'editor', orderSource: RESOLVING_REPAIRABLE, harnessOptions: shedWhenIdle(tracer, clock) });
-      const workspace = fixture.harness.shared.workspace;
-      const uri = fixture.orderDocument.uri.toString();
-      // Idle after every build, so the revert re-parses rather than keeping the CST of the same text.
-      const ended = workspace.DocumentBuilder.onBuildEnded(() => clock.advance(1));
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-      await settle(fixture);
-      // The open takes the staged repair.
-      workspace.TextDocuments.notifyDidOpenTextDocument({
-         textDocument: { uri, languageId: 'domain', version: 1, text: RESOLVING_REPAIRABLE }
-      });
-      await settle(fixture);
-      const requested = fixture.recovery.mock.calls.length;
-      const version = workspace.TextDocuments.get(uri)!.version + 1;
-      workspace.TextDocuments.notifyDidChangeTextDocument({
-         textDocument: { uri, version },
-         contentChanges: [{ text: RESOLVING_REPAIRABLE }]
-      });
-      await workspace.DocumentBuilder.scheduleUpdate([fixture.orderDocument.uri], []);
-      await settle(fixture);
-      ended.dispose();
-
-      expect(rule.repairs).toBe(3);
-      expect(fixture.recovery).toHaveBeenCalledTimes(requested + 1);
-      expect(lines.filter(line => line.level === 'warn')).toHaveLength(0);
-      expect(fixture.processDocument.parseResult.value.subject.ref).toBe(order(fixture.orderDocument));
-   });
-
-   it('asks for no build when a shed CST replays a second repair made while the build it asked for waited (editor, closed)', async () => {
-      const { tracer, lines } = makeCapturingTracer();
-      const clock = makeFakeClock();
-      const rule = renameRule();
-      const fixture = setUp(rule, { syncMode: 'editor', orderSource: CLEAN_SOURCE, harnessOptions: shedWhenIdle(tracer, clock) });
-      const workspace = fixture.harness.shared.workspace;
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-      const ended = workspace.DocumentBuilder.onBuildEnded(() => clock.advance(1));
-      const uri = fixture.orderDocument.uri;
-      // Both builds in one write, so the requested build waits behind them.
-      await workspace.WorkspaceLock.write(async token => {
-         for (const source of [RESOLVING_REPAIRABLE, RESOLVING_EDITED]) {
-            writeFileSync(uri.fsPath, source);
-            await workspace.DocumentBuilder.update([uri], [], token);
-         }
-      });
-      await settle(fixture);
-      // A later build re-reads the unchanged disk text, as a watcher event would.
-      await workspace.DocumentBuilder.scheduleUpdate([uri], []);
-      await settle(fixture);
-      ended.dispose();
-
-      expect(rule.repairs).toBe(4);
-      expect(fixture.recovery).toHaveBeenCalledTimes(1);
-      expect(lines.filter(line => line.level === 'warn')).toHaveLength(0);
-   });
-
-   it.each(REPARSED_ROWS)(
-      'keeps no repair to compare a later one with when the document writes its repairs (%s)',
-      async (_label, syncMode, open) => {
-         class Recording extends DefaultIntegrityService {
-            recorded(document: LangiumDocument): string | undefined {
-               return this.replayKeys.get(document)?.key;
+      let stage: 'locked' | 'other' | 'after' = 'locked';
+      const fixture = setUp(
+         {
+            ...rule,
+            // The locked build waits at its first node until the other build has indexed the dependent's references.
+            async enforce(...args: Parameters<IntegrityRule['enforce']>): Promise<boolean> {
+               if (stage === 'locked') {
+                  stage = 'other';
+                  await repairAllowed.promise;
+                  stage = 'after';
+               }
+               return stage === 'after' && (await rule.enforce(...args));
             }
-         }
-         const fixture = setUp(renameRule(), { syncMode, open, integrityService: Recording });
-         await build(fixture, [fixture.orderDocument, fixture.processDocument]);
-         await settle(fixture);
-
-         expect(fixture.recovery).toHaveBeenCalledTimes(1);
-         const service = fixture.harness.domain.integrity.IntegrityService;
-         expect(service instanceof Recording && service.recorded(fixture.orderDocument)).toBeUndefined();
-      }
-   );
-
-   it('asks for no build after one a deferral held back, for a repair while it waited', async () => {
-      const rule = renameRule();
-      const fixture = setUp(rule, { syncMode: 'silent', orderSource: CLEAN_SOURCE });
-      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+         },
+         { syncMode: 'silent' }
+      );
       const workspace = fixture.harness.shared.workspace;
-      const uri = fixture.orderDocument.uri;
-      // Held back as a deferral would, so the build never starts.
-      let release = (): void => undefined;
-      fixture.recovery.mockImplementationOnce(() => new Promise<void>(resolve => (release = resolve)));
-      await workspace.WorkspaceLock.write(async token => {
-         for (const source of [REPAIRABLE_SOURCE, EDITED_SOURCE]) {
-            writeFileSync(uri.fsPath, source);
-            await workspace.DocumentBuilder.update([uri], [], token);
+      const builder = workspace.DocumentBuilder;
+      // The other build waits once it indexed the dependent's references, until the locked build has repaired.
+      const otherIndexed = new Deferred<void>();
+      const otherResumes = new Deferred<void>();
+      let pauseOther = false;
+      builder.onDocumentPhase(DocumentState.IndexedReferences, async (document, token) => {
+         if (pauseOther && token === CancellationToken.None && document === fixture.processDocument) {
+            pauseOther = false;
+            otherIndexed.resolve();
+            await otherResumes.promise;
          }
       });
-      release();
+      // The locked build waits after its Linked passes until the other build ends.
+      const lockedLinked = new Deferred<void>();
+      const otherEnded = new Deferred<void>();
+      let pauseLocked = false;
+      builder.onBuildPhase(DocumentState.Linked, async (_documents, token) => {
+         if (pauseLocked && token !== CancellationToken.None) {
+            pauseLocked = false;
+            lockedLinked.resolve();
+            await otherEnded.promise;
+         }
+      });
+      const locked = build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      await vi.waitUntil(() => stage === 'other');
+      pauseOther = true;
+      const other = builder.update([fixture.processDocument.uri], [], CancellationToken.None);
+      await otherIndexed.promise;
+      pauseLocked = true;
+      repairAllowed.resolve();
+      await lockedLinked.promise;
+      otherResumes.resolve();
+      await other;
+      otherEnded.resolve();
+      await locked;
+      await workspace.VersionSyncService.recoveryBuildsSettled();
       await settle(fixture);
 
-      expect(rule.repairs).toBe(2);
+      expect(rule.repairs).toBe(1);
+      expect(stale(fixture.processDocument, fixture.orderDocument)).toEqual([]);
+      // Indexed, so an edit of the repaired document relinks it again.
+      expect(workspace.IndexManager.isAffected(fixture.processDocument, new Set([fixture.orderDocument.uri.toString()]))).toBe(true);
       expect(fixture.recovery).toHaveBeenCalledTimes(1);
    });
 
-   it('relinks its dependents when the relink of the repaired document throws', async () => {
+   it('relinks its dependents in a build after it when the relink of the repaired document throws', async () => {
       const rule = renameRule();
-      const fixture = setUp(rule, { syncMode: 'silent', orderSource: CLEAN_SOURCE });
+      rule.armed = false;
+      const fixture = setUp(rule, { syncMode: 'silent' });
       await build(fixture, [fixture.orderDocument, fixture.processDocument]);
       const workspace = fixture.harness.shared.workspace;
       const builder = workspace.DocumentBuilder;
@@ -1049,13 +1018,238 @@ describe('a Linked-phase integrity repair', () => {
          throw new Error('relink failed');
       });
 
-      writeFileSync(fixture.orderDocument.uri.fsPath, REPAIRABLE_SOURCE);
+      rule.armed = true;
+      writeFileSync(fixture.orderDocument.uri.fsPath, REPAIRABLE_SOURCE.replace('status:', 'status :'));
       await expect(workspace.WorkspaceLock.write(token => builder.update([fixture.orderDocument.uri], [], token))).rejects.toThrow(
          'relink failed'
       );
+      await Promise.all(fixture.recovery.mock.results.map(result => result.value));
       await settle(fixture);
 
       expect(rule.repairs).toBe(1);
-      expect(fixture.processDocument.parseResult.value.subject.ref).toBe(order(fixture.orderDocument));
+      expect(fixture.recovery).toHaveBeenCalledTimes(1);
+      expect(stale(fixture.processDocument, fixture.orderDocument)).toEqual([]);
+   });
+
+   it('relinks a dependent in a build after it when its relink within the build throws', async () => {
+      const rule = renameRule();
+      rule.armed = false;
+      const fixture = setUp(rule, { syncMode: 'silent' });
+      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      const workspace = fixture.harness.shared.workspace;
+      const linker = fixture.harness.process.references.Linker;
+      const link = linker.link.bind(linker);
+      let links = 0;
+      // The build links the dependent first, and the repair relinks it second.
+      vi.spyOn(linker, 'link').mockImplementation(async (document, token) => {
+         await link(document, token);
+         if (++links === 2) {
+            throw new Error('link failed');
+         }
+      });
+
+      rule.armed = true;
+      writeFileSync(fixture.orderDocument.uri.fsPath, REPAIRABLE_SOURCE.replace('status:', 'status :'));
+      await expect(
+         workspace.WorkspaceLock.write(token => workspace.DocumentBuilder.update([fixture.orderDocument.uri], [], token))
+      ).rejects.toThrow('link failed');
+      await Promise.all(fixture.recovery.mock.results.map(result => result.value));
+      await settle(fixture);
+
+      expect(fixture.recovery.mock.calls.map(call => String(call[0]))).toEqual([fixture.orderDocument.uri.toString()]);
+      expect(stale(fixture.processDocument, fixture.orderDocument)).toEqual([]);
+      expect(fixture.processDocument.state).toBeGreaterThanOrEqual(DocumentState.Validated);
+   });
+
+   it('relinks the dependents after one whose rules throw when run against the repair, in a build after it', async () => {
+      const rule = renameRule();
+      rule.armed = false;
+      const fixture = setUp(rule, { syncMode: 'silent' });
+      const billing = fixture.create<ProcessModel>('billing.process', FULFILLMENT_SOURCE.replace('Fulfillment', 'Billing'));
+      await build(fixture, [fixture.orderDocument, fixture.processDocument, billing]);
+      await settle(fixture);
+      fixture.harness.shared.workspace.LangiumDocuments.deleteDocument(fixture.orderDocument.uri);
+      const copy = fixture.create<DomainModel>('order.domain', REPAIRABLE_SOURCE);
+      let thrown = false;
+      fixture.harness.process.integrity.IntegrityService.register({
+         id: 'test-throw-once',
+         nodeType: 'ProcessModel',
+         phase: IntegrityPhase.Linked,
+         enforce(): boolean {
+            if (rule.armed && !thrown) {
+               thrown = true;
+               throw new Error('rule failed');
+            }
+            return false;
+         }
+      });
+
+      rule.armed = true;
+      // The dependents are not in this build, so the repair pulls them in and runs their rules.
+      await expect(build(fixture, [copy])).rejects.toThrow('rule failed');
+      await Promise.all(fixture.recovery.mock.results.map(result => result.value));
+      await settle(fixture);
+
+      expect({ fulfillment: stale(fixture.processDocument, copy), billing: stale(billing, copy) }).toEqual({
+         fulfillment: [],
+         billing: []
+      });
+      expect(fixture.recovery.mock.calls.map(call => String(call[0]))).toEqual([copy.uri.toString()]);
+   });
+
+   it('requests one build after a relink of the repaired document that throws in every build', async () => {
+      const rule = renameRule({ again: true });
+      rule.armed = false;
+      const fixture = setUp(rule, { syncMode: 'silent' });
+      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      const workspace = fixture.harness.shared.workspace;
+      const builder = workspace.DocumentBuilder;
+      vi.spyOn(builder, 'reparseAndRelink').mockImplementation(async (document, token) => {
+         await builder.reparse(document, token);
+         throw new Error('relink failed');
+      });
+
+      rule.armed = true;
+      await expect(workspace.WorkspaceLock.write(token => builder.update([fixture.orderDocument.uri], [], token))).rejects.toThrow(
+         'relink failed'
+      );
+      // Never settles while each failed build requests the next.
+      await workspace.VersionSyncService.recoveryBuildsSettled();
+
+      expect(fixture.recovery).toHaveBeenCalledTimes(1);
+   });
+
+   it('requests one build after a relink of a dependent that throws in every build', async () => {
+      const rule = renameRule({ again: true });
+      rule.armed = false;
+      const fixture = setUp(rule, { syncMode: 'silent' });
+      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      const workspace = fixture.harness.shared.workspace;
+      const builder = workspace.DocumentBuilder;
+      const relinkInRunningBuild = builder.relinkInRunningBuild.bind(builder);
+      let relinking = false;
+      vi.spyOn(builder, 'relinkInRunningBuild').mockImplementation(async (document, cause, cancelToken) => {
+         relinking = true;
+         try {
+            return await relinkInRunningBuild(document, cause, cancelToken);
+         } finally {
+            relinking = false;
+         }
+      });
+      const linker = fixture.harness.process.references.Linker;
+      const link = linker.link.bind(linker);
+      // Only the relink after the repair throws, so each build the failure requests repairs again.
+      vi.spyOn(linker, 'link').mockImplementation(async (document, token) => {
+         if (relinking) {
+            throw new Error('relink failed');
+         }
+         await link(document, token);
+      });
+
+      rule.armed = true;
+      writeFileSync(fixture.orderDocument.uri.fsPath, REPAIRABLE_SOURCE.replace('status:', 'status :'));
+      await expect(
+         workspace.WorkspaceLock.write(token => workspace.DocumentBuilder.update([fixture.orderDocument.uri], [], token))
+      ).rejects.toThrow('relink failed');
+      // Never settles while each failed build requests the next.
+      await workspace.VersionSyncService.recoveryBuildsSettled();
+
+      expect(fixture.recovery).toHaveBeenCalledTimes(1);
+   });
+
+   it('requests one build after a relink of a dependent only by a linking error that throws in every build', async () => {
+      const rule = renameRule({ again: true });
+      rule.armed = false;
+      const fixture = setUp(rule, { syncMode: 'silent' });
+      const broken = fixture.create<ProcessModel>('broken.process', 'process Broken for Missing {\n   task Pay\n}\n');
+      await build(fixture, [fixture.orderDocument, fixture.processDocument, broken]);
+      expect(unresolved(broken)).toEqual(['Missing']);
+      const workspace = fixture.harness.shared.workspace;
+      const builder = workspace.DocumentBuilder;
+      const relinkInRunningBuild = builder.relinkInRunningBuild.bind(builder);
+      // Only the deferred relink throws, after the repaired document's own rules ran without one.
+      vi.spyOn(builder, 'relinkInRunningBuild').mockImplementation(async (document, cause, cancelToken) => {
+         if (document === broken) {
+            throw new Error('relink failed');
+         }
+         return relinkInRunningBuild(document, cause, cancelToken);
+      });
+
+      rule.armed = true;
+      writeFileSync(fixture.orderDocument.uri.fsPath, REPAIRABLE_SOURCE.replace('status:', 'status :'));
+      await expect(
+         workspace.WorkspaceLock.write(token => workspace.DocumentBuilder.update([fixture.orderDocument.uri], [], token))
+      ).rejects.toThrow('relink failed');
+      // Never settles while each failed build requests the next.
+      await workspace.VersionSyncService.recoveryBuildsSettled();
+
+      expect(fixture.recovery).toHaveBeenCalledTimes(1);
+   });
+
+   it('relinks the dependents of a document whose repair an edit superseded, once the reconcile replaced its nodes', async () => {
+      const rule = renameRule();
+      const fixture = setUp(rule, { syncMode: 'silent' });
+      // An edit lands on disk between the parse and the repair's commit.
+      vi.spyOn(fixture.harness.shared.workspace.TextDocuments, 'commitRepair').mockImplementationOnce(() => {
+         writeFileSync(fixture.orderDocument.uri.fsPath, REPAIRABLE_SOURCE.replace('status:', 'status :'));
+         return { status: 'stale' };
+      });
+      const staleAtSettled = atSettled(fixture, () => stale(fixture.processDocument, fixture.orderDocument));
+      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      await settle(fixture);
+
+      expect(rule.repairs).toBe(1);
+      expect(staleAtSettled).toEqual([[]]);
+   });
+
+   it('requests a build again after a later relink of the repaired document throws, once a build succeeded between', async () => {
+      const rule = renameRule();
+      rule.armed = false;
+      const fixture = setUp(rule, { syncMode: 'silent' });
+      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      const workspace = fixture.harness.shared.workspace;
+      const builder = workspace.DocumentBuilder;
+      const reparseAndRelink = vi.spyOn(builder, 'reparseAndRelink');
+      const failOnce = (): void => {
+         reparseAndRelink.mockImplementationOnce(async (document, token) => {
+            await builder.reparse(document, token);
+            throw new Error('relink failed');
+         });
+      };
+      const repairOnDisk = async (): Promise<void> => {
+         writeFileSync(fixture.orderDocument.uri.fsPath, REPAIRABLE_SOURCE);
+         await expect(workspace.WorkspaceLock.write(token => builder.update([fixture.orderDocument.uri], [], token))).rejects.toThrow(
+            'relink failed'
+         );
+         await workspace.VersionSyncService.recoveryBuildsSettled();
+         await settle(fixture);
+      };
+
+      rule.armed = true;
+      failOnce();
+      await repairOnDisk();
+      failOnce();
+      await repairOnDisk();
+
+      expect(rule.repairs).toBe(2);
+      expect(fixture.recovery).toHaveBeenCalledTimes(2);
+      expect(stale(fixture.processDocument, fixture.orderDocument)).toEqual([]);
+   });
+
+   it.each([0, 1.5, Number.NaN])('rejects %s as the maxRepeatRepairs option', maxRepeatRepairs => {
+      const fixture = setUp(renameRule(), { syncMode: 'silent' });
+
+      expect(() => new DefaultIntegrityService(fixture.harness.domain, { maxRepeatRepairs })).toThrow(RangeError);
+   });
+
+   it.each(MODE_ROWS)('relinks no dependent after a Parsed-phase repair (%s)', async (_label, syncMode, open) => {
+      const rule: IntegrityRule = { ...renameRule(), phase: IntegrityPhase.Parsed };
+      const fixture = setUp(rule, { syncMode, open });
+      const relink = vi.spyOn(fixture.harness.shared.workspace.DocumentBuilder, 'relinkInRunningBuild');
+      await build(fixture, [fixture.orderDocument, fixture.processDocument]);
+      await settle(fixture);
+
+      expect(order(fixture.orderDocument).fields.map(field => field.name)).toEqual(['status', 'extraRepaired']);
+      expect(relink).not.toHaveBeenCalled();
    });
 });

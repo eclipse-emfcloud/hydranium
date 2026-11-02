@@ -38,6 +38,8 @@ export interface BuildPhasePassService extends BuildPhasePassRegistry {
     * `BuildPipelineIntegration` from an `onBuildPhase` listener.
     */
    runPasses(documents: readonly LangiumDocument[], phase: DocumentState, cancelToken: CancellationToken): Promise<void>;
+   /** The passes declaring `phase`, in the order {@link runPasses} runs them. */
+   passesAt(phase: DocumentState): readonly BuildPhasePass[];
 }
 
 /** Construction options for {@link DefaultBuildPhasePassService}. */
@@ -95,6 +97,10 @@ export class DefaultBuildPhasePassService implements BuildPhasePassService {
          );
       }
       return this.passes.register(pass);
+   }
+
+   passesAt(phase: DocumentState): readonly BuildPhasePass[] {
+      return [...this.getPhaseBucket(phase)];
    }
 
    async runPasses(documents: readonly LangiumDocument[], phase: DocumentState, cancelToken: CancellationToken): Promise<void> {

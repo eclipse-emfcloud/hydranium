@@ -35,7 +35,7 @@ import {
 // `Diagnostic` as a VALUE: `renderDiagnostics` needs its `getMessageString`
 // namespace helper to read the `string | MarkupContent` union without
 // restating it.
-import { CancellationToken, Diagnostic, Disposable } from 'vscode-languageserver-protocol';
+import { CancellationToken, CancellationTokenSource, Diagnostic, Disposable } from 'vscode-languageserver-protocol';
 import type { HydraniumTextDocuments } from '../../documents/hydranium-text-documents.js';
 import { type ModelLedger } from '../../documents/model-ledger.js';
 import { type VersionSyncService } from '../../documents/version-sync-service.js';
@@ -159,6 +159,34 @@ export interface BuildEndedEvent {
     * share one event.
     */
    readonly completed: boolean;
+   /**
+    * The token the completed build gave its build-phase listeners, so one can
+    * tell its own build from an overlapping one. Builds started with `None`
+    * share it. Unset when `completed` is `false`.
+    */
+   readonly cancelToken?: CancellationToken;
+   /**
+    * The tokens the builds that threw since the last such event gave their
+    * build-phase listeners. Unset when `completed` is `true`.
+    */
+   readonly cancelTokens?: readonly CancellationToken[];
+}
+
+/**
+ * A running `buildDocuments` call, with the documents it builds, the token
+ * it builds with and, while its `Linked` phase runs, the ones it links and the
+ * ones its build-phase listeners get.
+ */
+export interface RunningBuild {
+   readonly documents: LangiumDocument[];
+   /** The {@link documents}, for lookups in a batch as large as the workspace. */
+   readonly documentSet: Set<LangiumDocument>;
+   readonly options: BuildOptions;
+   readonly cancelToken: CancellationToken;
+   linking?: LangiumDocument[];
+   linked?: LangiumDocument[];
+   /** The {@link linked} documents, for lookups. */
+   linkedSet?: Set<LangiumDocument>;
 }
 
 /** Registered through {@link HydraniumDocumentBuilder.onBuildEnded}. */
@@ -296,6 +324,8 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected runningBuilds = 0;
    /** Resolved once {@link runningBuilds} drops back to zero. Set while it is above. */
    protected runningBuildsEnded?: Deferred<void>;
+   /** Each running {@link buildDocuments} call. Read by {@link relinkInRunningBuild}, which adds to all three arrays. */
+   protected readonly runningBuildDocuments = new Set<RunningBuild>();
    /**
     * `traceId` of the last build that ended in cancellation, for the successor's
     * "cancels #N" tag. Held here rather than on a session because the session
@@ -310,6 +340,8 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected readonly builderStateWaits = new Set<BuilderStateWait>();
    /** Set while the lock read {@link checkWaitsOnceDrained} queued has not run. */
    protected drainCheckQueued = false;
+   /** The tokens of the builds that threw, until {@link checkWaitsOnceDrained} tells them. */
+   protected readonly thrownBuildTokens = new Set<CancellationToken>();
    /** A thunk: a version-sync service whose constructor reads the builder would otherwise be a cycle. */
    protected readonly versionSyncService: () => VersionSyncService;
    /** A thunk: a residency service whose constructor reads the builder would otherwise be a cycle. */
@@ -412,15 +444,6 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     */
    isInsideBuildUpdate(): boolean {
       return this.insideBuildUpdate;
-   }
-
-   /**
-    * Whether the build calling the `onUpdate` listeners overlaps another build
-    * that still runs, such as an update outside the lock while a locked build
-    * runs. A listener reads this before its first await.
-    */
-   overlapsRunningBuild(): boolean {
-      return this.runningBuilds > 1;
    }
 
    /**
@@ -747,13 +770,35 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       });
    }
 
+   /**
+    * The running build that `cancelToken` names when `state` is `Linked`.
+    * Undefined when builds sharing `None` overlap, as either could be the one
+    * linking.
+    */
+   protected linkingBuild(cancelToken: CancellationToken, state: DocumentState): RunningBuild | undefined {
+      const builds = [...this.runningBuildDocuments].filter(running => running.cancelToken === cancelToken);
+      return state === DocumentState.Linked && builds.length === 1 ? builds[0] : undefined;
+   }
+
    protected override async runCancelable(
       documents: LangiumDocument[],
       targetState: DocumentState,
       cancelToken: CancellationToken,
       callback: (document: LangiumDocument) => unknown
    ): Promise<void> {
-      await super.runCancelable(documents, targetState, cancelToken, callback);
+      const build = this.linkingBuild(cancelToken, targetState);
+      if (build === undefined) {
+         await super.runCancelable(documents, targetState, cancelToken, callback);
+      } else {
+         build.linking = documents;
+         try {
+            await super.runCancelable(documents, targetState, cancelToken, callback);
+         } finally {
+            build.linking = undefined;
+            build.linked = undefined;
+            build.linkedSet = undefined;
+         }
+      }
       for (const wait of this.builderStateWaits) {
          if (this.currentState >= wait.state) {
             wait.resolve();
@@ -946,8 +991,180 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    ): Promise<void> {
       await this.rehydrateShedDocuments(documents, cancelToken);
       this.unlinkPrelinkedReferences(documents);
-      await super.buildDocuments(documents, options, cancelToken);
-      this.notifyBuildEnded({ completed: true });
+      // A token of its own, so `runCancelable` tells this build from one that
+      // overlaps it. Not for `None`, which Langium's builds never yield for.
+      const source = cancelToken === CancellationToken.None ? undefined : new CancellationTokenSource();
+      // Never disposed, so a listener that keeps the token past the build still sees a later cancel.
+      // One listener per build on the caller's token, which lives as long as that token does.
+      if (source !== undefined) {
+         cancelToken.onCancellationRequested(() => source.cancel());
+      }
+      // A token cancelled already tells its listeners only on a later tick.
+      if (cancelToken.isCancellationRequested) {
+         source?.cancel();
+      }
+      const token = source?.token ?? CancellationToken.None;
+      const running: RunningBuild = { documents, documentSet: new Set(documents), options, cancelToken: token };
+      // One already linking under the same `None` can no longer be told from this one, so a build after both relinks for it.
+      this.runningBuildDocuments.forEach(other => {
+         if (other.cancelToken === token) {
+            other.linking = undefined;
+         }
+      });
+      this.runningBuildDocuments.add(running);
+      try {
+         await super.buildDocuments(documents, options, token);
+      } catch (err: unknown) {
+         this.thrownBuildTokens.add(token);
+         throw err;
+      } finally {
+         this.runningBuildDocuments.delete(running);
+      }
+      this.notifyBuildEnded({ completed: true, cancelToken: token });
+   }
+
+   /**
+    * Relink `document` within the build whose `Linked` phase holds `cause` and
+    * gave its build-phase listeners `cancelToken`, as that build links its own
+    * documents, and return whether it did. False when no such build is linking
+    * `cause`, and outside a build nothing requests one.
+    * False too when another running build still carries `document`, whose
+    * references an unlink or a reset would drop from that build's linking or
+    * indexing, and a build of `cause` after them relinks it. A
+    * `document` whose CST was shed and cannot be grafted, or that has none to
+    * graft, is re-read and indexed first, and the build-phase listeners of each
+    * phase it passes get it, as in a build. Its nodes are new then, so the
+    * caller relinks its dependents too, and a build after this one builds it
+    * as changed. A relink that throws leaves `document` reset and requests no
+    * build, so the caller requests one once, as `IntegrityService` does for
+    * `cause`. A `document` below `Linked` is unlinked instead, so its next read
+    * or build resolves into the repair. A validated `document` its build
+    * options leave unlinked, which resolves its references lazily, joins the
+    * build unlinked and is validated again, and false is returned, as its own
+    * builds run no `Linked` work on it.
+    *
+    * For a `Linked` build-phase listener that changed `cause` after the phase
+    * linked the documents that reference it. A document the build links
+    * is relinked in place. Any other document joins the build, which indexes
+    * and validates it with its own documents, under the options it had, or
+    * with the build's validation when it has validated nothing.
+    * Langium reuses the arrays it links and validates, so the document is
+    * added to both, and to the batch the listeners after this one get. Either
+    * way it is validated in every category it ran and every one the build
+    * requests for it.
+    *
+    * Links without a cancellation token, so the link runs no macrotask. Between
+    * the reset and the link a shed document, or one without a CST to graft,
+    * reads its text, and a request in that window resolves its references
+    * lazily.
+    */
+   async relinkInRunningBuild(document: LangiumDocument, cause: LangiumDocument, cancelToken: CancellationToken): Promise<boolean> {
+      // Its links are a subset of its documents, and a lazy `cause` re-read in the build joined only the documents.
+      const build = [...this.runningBuildDocuments].find(
+         running => running.cancelToken === cancelToken && running.linking !== undefined && running.documentSet.has(cause)
+      );
+      if ([...this.runningBuildDocuments].some(running => running !== build && running.documentSet.has(document))) {
+         // Unlinked or reset now, it would miss the links or the indexing of the other build still carrying it, so a build after both relinks it.
+         this.versionSyncService().rebuildWhileCurrent(cause);
+         return false;
+      }
+      if (document.state < DocumentState.Linked) {
+         // Unlinked, it resolves again on its next read, or its next build links it.
+         this.serviceRegistry.getServices(document.uri).references.Linker.unlink(document);
+         return false;
+      }
+      const linking = build?.linking;
+      if (build === undefined || linking === undefined) {
+         // Builds that share `None` link unrecorded, so a build after them relinks the dependents.
+         if ([...this.runningBuildDocuments].some(running => running.documentSet.has(cause))) {
+            this.versionSyncService().rebuildWhileCurrent(cause);
+         }
+         return false;
+      }
+      const options = this.relinkBuildOptions(document, build);
+      this.resetToState(document, DocumentState.ComputedScopes);
+      await this.rehydrateShedDocuments([document], CancellationToken.None);
+      this.prepareBuild([document], options);
+      // Re-read now when lowered, so its exports stay indexed until the build `rehydrateShedDocuments` requested.
+      // Its build-phase listeners run too, as in a build, so its `Parsed` rules repair the new nodes.
+      await this.advanceToComputedScopes(document, true, CancellationToken.None);
+      if (!this.shouldLink(document)) {
+         // Validated lazily, as its own builds do, which run no `Linked` work on it.
+         if (!build.documentSet.has(document)) {
+            build.documents.push(document);
+            build.documentSet.add(document);
+         }
+         return false;
+      }
+      await this.serviceRegistry.getServices(document.uri).references.Linker.link(document, CancellationToken.None);
+      document.state = DocumentState.Linked;
+      await this.notifyDocumentPhase(document, DocumentState.Linked, CancellationToken.None);
+      // The build links each of its documents that links eagerly, so one outside them is outside its links too.
+      if (!build.documentSet.has(document)) {
+         linking.push(document);
+         build.documents.push(document);
+         build.documentSet.add(document);
+      }
+      if (build.linked !== undefined && build.linkedSet?.has(document) !== true) {
+         build.linked.push(document);
+         build.linkedSet?.add(document);
+      }
+      return true;
+   }
+
+   /**
+    * The options {@link relinkInRunningBuild} builds `document` with in
+    * `build`: its own, so a build that validates nothing still validates a
+    * document that was, or the build's validation when it has validated
+    * nothing. Either way every category it ran runs again, as the reset drops
+    * its results.
+    */
+   protected relinkBuildOptions(document: LangiumDocument, build: RunningBuild): BuildOptions {
+      const state = this.buildState.get(document.uri.toString());
+      const ran = state?.result?.validationChecks;
+      const own = state?.options ?? build.options;
+      const stored = !own.validation && (ran ?? []).length === 0 ? { ...own, validation: build.options.validation } : own;
+      const validation = typeof stored.validation === 'object' ? stored.validation : {};
+      const requested = typeof stored.validation === 'object' ? stored.validation.categories : stored.validation ? undefined : [];
+      // The build stores only the categories it adds, and none without validation, so both run.
+      return ran !== undefined && requested !== undefined
+         ? { ...stored, validation: { ...validation, categories: [...new Set([...ran, ...requested])] } }
+         : stored;
+   }
+
+   /**
+    * Bring `document` up to `ComputedScopes` from where a reset left it:
+    * re-read and index it when below `IndexedContent`, then compute its local
+    * scopes when below `ComputedScopes`. Fires each phase's document-phase
+    * listeners, and its build-phase listeners with `notifyBuildPhase`.
+    */
+   protected async advanceToComputedScopes(
+      document: LangiumDocument,
+      notifyBuildPhase: boolean,
+      cancelToken: CancellationToken
+   ): Promise<void> {
+      if (document.state < DocumentState.IndexedContent) {
+         await this.reparse(document, cancelToken);
+         await this.notifyDocumentPhase(document, DocumentState.Parsed, cancelToken);
+         if (notifyBuildPhase) {
+            await this.notifyBuildPhase([document], DocumentState.Parsed, cancelToken);
+         }
+         await this.indexManager.updateContent(document, cancelToken);
+         document.state = DocumentState.IndexedContent;
+         await this.notifyDocumentPhase(document, DocumentState.IndexedContent, cancelToken);
+         if (notifyBuildPhase) {
+            await this.notifyBuildPhase([document], DocumentState.IndexedContent, cancelToken);
+         }
+      }
+      if (document.state < DocumentState.ComputedScopes) {
+         const services = this.serviceRegistry.getServices(document.uri);
+         document.localSymbols = await services.references.ScopeComputation.collectLocalSymbols(document, cancelToken);
+         document.state = DocumentState.ComputedScopes;
+         await this.notifyDocumentPhase(document, DocumentState.ComputedScopes, cancelToken);
+         if (notifyBuildPhase) {
+            await this.notifyBuildPhase([document], DocumentState.ComputedScopes, cancelToken);
+         }
+      }
    }
 
    /**
@@ -1035,7 +1252,9 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
       this.drainCheckQueued = true;
       void this.workspaceLock.read(() => {
          this.drainCheckQueued = false;
-         this.notifyBuildEnded({ completed: false });
+         const cancelTokens = [...this.thrownBuildTokens];
+         this.thrownBuildTokens.clear();
+         this.notifyBuildEnded({ completed: false, cancelTokens });
       });
    }
 
@@ -1097,11 +1316,8 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * Treating an un-indexed document as affected is the conservative reading and
     * costs nothing in steady state — documents sit at `Validated` there, so this
     * branch is only taken for documents an interrupted build left behind.
-    *
-    * Public so a service that requests a build can skip one that would relink
-    * nothing.
     */
-   override shouldRelink(document: LangiumDocument, changedUris: Set<string>): boolean {
+   protected override shouldRelink(document: LangiumDocument, changedUris: Set<string>): boolean {
       if (document.state < DocumentState.IndexedReferences) {
          return true;
       }
@@ -1146,7 +1362,8 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
          return this.runInSession(
             { kind: 'build', trigger: `${documents.length} docs`, triggerCountsDocs: true, changed: uris, deleted: [] },
             `Build documents (${documents.length} docs)`,
-            () => super.build(documents, options, cancelToken)
+            // A copy, so a document `relinkInRunningBuild` adds stays out of the caller's array.
+            () => super.build([...documents], options, cancelToken)
          );
       } finally {
          this.insideBuildUpdate = outer;
@@ -1225,23 +1442,14 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     *
     * Only this document is relinked. The documents that reference it still
     * hold nodes a re-parse replaced, or names a mutation changed, so the
-    * caller has to relink them in a later build.
+    * caller relinks them through {@link relinkInRunningBuild}.
     */
    async reparseAndRelink(document: LangiumDocument, cancelToken: CancellationToken = CancellationToken.None): Promise<void> {
-      const languageServices = this.serviceRegistry.getServices(document.uri);
-      // Phase 0 — Parse (the factory sets state to `Parsed` itself).
-      await this.reparse(document, cancelToken);
-      await this.notifyDocumentPhase(document, DocumentState.Parsed, cancelToken);
-      // Phase 1 — Index content.
-      await this.indexManager.updateContent(document, cancelToken);
-      document.state = DocumentState.IndexedContent;
-      await this.notifyDocumentPhase(document, DocumentState.IndexedContent, cancelToken);
-      // Phase 2 — Local scopes.
-      document.localSymbols = await languageServices.references.ScopeComputation.collectLocalSymbols(document, cancelToken);
-      document.state = DocumentState.ComputedScopes;
-      await this.notifyDocumentPhase(document, DocumentState.ComputedScopes, cancelToken);
+      // From `Changed`, so phases 0–2 all run again. The factory sets `Parsed` itself.
+      document.state = DocumentState.Changed;
+      await this.advanceToComputedScopes(document, false, cancelToken);
       // Phase 3 — Linking.
-      await languageServices.references.Linker.link(document, cancelToken);
+      await this.serviceRegistry.getServices(document.uri).references.Linker.link(document, cancelToken);
       document.state = DocumentState.Linked;
       await this.notifyDocumentPhase(document, DocumentState.Linked, cancelToken);
    }
@@ -1649,6 +1857,11 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    // ============================================================
 
    override async notifyBuildPhase(documents: LangiumDocument[], state: DocumentState, cancelToken: CancellationToken): Promise<void> {
+      const build = this.linkingBuild(cancelToken, state);
+      if (build !== undefined) {
+         build.linked = documents;
+         build.linkedSet = new Set(documents);
+      }
       if (this.logLevel === 'off') {
          return super.notifyBuildPhase(documents, state, cancelToken);
       }
