@@ -175,11 +175,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # No `cache: npm`, for the reason theia-compat.yml gives.
+      # No npm cache. Its key is the lockfile each leg deletes before installing
+      # a different tree, so the legs would race to save unrelated trees under
+      # one key.
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
+          package-manager-cache: false
 
       # Mirrors ci.yml's step of the same name.
       - name: Pin the toolchain
