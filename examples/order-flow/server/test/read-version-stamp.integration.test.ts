@@ -258,7 +258,7 @@ describe('a read while an editor change is debounced', () => {
       services.shared.lsp.DocumentUpdateHandler.flushPending();
       const read = await reading;
       await head.proxy
-         .updateModelDocument({ uri, clientId: 'form', model: read.model!.root, baseVersion: read.model!.version })
+         .updateModelDocument({ uri, clientId: 'form', model: read.model!.root, baseVersion: read.model!.version, baseEpoch: read.epoch })
          .catch((rejection: unknown) => {
             if (!isConflictError(rejection)) {
                throw rejection;
@@ -272,7 +272,13 @@ describe('a read while an editor change is debounced', () => {
       const { head, services, uri, opened } = await changeDuringDebounce();
 
       const error = await head.proxy
-         .updateModelDocument({ uri, clientId: 'form', model: opened.model!.root, baseVersion: opened.model!.version })
+         .updateModelDocument({
+            uri,
+            clientId: 'form',
+            model: opened.model!.root,
+            baseVersion: opened.model!.version,
+            baseEpoch: opened.epoch
+         })
          .then(
             () => undefined,
             (rejection: unknown) => rejection

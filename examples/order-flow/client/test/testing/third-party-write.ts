@@ -11,7 +11,7 @@ import { isDuplicateClientIdError, type TransferElement } from '@hydranium/proto
 
 /** The part of the data head's wire a third-party write uses. */
 export interface ThirdPartyWriteServer<TTransfer extends TransferElement> {
-   createSession(args: { clientId: string }): Promise<void>;
+   createSession(args: { clientId: string }): Promise<unknown>;
    openModelDocument(args: { uri: string; clientId: string }): Promise<unknown>;
    updateModelDocument(args: { uri: string; clientId: string; model: TTransfer | string; baseVersion: 'any' }): Promise<unknown>;
 }

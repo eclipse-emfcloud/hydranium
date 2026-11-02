@@ -45,6 +45,7 @@ import {
    isDocumentSource,
    isModelVersion,
    isSyntheticSource,
+   randomUuid,
    ReservedClientIdError,
    reviveProtocolError,
    SessionClosedError,
@@ -53,6 +54,7 @@ import {
 } from '@hydranium/protocol';
 import { ResponseError } from 'vscode-jsonrpc';
 import type {
+   BaseVersionGate,
    CloseModelArgs,
    OpenModelArgs,
    Project,
@@ -67,6 +69,7 @@ import type {
 } from '@hydranium/protocol';
 import type {
    CloseSessionArgs,
+   CreatedSession,
    CreateModelDocumentArgs,
    CreateSessionArgs,
    GetModelDocumentArgs,
@@ -268,6 +271,10 @@ export interface CanaryDefects {
    readonly deleteKeepsUnsaved?: boolean;
    /** A delete ignores its base version. */
    readonly deleteUngated?: boolean;
+   /** A write takes a version whatever epoch it names, as a server that numbers afresh on a restart and checks the version alone. */
+   readonly epochUngated?: boolean;
+   /** A registration answers another epoch than the documents carry. */
+   readonly sessionEpochDiffers?: boolean;
    /** A delete of a document the session has not opened goes through. */
    readonly deleteWithoutOpen?: boolean;
    /** A delete leaves other sessions' opens of the document in place. */
@@ -315,6 +322,7 @@ export class CanaryDataServer {
    private readonly orphanedOpens = new Map<string, Set<string>>();
    /** Ids `closeSession` failed to free, under `sessionIdsKept`. */
    private readonly keptIds = new Set<string>();
+   private readonly epoch = randomUuid();
 
    constructor(private readonly defects: CanaryDefects = {}) {}
 
@@ -411,7 +419,7 @@ export class CanaryDataServer {
       return this.envelope(args.uri);
    }
 
-   async createSession(args: CreateSessionArgs): Promise<void> {
+   async createSession(args: CreateSessionArgs): Promise<CreatedSession> {
       if (FRAMEWORK_CLIENT_IDS.includes(args.clientId) && !this.defects.reservedIdsAccepted) {
          throw this.refusal(new ReservedClientIdError(args.clientId));
       }
@@ -421,6 +429,7 @@ export class CanaryDataServer {
       const inherited = this.orphanedOpens.get(args.clientId);
       this.orphanedOpens.delete(args.clientId);
       this.sessions.set(args.clientId, inherited ?? new Set<string>());
+      return { epoch: this.defects.sessionEpochDiffers ? randomUuid() : this.epoch };
    }
 
    async closeSession(args: CloseSessionArgs): Promise<void> {
@@ -485,7 +494,7 @@ export class CanaryDataServer {
          // harmlessly.
          for (const update of args.updates) {
             this.assertSessionMayWrite(args.clientId, update.uri);
-            this.assertBaseVersion(update.uri, update.baseVersion);
+            this.assertBaseVersion(update.uri, update);
          }
       }
       const documents: TransferWrittenDocument<CanaryRoot, TransferDiagnostic>[] = [];
@@ -523,14 +532,18 @@ export class CanaryDataServer {
       }
    }
 
-   private assertBaseVersion(uri: string, baseVersion: TransferUpdateDocumentArgs<CanaryRoot>['baseVersion']): void {
+   /** `versionUngated` skips the version only, so the epoch check stays its own canary. */
+   private assertBaseVersion(uri: string, gate: BaseVersionGate, versionUngated?: boolean): void {
+      if (!isModelVersion(gate.baseVersion)) {
+         return;
+      }
       // An unknown URI answers v0, so a write claiming a version against a
       // document that does not exist is stale rather than unchecked.
-      if (!this.defects.ungatedWrites && isModelVersion(baseVersion)) {
-         const current = this.documents.get(uri)?.version ?? 0;
-         if (current !== baseVersion) {
-            throw this.refusal(new ConflictError(uri, baseVersion, current));
-         }
+      const current = this.documents.get(uri)?.version ?? 0;
+      const staleVersion = !(this.defects.ungatedWrites || versionUngated) && current !== gate.baseVersion;
+      const foreignEpoch = !this.defects.epochUngated && gate.baseEpoch !== this.epoch;
+      if (staleVersion || foreignEpoch) {
+         throw this.refusal(new ConflictError(uri, gate.baseVersion, current));
       }
    }
 
@@ -541,7 +554,7 @@ export class CanaryDataServer {
       const text = typeof args.model === 'string' ? args.model : args.model.text;
       const existing = this.documents.get(args.uri);
       // The conflict gate, which is the property the base-version check probes.
-      this.assertBaseVersion(args.uri, args.baseVersion);
+      this.assertBaseVersion(args.uri, args);
       const checked = !args.restore || this.defects.restoresRefused;
       if (typeof args.model !== 'string' && checked && existing?.text === SYNTAX_ERROR_TEXT && !this.defects.syntaxErrorsWritten) {
          if (this.defects.syntaxErrorsWrittenThenRefused) {
@@ -609,6 +622,7 @@ export class CanaryDataServer {
       const text = this.defects.watchTextOmitted ? undefined : this.envelope(args.uri).text;
       return {
          uri: args.uri,
+         epoch: this.epoch,
          exists: this.defects.watchClaimsDocument === true || this.documents.has(args.uri),
          sequence: this.defects.watchAnswersPastEvents ? Number.MAX_SAFE_INTEGER : this.sequence,
          ...(text ? { text } : {})
@@ -649,9 +663,7 @@ export class CanaryDataServer {
 
    async persistModelDocument(args: TransferPersistDocumentArgs): Promise<TransferSavedDocument<CanaryRoot, TransferDiagnostic>> {
       this.assertSessionMayWrite(args.clientId, args.uri);
-      if (!this.defects.persistUngated) {
-         this.assertBaseVersion(args.uri, args.baseVersion);
-      }
+      this.assertBaseVersion(args.uri, args, this.defects.persistUngated);
       const text = this.documents.get(args.uri)?.text ?? '';
       this.disk.set(args.uri, this.defects.persistReformats ? text.trimEnd() : text);
       return this.savedEnvelope(args.uri);
@@ -661,9 +673,7 @@ export class CanaryDataServer {
       if (!this.defects.deleteWithoutOpen) {
          this.assertSessionMayWrite(args.clientId, args.uri);
       }
-      if (!this.defects.deleteUngated) {
-         this.assertBaseVersion(args.uri, args.baseVersion);
-      }
+      this.assertBaseVersion(args.uri, args, this.defects.deleteUngated);
       const saved = this.disk.delete(args.uri);
       if (!(saved ? this.defects.deleteKeepsSaved : this.defects.deleteKeepsUnsaved)) {
          this.documents.delete(args.uri);
@@ -695,7 +705,7 @@ export class CanaryDataServer {
       if (!stored) {
          // `model` absent is the documented answer for a URI the server does not
          // have, so this is an ordinary branch rather than an error.
-         return TransferDocument.absent<CanaryRoot, TransferDiagnostic>(uri);
+         return TransferDocument.absent<CanaryRoot, TransferDiagnostic>(uri, this.epoch);
       }
       const diagnostics = this.defects.diagnosticsOnValid
          ? [canaryDiagnostic('the canary reports every model as broken', this.defects)]
@@ -704,6 +714,7 @@ export class CanaryDataServer {
            : diagnosticsFor(stored.text, this.defects);
       return {
          uri,
+         epoch: this.epoch,
          model: {
             root: { $type: this.defects.blankRootType ? '' : 'CanaryRoot', text: stored.text },
             diagnostics,

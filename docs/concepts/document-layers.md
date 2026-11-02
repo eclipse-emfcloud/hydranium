@@ -196,9 +196,11 @@ same `model.hash`. So a client that skips a render on an equal `model.hash`
 still learns the new version.
 
 `>` cannot happen, because a model version is a value the counter already had
-and the counter never goes back. A restarted server numbers afresh, so a
-version from before the restart identifies nothing. Compare `text.hash` across
-a restart, as `DataSession`'s restore does.
+and the counter never goes back. A restarted server numbers afresh in another
+epoch, so a version names text only with the `epoch` every document carries. A
+write gated on a version names that epoch as `baseEpoch`, and the server refuses
+one that is not its own. Compare `text.hash` across a restart, as
+`DataSession`'s restore does.
 
 ### Waiting for a current model
 
@@ -271,6 +273,10 @@ await session.save({ uri, model: edited(snapshot.root), baseVersion: snapshot.ve
 // Explicitly ungated, for a write with no reader behind it.
 await session.save({ uri, model, baseVersion: 'any' });
 ```
+
+Over the data wire a version also names its epoch. A gated write sends the
+`epoch` of the document the version came from as `baseEpoch`, so the type
+there is `BaseVersionGate`, which requires one with the other.
 
 `document.textDocument.version` and `text.version` do not compile in that
 field. Both name the text the server holds now, which can be newer than the

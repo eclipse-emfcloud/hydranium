@@ -962,6 +962,11 @@ export class HydraniumTextDocuments<T extends TextDocument = TextDocument> exten
       return this.get(uri)?.version ?? this.textLedger.recordOf(this.documentKey(uri))?.version ?? 0;
    }
 
+   /** The epoch every version this store hands out is numbered in, its ledger's. */
+   get epoch(): string {
+      return this.textLedger.epoch;
+   }
+
    /**
     * The version the document at `uri` was opened at, which a client's write
     * or an integrity repair steps past; `undefined` while it is not open.

@@ -541,7 +541,8 @@ describe('DataServer', () => {
             await proxy.persistModelDocument({
                uri: URI_A,
                clientId: 'editor-1',
-               baseVersion: asModelVersion(bundle.textDocuments.version(URI_A))
+               baseVersion: asModelVersion(bundle.textDocuments.version(URI_A)),
+               baseEpoch: bundle.textDocuments.epoch
             });
 
             expect(bundle.fileSystem.writes.map(write => write.content)).toEqual(['name:   spaced\n\n']);
@@ -579,10 +580,12 @@ describe('DataServer', () => {
             const seen = asModelVersion(bundle.textDocuments.version(URI_A));
             await proxy.updateModelDocument({ uri: URI_A, clientId: 'editor-1', model: 'name:moved', baseVersion: 'any' });
 
-            const failure = await proxy.persistModelDocument({ uri: URI_A, clientId: 'editor-1', baseVersion: seen }).then(
-               () => undefined,
-               (error: unknown) => error
-            );
+            const failure = await proxy
+               .persistModelDocument({ uri: URI_A, clientId: 'editor-1', baseVersion: seen, baseEpoch: bundle.textDocuments.epoch })
+               .then(
+                  () => undefined,
+                  (error: unknown) => error
+               );
 
             expect(isConflictError(failure)).toBe(true);
             expect(bundle.fileSystem.writes).toEqual([]);
@@ -1789,6 +1792,27 @@ describe('DataServer', () => {
          } finally {
             onCloseSpy.mockRestore();
             pair.dispose();
+         }
+      });
+   });
+
+   describe('createSession', () => {
+      it('answers one epoch on every connection to the same services, which every document carries, and another for other services', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'current' });
+         const first = makeHarness(bundle.services);
+         const second = makeHarness(bundle.services);
+         const restarted = makeHarness(buildBundle().services);
+         try {
+            const { epoch } = await first.proxy.createSession({ clientId: 'first' });
+
+            expect((await second.proxy.createSession({ clientId: 'second' })).epoch).toBe(epoch);
+            expect((await second.proxy.getModelDocument({ uri: URI_A })).epoch).toBe(epoch);
+            expect((await restarted.proxy.createSession({ clientId: 'first' })).epoch).not.toBe(epoch);
+         } finally {
+            first.pair.dispose();
+            second.pair.dispose();
+            restarted.pair.dispose();
          }
       });
    });

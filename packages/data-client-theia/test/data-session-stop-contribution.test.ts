@@ -30,6 +30,8 @@ import { FrontendApplicationContribution } from '@theia/core/lib/browser/fronten
 import { Container, ContainerModule, injectable, type interfaces } from '@theia/core/shared/inversify';
 import { bindDataConnection, DataSessionStopContribution } from '../src/browser/data-session-stop-contribution';
 
+const EPOCH = 'epoch';
+
 type Server = RpcProxy<DataServerProtocol<TransferElement>>;
 
 /**
@@ -48,15 +50,15 @@ function makeConnection(saveGate?: Promise<void>): {
    const closed: string[] = [];
    const closedBeforeTimer: boolean[] = [];
    let timerFired = false;
-   const document = (uri: string): unknown => ({ uri, version: 1, root: { $type: 'TypeOne' }, diagnostics: [] });
+   const document = (uri: string): unknown => ({ uri, epoch: EPOCH, version: 1, root: { $type: 'TypeOne' }, diagnostics: [] });
    const server = {
-      createSession: async (): Promise<void> => undefined,
+      createSession: async (): Promise<{ epoch: string }> => ({ epoch: EPOCH }),
       closeSession: async (args: { clientId: string }): Promise<void> => {
          closed.push(args.clientId);
          closedBeforeTimer.push(!timerFired);
       },
       openModelDocument: async (args: { uri: string }): Promise<unknown> => document(args.uri),
-      watchModelDocument: async (args: { uri: string }): Promise<unknown> => ({ uri: args.uri, exists: true, sequence: 0 }),
+      watchModelDocument: async (args: { uri: string }): Promise<unknown> => ({ uri: args.uri, epoch: EPOCH, exists: true, sequence: 0 }),
       saveModelDocument: async (args: { uri: string }): Promise<unknown> => {
          await saveGate;
          return { ...(document(args.uri) as object), persisted: { version: 1 } };

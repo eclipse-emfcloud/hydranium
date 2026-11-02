@@ -44,7 +44,17 @@ import {
    type TokenizeOptions,
    URI
 } from '@hydranium/langium';
-import { asModelVersion, isConflictError, type TextVersion, type TransferElement, UNKNOWN_CLIENT_ID } from '@hydranium/protocol';
+import {
+   asModelVersion,
+   type BaseVersion,
+   ConflictError,
+   isConflictError,
+   STALE_BASE_VERSION_SAVE,
+   type STALE_BASE_VERSION_UPDATE,
+   type TextVersion,
+   type TransferElement,
+   UNKNOWN_CLIENT_ID
+} from '@hydranium/protocol';
 import { type CancellationToken, FileChangeType, type FileEvent } from 'vscode-languageserver';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -1497,10 +1507,11 @@ describe('ClientSessionFactory', () => {
          updates = 0;
          protected override updateDocument(
             args: ClientSessionWriteArgs<TransferElement>,
-            cancelToken?: CancellationToken
+            cancelToken?: CancellationToken,
+            message?: typeof STALE_BASE_VERSION_UPDATE | typeof STALE_BASE_VERSION_SAVE
          ): Promise<WrittenAstDocument<AstNode>> {
             this.updates++;
-            return super.updateDocument(args, cancelToken);
+            return super.updateDocument(args, cancelToken, message);
          }
       }
       scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, CLEAN), {
@@ -1522,6 +1533,44 @@ describe('ClientSessionFactory', () => {
 
       expect(session.updates).toBe(1);
       expect(readFileSync(scratch.workspace.resolve(FILE), 'utf8')).toBe(EDITED);
+   });
+
+   it('refuses a stale save with the conflict the session subclass throws, worded as a refused save', async () => {
+      class OwnConflictError extends ConflictError {}
+      class OwnConflictSession extends DefaultClientSession<AstNode> {
+         protected override assertBaseVersion(
+            uri: string,
+            baseVersion: BaseVersion,
+            currentVersion: number,
+            message?: typeof STALE_BASE_VERSION_UPDATE | typeof STALE_BASE_VERSION_SAVE
+         ): void {
+            try {
+               super.assertBaseVersion(uri, baseVersion, currentVersion, message);
+            } catch (error: unknown) {
+               throw isConflictError(error) ? new OwnConflictError(error.uri, error.baseVersion, error.actualVersion, message) : error;
+            }
+         }
+      }
+      scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, CLEAN), {
+         extraSharedModules: [
+            {
+               model: {
+                  ClientSessionFactory: (services: ServerSharedServices) => ({
+                     create: (clientId: string, label: string) => new OwnConflictSession(services, { clientId, label })
+                  })
+               }
+            }
+         ]
+      });
+      const uri = scratch.workspace.uri(FILE);
+      const session = scratch.harness.shared.model.ModelService.createSession('form');
+      await session.open(uri);
+      const stale = asModelVersion(scratch.harness.shared.workspace.TextDocuments.version(uri)! + 1);
+
+      const refused: unknown = await session.save({ uri, model: EDITED, baseVersion: stale }).catch((error: unknown) => error);
+
+      expect(refused).toBeInstanceOf(OwnConflictError);
+      expect(isConflictError(refused) && refused.data?.hydranium?.code).toBe(STALE_BASE_VERSION_SAVE.code);
    });
 
    it('writes a save and a persist to disk through the session subclass’s own persist', async () => {

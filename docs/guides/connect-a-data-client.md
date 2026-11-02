@@ -43,7 +43,7 @@ declare const model: string;
 ```ts
 const form = connection.createSession('form');
 await form.withOpenDocument({ uri }, opened =>
-   form.saveDocument({ uri, model, baseVersion: TransferDocument.assertLoaded(opened).model.version })
+   form.saveDocument({ uri, model, baseVersion: TransferDocument.assertLoaded(opened).model.version, baseEpoch: opened.epoch })
 );
 ```
 
@@ -111,12 +111,13 @@ otherwise its unsaved text is reported lost. No update event tells you of a
 change made while the connection was down, and a restarted server numbers
 versions afresh, so take the document and its version from the event, or read
 the document again when the event carries none. Treat a document whose event
-says `reopened: false` as closed. A write gated on a version that you made
-before the event, and that waited for the reconnect, fails with a
-`ConflictError`, unless the session found the text it last saw at that
-document's version. One gated on `'any'` is sent. One you make after it with a
-version you kept is sent, and lands if that version matches the new numbering by
-chance.
+says `reopened: false` as closed. Gate a write on a version together with the
+`epoch` of the document it came from, as `baseEpoch`. A restarted server
+refuses a version from before the restart with a `ConflictError`, whenever you
+make the call, and a reconnect to the same server keeps the epoch. One gated on
+`'any'` is sent. To tell a restart from a brief drop without a document, listen
+to `session.onDidRegister`. It fires before the restore events, and its
+`restarted` says whether the reconnect reached another epoch.
 
 How long the server keeps your unsaved text after a drop is its
 `releaseGraceMs`, an option of `HydraniumTextDocuments` in the server's shared

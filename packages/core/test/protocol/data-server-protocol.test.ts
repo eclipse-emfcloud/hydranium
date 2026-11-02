@@ -58,7 +58,7 @@ const FakeRoot = {
 
 /** Helper that synthesises a `TransferDocument<FakeRoot>` for the fake-impl factories. */
 function makeDocument(uri: string, root: FakeRoot): TransferDocument<FakeRoot> {
-   return TransferDocument.create<FakeRoot>(uri, 1, root, 'hash', []);
+   return TransferDocument.create<FakeRoot>(uri, 1, root, 'hash', 'epoch', []);
 }
 
 /**
@@ -70,6 +70,7 @@ function makeFakeProtocol(): DataServerProtocol<FakeRoot> {
    return {
       async createSession(_args: CreateSessionArgs) {
          // No registry in the fake: every id is a session.
+         return { epoch: 'epoch' };
       },
       async closeSession(_args: CloseSessionArgs) {
          // Counterpart to createSession — no-op in the fake.
@@ -108,7 +109,7 @@ function makeFakeProtocol(): DataServerProtocol<FakeRoot> {
          // Nothing to return: the deletion reaches clients as an event.
       },
       async watchModelDocument(args: WatchModelDocumentArgs) {
-         return { uri: args.uri, exists: true, sequence: 0 };
+         return { uri: args.uri, epoch: 'epoch', exists: true, sequence: 0 };
       },
       async unwatchModelDocument(_args: WatchModelDocumentArgs) {
          // Pairs with watchModelDocument — idempotent teardown.

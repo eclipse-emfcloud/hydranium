@@ -17,15 +17,19 @@ interface FakeRoot extends TransferElement {
 
 describe('TransferDocument.create', () => {
    it('builds an envelope with a model block, and no diagnostics or text unless given', () => {
-      const doc = TransferDocument.create<FakeRoot>('file:///A.fake', 3, { $type: 'FakeRoot', name: 'a' }, 'hash');
-      expect(doc).toEqual({ uri: 'file:///A.fake', model: { root: { $type: 'FakeRoot', name: 'a' }, version: 3, hash: 'hash' } });
+      const doc = TransferDocument.create<FakeRoot>('file:///A.fake', 3, { $type: 'FakeRoot', name: 'a' }, 'hash', 'epoch');
+      expect(doc).toEqual({
+         uri: 'file:///A.fake',
+         epoch: 'epoch',
+         model: { root: { $type: 'FakeRoot', name: 'a' }, version: 3, hash: 'hash' }
+      });
       expect(TransferDocument.isLoaded(doc)).toBe(true);
    });
 
    it('accepts an explicit diagnostics array and text block', () => {
       const diags: TransferDiagnostic[] = [{ type: 'validation-error', severity: 'error', message: 'boom', element: 'a', code: 'x' }];
       const text = { version: 4, hash: 'text', dirty: true };
-      const doc = TransferDocument.create<FakeRoot>('file:///A.fake', 1, { $type: 'FakeRoot', name: 'a' }, 'hash', diags, text);
+      const doc = TransferDocument.create<FakeRoot>('file:///A.fake', 1, { $type: 'FakeRoot', name: 'a' }, 'hash', 'epoch', diags, text);
       expect(doc.model?.diagnostics).toBe(diags);
       expect(doc.text).toBe(text);
    });
@@ -33,8 +37,8 @@ describe('TransferDocument.create', () => {
 
 describe('TransferDocument.absent', () => {
    it('carries neither a model nor a text block', () => {
-      const doc = TransferDocument.absent<FakeRoot>('file:///A.fake');
-      expect(doc).toEqual({ uri: 'file:///A.fake' });
+      const doc = TransferDocument.absent<FakeRoot>('file:///A.fake', 'epoch');
+      expect(doc).toEqual({ uri: 'file:///A.fake', epoch: 'epoch' });
       expect(TransferDocument.isLoaded(doc)).toBe(false);
    });
 });

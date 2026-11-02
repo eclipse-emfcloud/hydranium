@@ -29,6 +29,7 @@ import type {
 } from './events';
 import type {
    CloseSessionArgs,
+   CreatedSession,
    CreateModelDocumentArgs,
    CreateSessionArgs,
    GetModelDocumentArgs,
@@ -74,8 +75,12 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
     * A registration carrying the `resumeToken` an earlier registration of the
     * same id carried ends that session first, from any connection, so a client
     * whose connection dropped can register again before the server notices.
+    *
+    * Answers the server's epoch, so a client that registers again can tell the
+    * same server from a restarted one. The epoch stays for the server's life,
+    * across its connections, and every document it sends carries it.
     */
-   createSession(args: CreateSessionArgs): Promise<void>;
+   createSession(args: CreateSessionArgs): Promise<CreatedSession>;
 
    /**
     * End a session this connection registered: close every document it has

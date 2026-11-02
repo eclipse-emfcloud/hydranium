@@ -66,6 +66,11 @@ export interface TransferDocument<TTransfer extends TransferElement, TDiagnostic
    /** Need not be spelled as the request named it. */
    uri: string;
    /**
+    * The epoch of the server that sent the document, which its versions are
+    * numbered in. A write based on one of them passes it as `baseEpoch`.
+    */
+   epoch: string;
+   /**
     * Absent when the document does not exist: the server answers an unknown
     * URI with a shaped envelope rather than an error, so absence is an
     * ordinary branch and not a catch.
@@ -133,6 +138,8 @@ export type TransferCreatedDocument<TTransfer extends TransferElement, TDiagnost
 export interface TransferWatchedDocument {
    /** The key the watch's events name the document by, which need not be the spelling the watch was asked with. */
    readonly uri: string;
+   /** The epoch {@link text}'s version is numbered in, as on a {@link TransferDocument}. */
+   readonly epoch: string;
    /** Whether a document exists there; one the server fails to load counts, only a missing one does not. */
    readonly exists: boolean;
    /** The position of the last update or deletion event sent before `exists` was taken; an event past it was sent after. */
@@ -167,11 +174,12 @@ export namespace TransferDocument {
       return document;
    }
 
-   /** The envelope for a document the server does not have. */
+   /** The envelope for a document the server whose epoch is `epoch` does not have. */
    export function absent<TTransfer extends TransferElement, TDiagnostic = TransferDiagnostic>(
-      uri: string
+      uri: string,
+      epoch: string
    ): TransferDocument<TTransfer, TDiagnostic> {
-      return { uri };
+      return { uri, epoch };
    }
 
    /**
@@ -183,11 +191,13 @@ export namespace TransferDocument {
       version: number,
       root: TTransfer,
       hash: string,
+      epoch: string,
       diagnostics?: TDiagnostic[],
       text?: TextState
    ): TransferDocument<TTransfer, TDiagnostic> {
       return {
          uri,
+         epoch,
          model: { root, version: asModelVersion(version), hash, ...(diagnostics === undefined ? {} : { diagnostics }) },
          ...(text === undefined ? {} : { text })
       };

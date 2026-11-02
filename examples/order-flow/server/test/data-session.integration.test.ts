@@ -26,6 +26,7 @@ import {
    isDocumentNotOpenError,
    isDuplicateClientIdError,
    isSessionClosedError,
+   type ModelVersion,
    type ResolvedMessage,
    type RpcProxy,
    type TransferElement,
@@ -231,13 +232,14 @@ async function fixThenRename(
    await session.openDocument({ uri });
    await session.saveDocument({ uri, model: BROKEN, baseVersion: 'any' });
    const fixed = TransferDocument.assertLoaded(
-      await session.updateDocument({ uri, model: EDITED, baseVersion: (await session.openDocument({ uri })).model!.version })
+      await session.updateDocument({ uri, model: EDITED, ...gateOf(await session.openDocument({ uri })) })
    );
    const [entity] = fixed.model.root.declarations as Entity[];
    await session.updateDocument({
       uri,
       model: { ...fixed.model.root, declarations: [{ ...entity, name: 'Renamed' }] },
-      baseVersion: fixed.model.version
+      baseVersion: fixed.model.version,
+      baseEpoch: fixed.epoch
    });
    return services.shared.workspace.TextDocuments.get(uri)?.getText();
 }
@@ -248,6 +250,11 @@ async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
       () => undefined,
       (error: unknown) => error
    );
+}
+
+/** The gate of a write based on `document`'s version. */
+function gateOf(document: TransferDocument<DomainModel>): { baseVersion: ModelVersion; baseEpoch: string } {
+   return { baseVersion: TransferDocument.assertLoaded(document).model.version, baseEpoch: document.epoch };
 }
 
 describe('data head sessions', () => {
@@ -387,7 +394,13 @@ describe('data head sessions', () => {
       const opened = await head.proxy.openModelDocument({ uri, clientId: SESSION });
 
       const write = rejectionOf(
-         head.server.updateModelDocument({ uri, clientId: SESSION, model: EDITED, baseVersion: opened.model!.version })
+         head.server.updateModelDocument({
+            uri,
+            clientId: SESSION,
+            model: EDITED,
+            baseVersion: opened.model!.version,
+            baseEpoch: opened.epoch
+         })
       );
       head.server.dispose();
 
@@ -424,7 +437,13 @@ describe('data head sessions', () => {
       expect(services.shared.workspace.TextDocuments.isOpenInClient(newUri, SESSION)).toBe(true);
       expect(() => readFileSync(path(NEW_FILE), 'utf8')).toThrow();
 
-      await proxy.saveModelDocument({ uri: newUri, clientId: SESSION, model: EDITED, baseVersion: created.model!.version });
+      await proxy.saveModelDocument({
+         uri: newUri,
+         clientId: SESSION,
+         model: EDITED,
+         baseVersion: created.model!.version,
+         baseEpoch: created.epoch
+      });
       expect(readFileSync(path(NEW_FILE), 'utf8')).toBe(EDITED);
    });
 
@@ -452,7 +471,13 @@ describe('data head sessions', () => {
 
       expect(policy.canonicalUri(viaLink)).toBe(real);
       const created = await head.proxy.createModelDocument({ uri: viaLink, clientId: SESSION, text: CLEAN });
-      await head.proxy.saveModelDocument({ uri: viaLink, clientId: SESSION, model: EDITED, baseVersion: created.model!.version });
+      await head.proxy.saveModelDocument({
+         uri: viaLink,
+         clientId: SESSION,
+         model: EDITED,
+         baseVersion: created.model!.version,
+         baseEpoch: created.epoch
+      });
       expect(policy.canonicalUri(viaLink)).toBe(real);
 
       // The open, the text store and the build still name the one document.
@@ -477,7 +502,7 @@ describe('data head sessions', () => {
       // The answer holds the other session's write; the created version is behind it.
       expect(TransferDocument.assertLoaded(created).model.version).toBeGreaterThan(created.created.version);
       const persist = await rejectionOf(
-         head.proxy.persistModelDocument({ uri: newUri, clientId: SESSION, baseVersion: created.created.version })
+         head.proxy.persistModelDocument({ uri: newUri, clientId: SESSION, baseVersion: created.created.version, baseEpoch: created.epoch })
       );
       expect(isConflictError(persist)).toBe(true);
       expect(existsSync(path(NEW_FILE))).toBe(false);
@@ -488,7 +513,13 @@ describe('data head sessions', () => {
       const { proxy } = connect();
       await proxy.createSession({ clientId: SESSION });
       const opened = await proxy.openModelDocument({ uri, clientId: SESSION });
-      const written = await proxy.updateModelDocument({ uri, clientId: SESSION, model: EDITED, baseVersion: opened.model!.version });
+      const written = await proxy.updateModelDocument({
+         uri,
+         clientId: SESSION,
+         model: EDITED,
+         baseVersion: opened.model!.version,
+         baseEpoch: opened.epoch
+      });
 
       const watched = await proxy.watchModelDocument({ uri, clientId: SESSION });
       const absent = await proxy.watchModelDocument({ uri: newUri, clientId: SESSION });
@@ -636,6 +667,32 @@ describe('DataSession.restore against the real stack', () => {
       expect(restarted.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(CLEAN);
    });
 
+   it('refuses a write made after the restore on a version from before a restart, which the restarted server holds other text at', async () => {
+      const { uri, path, connect } = await boot();
+      let head: Harness = connect();
+      const session = sessionOver(() => head, []);
+      const opened = TransferDocument.assertLoaded(await session.openDocument({ uri }));
+
+      drop(head);
+      writeFileSync(path(FILE), THEIRS);
+      const restarted = makeServices();
+      await initializeWorkspaceProgrammatically(restarted.shared, scratch!.workspace.root);
+      head = makeDataServerHarness<DataServer<DomainModel>, DomainModel>({
+         server: channel => new DataServer<DomainModel>(channel, restarted.shared)
+      });
+      heads.push(head);
+      await session.connected();
+      // The restarted server numbers afresh, so the old version names its text.
+      expect(restarted.shared.workspace.TextDocuments.version(uri)).toBe(opened.model.version);
+
+      const refusal = await rejectionOf(
+         session.updateDocument({ uri, model: EDITED, baseVersion: opened.model.version, baseEpoch: opened.epoch })
+      );
+
+      expect(isConflictError(refusal)).toBe(true);
+      expect(restarted.shared.workspace.TextDocuments.get(uri)?.getText()).toBe(THEIRS);
+   });
+
    it('reports nothing when another client kept the document, and the edits with it', async () => {
       const { services, uri, connect } = await boot();
       const textDocuments = services.shared.workspace.TextDocuments;
@@ -683,7 +740,7 @@ describe('DataSession re-apply against the real stack', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       const opened = await session.openDocument({ uri });
-      const written = await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version });
+      const written = await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version, baseEpoch: opened.epoch });
 
       head.server.lose();
       head.dispose();
@@ -703,7 +760,7 @@ describe('DataSession re-apply against the real stack', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       const opened = await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version, baseEpoch: opened.epoch });
 
       head.server.lose();
       head.dispose();
@@ -725,7 +782,7 @@ describe('DataSession re-apply against the real stack', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       const opened = await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version, baseEpoch: opened.epoch });
 
       drop(head);
       const other = services.shared.model.ModelService.createSession('other');
@@ -745,7 +802,7 @@ describe('DataSession re-apply against the real stack', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       const opened = await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version, baseEpoch: opened.epoch });
 
       drop(head);
       const restarted = makeServices();
@@ -771,7 +828,8 @@ describe('DataSession re-apply against the real stack', () => {
       await session.updateDocument({
          uri,
          model: { ...opened.model.root, declarations: [{ ...entity, name: 'Renamed' }] },
-         baseVersion: opened.model.version
+         baseVersion: opened.model.version,
+         baseEpoch: opened.epoch
       });
 
       drop(head);
@@ -819,13 +877,13 @@ describe('DataSession re-apply against the real stack', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       const fixedA = TransferDocument.assertLoaded(
-         await session.updateDocument({ uri, model: EDITED, baseVersion: (await session.openDocument({ uri })).model!.version })
+         await session.updateDocument({ uri, model: EDITED, ...gateOf(await session.openDocument({ uri })) })
       );
       const fixedB = TransferDocument.assertLoaded(
          await session.updateDocument({
             uri: otherUri,
             model: EDITED,
-            baseVersion: (await session.openDocument({ uri: otherUri })).model!.version
+            ...gateOf(await session.openDocument({ uri: otherUri }))
          })
       );
       const renamed = (document: typeof fixedA): DomainModel => {
@@ -834,8 +892,8 @@ describe('DataSession re-apply against the real stack', () => {
       };
       await session.updateDocuments({
          updates: [
-            { uri, model: renamed(fixedA), baseVersion: fixedA.model.version },
-            { uri: otherUri, model: renamed(fixedB), baseVersion: fixedB.model.version }
+            { uri, model: renamed(fixedA), baseVersion: fixedA.model.version, baseEpoch: fixedA.epoch },
+            { uri: otherUri, model: renamed(fixedB), baseVersion: fixedB.model.version, baseEpoch: fixedB.epoch }
          ]
       });
 
@@ -866,7 +924,7 @@ describe('DataSession re-apply against the real stack', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       const opened = await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: BROKEN, baseVersion: opened.model!.version });
+      await session.updateDocument({ uri, model: BROKEN, baseVersion: opened.model!.version, baseEpoch: opened.epoch });
       const other = services.shared.model.ModelService.createSession('other');
       await other.open(uri);
       await other.update({ uri, model: THEIRS, baseVersion: 'any' });
@@ -875,7 +933,8 @@ describe('DataSession re-apply against the real stack', () => {
       await session.updateDocument({
          uri,
          model: { ...fixed.model.root, declarations: [{ ...entity, name: 'Renamed' }] },
-         baseVersion: fixed.model.version
+         baseVersion: fixed.model.version,
+         baseEpoch: fixed.epoch
       });
       const edited = services.shared.workspace.TextDocuments.get(uri)?.getText();
 
@@ -902,7 +961,7 @@ describe('DataSession re-apply against the real stack', () => {
       const session = sessionOver(() => head, reported);
       await session.openDocument({ uri });
       await session.saveDocument({ uri, model: BROKEN, baseVersion: 'any' });
-      await session.updateDocument({ uri, model: EDITED, baseVersion: (await session.openDocument({ uri })).model!.version });
+      await session.updateDocument({ uri, model: EDITED, ...gateOf(await session.openDocument({ uri })) });
       const other = services.shared.model.ModelService.createSession('other');
       await other.open(uri);
       await other.update({ uri, model: THEIRS, baseVersion: 'any' });
@@ -911,7 +970,8 @@ describe('DataSession re-apply against the real stack', () => {
       await session.updateDocument({
          uri,
          model: { ...theirs.model.root, declarations: [{ ...entity, name: 'Renamed' }] },
-         baseVersion: theirs.model.version
+         baseVersion: theirs.model.version,
+         baseEpoch: theirs.epoch
       });
       const edited = services.shared.workspace.TextDocuments.get(uri)?.getText();
 
@@ -966,16 +1026,21 @@ describe('DataSession re-apply against the real stack', () => {
       const otherOpened = await session.openDocument({ uri: otherUri });
       const fixed = await session.updateDocuments({
          updates: [
-            { uri: otherUri, model: THEIRS, baseVersion: otherOpened.model!.version },
-            { uri, model: EDITED, baseVersion: (await session.openDocument({ uri })).model!.version }
+            { uri: otherUri, model: THEIRS, baseVersion: otherOpened.model!.version, baseEpoch: otherOpened.epoch },
+            { uri, model: EDITED, ...gateOf(await session.openDocument({ uri })) }
          ]
       });
       const [theirs, loaded] = fixed.map(document => TransferDocument.assertLoaded(document));
       const [entity] = loaded.model.root.declarations as Entity[];
       await session.updateDocuments({
          updates: [
-            { uri: otherUri, model: theirs.model.root, baseVersion: theirs.model.version },
-            { uri, model: { ...loaded.model.root, declarations: [{ ...entity, name: 'Renamed' }] }, baseVersion: loaded.model.version }
+            { uri: otherUri, model: theirs.model.root, baseVersion: theirs.model.version, baseEpoch: theirs.epoch },
+            {
+               uri,
+               model: { ...loaded.model.root, declarations: [{ ...entity, name: 'Renamed' }] },
+               baseVersion: loaded.model.version,
+               baseEpoch: loaded.epoch
+            }
          ]
       });
       const edited = [uri, otherUri].map(written => services.shared.workspace.TextDocuments.get(written)?.getText());
@@ -1002,8 +1067,12 @@ describe('DataSession re-apply against the real stack', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       const opened = TransferDocument.assertLoaded(await session.openDocument({ uri }));
-      const broken = TransferDocument.assertLoaded(await session.updateDocument({ uri, model: BROKEN, baseVersion: opened.model.version }));
-      const refused = await rejectionOf(session.updateDocument({ uri, model: broken.model.root, baseVersion: broken.model.version }));
+      const broken = TransferDocument.assertLoaded(
+         await session.updateDocument({ uri, model: BROKEN, baseVersion: opened.model.version, baseEpoch: opened.epoch })
+      );
+      const refused = await rejectionOf(
+         session.updateDocument({ uri, model: broken.model.root, baseVersion: broken.model.version, baseEpoch: broken.epoch })
+      );
       expect(isDocumentSyntaxError(refused)).toBe(true);
 
       drop(head);
@@ -1030,8 +1099,8 @@ describe('DataSession re-apply against the real stack', () => {
       const otherOpened = await session.openDocument({ uri: otherUri });
       await session.updateDocuments({
          updates: [
-            { uri, model: EDITED, baseVersion: opened.model!.version },
-            { uri: otherUri, model: EDITED, baseVersion: otherOpened.model!.version }
+            { uri, model: EDITED, baseVersion: opened.model!.version, baseEpoch: opened.epoch },
+            { uri: otherUri, model: EDITED, baseVersion: otherOpened.model!.version, baseEpoch: otherOpened.epoch }
          ]
       });
 
@@ -1055,8 +1124,8 @@ describe('DataSession re-apply against the real stack', () => {
       const otherOpened = await session.openDocument({ uri: otherUri });
       await session.updateDocuments({
          updates: [
-            { uri, model: EDITED, baseVersion: opened.model!.version },
-            { uri: otherUri, model: EDITED, baseVersion: otherOpened.model!.version }
+            { uri, model: EDITED, baseVersion: opened.model!.version, baseEpoch: opened.epoch },
+            { uri: otherUri, model: EDITED, baseVersion: otherOpened.model!.version, baseEpoch: otherOpened.epoch }
          ]
       });
 
@@ -1080,7 +1149,7 @@ describe('DataSession re-apply against the real stack', () => {
       const reported: ResolvedMessage[] = [];
       const session = sessionOver(() => head, reported);
       const opened = await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version, baseEpoch: opened.epoch });
 
       drop(head);
       head = connect();
@@ -1117,7 +1186,7 @@ describe('DataSession re-apply against the real stack', () => {
       });
       heads.push(head);
       const opened = await session.openDocument({ uri });
-      await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version });
+      await session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version, baseEpoch: opened.epoch });
       const other = services.shared.model.ModelService.createSession('other');
       await other.open(uri);
       await other.save({ uri, model: THEIRS, baseVersion: 'any' });
@@ -1154,7 +1223,7 @@ describe('DataSession re-apply against the real stack', () => {
       head.server.answerGate = new Promise<void>(resolve => {
          release = resolve;
       });
-      const late = session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version });
+      const late = session.updateDocument({ uri, model: EDITED, baseVersion: opened.model!.version, baseEpoch: opened.epoch });
       const textDocuments = services.shared.workspace.TextDocuments;
       await waitFor(() => textDocuments.get(uri)?.getText() === EDITED, { message: 'the write was never applied' });
       await session.saveDocument({ uri, model: EDITED, baseVersion: 'any' });

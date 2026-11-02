@@ -39,10 +39,10 @@ interface WidenedOpenArgs extends OpenModelArgs {
    extra?: string;
 }
 
-/** The same widening on the save path. */
-interface WidenedSaveArgs extends TransferSaveDocumentArgs<Root> {
+/** The same widening on the save path, an intersection since the args hold a union. */
+type WidenedSaveArgs = TransferSaveDocumentArgs<Root> & {
    extra?: string;
-}
+};
 
 /** The same widening on the close path. */
 interface WidenedCloseArgs extends CloseModelArgs {
@@ -102,12 +102,19 @@ async function typeAssertions(
    void unrecorded;
 
    // Accepted: the default instantiation still takes the framework's own fields.
+   await plain.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: asModelVersion(1), baseEpoch: 'epoch' });
+   // @ts-expect-error a version means nothing without the epoch it was numbered in
    await plain.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: asModelVersion(1) });
 
    // Accepted: a create answers the version it made, which a write names as
    // its base without a cast, and the adopter's diagnostic survives it too.
    const created = await widened.createDocument({ uri: URI_A, text: '' });
-   await widened.updateDocument({ uri: URI_A, model: { $type: 'TypeOne' }, baseVersion: created.created.version });
+   await widened.updateDocument({
+      uri: URI_A,
+      model: { $type: 'TypeOne' },
+      baseVersion: created.created.version,
+      baseEpoch: created.epoch
+   });
    const createdRuleId: string | undefined = created.model?.diagnostics?.[0]?.ruleId;
    void createdRuleId;
 

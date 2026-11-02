@@ -46,6 +46,14 @@ export function isModelVersion(baseVersion: BaseVersion): baseVersion is ModelVe
 }
 
 /**
+ * The precondition a write over the wire carries: a version with the epoch of
+ * the server that numbered it, or `'any'`. A restarted server numbers versions
+ * afresh, so a version alone can name text the writer never saw. The server
+ * refuses a version whose epoch is not its own with a `ConflictError`.
+ */
+export type BaseVersionGate = { baseVersion: ModelVersion; baseEpoch: string } | { baseVersion: 'any'; baseEpoch?: undefined };
+
+/**
  * Mark a version as having come from a snapshot read.
  *
  * **For the envelope constructors, not for callers.** Every door that builds a

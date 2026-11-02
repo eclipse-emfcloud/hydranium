@@ -34,8 +34,10 @@ export const STALE_BASE_VERSION_UPDATE = defineMessage(
 );
 
 /**
- * {@link STALE_BASE_VERSION_UPDATE}'s counterpart for an editor's save the
- * server refused, since the editor's buffer is not the text it holds.
+ * {@link STALE_BASE_VERSION_UPDATE}'s counterpart for a save or persist the
+ * server refused, an editor's whose buffer is not the text it holds, or a
+ * session's gated on a version the document has moved past or of another
+ * epoch.
  */
 export const STALE_BASE_VERSION_SAVE = defineMessage(
    'hydranium/protocol/stale-base-version-save',
@@ -81,7 +83,8 @@ export const CONFLICT_ERROR_CODE = HYDRANIUM_ERROR_CODES.conflict;
 export interface ConflictErrorData extends HydraniumMessageData {
    /**
     * The document whose version moved. A write of several documents names
-    * the first stale one in request order, and others may be stale too.
+    * the first in request order on another epoch, otherwise the first stale
+    * one, and others may be stale too.
     */
    readonly uri: string;
    /** The base version the caller authored against. */
@@ -94,7 +97,9 @@ export interface ConflictErrorData extends HydraniumMessageData {
  * Thrown by a client session's `update` / `save` when the caller-
  * supplied base version no longer matches the server's current text-
  * document version for the same URI — i.e. the snapshot the caller
- * authored against has been superseded by an intervening edit.
+ * authored against has been superseded by an intervening edit. A data
+ * server also throws it for a base version whose `baseEpoch` is not its
+ * own, as after a restart, whatever the version.
  *
  * Extends vscode-jsonrpc's {@link ResponseError} so the typed
  * {@link ConflictErrorData} payload rides on the standard JSON-RPC
@@ -137,13 +142,10 @@ export class ConflictError extends ResponseError<ConflictErrorData> {
          ...messageData(message, { uri })
       });
       this.name = 'ConflictError';
-      // ResponseError's constructor calls `Object.setPrototypeOf(this,
-      // ResponseError.prototype)` to keep its own prototype chain intact across
-      // transpilation targets; that resets us to ResponseError, hiding the
-      // ConflictError-specific getters. Restore the prototype here so
-      // `err.uri` / `.baseVersion` / `.actualVersion` resolve through this
-      // class.
-      Object.setPrototypeOf(this, ConflictError.prototype);
+      // ResponseError's constructor resets the prototype to its own, which
+      // hides this class's getters. Restored to the class constructed, so a
+      // subclass stays an instance of itself.
+      Object.setPrototypeOf(this, new.target.prototype);
    }
 
    /** The document whose version moved, see {@link ConflictErrorData.uri}. */
@@ -211,7 +213,7 @@ export class SessionClosedError extends ResponseError<SessionClosedErrorData> {
       super(SESSION_CLOSED_ERROR_CODE, message, { clientId, ...messageData(SESSION_CLOSED) });
       this.name = 'SessionClosedError';
       // `ResponseError` resets the prototype to its own; see `ConflictError`.
-      Object.setPrototypeOf(this, SessionClosedError.prototype);
+      Object.setPrototypeOf(this, new.target.prototype);
    }
 
    get clientId(): string {
@@ -249,7 +251,7 @@ export class DocumentNotOpenError extends ResponseError<DocumentNotOpenErrorData
          ...messageData(DOCUMENT_NOT_OPEN, { uri })
       });
       this.name = 'DocumentNotOpenError';
-      Object.setPrototypeOf(this, DocumentNotOpenError.prototype);
+      Object.setPrototypeOf(this, new.target.prototype);
    }
 
    get uri(): string {
@@ -288,7 +290,7 @@ export class DuplicateClientIdError extends ResponseError<DuplicateClientIdError
    constructor(clientId: string) {
       super(DUPLICATE_CLIENT_ID_ERROR_CODE, DUPLICATE_CLIENT_ID.format(), { clientId, ...messageData(DUPLICATE_CLIENT_ID) });
       this.name = 'DuplicateClientIdError';
-      Object.setPrototypeOf(this, DuplicateClientIdError.prototype);
+      Object.setPrototypeOf(this, new.target.prototype);
    }
 
    get clientId(): string {
@@ -308,7 +310,7 @@ export class ReservedClientIdError extends ResponseError<{ readonly clientId: st
    constructor(clientId: string) {
       super(RESERVED_CLIENT_ID_ERROR_CODE, `Client id ${clientId} is reserved for a framework participant`, { clientId });
       this.name = 'ReservedClientIdError';
-      Object.setPrototypeOf(this, ReservedClientIdError.prototype);
+      Object.setPrototypeOf(this, new.target.prototype);
    }
 
    get clientId(): string {
@@ -347,7 +349,7 @@ export class SaveFailedError extends ResponseError<SaveFailedErrorData> {
          ...messageData(SAVE_FAILED, { failures: named })
       });
       this.name = 'SaveFailedError';
-      Object.setPrototypeOf(this, SaveFailedError.prototype);
+      Object.setPrototypeOf(this, new.target.prototype);
    }
 
    get failures(): readonly SaveFailure[] {
@@ -380,7 +382,7 @@ export class DocumentSyntaxError extends ResponseError<DocumentSyntaxErrorData> 
    constructor(uri: string) {
       super(DOCUMENT_SYNTAX_ERROR_CODE, DOCUMENT_SYNTAX_ERROR.format({ uri }), { uri, ...messageData(DOCUMENT_SYNTAX_ERROR, { uri }) });
       this.name = 'DocumentSyntaxError';
-      Object.setPrototypeOf(this, DocumentSyntaxError.prototype);
+      Object.setPrototypeOf(this, new.target.prototype);
    }
 
    get uri(): string {

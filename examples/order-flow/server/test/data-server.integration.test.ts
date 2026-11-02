@@ -28,7 +28,14 @@
  * `saveModelDocument` and because a rebuild runs the integrity rules.
  */
 
-import { isConflictError, TransferDocument, UNKNOWN_CLIENT_ID } from '@hydranium/protocol';
+import {
+   asModelVersion,
+   isConflictError,
+   type ModelVersion,
+   STALE_BASE_VERSION_SAVE,
+   TransferDocument,
+   UNKNOWN_CLIENT_ID
+} from '@hydranium/protocol';
 import { waitFor } from '@hydranium/protocol/testing';
 import { DataServer, type DataServerOptions } from '@hydranium/data-server';
 import { RealpathDocumentUriPolicy, type ServerSharedServices } from '@hydranium/core';
@@ -214,7 +221,7 @@ describe('order-flow data head', () => {
 
          const answer = await head.harness.proxy.getModelDocument({ uri, includeDiagnostics });
 
-         expect(answer).toEqual({ uri });
+         expect(answer).toEqual({ uri, epoch: head.services.shared.workspace.TextDocuments.epoch });
       }
    );
 
@@ -391,6 +398,7 @@ describe('order-flow data head', () => {
 
       expect(answer).toEqual({
          uri,
+         epoch: head.services.shared.workspace.TextDocuments.epoch,
          exists: true,
          sequence: expect.any(Number),
          text: { version: expect.any(Number), hash: expect.any(String), dirty: false }
@@ -414,6 +422,7 @@ describe('order-flow data head', () => {
       // The placeholder's text, as a read of the document answers it.
       expect(answer).toEqual({
          uri,
+         epoch: head.services.shared.workspace.TextDocuments.epoch,
          exists: true,
          sequence: expect.any(Number),
          text: { version: expect.any(Number), hash: expect.any(String), dirty: false }
@@ -423,7 +432,7 @@ describe('order-flow data head', () => {
    it('answers a watch made through a symlink with the key its deletion is named by', async () => {
       const { link, target } = await driveSymlinkedHead();
       const proxy = harness!.proxy;
-      await proxy.createSession({ clientId: CLIENT_ID });
+      const { epoch } = await proxy.createSession({ clientId: CLIENT_ID });
       await proxy.openModelDocument({ uri: link, clientId: CLIENT_ID });
 
       const answer = await proxy.watchModelDocument({ uri: link, clientId: OTHER_ID });
@@ -431,6 +440,7 @@ describe('order-flow data head', () => {
 
       expect(answer).toEqual({
          uri: target,
+         epoch,
          exists: true,
          sequence: expect.any(Number),
          text: { version: 0, hash: expect.any(String), dirty: false }
@@ -439,6 +449,7 @@ describe('order-flow data head', () => {
       // The link now points at nothing, and still keys by its target.
       expect(await proxy.watchModelDocument({ uri: link, clientId: 'later' })).toEqual({
          uri: target,
+         epoch,
          exists: false,
          sequence: expect.any(Number)
       });
@@ -510,10 +521,12 @@ describe('order-flow data head', () => {
          baseVersion: 'any'
       });
 
-      const refusal = await proxy.deleteModelDocument({ uri, clientId: CLIENT_ID, baseVersion: opened.model.version }).then(
-         () => undefined,
-         (error: unknown) => error
-      );
+      const refusal = await proxy
+         .deleteModelDocument({ uri, clientId: CLIENT_ID, baseVersion: opened.model.version, baseEpoch: opened.epoch })
+         .then(
+            () => undefined,
+            (error: unknown) => error
+         );
 
       expect(isConflictError(refusal)).toBe(true);
       expect(existsSync(URI.parse(uri).fsPath)).toBe(true);
@@ -691,5 +704,59 @@ describe('order-flow data head', () => {
       });
 
       expect(written.model?.diagnostics?.map(diagnostic => diagnostic.message)).toEqual([expect.stringContaining('NoSuchStamp')]);
+   });
+
+   it('refuses a set with one member gated on another epoch and writes none of it', async () => {
+      const head = await driveDataHead();
+      const audit = head.uri(WORKSPACE_FILES.auditLeak);
+      const returns = head.uri(WORKSPACE_FILES.returnsProcess);
+      const current = TransferDocument.assertLoaded(await head.harness.proxy.openModelDocument({ uri: audit, clientId: CLIENT_ID }));
+      const stale = TransferDocument.assertLoaded(await head.harness.proxy.openModelDocument({ uri: returns, clientId: CLIENT_ID }));
+      const texts = () => [audit, returns].map(uri => head.services.shared.workspace.TextDocuments.get(uri)?.getText());
+      const before = texts();
+
+      // The member on the current epoch comes first, so a check made per member would write it.
+      const refusal = await head.harness.proxy
+         .updateModelDocuments({
+            clientId: CLIENT_ID,
+            updates: [
+               { uri: audit, model: 'entity ShipmentAudit {\n}', baseVersion: current.model.version, baseEpoch: current.epoch },
+               {
+                  uri: returns,
+                  model: 'process Returns for Order {\n}',
+                  baseVersion: stale.model.version,
+                  baseEpoch: `${stale.epoch}-before`
+               }
+            ]
+         })
+         .catch((error: unknown) => error);
+
+      expect(isConflictError(refusal)).toBe(true);
+      expect(texts()).toEqual(before);
+   });
+
+   it.each([
+      ['another epoch', (version: ModelVersion, epoch: string) => ({ baseVersion: version, baseEpoch: `${epoch}-before` })],
+      [
+         'a version the document moved past',
+         (version: ModelVersion, epoch: string) => ({ baseVersion: asModelVersion(version + 1), baseEpoch: epoch })
+      ]
+   ])('words the refusal of a save and a persist gated on %s as a refused save', async (_label, gateOf) => {
+      const head = await driveDataHead();
+      const uri = head.uri(WORKSPACE_FILES.auditLeak);
+      const opened = TransferDocument.assertLoaded(await head.harness.proxy.openModelDocument({ uri, clientId: CLIENT_ID }));
+      const gate = gateOf(opened.model.version, opened.epoch);
+
+      const refusals = await Promise.all([
+         head.harness.proxy
+            .saveModelDocument({ uri, clientId: CLIENT_ID, model: 'entity ShipmentAudit {\n}', ...gate })
+            .catch((error: unknown) => error),
+         head.harness.proxy.persistModelDocument({ uri, clientId: CLIENT_ID, ...gate }).catch((error: unknown) => error)
+      ]);
+
+      expect(refusals.map(refusal => (isConflictError(refusal) ? refusal.data?.hydranium?.code : refusal))).toEqual([
+         STALE_BASE_VERSION_SAVE.code,
+         STALE_BASE_VERSION_SAVE.code
+      ]);
    });
 });

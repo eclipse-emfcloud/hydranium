@@ -10,7 +10,7 @@
 import { compare } from 'fast-json-patch';
 import { type Disposable, Emitter, type Event } from 'vscode-jsonrpc';
 import { type Clock, SystemClock, TIMED_OUT } from '../clock';
-import { ConflictError, DocumentNotOpenError, SaveFailedError, STALE_BASE_VERSION_SAVE, STALE_BASE_VERSION_UPDATE } from '../errors';
+import { ConflictError, DocumentNotOpenError, SaveFailedError, STALE_BASE_VERSION_UPDATE } from '../errors';
 import { type BaseVersion, isModelVersion, type ModelVersion, UNRECORDED_VERSION } from '../model-service/base-version';
 import { type ConflictResolver, type ReconcileOutcome, ReconcilingConflictResolver } from '../patch-merge';
 import { PendingWorkTracker } from '../pending-work-tracker';
@@ -53,8 +53,6 @@ export type WorkingCopyEditOutcome =
 export interface WorkingCopyOpen<TTransfer extends TransferElement> {
    /** The last document the server sent. */
    snapshot: TransferDocument<TTransfer>;
-   /** The copy's restores heard when {@link snapshot} was taken. */
-   snapshotRestores: number;
    /**
     * Whether {@link snapshot} was taken while a write was out, so it may hold
     * the edits {@link sending} applies again. A base made on it then is
@@ -68,17 +66,17 @@ export interface WorkingCopyOpen<TTransfer extends TransferElement> {
     * included, and the snapshot version their write is gated on. A foreign
     * update that lands while they wait then conflicts and is reconciled,
     * instead of being written over, and the copy's own write does not.
-    * `restores` is the copy's restores heard when that root was taken. A base
-    * from before a restore conflicts on its first write. `unconfirmed` marks
-    * a base whose write before a conflict dropped edits from. The root is then
-    * the one that write was made on with only the edits it kept, so an edit
-    * restating a dropped value conflicts, and its first write conflicts too.
+    * `epoch` is the server's when that root was taken. A server that does not
+    * have it refuses the base's first write. `unconfirmed` marks a base whose
+    * write before a conflict dropped edits from. The root is then the one that
+    * write was made on with only the edits it kept, so an edit restating a
+    * dropped value conflicts, and its first write conflicts too.
     * It also marks a base made on a {@link snapshotUnderWrite}. `dropped`
     * makes any edit of a path a dropped edit wrote conflict, a revert to the
     * value before it included.
     */
    base?: VersionedModel<TTransfer> & {
-      readonly restores: number;
+      readonly epoch: string;
       readonly unconfirmed?: boolean;
       /** The root the user saw before a conflict dropped edits, and the paths those edits wrote. */
       readonly dropped?: { readonly seen: TTransfer; readonly paths: readonly string[] };
@@ -213,10 +211,10 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    protected readonly conflictResolver: ConflictResolver = new ReconcilingConflictResolver();
    /**
     * Writes of one reconcile, the first included, before a still-conflicting
-    * one is dropped. A first write the copy refuses unsent, on a base from
-    * before a restore or one a conflict dropped edits from, counts too. A
-    * split batch reconciles twice, so one batch makes at most twice the cap
-    * less one writes. Absent, `reconcileWrite`'s default applies.
+    * one is dropped. A first write the copy refuses unsent, on a base a
+    * conflict dropped edits from, counts too. A split batch reconciles twice,
+    * so one batch makes at most twice the cap less one writes. Absent,
+    * `reconcileWrite`'s default applies.
     */
    protected readonly maxWrites?: number;
    /**
@@ -233,8 +231,6 @@ export class WorkingCopy<TTransfer extends TransferElement> {
     * request sent under an earlier one neither counts nor answers.
     */
    protected current?: WorkingCopyOpen<TTransfer>;
-   /** Restores heard that may have renumbered the versions, see {@link handleDocumentRestored}. */
-   protected restores = 0;
    /** Every edit until its write answers, so a settle waits on rereads after a conflict too. */
    protected readonly editsInFlight = new PendingWorkTracker();
    /** {@link dirty} as last announced. */
@@ -249,6 +245,11 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    protected readonly subscriptions: Disposable[];
    /** Set by {@link dispose}, after which nothing is announced. */
    protected disposed = false;
+   /**
+    * The epoch the session's last registration answered, `undefined` until it
+    * registers again after the copy was made.
+    */
+   protected registeredEpoch?: string;
    /** Set once {@link close} stopped waiting for the open, which then ends when it answers. */
    protected openAbandoned = false;
 
@@ -260,6 +261,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    ) {
       // A deletion carries no document, so it has a channel of its own.
       this.subscriptions = [
+         session.onDidRegister(event => (this.registeredEpoch = event.epoch)),
          events.onDidUpdateDocument(event => this.handleDocumentUpdated(event)),
          events.onDidDeleteDocument(event => this.handleDocumentDeleted(event)),
          events.onDidChangeDocumentDirty(event => {
@@ -361,7 +363,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          // A sent edit that throws on this root is measured as none.
          model: rootOrUndefined(() => open.sending.reduce((root, sent) => sent.change(root), loaded.model.root)) ?? loaded.model.root,
          baseVersion: loaded.model.version,
-         restores: open.snapshotRestores,
+         epoch: loaded.epoch,
          unconfirmed: (open.snapshotUnderWrite && open.sending.length > 0) || undefined
       };
       open.queued.push(edit);
@@ -381,8 +383,8 @@ export class WorkingCopy<TTransfer extends TransferElement> {
     * needed saving. Rejects with a `DocumentNotOpenError` when the copy
     * follows no document, at the call or once the edits have answered, or
     * follows one opened again meanwhile. Rejects with a `ConflictError` when
-    * the text moved past the copy's version or the copy's document is from
-    * before the latest restore, and with a `SaveFailedError` when an edit has
+    * the text moved past the copy's version or the server restarted since
+    * the copy's document, and with a `SaveFailedError` when an edit has
     * not answered within {@link settleWritesMs}.
     */
    async save(): Promise<TransferSavedDocument<TTransfer> | undefined> {
@@ -405,14 +407,10 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       }
       // Gated on the copy's version: text the copy has not shown is not saved
       // on its behalf, and the save rejects with the `ConflictError` instead.
-      // A version from before the latest restore names nothing on this server.
-      if (open.snapshotRestores !== this.restores) {
-         throw new ConflictError(this.uri, model.version, UNRECORDED_VERSION, STALE_BASE_VERSION_SAVE);
-      }
       let saved: TransferSavedDocument<TTransfer> | undefined;
       open.snapshotRequests++;
       try {
-         saved = await this.session.persistDocument({ uri: this.uri, baseVersion: model.version });
+         saved = await this.session.persistDocument({ uri: this.uri, baseVersion: model.version, baseEpoch: open.snapshot.epoch });
          return saved;
       } finally {
          this.settleRequest(open, saved, true);
@@ -504,10 +502,8 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       if (this.openAbandoned) {
          throw new Error('WorkingCopy is closed');
       }
-      const restores = this.restores;
       const open: WorkingCopyOpen<TTransfer> = {
          snapshot: document,
-         snapshotRestores: restores,
          queued: [],
          sending: [],
          writing: false,
@@ -518,7 +514,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       this.current = open;
       // Taken now, so a save while the second read is out sees the text dirty.
       this.takeDirty(open, document.text);
-      // Heard apart from the restore count, which skips a restore that found the text unchanged.
+      // Whether a restore took the document over while the read was out.
       let restored = false;
       const listening = this.session.onDidRestoreDocument(event => {
          restored ||= event.uri === this.uri && event.reopened;
@@ -618,7 +614,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
                answer = reconciled.answer;
                writtenOutcomes = writtenOutcomes.map(() => this.toEditOutcome(reconciled.outcome));
                if (reconciled.outcome.status === 'conflict' && written.length > 1 && answer && TransferDocument.isLoaded(answer)) {
-                  ({ answer, outcomes: writtenOutcomes } = await this.splitConflict(open, roots, answer, reconciled.restores));
+                  ({ answer, outcomes: writtenOutcomes } = await this.splitConflict(open, roots, answer));
                }
             }
             let next = 0;
@@ -638,7 +634,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
             open.base = open.snapshot.model && {
                model: open.snapshot.model.root,
                baseVersion: open.snapshot.model.version,
-               restores: open.snapshotRestores
+               epoch: open.snapshot.epoch
             };
          } else if (base && outcomes.some(isDropped)) {
             // Dropped in part over a foreign edit, so reconciled against it,
@@ -663,8 +659,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    protected async splitConflict(
       open: WorkingCopyOpen<TTransfer>,
       roots: readonly TTransfer[],
-      theirs: LoadedTransferDocument<TTransfer>,
-      restores: number
+      theirs: LoadedTransferDocument<TTransfer>
    ): Promise<{ answer?: TransferDocument<TTransfer>; outcomes: (WorkingCopyEditOutcome | Promise<never>)[] }> {
       let merged = theirs.model.root;
       const replays: ReconcileOutcome<TTransfer>['status'][] = [];
@@ -682,7 +677,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          try {
             const reconciled = await this.reconcile(
                open,
-               { model: theirs.model.root, baseVersion: theirs.model.version, restores },
+               { model: theirs.model.root, baseVersion: theirs.model.version, epoch: theirs.epoch },
                merged,
                false
             );
@@ -712,13 +707,12 @@ export class WorkingCopy<TTransfer extends TransferElement> {
     * Write `ours`, based on `base`, and reconcile a conflict. Resolves to the
     * last document the write and its rereads answered, which {@link writeBatch}
     * takes, so the copy shows the server's value for an edit the reconcile
-    * dropped. `restores` is {@link restores} when its last reread was taken.
+    * dropped.
     *
-    * A base from before a restore is not sent but refused as a conflict, so
-    * the write is reconciled against the restarted server's document. Its
-    * version could match that server's by chance and the write would land.
-    * An unconfirmed base is refused the same way. Only a batch's own write,
-    * `whole`, can move the base of the edits queued meanwhile.
+    * Each write carries the epoch of the document its version came from, so
+    * a restarted server refuses a version it numbered for other text. An
+    * unconfirmed base is refused unsent. Only a batch's own write, `whole`,
+    * can move the base of the edits queued meanwhile.
     *
     * A merged write comes back as `persisted` when it was gated on a reread
     * that equals the root the edit was made on, since it raced no foreign
@@ -732,7 +726,6 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    ): Promise<{
       readonly outcome: ReconcileWriteOutcome;
       readonly answer?: TransferDocument<TTransfer>;
-      readonly restores: number;
    }> {
       let written: TransferDocument<TTransfer> | undefined;
       let theirs: TransferDocument<TTransfer> | undefined;
@@ -740,22 +733,23 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       let landedOn: BaseVersion | undefined;
       let first = true;
       let went = false;
-      // The restores heard when the version written next was read.
-      let restores = base.restores;
+      // The epoch of the version written next.
+      let epoch = base.epoch;
       const outcome = await reconcileWrite(ours, base.baseVersion, {
          persist: async (model, baseVersion) => {
             const onBase = first;
             first = false;
-            // Refused, not sent, on an unconfirmed base, after a restore or
-            // once the document went. The reread after a document went
-            // reports the edit unavailable.
+            // Refused, not sent, on an unconfirmed base or once the document
+            // went. The reread after a document went reports the edit
+            // unavailable.
             const unconfirmed = onBase && base.unconfirmed;
-            if (open !== this.current || unconfirmed || (restores !== this.restores && isModelVersion(baseVersion))) {
+            if (open !== this.current || unconfirmed) {
                went = open !== this.current;
                const refused = isModelVersion(baseVersion) ? baseVersion : base.baseVersion;
                throw new ConflictError(this.uri, refused, UNRECORDED_VERSION, STALE_BASE_VERSION_UPDATE);
             }
-            const answer = await this.session.updateDocument({ uri: this.uri, model, baseVersion });
+            const gate = isModelVersion(baseVersion) ? { baseVersion, baseEpoch: epoch } : { baseVersion };
+            const answer = await this.session.updateDocument({ uri: this.uri, model, ...gate });
             written = answer;
             landedOn = baseVersion;
             // The queued edits were made on the answer when it was built from
@@ -766,7 +760,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
                TransferDocument.isLoaded(answer) &&
                (answer.model.version === answer.written.version || compare(answer.model.root, model).length === 0);
             if (whole && onBase && queued?.baseVersion === base.baseVersion && landed) {
-               open.base = { model: answer.model.root, baseVersion: answer.model.version, restores: this.restores };
+               open.base = { model: answer.model.root, baseVersion: answer.model.version, epoch: answer.epoch };
             }
          },
          refetch: async () => {
@@ -781,7 +775,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
                return undefined;
             }
             theirs = read;
-            restores = this.restores;
+            epoch = read.epoch;
             // Gone, the edit is not written, so a deleted file is not written back.
             return theirs.model && { model: theirs.model.root, baseVersion: theirs.model.version };
          },
@@ -791,7 +785,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       });
       // A resolver that refetches nothing would retry a write refused this way until it ran out.
       if (went && outcome.status !== 'persisted') {
-         return { outcome: { ...outcome, status: 'unavailable' }, answer: theirs, restores };
+         return { outcome: { ...outcome, status: 'unavailable' }, answer: theirs };
       }
       if (outcome.status === 'dropped') {
          // The last refetch is older than the write that conflicted after it.
@@ -800,22 +794,22 @@ export class WorkingCopy<TTransfer extends TransferElement> {
             .connected()
             .then(server => server.getModelDocument({ uri: this.uri, includeDiagnostics: true }))
             .catch(() => undefined);
-         return { outcome, answer: reread, restores };
+         return { outcome, answer: reread };
       }
       if (outcome.status === 'conflict' || outcome.status === 'already-applied' || outcome.status === 'unavailable') {
-         return { outcome, answer: theirs, restores };
+         return { outcome, answer: theirs };
       }
       // Gated on a reread that equals the root the edit was made on, the write
-      // raced no foreign edit, as one the copy refused itself after a restore.
+      // raced no foreign edit, as one a restarted server refused.
       if (
          outcome.status === 'merged' &&
          theirs?.model &&
          landedOn === theirs.model.version &&
          compare(theirs.model.root, base.model).length === 0
       ) {
-         return { outcome: { status: 'persisted' }, answer: written, restores };
+         return { outcome: { status: 'persisted' }, answer: written };
       }
-      return { outcome, answer: written, restores };
+      return { outcome, answer: written };
    }
 
    /** The outcome an edit reports for what {@link reconcile} did. */
@@ -874,9 +868,8 @@ export class WorkingCopy<TTransfer extends TransferElement> {
     * versions afresh, so the versions held from before compare with nothing,
     * and a change made while the connection was down sent no event. Queued
     * edits keep their base, so their write is reconciled against what the
-    * restarted server holds and a field changed meanwhile conflicts. A restore
-    * that finds the snapshot's text at its version is not counted, as in the
-    * session, so a brief drop costs no conflict.
+    * restarted server holds and a field changed meanwhile conflicts. The
+    * epoch they carry tells that server's versions from those held before.
     */
    protected handleDocumentRestored(event: DataSessionRestoreEvent<TTransfer>): void {
       const open = this.current;
@@ -885,20 +878,8 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       }
       // The session no longer has it open, so neither does the copy.
       if (!event.reopened) {
-         this.restores++;
          this.dropDocument();
          return;
-      }
-      // The text the copy last saw, at its version, is still named by it.
-      const text = event.document?.text;
-      const known = open.snapshot.text;
-      if (
-         !text ||
-         text.version !== known?.version ||
-         text.hash !== known.hash ||
-         event.document?.model?.version !== open.snapshot.model?.version
-      ) {
-         this.restores++;
       }
       this.unhold(open);
       open.dirtyVersion = undefined;
@@ -957,11 +938,11 @@ export class WorkingCopy<TTransfer extends TransferElement> {
     * unless a request is out. A document older than the snapshot is skipped.
     */
    protected offer(open: WorkingCopyOpen<TTransfer>, document: TransferDocument<TTransfer>, announce: boolean): void {
-      // Versions rise per server, so an older one was built before the
-      // snapshot. Held, it would be taken when a request answers.
+      // Versions rise per server life, so an older one of the same epoch was
+      // built before the snapshot. Held, it would be taken when a request answers.
       const offered = document.model?.version;
       const current = open.snapshot.model?.version;
-      if (offered !== undefined && current !== undefined && offered < current && open.snapshotRestores === this.restores) {
+      if (offered !== undefined && current !== undefined && offered < current && document.epoch === open.snapshot.epoch) {
          return;
       }
       this.takeDirty(open, document.text);
@@ -1011,7 +992,6 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    protected adopt(open: WorkingCopyOpen<TTransfer>, document: TransferDocument<TTransfer>, announce = true): void {
       const held = open.snapshot.model?.hash;
       open.snapshot = document;
-      open.snapshotRestores = this.restores;
       open.snapshotUnderWrite = open.sending.length > 0;
       if (announce && (held === undefined || held !== document.model?.hash)) {
          this.changeEmitter.fire(undefined);
@@ -1040,7 +1020,10 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    }
 
    /** {@link settleRequest} past its check that `open` is followed, without announcing {@link dirty}. */
-   protected settleAnswer(open: WorkingCopyOpen<TTransfer>, answer: TransferDocument<TTransfer> | undefined, announce: boolean): void {
+   protected settleAnswer(open: WorkingCopyOpen<TTransfer>, received: TransferDocument<TTransfer> | undefined, announce: boolean): void {
+      // A request sent before a restart can answer after it, for a server
+      // whose document the restore replaced.
+      const answer = received?.epoch === (this.registeredEpoch ?? open.snapshot.epoch) ? received : undefined;
       // A read found the file gone, and a deletion event need not follow, so
       // the session's open is closed too. An open called later follows it.
       if (answer && !TransferDocument.isLoaded(answer)) {
