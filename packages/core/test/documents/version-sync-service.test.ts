@@ -514,6 +514,16 @@ describe('DefaultVersionSyncService.requestRecoveryBuild', () => {
       });
    });
 
+   it('builds a request once when a write is queued after its build ended', async () => {
+      const rig = makeRig();
+      const lock = rig.services.workspace.WorkspaceLock;
+      rig.outcomes.push(() => lock.write(() => undefined).then(() => void lock.write(() => undefined)));
+
+      const answer = await outcome(rig.sync.requestRecoveryBuild(uri, needed()));
+
+      expect({ answer, builds: rig.builds.length }).toEqual({ answer: 'built', builds: 1 });
+   });
+
    it('builds rather than removes the document when a change request follows a deletion in one batch', async () => {
       const rig = makeRig();
       let release!: () => void;

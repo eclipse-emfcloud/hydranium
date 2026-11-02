@@ -94,3 +94,40 @@ describe('HydraniumWorkspaceLock stalled-write diagnosis', () => {
       expect(warnings()).toEqual([expect.stringContaining('from inside a build')]);
    });
 });
+
+describe('HydraniumWorkspaceLock write cancellations', () => {
+   it('counts none for a write queued after the write before it ended', async () => {
+      const { lock } = makeLock();
+      await lock.write(() => undefined);
+      const before = lock.writeCancellations;
+      await lock.write(() => undefined);
+      expect(lock.writeCancellations).toBe(before);
+   });
+
+   it('counts one for a write queued while another is still queued', async () => {
+      const { lock } = makeLock();
+      const first = lock.write(() => undefined);
+      const before = lock.writeCancellations;
+      const second = lock.write(() => undefined);
+      expect(lock.writeCancellations).toBe(before + 1);
+      await Promise.all([first, second]);
+   });
+
+   it('counts one for a write queued while another runs', async () => {
+      const { lock } = makeLock();
+      const { release, held } = await holdWrite(lock);
+      const before = lock.writeCancellations;
+      const next = lock.write(() => undefined);
+      expect(lock.writeCancellations).toBe(before + 1);
+      release();
+      await Promise.all([held, next]);
+   });
+
+   it('counts none for a cancelWrite with no write queued or running', async () => {
+      const { lock } = makeLock();
+      await lock.write(() => undefined);
+      const before = lock.writeCancellations;
+      lock.cancelWrite();
+      expect(lock.writeCancellations).toBe(before);
+   });
+});
