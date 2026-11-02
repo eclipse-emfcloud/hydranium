@@ -13,7 +13,6 @@ import { asMutable, type CanonicalUri, Deferred, Disposable, Logger, type LogThr
 import {
    type BuildOptions,
    type CstNode,
-   DefaultDocumentBuilder,
    DocumentState,
    type DocumentPhaseListener,
    type FileSystemNode,
@@ -777,13 +776,13 @@ describe('HydraniumDocumentBuilder', () => {
          return { uri: URI.file(path), state, parseResult: { value: root }, references: [] } as unknown as LangiumDocument;
       }
 
-      /** Langium's phase runner, which is protected. */
+      /** The phase runner, which is protected. */
       interface LangiumPhases {
-         buildDocuments(): Promise<void>;
+         buildPhases(build: RunningBuild): Promise<void>;
       }
-      // Langium's phases are stubbed out, so a build runs only the graft before them.
+      // The phases are stubbed out, so a build runs only the graft before them.
       async function buildWithoutPhases(run: () => Promise<void>): Promise<void> {
-         const phases = vi.spyOn(DefaultDocumentBuilder.prototype as unknown as LangiumPhases, 'buildDocuments').mockResolvedValue();
+         const phases = vi.spyOn(HydraniumDocumentBuilder.prototype as unknown as LangiumPhases, 'buildPhases').mockResolvedValue();
          try {
             await run();
          } finally {
@@ -845,8 +844,8 @@ describe('HydraniumDocumentBuilder', () => {
          const builder = rehydrateBuilder();
          const tokens: CancellationToken[] = [];
          const phases = vi
-            .spyOn(DefaultDocumentBuilder.prototype as unknown as { buildDocuments(...args: unknown[]): Promise<void> }, 'buildDocuments')
-            .mockImplementation(async (...args: unknown[]) => void tokens.push(args[2] as CancellationToken));
+            .spyOn(HydraniumDocumentBuilder.prototype as unknown as LangiumPhases, 'buildPhases')
+            .mockImplementation(async build => void tokens.push(build.cancelToken));
          const source = new CancellationTokenSource();
          try {
             await builder.build([], {}, source.token);
@@ -979,6 +978,114 @@ describe('HydraniumDocumentBuilder', () => {
          const doc = { uri: URI.parse('file:///foo.a') } as LangiumDocument;
          const line = builder.callPhaseReachedLine(DocumentState.Linked, [doc], 1);
          expect(line).toContain('[ws]/foo.a');
+      });
+   });
+
+   describe('phase batch ownership', () => {
+      class OwnerBuilder extends HydraniumDocumentBuilder {
+         associate(documents: LangiumDocument[], build: RunningBuild): void {
+            this.buildsByBatch.set(documents, build);
+         }
+         runFiltered(documents: LangiumDocument[], state: DocumentState, build: RunningBuild): Promise<void> {
+            return this.runCancelable(documents.slice(0, 1), state, CancellationToken.None, () => undefined, build);
+         }
+      }
+      it.each([
+         DocumentState.Parsed,
+         DocumentState.IndexedContent,
+         DocumentState.ComputedScopes,
+         DocumentState.Linked,
+         DocumentState.IndexedReferences,
+         DocumentState.Validated
+      ])('keeps the explicit owner when the phase runner filters its input at %s', async state => {
+         const builder = new OwnerBuilder(makeStubServices(makeNoopLogger()), { logLevel: 'off' });
+         const documents = [0, 1].map(index => ({ state, uri: URI.parse(`file:///phase-${index}.a`) }) as LangiumDocument);
+         const build: RunningBuild = { documents, documentSet: new Set(documents), options: {}, cancelToken: CancellationToken.None };
+         const seen: RunningBuild[] = [];
+         builder.onBuildPhase(state, batch => {
+            expect(batch).toEqual([documents[0]]);
+            expect(builder.buildForBatch(batch)).toBe(build);
+            seen.push(build);
+         });
+         await builder.runFiltered(documents, state, build);
+         expect(seen).toEqual([build]);
+      });
+      it.each(
+         (['off', 'info'] as const).flatMap(level =>
+            [false, true].flatMap(fails => [false, true].map(prior => [level, fails, prior] as const))
+         )
+      )('holds notification ownership across awaits at %s, failure=%s, prior=%s', async (level, fails, prior) => {
+         const builder = new OwnerBuilder(makeStubServices(makeNoopLogger()), { logLevel: level });
+         const documents = [{ state: DocumentState.Parsed, uri: URI.parse('file:///phase.a') } as LangiumDocument];
+         const build: RunningBuild = { documents, documentSet: new Set(documents), options: {}, cancelToken: CancellationToken.None };
+         const previous: RunningBuild = { ...build };
+         if (prior) builder.associate(documents, previous);
+         const entered = new Deferred<void>();
+         const resume = new Deferred<void>();
+         const failure = new Error('notification failed');
+         builder.onBuildPhase(DocumentState.Parsed, async batch => {
+            expect(builder.buildForBatch(batch)).toBe(build);
+            entered.resolve();
+            await resume.promise;
+            expect(builder.buildForBatch(batch)).toBe(build);
+            if (fails) throw failure;
+         });
+         const delivery = builder.notifyBuildPhase(documents, DocumentState.Parsed, CancellationToken.None, build);
+         try {
+            await Promise.race([
+               entered.promise,
+               delivery.then(() => {
+                  throw new Error('Delivery ended before hold');
+               })
+            ]);
+            expect(builder.buildForBatch(documents)).toBe(prior ? previous : build);
+         } finally {
+            resume.resolve();
+            if (fails) await expect(delivery).rejects.toBe(failure);
+            else await delivery;
+         }
+         expect(builder.buildForBatch(documents)).toBe(prior ? previous : undefined);
+      });
+      it.each(['first', 'second'])('keeps concurrent notification ownership when %s finishes first', async finishes => {
+         const builder = new OwnerBuilder(makeStubServices(makeNoopLogger()), { logLevel: 'off' });
+         const documents = [{ state: DocumentState.Parsed, uri: URI.parse('file:///phase.a') } as LangiumDocument];
+         const first: RunningBuild = { documents, documentSet: new Set(documents), options: {}, cancelToken: CancellationToken.None };
+         const second: RunningBuild = { ...first };
+         const entered = new Map([
+            [first, new Deferred<void>()],
+            [second, new Deferred<void>()]
+         ]);
+         const resume = new Map([
+            [first, new Deferred<void>()],
+            [second, new Deferred<void>()]
+         ]);
+         const batches = new Map<RunningBuild, readonly LangiumDocument[]>();
+         builder.onBuildPhase(DocumentState.Parsed, async batch => {
+            const owner = builder.buildForBatch(batch);
+            expect(owner === first || owner === second).toBe(true);
+            if (owner === undefined) return;
+            batches.set(owner, batch);
+            entered.get(owner)!.resolve();
+            await resume.get(owner)!.promise;
+            expect(builder.buildForBatch(batch)).toBe(owner);
+         });
+         const a = builder.notifyBuildPhase(documents, DocumentState.Parsed, CancellationToken.None, first);
+         await entered.get(first)!.promise;
+         const b = builder.notifyBuildPhase(documents, DocumentState.Parsed, CancellationToken.None, second);
+         try {
+            await entered.get(second)!.promise;
+            const done = finishes === 'first' ? first : second;
+            const active = finishes === 'first' ? second : first;
+            resume.get(done)!.resolve();
+            await (done === first ? a : b);
+            expect(builder.buildForBatch(batches.get(active)!)).toBe(active);
+         } finally {
+            resume.get(first)!.resolve();
+            resume.get(second)!.resolve();
+            await Promise.all([a, b]);
+         }
+         expect(builder.buildForBatch(documents)).toBeUndefined();
+         expect(builder.buildForBatch(batches.get(second)!)).toBeUndefined();
       });
    });
 
