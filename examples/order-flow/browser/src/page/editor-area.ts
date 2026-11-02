@@ -38,7 +38,7 @@ import type { MonacoLspClient } from '@hydranium/client-browser/monaco';
 import * as monaco from 'monaco-editor-core';
 import { requireElement } from './dom.js';
 import { editorOptions } from './monaco-setup.js';
-import { isNarrowViewport } from './responsive.js';
+import { expandRegion, isNarrowViewport } from './responsive.js';
 import type { VisibleDocuments } from './workspace-panel.js';
 
 /** One editor: its title element, its Monaco instance, and what is in it. */
@@ -183,7 +183,10 @@ export class EditorArea {
       if (isNarrowViewport()) {
          // The whole pane rather than the editor: its header names the document,
          // which is the part that says the selection was honoured.
-         pane.editor.getContainerDomNode().closest('.pane')?.scrollIntoView({ block: 'start' });
+         const region = pane.editor.getContainerDomNode().closest('.pane');
+         expandRegion(region);
+         pane.editor.layout();
+         region?.scrollIntoView({ block: 'start' });
          return;
       }
       pane.editor.focus();
