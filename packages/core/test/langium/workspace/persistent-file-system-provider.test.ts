@@ -163,15 +163,12 @@ describe('PersistentFileSystemProvider writes', () => {
       expect(store.contents.get('alpha/one.a')).toBe('written one');
    });
 
-   it('rejects writeFile when the store refuses, so a save cannot report success', async () => {
+   it('keeps the previous bytes when the store refuses writeFile', async () => {
       const store = new RecordingStore();
       store.failure = new Error('QuotaExceededError');
       const files = await restored(store);
       await expect(files.writeFile(URI.parse(`${ROOT}/alpha/one.a`), 'written one')).rejects.toThrow('QuotaExceededError');
-      // The map took it anyway. The write is what the server now serves and the
-      // client was told the save failed, which is the honest pair — a rollback
-      // here would discard content no one else holds.
-      expect(files.readFileSync(URI.parse(`${ROOT}/alpha/one.a`))).toBe('written one');
+      expect(files.readFileSync(URI.parse(`${ROOT}/alpha/one.a`))).toBe('seeded one');
    });
 
    it('rejects a write outside rootUri rather than storing an unrestorable key', async () => {

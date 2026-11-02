@@ -204,13 +204,17 @@ export class PersistentFileSystemProvider extends InMemoryFileSystemProvider {
     * the save: the alternative is a page that reports a saved workspace and
     * reloads without it, which is the same shape as persistence working.
     *
-    * `super.setFile` rather than `this.setFile`, so the awaited mirror below is
+    * The map advances only after persistence succeeds, so a save retry still
+    * sees the previous bytes and retries the store. Unsaved text belongs to the
+    * document manager, not this filesystem.
+    *
+    * `super.setFile` rather than `this.setFile`, so the awaited mirror is
     * the only one — the override would fire a second, unawaited write for the
     * same content.
     */
    override async writeFile(uri: URI, content: string): Promise<void> {
-      super.setFile(uri, content);
       await this.persist(uri, content);
+      super.setFile(uri, content);
    }
 
    /**
