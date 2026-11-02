@@ -41,7 +41,7 @@ import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { HydraniumGlspSubmissionHandler } from '../src/submission/hydranium-glsp-submission-handler.js';
 import { HydraniumGlspServer } from '../src/launcher/hydranium-glsp-server.js';
-import { DiagramEditDroppedError } from '../src/command/diagram-edit-dropped-error.js';
+import { DiagramEditDroppedError } from '../src/command/diagram-write-errors.js';
 import { makeGlspHarness } from '../src/testing/glsp-harness.js';
 import { waitFor } from '@hydranium/protocol/testing';
 

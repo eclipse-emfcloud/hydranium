@@ -130,6 +130,7 @@ export class ReconcilingTransferHydraniumGlspState<
          base: this.base,
          conflictResolver: this.conflictResolver,
          logger: this.logger,
+         messageRenderer: this.sharedServices.MessageRenderer,
          onConflictDropped: () => this.writeDropped(),
          onAlreadyApplied: () => this.captureBuiltRoot(),
          assertParses: () => this.assertStoredTextParses(this._sourceUri),

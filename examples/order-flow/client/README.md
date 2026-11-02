@@ -154,13 +154,14 @@ returns a status rather than `void`:
 | --- | --- |
 | `applied` | Landed against an unchanged document. |
 | `merged` | Raced foreign edits to *different* fields; both intents survive. |
-| `conflict` | Raced a foreign edit of the *same* field to a different value, and was dropped while the other edits of its write still landed. Or kept racing foreign edits, and the whole write was dropped. Or set a field an earlier edit lost that way, a revert to the value before it included. The panel then shows the server's value, unless reading it failed. |
+| `conflict` | Raced a foreign edit of the *same* field to a different value, and was dropped while the other edits of its write still landed. Or set a field an earlier edit lost that way, a revert to the value before it included. The panel then shows the server's value. When reading it fails, the edit fails instead. |
+| `ran-out` | Each write conflicted with a foreign edit until its writes ran out, and the whole write was dropped. The panel then shows the server's values. When reading them fails, the edit fails instead. |
 | `unchanged` | Nothing was written: the panel's value already matched, or the server turned out to hold it. |
 | `unavailable` | Nothing was written: the document was closed or deleted, a restore could not open it again, or its open's second read failed, before a write carried the edit. |
 
-The panel reports a `conflict` or an `unavailable` of a document it no longer
-shows through its error sink, naming the field and the document, since its
-status line belongs to the next one.
+The panel reports a `conflict`, a `ran-out` or an `unavailable` of a document it
+no longer shows through its error sink, naming the field and the document,
+since its status line belongs to the next one.
 
 ## The contract with the server
 

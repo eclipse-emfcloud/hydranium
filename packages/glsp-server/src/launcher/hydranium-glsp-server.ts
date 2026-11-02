@@ -23,7 +23,7 @@ import {
 import { type ServerSharedServices } from '@hydranium/core';
 import { describeErrorWithStack, isResponseError, RequestSaveModelAction } from '@hydranium/protocol';
 import { inject, injectable, optional } from 'inversify';
-import { logActionFailure } from '../command/diagram-edit-dropped-error.js';
+import { logActionFailure } from '../command/diagram-write-errors.js';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { HydraniumGlspStorage } from '../storage/hydranium-glsp-storage.js';
 import { takeSettleFailureLogged } from '../storage/logged-settle-failures.js';

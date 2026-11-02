@@ -28,7 +28,7 @@ import {
    isConflictError,
    isDocumentSyntaxError
 } from '@hydranium/protocol';
-import { DiagramEditDroppedError, isDiagramEditDroppedError } from './diagram-edit-dropped-error.js';
+import { DiagramEditDroppedError, isDiagramEditDroppedError, isDiagramWriteUnsettledError } from './diagram-write-errors.js';
 import { type HydraniumGlspRecordingState } from './hydranium-glsp-recording-command.js';
 
 /**
@@ -248,15 +248,21 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
     * `create` runs inside the operation, because handlers resolve their
     * targets there. On any failure, `create`, the command or the write, the
     * executed commands' side effects are undone, nothing is written, and the
-    * error is rethrown; after a write whose reconcile dropped the edit, the
-    * side effects are undone the same way and this answers `'dropped'`. The
-    * operation closes either way: the copies are dropped and the source root
-    * is captured again, with the base version, every tracked version and the
-    * index.
+    * error is rethrown. A refusal, see {@link isRefusal}, stays bare unless a
+    * command threw it or a side effect could not be undone, see
+    * {@link rollback}. Then it is rethrown as the `cause` of a plain error, as
+    * an undo or redo does, so a command stack executing it flushes. After a
+    * write whose reconcile dropped the edit, the side effects are undone the
+    * same way and this answers `'dropped'`, or throws a plain error when one
+    * could not be undone. The operation closes either way: the copies are
+    * dropped and the source root is captured again, with the base version,
+    * every tracked version and the index.
     */
    protected async run(create: () => MaybePromise<Command | undefined>): Promise<'executed' | 'dropped' | 'none'> {
       this.open();
       let recorded: OperationTransition<TSourceModel> | undefined;
+      let undone: boolean | undefined;
+      let executing = false;
       try {
          this.before = await this.project();
          await this.checkpoint('create');
@@ -264,22 +270,35 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
          if (!command) {
             return 'none';
          }
+         executing = true;
          await this.tracked(command).execute();
+         executing = false;
          this.command = command;
          await this.checkpoint('project');
          const written = await this.project();
          if (written !== undefined && !(await this.write(written))) {
-            await this.rollback();
-            return 'dropped';
-         }
-         if (this.before !== undefined && written !== undefined) {
+            undone = await this.rollback();
+         } else if (this.before !== undefined && written !== undefined) {
             recorded = { from: this.before, to: written };
          }
       } catch (error: unknown) {
-         await this.rollback();
+         const undoneAll = await this.rollback();
+         // A command that threw registered no undo for what it ran, and a step that failed or has
+         // no undo hook left its change. Either way the refusal no longer tells all that happened.
+         if (isRefusal(error) && (executing || !undoneAll)) {
+            throw new Error(`The operation was refused, and a side effect it ran may not have been undone: ${describeError(error)}`, {
+               cause: error
+            });
+         }
          throw error;
       } finally {
          this.close();
+      }
+      if (undone === false) {
+         throw new Error("The operation's write was dropped, and a side effect it ran may not have been undone");
+      }
+      if (undone) {
+         return 'dropped';
       }
       // After the write landed, so a failure here leaves it in place: the
       // transition is then kept as recorded, and an undo may conflict.
@@ -401,14 +420,17 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
    /**
     * Undo the side effects of the executed commands, newest first, each step
     * on its own: a step that fails is logged and the rest are still undone.
-    * The operation's own error is the one thrown.
+    * The operation's own error is the one thrown. Resolves to whether every
+    * step was undone, which a step with a redo hook but no undo hook was not,
+    * as {@link compensate} counts it.
     */
-   protected async rollback(): Promise<void> {
-      await this.runEach(
+   protected async rollback(): Promise<boolean> {
+      const undone = await this.runEach(
          [...this.steps].reverse().map(step => () => step.undo?.()),
          'Rolling back a failed operation',
          'rollback'
       );
+      return undone && this.steps.every(step => step.redo === undefined || step.undo !== undefined);
    }
 
    /**
@@ -569,9 +591,9 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
     * steps already run are run the other way, newest first, with nothing
     * written. A write dropped after every step was run back changed nothing,
     * and resolves to `false`: the undo or redo is skipped as for a collision,
-    * and the history kept. A `DocumentSyntaxError` or `ConflictError` the
-    * write threw then is rethrown, and the command stack keeps its place, so a
-    * retry reads the model again. This relies on the state's write applying
+    * and the history kept. A refusal the write threw then, see
+    * {@link isRefusal}, is rethrown, and the command stack keeps its place, so
+    * a retry reads the model again. This relies on the state's write applying
     * none of its documents when it throws. Any other error is rethrown, and
     * GLSP's command stack flushes. A refusal a step threw, or one after a step
     * that cannot be run back, is rethrown as the `cause` of a plain error, so
@@ -613,7 +635,7 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
             }
             throw error;
          }
-         if (isDocumentSyntaxError(error) || isConflictError(error)) {
+         if (isRefusal(error)) {
             throw new Error(`The ${direction} was refused, and a step it ran may have changed the model: ${describeError(error)}`, {
                cause: error
             });
@@ -731,6 +753,15 @@ export class HydraniumGlspOperationCommand<TSourceModel extends AnyObject = AnyO
          }
       }
    }
+}
+
+/**
+ * Whether `error` refused a write without writing: a document that does not
+ * parse, a conflict, writes that ran out, or a text that could not be read.
+ * Only such a failure can leave the model as it was.
+ */
+export function isRefusal(error: unknown): boolean {
+   return isDocumentSyntaxError(error) || isConflictError(error) || isDiagramWriteUnsettledError(error);
 }
 
 /** Whether `value` is a list of commands, as a `CompoundCommand` holds its children. */

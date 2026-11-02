@@ -251,6 +251,7 @@ export class ReconcilingMultiDocumentGlspState<
          base: this.base,
          conflictResolver: this.conflictResolver,
          logger: this.logger,
+         messageRenderer: this.sharedServices.MessageRenderer,
          onConflictDropped: () => this.writeDropped(),
          onAlreadyApplied: () => this.captureBuiltRoot(),
          assertParses: () => [this._sourceUri, ...this.secondaryUris].forEach(uri => this.assertStoredTextParses(uri)),
@@ -418,7 +419,8 @@ export class ReconcilingMultiDocumentGlspState<
       const secondaries: Record<string, TransferElement> = {};
       const secondaryVersions: Record<string, ModelVersion> = {};
       for (const uri of this.secondaryUris) {
-         const read = await this.readCurrentRoot(uri);
+         // A secondary it cannot read is left out, and the write goes on.
+         const read = await this.readCurrentRoot(uri, 'debug');
          if (read) {
             secondaries[uri] = this.projectRoot(read.root);
             secondaryVersions[uri] = read.version;

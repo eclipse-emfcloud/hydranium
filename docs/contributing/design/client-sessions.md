@@ -300,10 +300,11 @@ An answer built past its `written` version holds a later write too, so unless
 its model is the one the copy sent, the edit is reconciled against it.
 
 **A dropped edit is not carried.** An edit typed during a write that a conflict
-dropped edits from is reconciled against the server. An edit of the dropped
-field conflicts, one that restates the dropped value or reverts to the value
-before it included, since the server keeps the other client's, and an edit of a
-field the write merged does not.
+dropped edits from, or whose writes ran out, is reconciled against the server.
+An edit of a field a conflict dropped conflicts, one that restates the dropped
+value or reverts to the value before it included, since the server keeps the
+other client's. An edit of a field the write merged does not, nor one of a
+field whose writes ran out, since no other value won there.
 
 **A write never lands on text the copy has not seen.** A restarted server
 numbers versions afresh in another epoch, so it refuses a write based on a
@@ -317,7 +318,9 @@ written again, by the server or by the copy itself on an unconfirmed base,
 reports `merged` when the document it read in between differs from the one the
 edit was made on, or when the write was not gated on that read. The two are
 compared as models, so another client's change to the text alone, such as a
-comment, counts as none, as does a change undone before the read.
+comment, counts as none, as does a change undone before the read. A write the
+copy refused unsent does not count against its write limit, up to as many as
+the limit.
 
 **An ended open stays ended.** A close, a deletion, a restore that could not
 open the document again, a failed second read of the open or a read that finds

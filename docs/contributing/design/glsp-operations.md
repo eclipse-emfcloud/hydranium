@@ -66,12 +66,29 @@ an inserted element never does, since two equal insertions may both be meant.
 
 ## A dropped edit is told to the client
 
-Every diagram action that does not take effect sends the client a message;
-otherwise the diagram returning to the document's state, or an undo doing
-nothing, reads as a fault. A write the reconcile drops is told as a dropped
-edit, whether an operation or a recording command executed outside one wrote
-it. An undo or redo that a foreign edit of the same field skips, wholly or in
-part, is told as skipped.
+Every operation, undo or redo that does not take effect sends the client a
+message. Otherwise the diagram returning to the document's state, or an undo
+doing nothing, reads as a fault. A write the reconcile drops is told as a
+dropped edit, whether an operation or a recording command executed outside one
+wrote it. An undo or redo that a foreign edit of the same field skips, wholly
+or in part, is told as skipped.
+
+A write the reconcile cannot settle fails instead, with nothing written, and is
+told with its own reason. Its writes can run out: each one conflicted, because
+another writer kept changing the document, and a retry may land. Or the current
+text cannot be read to reconcile against, and forcing the write would overwrite
+text the diagram never saw. Told as a dropped edit, either would name a
+collision the reconcile never found. The operation handler sends the model
+again after an operation fails this way, or for any other reason, so the client
+stops showing the gesture. That submit runs in a section of its own, since it
+waits for the document's build, and a settle request waits for its delivery.
+While a document the diagram writes does not parse, every submit but the
+initial one sends the dirty state and no model, a resync and an undo's submit
+included, since a model built from the broken text drops what the parser
+skipped. Such a submit forgets the last model sent, so the rebuild once the
+text parses again reaches the client. A write made outside an operation,
+through `updateSourceModel` or a recording command executed on the stack, gets
+the error and nothing else. Its caller reports it and resyncs the client.
 
 An undo or redo whose own write is dropped, because a foreign edit of the same
 field lands while it runs, reverts the steps it ran and writes nothing. It is
@@ -85,13 +102,16 @@ run does nothing: when a `CompoundCommand` rolls it back after a later child
 fails, the entry's undo runs in full, its write and its hooks, as any undo
 does.
 
-An undo or redo whose own write throws `ConflictError`, as when the reconcile
-cannot read the current text, also reverts the steps it ran and writes nothing.
-The conflict tells only that the text moved, so the command stack keeps the
-history and its place, and the refusal is told as a warning. A retry reads the
-model again: an edit of another field merges, one of the same field skips the
-entry. Both cases rely on the state's write applying none of its documents
-when it throws, as `updateAll` does.
+An undo or redo whose own write is refused, because the text moved past the
+version it read, its writes ran out, or the current text cannot be read, also
+reverts the steps it ran and writes nothing. None of these says a foreign edit
+changed what the entry restores, so the command stack keeps the history and its
+place, and the refusal is told as a warning naming its reason. A retry reads
+the model again: an edit of another field merges, one of the same field skips
+the entry. While the text stays unreadable, every retry is refused the same
+way, and the place is still kept, since a refusal changes nothing. These cases
+rely on the state's write applying none of its documents when it throws, as
+`updateAll` does.
 
 An undo or redo whose own write is refused with `DocumentSyntaxError`, because
 a document it reads or writes does not parse, is refused as a conflict is. The
@@ -102,18 +122,26 @@ field. The full-text state refuses its own write while its source does not
 parse, since the session accepts text without that check.
 
 Any other undo or redo that fails clears the undo and redo history, as GLSP
-does, and its message says so. That includes a dropped, conflicting or
-unparsable write after a step that cannot be reverted, and a conflict or syntax
-error a step threw, since that step may have written. It also includes any
-refusal of an entry that is a `CompoundCommand`, whose revert of its children
-reports no failure. A recording command with only one of `undoAction` and
-`redoAction` has a step that cannot be reverted once that hook ran, and nothing
-to revert when it did not. A dropped write or a conflict is told as a foreign
-edit, any other failure as an error.
+does, and its message says so. That includes a dropped or refused write after
+a step that cannot be reverted, and a conflict or syntax error a step threw,
+since that step may have written. It also includes any refusal of an entry that
+is a `CompoundCommand`, whose revert of its children reports no failure. A
+recording command with only one of `undoAction` and `redoAction` has a step
+that cannot be reverted once that hook ran, and nothing to revert when it did
+not. A dropped write or a conflict is told as a foreign edit, any other failure
+as an error.
 
 A recording command executed outside an operation whose write is dropped pushes
 no undo step. In a compound whose other commands wrote, the step is pushed
-without it, and the server logs a warning.
+without it, and the server logs a warning. One whose write is refused pushes no
+step either: its operation rolled back, so the history is kept. When one of
+its side effects fails to roll back after a dropped or refused write, or has a
+redo hook but no undo hook, or the command's own code throws the refusal, the
+operation throws a plain error, with any refusal as its cause, and the stack
+clears the history, as for an undo or redo. An operation a client sends never
+reaches the stack when it fails, so its history is left as it was. A compound
+with a refused command clears the history, since its other commands may have
+written, and fails as a plain error with the refusal as its cause.
 
 ## One gesture, one operation
 
