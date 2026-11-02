@@ -11,6 +11,8 @@ import { describe, expect, it } from 'vitest';
 import { type CanonicalUri, type Logger, UNRECORDED_VERSION } from '@hydranium/protocol';
 import { tick, waitFor } from '@hydranium/protocol/testing';
 import { type AstNode, DocumentState, URI, UriUtils } from '@hydranium/langium';
+import { DefaultFileSystemProviderRegistry } from '../../src/langium/workspace/file-system-provider.js';
+import { PersistentFileSystemProvider, type FileSystemStore } from '../../src/langium/workspace/persistent-file-system-provider.js';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { type AstDocumentManagerOptions, DefaultAstDocumentManager } from '../../src/documents/ast-document-manager.js';
 import { LANGUAGE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '../../src/documents/client-ids.js';
@@ -703,6 +705,48 @@ describe('AstDocumentManager.update', () => {
 });
 
 describe('AstDocumentManager.save', () => {
+   it('retries persistence after a refused save and restores the saved text', async () => {
+      const { services, textDocuments } = makeManagerHarness();
+      const contents: Record<string, string> = {};
+      let attempts = 0;
+      const store: FileSystemStore = {
+         load: async () => ({ ...contents }),
+         write: async (path, content) => {
+            if (++attempts === 1) {
+               throw new Error('storage refused');
+            }
+            contents[path] = content;
+         },
+         remove: async path => {
+            delete contents[path];
+         }
+      };
+      const seed = { [URI_A]: 'original' };
+      services.workspace.FileSystemProvider = new DefaultFileSystemProviderRegistry(
+         { ...services, fileSystemProviders: {} },
+         {
+            host: new PersistentFileSystemProvider(services, { store, seed })
+         }
+      );
+      const manager = new DefaultAstDocumentManager<FakeRoot>(services);
+      const saved: string[] = [];
+      textDocuments.onDidSave(event => saved.push(event.document.getText()));
+      await manager.open({ uri: URI_A, clientId: 'c1', languageId: 'plaintext', version: 0, text: 'edited' });
+
+      await expect(manager.save(URI_A, 'c1')).rejects.toThrow('storage refused');
+      expect(textDocuments.isDirty(URI_A)).toBe(true);
+      expect(textDocuments.get(URI_A)?.getText()).toBe('edited');
+      expect(saved).toEqual([]);
+      expect(contents).toEqual({});
+
+      await manager.save(URI_A, 'c1');
+      expect(attempts).toBe(2);
+      expect(textDocuments.isDirty(URI_A)).toBe(false);
+      expect(saved).toEqual(['edited']);
+      const reloaded = new PersistentFileSystemProvider(services, { store, seed, restored: await store.load() });
+      expect(reloaded.readFileSync(URI.parse(URI_A))).toBe('edited');
+   });
+
    it('throws when saving a document that is not open', async () => {
       // Kills the `if (!document)` throw guard in save().
       const { manager } = makeManagerHarness();
