@@ -29,6 +29,7 @@ import type { WritableFileSystemProvider } from './file-system-provider.js';
 import { type DocumentUriPolicy, findRealpathDivergence } from './document-uri-policy.js';
 import { type AdditionalDocumentContribution, collectAdditionalDocuments } from './additional-document-contribution.js';
 import { onProcessEvent } from '../../util/environment.js';
+import { ReadLockWaitError } from './read-lock-scope.js';
 import { isConnectionGoneError } from '../../util/connection-liveness.js';
 
 /**
@@ -63,6 +64,9 @@ const LOAD_YIELD_TOKEN = new CancellationTokenSource().token;
  * server logs spurious "Unhandled rejection" entries for cancellations that
  * are not errors).
  *
+ * A `ReadLockWaitError` nobody awaited is logged at debug. It refuses work a
+ * request started without awaiting it, which runs once the request ends.
+ *
  * Every OTHER reason is re-surfaced through {@link Logger.error}. This matters
  * because Node disables its default crash/warn for ALL unhandled rejections as
  * soon as any `unhandledRejection` listener is registered — so a handler that
@@ -75,6 +79,10 @@ const LOAD_YIELD_TOKEN = new CancellationTokenSource().token;
  */
 export function handleProcessUnhandledRejection(reason: unknown, logger: Logger): void {
    if (typeof reason === 'symbol' && String(reason) === 'Symbol(OperationCancelled)') {
+      return;
+   }
+   if (reason instanceof ReadLockWaitError) {
+      logger.debug('A refused wait nobody awaited: ' + reason.message);
       return;
    }
    logger.error('Unhandled promise rejection: ' + describeErrorWithStack(reason));

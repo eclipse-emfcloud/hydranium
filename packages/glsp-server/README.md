@@ -32,7 +32,7 @@ npm install @hydranium/glsp-server
 | `@hydranium/protocol`         | `^1.0.0-next` |
 | `inversify`                   | `^6.1.3`      |
 | `reflect-metadata`            | `^0.2.2`      |
-| `vscode-jsonrpc`              | `^9.0.0`      |
+| `vscode-jsonrpc`              | `^9.0.3`      |
 | `vscode-languageserver-types` | `^3.18.0`     |
 
 Import `reflect-metadata` once, first, in your server's entry point: the DI

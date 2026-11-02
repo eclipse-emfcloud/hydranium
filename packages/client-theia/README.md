@@ -32,7 +32,7 @@ npm install @hydranium/client-theia
 | `@theia/filesystem`   | `^1.70.0`     |
 | `@theia/output`       | `^1.70.0`     |
 | `inversify`           | `^6.1.3`      |
-| `vscode-jsonrpc`      | `^9.0.0`      |
+| `vscode-jsonrpc`      | `^9.0.3`      |
 
 `@theia/output` is easy to miss: the logger and the diagnostics commands both
 write to an Output channel, so add it if your application does not have it yet.

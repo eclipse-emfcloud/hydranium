@@ -30,6 +30,7 @@ import type { ServerSharedServices } from '../../../src/langium/module.js';
 import { type ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { type DocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
 import { HydraniumWorkspaceLock } from '../../../src/langium/workspace/hydranium-workspace-lock.js';
+import { type ReadLockMark, ReadLockWaitError, runInReadLockScope } from '../../../src/langium/workspace/read-lock-scope.js';
 import { BuildSession, type BuildSessionContext } from '../../../src/langium/document-builder/build-session.js';
 import {
    type BuildEndedEvent,
@@ -1092,8 +1093,13 @@ describe('HydraniumDocumentBuilder', () => {
          completeBuild(): Promise<void> {
             return this.buildDocuments([], {}, CancellationToken.None);
          }
+         get waits(): number {
+            return this.builderStateWaits.size;
+         }
       }
-      const settled = (wait: Promise<void> | undefined): Promise<unknown> => Promise.race([wait, Promise.resolve('pending')]);
+      // A macrotask, so a wait whose resolution is a few microtasks along counts as settled.
+      const settled = (wait: Promise<void> | undefined): Promise<unknown> =>
+         Promise.race([wait, new Promise(resolve => setTimeout(() => resolve('pending'), 0))]);
 
       it('resolves a wait armed while the phase notifies its listeners, and not one for a later phase', async () => {
          const builder = new PhaseBuilder();
@@ -1124,6 +1130,26 @@ describe('HydraniumDocumentBuilder', () => {
          expect(await settled(wait)).toBe('pending');
          await builder.indexReferences();
          expect(await settled(wait)).toBeUndefined();
+      });
+
+      it('drops a wait a read refuses', async () => {
+         const builder = new PhaseBuilder();
+         let refuse = (): void => undefined;
+         const read: ReadLockMark = {
+            running: true,
+            ended: new Deferred<void>().promise,
+            startGrace: onEnd => {
+               refuse = onEnd;
+               return { dispose: () => undefined };
+            }
+         };
+         const source = new CancellationTokenSource();
+         const wait = runInReadLockScope(() => builder.waitUntil(DocumentState.IndexedReferences, source.token), read);
+         expect(builder.waits).toBe(1);
+
+         refuse();
+         await expect(wait).rejects.toBeInstanceOf(ReadLockWaitError);
+         expect(builder.waits).toBe(0);
       });
 
       it('rejects a wait whose token is cancelled', async () => {
@@ -1342,6 +1368,37 @@ describe('HydraniumDocumentBuilder', () => {
 
          source.cancel();
          await expect(waiting).rejects.toBe(OperationCancelled);
+         failRecovery(new Error('recovery broke'));
+         await waitFor(() => lines.some(line => line.level === 'error'));
+
+         expect(lines.filter(line => line.level === 'error').map(line => line.message.split('\n')[0])).toEqual([
+            `A recovery build of ${DOC_URI.toString()} failed. Error: recovery broke`
+         ]);
+      });
+
+      it('logs a recovery build that fails after a read refused its wait, since the waiter has gone', async () => {
+         const { logger, lines } = makeCapturingLogger();
+         const stuck = documentAt(DocumentState.ComputedScopes);
+         let failRecovery!: (error: Error) => void;
+         class FailingRecoveryBuilder extends OrphanBuilder {
+            protected override requeueOrphaned(): Promise<void> {
+               return new Promise<void>((_resolve, reject) => (failRecovery = reject));
+            }
+         }
+         const builder = new FailingRecoveryBuilder(stuck, DocumentState.Validated, makeServicesWithDocument(stuck, logger));
+         let refuse = (): void => undefined;
+         const read: ReadLockMark = {
+            running: true,
+            ended: new Deferred<void>().promise,
+            startGrace: onEnd => {
+               refuse = onEnd;
+               return { dispose: () => undefined };
+            }
+         };
+         const waiting = runInReadLockScope(() => builder.callAwaitDocumentState(DocumentState.Validated, DOC_URI), read);
+
+         refuse();
+         await expect(waiting).rejects.toBeInstanceOf(ReadLockWaitError);
          failRecovery(new Error('recovery broke'));
          await waitFor(() => lines.some(line => line.level === 'error'));
 

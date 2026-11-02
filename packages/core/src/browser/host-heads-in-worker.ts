@@ -24,6 +24,7 @@ import { isFileSystemProviderRegistry } from '../langium/workspace/file-system-p
 import { hasLspConnection, initializeWorkspaceWithoutLsp } from '../langium/workspace/initialize-workspace.js';
 import { PersistentFileSystemProvider } from '../langium/workspace/persistent-file-system-provider.js';
 import { isConnectionGoneError } from '../util/connection-liveness.js';
+import { ReadLockWaitError } from '../langium/workspace/read-lock-scope.js';
 
 /**
  * Report a failure to the page on the worker global, the channel no head is
@@ -93,8 +94,10 @@ export interface HostHeadsInWorkerOptions {
  * heads on the same ports and reports every rejection twice. The worker's
  * `unhandledrejection` listener is this function's; it drops Langium's
  * `OperationCancelled` marker, which a build preempted by a write rejects
- * with, as the Node host does. An uncaught throw needs no listener, since it
- * reaches the page as the `Worker`'s own `error` event.
+ * with, as the Node host does. Like the Node host, it logs a
+ * `ReadLockWaitError` at debug, since the refused work runs once the request
+ * ends. An uncaught throw needs no listener, since it reaches the page as the
+ * `Worker`'s own `error` event.
  */
 export function hostHeadsInWorker<TPrepared>(
    prepared: TPrepared | PromiseLike<TPrepared>,
@@ -115,6 +118,9 @@ export function hostHeadsInWorker<TPrepared>(
          // Dropped from the console too, as a Node listener's presence drops
          // it there; a reported rejection keeps its console entry, the one
          // place its stack stays navigable.
+         event.preventDefault();
+      } else if (event.reason instanceof ReadLockWaitError) {
+         console.debug('A refused wait nobody awaited: ' + event.reason.message);
          event.preventDefault();
       } else {
          reportWorkerError('unhandled rejection', event.reason);

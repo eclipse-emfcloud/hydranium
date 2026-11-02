@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import { type AstNode, type LangiumDocument, URI } from '@hydranium/langium';
+import { type AstNode, type LangiumDocument, OperationCancelled, URI } from '@hydranium/langium';
 import { UNRECORDED_VERSION } from '@hydranium/protocol';
 import { CancellationToken } from 'vscode-languageserver-protocol';
 import { TextDocument } from 'vscode-languageserver-textdocument';
@@ -31,8 +31,8 @@ interface Rig {
    readonly ledger: DefaultModelLedger;
    /** The store's text document, shared with every document the factory builds from it. */
    readonly stored: TextDocument;
-   /** `duringParse` runs while the asynchronous parse is in flight. */
-   readonly hooks: { duringParse?: () => void };
+   /** `duringParse` runs while the asynchronous parse is in flight. `closed` hides the store's text document. */
+   readonly hooks: { duringParse?: () => void; closed?: boolean };
 }
 
 function makeRig(text: string, version: number): Rig {
@@ -56,8 +56,8 @@ function makeRig(text: string, version: number): Rig {
          })
       },
       workspace: {
-         TextDocuments: { get: (uri: string) => (uri === URI_STRING ? stored : undefined) },
-         FileSystemProvider: {},
+         TextDocuments: { get: (uri: string) => (uri === URI_STRING && !hooks.closed ? stored : undefined) },
+         FileSystemProvider: { readFile: async () => 'a b c' },
          ModelLedger: ledger,
          VersionSyncService: undefined as unknown
       }
@@ -117,6 +117,22 @@ describe('the version the document factory records', () => {
          version: 3,
          recorded: 2
       });
+   });
+
+   it('records the version of the file text after a cancelled re-parse of the store’s text', async () => {
+      const rig = makeRig('a', 1);
+      const document = rig.factory.fromTextDocument(rig.stored, URI.parse(URI_STRING));
+      edit(rig.stored, 'a b');
+      rig.hooks.duringParse = () => {
+         throw OperationCancelled;
+      };
+      await expect(rig.factory.update(document, CancellationToken.None)).rejects.toBe(OperationCancelled);
+
+      rig.hooks.duringParse = undefined;
+      rig.hooks.closed = true;
+      await rig.factory.update(document, CancellationToken.None);
+
+      expect(rig.ledger.versionOf(document.parseResult.value)).toBe(0);
    });
 
    it('records the version of the text an asynchronous first parse read, not of an edit arriving while it runs', async () => {

@@ -206,8 +206,8 @@ export class DefaultDocumentReleaseHandler implements DocumentReleaseHandler {
       // Typed by assertion: the write's callback moves it, which narrowing does not see.
       let progress = 'queued' as 'queued' | 'reclaimed' | 'building' | 'built';
       try {
-         // Decided before the lock: every build and read waits while the lock
-         // is held, and the default decision waits on the file's save I/O.
+         // Decided before the lock: every build and queued read waits while the
+         // lock is held, and the default decision waits on the file's save I/O.
          const decided = await this.decideRelease(released, target);
          decision = decided;
          await workspace.WorkspaceManager?.ready;

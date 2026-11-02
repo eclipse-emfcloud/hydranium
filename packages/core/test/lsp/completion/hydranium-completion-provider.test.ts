@@ -31,6 +31,26 @@ function description(name: string, tier: DescriptionTier, path: string): AstNode
    return value;
 }
 
+interface StubLanguageServer {
+   onInitialize: (handler: (params: unknown) => void) => void;
+   initialize: () => void;
+}
+
+/**
+ * Records the base constructor's `onInitialize` registration. `initialize`
+ * answers it as a client advertising `insertReplaceSupport` (or not) would.
+ * Call it once the provider is built, as the real server does after loading
+ * every service.
+ */
+function languageServer(insertReplaceSupport = true): StubLanguageServer {
+   const handlers: Array<(params: unknown) => void> = [];
+   const params = { capabilities: { textDocument: { completion: { completionItem: { insertReplaceSupport } } } } };
+   return {
+      onInitialize: handler => handlers.push(handler),
+      initialize: () => handlers.forEach(handler => handler(params))
+   };
+}
+
 /** Exposes the protected cross-reference candidate hook for testing. */
 class TestCompletionProvider extends HydraniumCompletionProvider {
    /** Counts how far a request got: the base builds contexts only once the comment guard lets it through. */
@@ -55,14 +75,16 @@ class TestCompletionProvider extends HydraniumCompletionProvider {
    }
 }
 
-function makeProvider(elements: AstNodeDescription[], fuzzyMatch = true): TestCompletionProvider {
+function makeProvider(elements: AstNodeDescription[], fuzzyMatch = true, insertReplaceSupport = true): TestCompletionProvider {
    const scope: Scope = {
       getAllElements: () => stream(elements),
       getElement: () => undefined,
       getElements: () => stream([])
    } as unknown as Scope;
-   // The DefaultCompletionProvider constructor only assigns services; getReferenceCandidates
-   // reads scopeProvider.getScope alone, so empty stubs for the rest suffice.
+   const server = languageServer(insertReplaceSupport);
+   // The DefaultCompletionProvider constructor assigns services and registers on the
+   // language server's onInitialize, and getReferenceCandidates reads
+   // scopeProvider.getScope alone, so empty stubs for the rest suffice.
    const services = makeNoopLanguageServices({
       references: { ScopeProvider: { getScope: () => scope }, NameProvider: {} },
       Grammar: {},
@@ -73,9 +95,14 @@ function makeProvider(elements: AstNodeDescription[], fuzzyMatch = true): TestCo
       documentation: { DocumentationProvider: {} },
       // FuzzyMatcher.match must return true for the base buildCompletionTextEdit to emit a TextEdit;
       // pass `false` to drive the base into returning `undefined` (no TextEdit built).
-      shared: { lsp: { NodeKindProvider: {}, FuzzyMatcher: { match: () => fuzzyMatch } }, AstReflection: {} }
+      shared: {
+         lsp: { NodeKindProvider: {}, FuzzyMatcher: { match: () => fuzzyMatch }, LanguageServer: server },
+         AstReflection: {}
+      }
    });
-   return new TestCompletionProvider(services);
+   const provider = new TestCompletionProvider(services);
+   server.initialize();
+   return provider;
 }
 
 describe('HydraniumCompletionProvider cross-reference candidates', () => {
@@ -137,6 +164,7 @@ function makeWired(elements: AstNodeDescription[]): {
       referenceContextToInfo: () => refInfo,
       sortText: (description: AstNodeDescription) => description.name
    };
+   const server = languageServer();
    const services = makeNoopLanguageServices({
       references: { ScopeProvider: scopeProvider, NameProvider: { getDisplayName: () => undefined } },
       Grammar: {},
@@ -147,13 +175,14 @@ function makeWired(elements: AstNodeDescription[]): {
       documentation: { DocumentationProvider: {} },
       shared: {
          workspace: { ProjectManager: { getProject: () => undefined } },
-         lsp: { NodeKindProvider: {}, FuzzyMatcher: { match: () => true } },
+         lsp: { NodeKindProvider: {}, FuzzyMatcher: { match: () => true }, LanguageServer: server },
          AstReflection: {}
       }
    });
    const candidate = new DefaultReferenceCandidateProvider(services as never);
    (services as unknown as { references: { CandidateProvider: unknown } }).references.CandidateProvider = candidate;
    const completion = new TestCompletionProvider(services);
+   server.initialize();
    return { completion, candidate, refInfo };
 }
 
@@ -192,6 +221,7 @@ describe('HydraniumCompletionProvider comment suppression', () => {
 
    function makeCommentProvider(): { provider: TestCompletionProvider; document: LangiumDocument; textDocument: TextDocument } {
       const textDocument = TextDocument.create('memory://comment-test', 'plaintext', 1, commentDocText);
+      const server = languageServer();
       const services = makeNoopLanguageServices({
          references: { ScopeProvider: {}, NameProvider: {} },
          Grammar: {},
@@ -203,9 +233,13 @@ describe('HydraniumCompletionProvider comment suppression', () => {
             GrammarConfig: { nameRegexp: /\w/, multilineCommentRules: ['ML_COMMENT'] }
          },
          documentation: { DocumentationProvider: {} },
-         shared: { lsp: { NodeKindProvider: {}, FuzzyMatcher: { match: () => true } }, AstReflection: {} }
+         shared: {
+            lsp: { NodeKindProvider: {}, FuzzyMatcher: { match: () => true }, LanguageServer: server },
+            AstReflection: {}
+         }
       });
       const provider = new TestCompletionProvider(services);
+      server.initialize();
       return { provider, document: { textDocument } as unknown as LangiumDocument, textDocument };
    }
 
@@ -279,7 +313,7 @@ describe('HydraniumCompletionProvider comment suppression', () => {
    });
 });
 
-describe('HydraniumCompletionProvider.fillCompletionItem token upgrade', () => {
+describe('HydraniumCompletionProvider replace-range widening', () => {
    // Single line whose second `Element` token spans offsets 21..28, with a
    // space at 28 for the "cursor is not inside a token" case, a `:` at 19 for
    // the "cursor on punctuation" case, and `extends` at 29..36 so a widened
@@ -288,8 +322,13 @@ describe('HydraniumCompletionProvider.fillCompletionItem token upgrade', () => {
    const textDocument = TextDocument.create('memory://completion-test', 'plaintext', 1, docText);
    const positionAt = (offset: number) => textDocument.positionAt(offset);
 
-   function fillItemAt(args: { offset: number; tokenEndOffset: number; tokenStartOffset: number }): CompletionItem {
-      const provider = makeProvider([]);
+   function fillItemAt(args: {
+      offset: number;
+      tokenEndOffset: number;
+      tokenStartOffset: number;
+      insertReplaceSupport?: boolean;
+   }): CompletionItem {
+      const provider = makeProvider([], true, args.insertReplaceSupport ?? true);
       const context: CompletionContext = {
          document: undefined as never,
          textDocument,
@@ -307,7 +346,8 @@ describe('HydraniumCompletionProvider.fillCompletionItem token upgrade', () => {
       return item;
    }
 
-   it('upgrades a mid-word completion to an InsertReplaceEdit covering the token', () => {
+   it("keeps Langium's InsertReplaceEdit for a mid-word completion, its replace range covering the token", () => {
+      // Langium's own contract, which passes without the widening: the widening must keep it.
       const item = fillItemAt({ offset: 24, tokenEndOffset: 28, tokenStartOffset: 21 });
       expect('insert' in item.textEdit! && 'replace' in item.textEdit!).toBe(true);
       const edit = item.textEdit as InsertReplaceEdit;
@@ -315,23 +355,30 @@ describe('HydraniumCompletionProvider.fillCompletionItem token upgrade', () => {
       expect(edit.insert.end).toEqual(positionAt(24)); // cursor (Langium's narrow range)
    });
 
-   it('keeps a whitespace completion as a plain TextEdit (no replace split)', () => {
+   it("ends a whitespace completion's replace range at the cursor", () => {
       // Cursor on the space at 28, with a second space to its right — there is
-      // no name for a suggestion to stand in for, so the early exit fires and
-      // the narrow range is correct.
+      // no name for a suggestion to stand in for, so the narrow range is correct.
+      // Langium's own range, which passes without the widening: the widening must keep it.
       const item = fillItemAt({ offset: 28, tokenEndOffset: 28, tokenStartOffset: 28 });
-      expect('insert' in item.textEdit!).toBe(false);
-      expect('replace' in item.textEdit!).toBe(false);
-      expect('range' in item.textEdit!).toBe(true);
+      const edit = item.textEdit as InsertReplaceEdit;
+      expect(edit.replace.end).toEqual(positionAt(28));
    });
 
-   it('keeps a completion on punctuation as a plain TextEdit', () => {
+   it("ends a completion on punctuation's replace range at the cursor", () => {
       // The `:` at 19. Distinct from the whitespace case above because it is the
       // character AT the cursor that decides, not whether the cursor is on
       // whitespace — a scan keyed on "not whitespace" would widen here and
-      // propose replacing a token separator.
+      // propose replacing a token separator. Langium's own range, which passes
+      // without the widening: the widening must keep it.
       const item = fillItemAt({ offset: 19, tokenEndOffset: 19, tokenStartOffset: 19 });
-      expect('range' in item.textEdit!).toBe(true);
+      const edit = item.textEdit as InsertReplaceEdit;
+      expect(edit.replace.end).toEqual(positionAt(19));
+   });
+
+   it("leaves Langium's plain TextEdit for a client without insertReplaceSupport", () => {
+      // Langium's own gating, which passes without the widening: the widening must keep it.
+      const item = fillItemAt({ offset: 24, tokenEndOffset: 28, tokenStartOffset: 21, insertReplaceSupport: false });
+      expect(item.textEdit).toEqual({ newText: 'Element1', range: { start: positionAt(21), end: positionAt(24) } });
    });
 
    it('widens the replace range over a name that BEGINS at the cursor', () => {
@@ -361,6 +408,7 @@ describe('HydraniumCompletionProvider.fillCompletionItem token upgrade', () => {
    });
 
    it('leaves the insert range at the cursor so insert-mode clients are unaffected', () => {
+      // Langium's own range, which passes without the widening: the widening must keep it.
       const item = fillItemAt({ offset: 24, tokenEndOffset: 28, tokenStartOffset: 21 });
       const edit = item.textEdit as InsertReplaceEdit;
       expect(edit.insert.start).toEqual(positionAt(21)); // token start (Langium's original)
@@ -368,9 +416,8 @@ describe('HydraniumCompletionProvider.fillCompletionItem token upgrade', () => {
    });
 
    it('returns undefined (does not throw) when the base provider produces no item', () => {
-      // Pins the `completionItem?.textEdit` optional-chaining guard: when the
-      // fuzzy matcher rejects, the base returns undefined, and the handler must
-      // short-circuit rather than dereference `.textEdit` on undefined.
+      // Pins the `if (edit)` guard: when the fuzzy matcher rejects, the base
+      // builds no edit, and the override must not dereference `.replace`.
       const provider = makeProvider([], /* fuzzyMatch */ false);
       const context: CompletionContext = {
          document: undefined as never,
@@ -386,11 +433,9 @@ describe('HydraniumCompletionProvider.fillCompletionItem token upgrade', () => {
    });
 
    it('leaves an already-InsertReplaceEdit textEdit untouched', () => {
-      // Pins the `'insert' in completionItem.textEdit` early-return: when the
-      // base item already carries an InsertReplaceEdit, the handler must return
-      // it unchanged rather than rebuild it (which would read the nonexistent
-      // `.range` and corrupt the edit). Distinguishes both the
-      // ConditionalExpression and the `||`→`&&` langA-operator mutants.
+      // An item that brings its own edit never reaches the builder, so the
+      // widening must not reach it either. Langium keeps it, so this passes
+      // without the widening too.
       const provider = makeProvider([]);
       const preBuilt: InsertReplaceEdit = {
          newText: 'Element1',

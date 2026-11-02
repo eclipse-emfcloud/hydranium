@@ -34,6 +34,7 @@ import { DefaultFileSystemProviderRegistry, type WritableFileSystemProvider } fr
 import { InMemoryFileSystemProvider } from '../../src/langium/workspace/in-memory-file-system-provider.js';
 import { persistentFileSystem } from '../../src/langium/workspace/persistent-file-system-provider.js';
 import { makeFakeAstNode, makeNoopSharedServices, makeStubLangiumDocuments } from '../../src/testing/index.js';
+import { ReadLockWaitError } from '../../src/langium/workspace/read-lock-scope.js';
 
 type Listener = (event: unknown) => void;
 
@@ -458,6 +459,20 @@ describe('hostHeadsInWorker', () => {
 
       expect(errorReports()).toEqual([]);
       expect(preventDefault).toHaveBeenCalledOnce();
+   });
+
+   it('logs a refused wait nobody awaited at debug, as the Node host does, since its work runs once the request ends', () => {
+      const workspace = makeWorkspaceServices([]);
+      hostHeadsInWorker(undefined, () => workspace.services);
+      const preventDefault = vi.fn();
+      const debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+
+      fire('unhandledrejection', { reason: new ReadLockWaitError('A build of x'), preventDefault });
+
+      expect(errorReports()).toEqual([]);
+      expect(preventDefault).toHaveBeenCalledOnce();
+      expect(debug).toHaveBeenCalledWith(expect.stringContaining('A build of x'));
+      debug.mockRestore();
    });
 
    it('reports an unhandled rejection in the worker to the page, leaving its console entry', () => {

@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { type ReadLockMark, type ReadLockScope, setReadLockScope } from '../langium/workspace/read-lock-scope.js';
 import { type WriteLockScope, setWriteLockScope } from '../langium/workspace/write-lock-scope.js';
 
 const storage = new AsyncLocalStorage<true>();
@@ -38,4 +39,21 @@ export const nodeWriteLockScope: WriteLockScope = {
  */
 export function installNodeWriteLockScope(): void {
    setWriteLockScope(nodeWriteLockScope);
+}
+
+const readStorage = new AsyncLocalStorage<ReadLockMark | undefined>();
+
+/** The `AsyncLocalStorage`-backed {@link ReadLockScope}. */
+export const nodeReadLockScope: ReadLockScope = {
+   run<T>(fn: () => T, read: ReadLockMark | undefined): T {
+      return readStorage.run(read, fn);
+   },
+   current(): ReadLockMark | undefined {
+      return readStorage.getStore();
+   }
+};
+
+/** Install {@link nodeReadLockScope} as the process-wide read-lock tracker. */
+export function installNodeReadLockScope(): void {
+   setReadLockScope(nodeReadLockScope);
 }

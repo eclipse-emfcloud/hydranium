@@ -686,8 +686,8 @@ describe('HydraniumDocumentValidator', () => {
       });
 
       it('identifies an auto-inserted token, whose zero-width range yields the empty image', () => {
-         // Chevrotain's recovery reports `NaN` offsets for a token it inserted,
-         // and Langium collapses those to a zero-width range at the end of the
+         // Chevrotain's recovery gives a token it inserted no valid range, and
+         // Langium collapses it to a zero-width range at the end of the
          // previous token. The sentence renders the empty string for it, so the
          // pass has to reproduce that rather than decline.
          const diagnostic = runPass(

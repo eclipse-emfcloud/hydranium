@@ -9,9 +9,10 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { handleProcessUnhandledRejection } from '../../../src/langium/workspace/hydranium-workspace-manager.js';
+import { ReadLockWaitError } from '../../../src/langium/workspace/read-lock-scope.js';
 import { makeNoopLogger } from '../../../src/testing/index.js';
 
-/** Real no-op logger with its `error` method spied — the handler only ever calls `error`. */
+/** Real no-op logger with its `error` method spied. */
 function makeLogger(): { logger: ReturnType<typeof makeNoopLogger>; error: ReturnType<typeof vi.spyOn> } {
    const logger = makeNoopLogger();
    const error = vi.spyOn(logger, 'error');
@@ -24,6 +25,14 @@ describe('handleProcessUnhandledRejection', () => {
       // The String() form is what Langium's internal cancellation marker produces.
       handleProcessUnhandledRejection(Symbol('OperationCancelled'), logger);
       expect(error).not.toHaveBeenCalled();
+   });
+
+   it('logs a refused wait nobody awaited at debug, since its work runs once the request ends', () => {
+      const { logger, error } = makeLogger();
+      const debug = vi.spyOn(logger, 'debug');
+      handleProcessUnhandledRejection(new ReadLockWaitError('A build of x'), logger);
+      expect(error).not.toHaveBeenCalled();
+      expect(String(debug.mock.calls[0]?.[0])).toContain('A build of x');
    });
 
    it('logs a non-cancellation Error so it is not silently dropped', () => {

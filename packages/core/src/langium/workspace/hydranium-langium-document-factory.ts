@@ -12,7 +12,6 @@ import {
    type AstReflection,
    AstUtils,
    DefaultLangiumDocumentFactory,
-   DocumentState,
    isAstNode,
    isMultiReference,
    type LangiumDocument,
@@ -89,6 +88,8 @@ export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFacto
    protected readonly cstResidency: () => CstResidencyService;
    /** The code-built documents, which are re-read from the text they hold when no file is at their URI. */
    protected readonly codeBuiltDocuments = new WeakSet<LangiumDocument>();
+   /** The text each running {@link update} of a code-built document reads, for {@link getUpdatedText}. */
+   protected readonly codeBuiltTexts = new WeakMap<LangiumDocument, string>();
    protected readonly astReflection: AstReflection;
 
    constructor(services: ServerSharedServicesMinimal) {
@@ -263,10 +264,15 @@ export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFacto
          }
       }
       const stored = codeBuilt === undefined ? this.textDocuments?.get(document.uri.toString())?.version : codeBuilt.version;
-      const updated =
-         codeBuilt === undefined
-            ? await super.update(document, cancellationToken)
-            : await this.reparse(document, codeBuilt.text, cancellationToken);
+      if (codeBuilt !== undefined) {
+         this.codeBuiltTexts.set(document, codeBuilt.text);
+      }
+      let updated: LangiumDocument<T>;
+      try {
+         updated = await super.update(document, cancellationToken);
+      } finally {
+         this.codeBuiltTexts.delete(document);
+      }
       const version =
          stored ??
          this.versionOfParsedText(
@@ -296,29 +302,13 @@ export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFacto
          : { text: open.getText(), version: open.version };
    }
 
-   /**
-    * Langium's `update` with `text` in place of the text it reads from the
-    * store or the URI. Mirrors `DefaultLangiumDocumentFactory.update` of
-    * Langium 4.3.1, so a Langium upgrade has to compare the two. From
-    * Langium 4.4, an override of `getUpdatedText` replaces it.
-    */
-   protected async reparse<T extends AstNode = AstNode>(
-      document: Mutable<LangiumDocument<T>>,
-      text: string,
+   /** A code-built document's text, read where `update` reads its version. */
+   protected override async getUpdatedText(
+      document: LangiumDocument,
+      textDocument: TextDocument | undefined,
       cancellationToken: CancellationToken
-   ): Promise<LangiumDocument<T>> {
-      const textDocument = this.textDocuments?.get(document.uri.toString());
-      Object.defineProperty(
-         document,
-         'textDocument',
-         textDocument ? { value: textDocument } : { get: this.createTextDocumentGetter(document.uri, text) }
-      );
-      if (document.parseResult.value.$cstNode?.root.fullText !== text) {
-         document.parseResult = await this.parseAsync<T>(document.uri, text, cancellationToken);
-         (document.parseResult.value as Mutable<AstNode>).$document = document;
-      }
-      document.state = DocumentState.Parsed;
-      return document;
+   ): Promise<string> {
+      return this.codeBuiltTexts.get(document) ?? super.getUpdatedText(document, textDocument, cancellationToken);
    }
 
    /**

@@ -275,15 +275,17 @@ export abstract class AbstractHydraniumSemanticTokenProvider extends AbstractSem
     */
    protected acceptComment(cst: LeafCstNode, acceptor: SemanticTokenAcceptor): void {
       const lines = cst.text.split('\n');
+      // A leaf builds its range on every read.
+      const start = cst.range.start;
       for (let index = 0; index < lines.length; index++) {
          // A `\r\n` document leaves the carriage return on the line's end;
          // colouring it would extend the token past the visible text.
          const length = lines[index].replace(/\r$/, '').length;
-         const character = index === 0 ? cst.range.start.character : 0;
+         const character = index === 0 ? start.character : 0;
          if (length === 0) {
             continue;
          }
-         const line = cst.range.start.line + index;
+         const line = start.line + index;
          acceptor({
             range: { start: { line, character }, end: { line, character: character + length } },
             type: SemanticTokenTypes.comment

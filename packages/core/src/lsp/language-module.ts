@@ -18,9 +18,9 @@ import { HydraniumCompletionProvider } from './completion/hydranium-completion-p
  * Bound by {@link createLspServerLanguageModule}; consumer modules
  * layered after it can override any slot.
  *
- * - {@link HydraniumCompletionProvider} upgrades Langium's default
- *   `TextEdit` to an `InsertReplaceEdit` so the user's
- *   `editor.suggest.insertMode` preference is honoured.
+ * - {@link HydraniumCompletionProvider} widens the replace range of
+ *   Langium's `InsertReplaceEdit` over the name at the cursor, so the user's
+ *   `editor.suggest.insertMode` preference replaces the whole name.
  *
  * The head's SHARED-tier slots are bound by
  * `createLspServerSharedModule` instead: `lsp.DocumentUpdateHandler`

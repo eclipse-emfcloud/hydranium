@@ -202,7 +202,9 @@ export interface LspServerConnection extends Harness {
     * Drive the real LSP `initialize` → `initialized` handshake and return the
     * `InitializeResult`. Defaults to no workspace folders (no async
     * discovery/build, nothing racy to await); pass `workspaceFolders` for the
-    * fully faithful path. Required before any other request.
+    * fully faithful path. The default `capabilities` declare
+    * `insertReplaceSupport` for completion, and `capabilities` passed here
+    * replace them whole. Required before any other request.
     */
    initialize(params?: Partial<InitializeParams>): Promise<InitializeResult>;
    /**
@@ -416,7 +418,8 @@ export function makeLspServerConnection(): LspServerConnection {
             processId: process.pid,
             rootUri: null,
             workspaceFolders: null,
-            capabilities: {},
+            // So a completion goes out as the insert-and-replace edit an editor asks for.
+            capabilities: { textDocument: { completion: { completionItem: { insertReplaceSupport: true } } } },
             ...params
          };
          const result = await client.sendRequest(InitializeRequest.type, initializeParams);

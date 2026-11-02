@@ -19,8 +19,8 @@ it needs, so both services share that bridge without a cycle.
 The LSP head's `HydraniumCompletionProvider` overrides `getReferenceCandidates`
 to return the candidate provider's `getCandidateScope(...)` elements, so the
 text editor's dropdown and the protocol's candidate picker run the same
-pipeline once. The completion provider keeps only the LSP-specific
-`fillCompletionItem` upgrade to an `InsertReplaceEdit`.
+pipeline once. The completion provider keeps only the LSP-specific widening
+of the `InsertReplaceEdit`'s replace range over the name at the cursor.
 
 ## The chain
 

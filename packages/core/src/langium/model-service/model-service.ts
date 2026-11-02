@@ -54,6 +54,7 @@ import {
    type ModelsBuiltEvent,
    type ModelUpdatedEvent
 } from './model-events.js';
+import { captureReadLockScope, ReadLockWaitError, refuseWaitInRead } from '../workspace/read-lock-scope.js';
 
 /**
  * The undo-stack entry for a server-authored write pushed to the editor.
@@ -226,7 +227,9 @@ export interface SyncedWaitOptions {
  * Do not await one inside a build phase listener: a browser host installs no
  * write-lock scope, so the wait cannot tell it is inside a build and waits for
  * one that cannot start. Nor inside a `WorkspaceLock.read`: the lock starts no
- * write, the build included, while a read runs.
+ * write, the build included, while a read runs. On Node a wait there still
+ * pending past the lock's `readWaitGraceMs`, with no build running, rejects
+ * with `ReadLockWaitError`. Without async context it can hang.
  *
  * **Diagnostics are typed `never` below `Validated`.** Validation is the last
  * phase, so at any earlier landmark the array either is not yet computed or
@@ -617,17 +620,18 @@ export class DefaultModelService<
       const builder = this.services.workspace.DocumentBuilder;
       const sync = this.services.workspace.VersionSyncService;
       const waitOptions = { rejectWhenStuck: options.sync === true };
+      const inCallerRead = captureReadLockScope();
       await builder.waitUntil(state, uri, cancelToken, waitOptions);
       if (textVersion === undefined) {
          return;
       }
       while (!sync.isSyncedTo(uri, textVersion)) {
-         const build = options.sync === true ? sync.syncTo(uri, textVersion) : undefined;
+         const build = options.sync === true ? inCallerRead(() => sync.syncTo(uri, textVersion)) : undefined;
          this.tracer
             .withUri(uri.toString())
             .debug(`waiting for ${uri.toString()} to reach ${DocumentState[state]} at v${textVersion} or later`);
-         await this.nextParseOrDeletion(uri, cancelToken, build);
-         await builder.waitUntil(state, uri, cancelToken, waitOptions);
+         await inCallerRead(() => this.nextParseOrDeletion(uri, cancelToken, build));
+         await inCallerRead(() => builder.waitUntil(state, uri, cancelToken, waitOptions));
       }
    }
 
@@ -636,22 +640,31 @@ export class DefaultModelService<
     * it, rejecting with `OperationCancelled` when `cancelToken` is cancelled
     * first, and with an error when `build`, the build requested for it, is
     * given up. A `Parsed` phase listener cannot serve: a cancel right after the
-    * parse skips it, and the resumed build does not parse again.
+    * parse skips it, and the resumed build does not parse again. Inside a
+    * read, it rejects with `ReadLockWaitError` as `refuseWaitInRead` says,
+    * and drops its listeners.
     */
    protected nextParseOrDeletion(uri: URI, cancelToken: CancellationToken = CancellationToken.None, build?: Promise<void>): Promise<void> {
       const builder = this.services.workspace.DocumentBuilder;
-      return new Promise<void>((resolve, reject) => {
+      let abandon: () => void = () => undefined;
+      const waiting = new Promise<void>((resolve, reject) => {
          let ended = false;
          let cancelled = false;
          // Handled before any return, so a build given up after the wait ended is not an unhandled rejection.
          build?.catch((error: unknown) => {
             const line = `The build that would sync the root to its text failed. ${describeErrorWithStack(error)}`;
+            if (cancelled && error instanceof ReadLockWaitError) {
+               // Refused, not failed: the build still runs, and its waiter has gone.
+               return;
+            }
             if (cancelled) {
                // The waiter has gone, so nothing else reports this.
                this.tracer.withUri(uri.toString()).error(line);
             } else if (ended) {
                // A parse or deletion came first: the waiter goes on and reports its own outcome, and the retry warned.
                this.tracer.withUri(uri.toString()).debug(line);
+            } else if (error instanceof ReadLockWaitError) {
+               done(() => reject(error));
             } else {
                done(() => reject(new Error(`The build that would sync ${uri.toString()} to its text failed`, { cause: error })));
             }
@@ -685,7 +698,15 @@ export class DefaultModelService<
             cancelled = true;
             done(() => reject(OperationCancelled));
          });
+         // Refused, the waiter has gone, as for a cancellation.
+         abandon = () => {
+            cancelled = true;
+            done(() => undefined);
+         };
       });
+      return refuseWaitInRead(`A wait for ${uri.toString()} to parse its text`, waiting, this.services.workspace.WorkspaceLock, () =>
+         abandon()
+      );
    }
 
    /**
