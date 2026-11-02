@@ -55,9 +55,10 @@ export interface LanguageClientOptions {
     * Called with the server's answer before `initialized` is sent: the window
     * in which a handler for the server's first notifications is registered
     * once the answer it needs is known. The server publishes nothing before
-    * `initialized`, so nothing is missed.
+    * `initialized`, so nothing is missed. `capabilities` are the ones the
+    * client sent, for `MonacoLspClient`'s `clientCapabilities`.
     */
-   readonly beforeInitialized?: (result: InitializeResult) => void;
+   readonly beforeInitialized?: (result: InitializeResult, capabilities: ClientCapabilities) => void;
 }
 
 /** The capabilities the server's inbound requests rely on, declared unless the host declares its own. */
@@ -95,14 +96,15 @@ export async function initializeLanguageClient(connection: MessageConnection, op
    // By method name: these types come from `vscode-languageserver-protocol`'s
    // copy of `vscode-jsonrpc`, which need not be the connection's.
    const sender = sendByMethodName(connection);
+   const capabilities = options.capabilities ?? DEFAULT_CAPABILITIES;
    const result = await sender.sendRequest(InitializeRequest.type, {
       processId: null,
       rootUri: options.rootUri,
       locale: options.locale,
-      capabilities: options.capabilities ?? DEFAULT_CAPABILITIES,
+      capabilities,
       workspaceFolders: [{ uri: options.rootUri, name: workspaceName }]
    });
-   options.beforeInitialized?.(result);
+   options.beforeInitialized?.(result, capabilities);
    await sender.sendNotification(InitializedNotification.type, {});
    return result;
 }

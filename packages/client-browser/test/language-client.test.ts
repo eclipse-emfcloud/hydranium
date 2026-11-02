@@ -162,6 +162,20 @@ describe('initializeLanguageClient', () => {
       expect(arrived).toEqual(['before:true', 'initialized']);
    });
 
+   it('hands beforeInitialized the capabilities it sent, the default included', async () => {
+      const declared = { workspace: { textDocumentContent: {} } };
+      const received: unknown[] = [];
+
+      await initializeLanguageClient(makeEnds().page, {
+         ...OPTIONS,
+         capabilities: declared,
+         beforeInitialized: (_result, sent) => received.push(sent)
+      });
+      await initializeLanguageClient(makeEnds().page, { ...OPTIONS, beforeInitialized: (_result, sent) => received.push(sent) });
+
+      expect(received).toEqual([declared, { workspace: { applyEdit: true, configuration: true } }]);
+   });
+
    it('hands the host a log message the server sends while initializing', async () => {
       const { page, server } = makeEnds();
       server.onRequest(InitializeRequest.type, () => {

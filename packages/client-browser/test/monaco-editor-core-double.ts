@@ -22,6 +22,7 @@ import {
    CompletionItemTag,
    CompletionTriggerKind,
    DocumentHighlightKind,
+   EditorOption,
    MarkerSeverity,
    MarkerTag
 } from 'monaco-editor-core/esm/vs/editor/common/standalone/standaloneEnums.js';
@@ -37,16 +38,12 @@ export interface RecordedProvider {
    readonly provider: unknown;
 }
 
-export interface RecordedEditor {
-   readonly options: monaco.editor.IStandaloneEditorConstructionOptions;
-   getModel(): monaco.editor.ITextModel | null;
-}
-
 export const models = new Map<string, TextModelDouble>();
 export const registeredLanguages: monaco.languages.ILanguageExtensionPoint[] = [];
 export const providers: RecordedProvider[] = [];
 export const openers: monaco.editor.ICodeEditorOpener[] = [];
-export const editors: RecordedEditor[] = [];
+export const editors: EditorDouble[] = [];
+const createListeners = new Set<(created: monaco.editor.ICodeEditor) => void>();
 export const markers = new Map<string, monaco.editor.IMarkerData[]>();
 /** What a model's listeners threw, which Monaco's emitter reports rather than rethrows. */
 export const unexpectedErrors: unknown[] = [];
@@ -57,6 +54,7 @@ export function reset(): void {
    providers.length = 0;
    openers.length = 0;
    editors.length = 0;
+   createListeners.clear();
    markers.clear();
    unexpectedErrors.length = 0;
 }
@@ -87,6 +85,8 @@ export class TextModelDouble {
    /** Every undo-stack call in order, so a test can see an edit bracketed by its undo stops. */
    readonly stackCalls: ('pushStackElement' | 'pushEditOperations')[] = [];
    disposed = false;
+   /** Per owner, the markers drawn on the model, which Monaco drops with every decoration on `setValue`. */
+   readonly drawnMarkers = new Map<string, monaco.editor.IMarkerData[]>();
 
    constructor(
       value: string,
@@ -162,6 +162,18 @@ export class TextModelDouble {
       this.fire(changes, false);
    }
 
+   /** Replace the whole text, normalized as `createModel` does, as a flush that clears the undo stack. */
+   setValue(value: string): void {
+      this.assertNotDisposed();
+      const before = this.value;
+      this.value = normalizeText(value);
+      this.versionId++;
+      this.alternativeVersionId = this.versionId;
+      this.history.length = 0;
+      this.drawnMarkers.clear();
+      this.fire([{ range: fullRange(before), rangeOffset: 0, rangeLength: before.length, text: this.value }], false, true);
+   }
+
    /** Undo the last edit: the alternative version id returns, the version id moves on. */
    undo(): void {
       const previous = this.history.pop();
@@ -180,6 +192,10 @@ export class TextModelDouble {
       const line = this.value.split('\n')[position.lineNumber - 1] ?? '';
       const word = /[\w$]+$/.exec(line.slice(0, position.column - 1))?.[0] ?? '';
       return { word, startColumn: position.column - word.length, endColumn: position.column };
+   }
+
+   isDisposed(): boolean {
+      return this.disposed;
    }
 
    /**
@@ -207,14 +223,14 @@ export class TextModelDouble {
       }
    }
 
-   private fire(changes: monaco.editor.IModelContentChange[], isUndoing: boolean): void {
+   private fire(changes: monaco.editor.IModelContentChange[], isUndoing: boolean, isFlush = false): void {
       const event = {
          changes,
          eol: '\n',
          versionId: this.versionId,
          isUndoing,
          isRedoing: false,
-         isFlush: false,
+         isFlush,
          isEolChange: false,
          detailedReasonsChangeLengths: []
       } as monaco.editor.IModelContentChangedEvent;
@@ -275,6 +291,73 @@ export function asMonaco<T>(double: Partial<T>): T {
    return double as T;
 }
 
+/** An editor as Monaco orders it: `onDidCreateEditor` first, then the model, and a disposed model detaches. */
+export class EditorDouble {
+   readOnly: boolean;
+   disposed = false;
+   private model: monaco.editor.ITextModel | null = null;
+   private detach: monaco.IDisposable | undefined;
+   private readonly modelListeners = new Set<(event: monaco.editor.IModelChangedEvent) => void>();
+   private readonly disposeListeners = new Set<() => void>();
+
+   constructor(readonly options: monaco.editor.IStandaloneEditorConstructionOptions) {
+      this.readOnly = options.readOnly ?? false;
+   }
+
+   getModel(): monaco.editor.ITextModel | null {
+      return this.model;
+   }
+
+   setModel(model: monaco.editor.ITextModel | null): void {
+      if (model === this.model) {
+         return;
+      }
+      const event = { oldModelUrl: this.model?.uri ?? null, newModelUrl: model?.uri ?? null };
+      this.detach?.dispose();
+      this.model = model;
+      this.detach = model?.onWillDispose(() => this.setModel(null));
+      for (const listener of [...this.modelListeners]) {
+         listener(event);
+      }
+   }
+
+   /** How many listeners are subscribed to the editor's events. */
+   get listenerCount(): number {
+      return this.modelListeners.size + this.disposeListeners.size;
+   }
+
+   onDidChangeModel(listener: (event: monaco.editor.IModelChangedEvent) => void): monaco.IDisposable {
+      this.modelListeners.add(listener);
+      return { dispose: () => this.modelListeners.delete(listener) };
+   }
+
+   onDidDispose(listener: () => void): monaco.IDisposable {
+      this.disposeListeners.add(listener);
+      return { dispose: () => this.disposeListeners.delete(listener) };
+   }
+
+   /** Only `readOnly` is modelled. */
+   getOption<T extends monaco.editor.EditorOption>(id: T): monaco.editor.FindComputedEditorOptionValueById<T> {
+      if (id !== EditorOption.readOnly) {
+         throw new Error(`The double models only readOnly, not option ${id}`);
+      }
+      return this.readOnly as monaco.editor.FindComputedEditorOptionValueById<T>;
+   }
+
+   updateOptions(options: monaco.editor.IEditorOptions): void {
+      this.readOnly = options.readOnly ?? this.readOnly;
+   }
+
+   dispose(): void {
+      this.disposed = true;
+      for (const listener of [...this.disposeListeners]) {
+         listener();
+      }
+      this.modelListeners.clear();
+      this.disposeListeners.clear();
+   }
+}
+
 export const editor = {
    getModel: (uri: monaco.Uri): monaco.editor.ITextModel | null => {
       const model = models.get(uri.toString());
@@ -290,12 +373,24 @@ export const editor = {
    },
    setModelMarkers: (model: monaco.editor.ITextModel, owner: string, data: monaco.editor.IMarkerData[]): void => {
       markers.set(`${owner} ${model.uri.toString()}`, data);
+      models.get(model.uri.toString())?.drawnMarkers.set(owner, data);
    },
    create: (_container: HTMLElement, options: monaco.editor.IStandaloneEditorConstructionOptions): monaco.editor.IStandaloneCodeEditor => {
-      const created: RecordedEditor = { options, getModel: () => options.model ?? null };
+      const created = new EditorDouble(options);
       editors.push(created);
+      for (const listener of [...createListeners]) {
+         listener(asMonaco<monaco.editor.ICodeEditor>(created));
+      }
+      created.setModel(options.model ?? null);
       return asMonaco<monaco.editor.IStandaloneCodeEditor>(created);
    },
+   getEditors: (): monaco.editor.ICodeEditor[] =>
+      editors.filter(created => !created.disposed).map(created => asMonaco<monaco.editor.ICodeEditor>(created)),
+   onDidCreateEditor: (listener: (created: monaco.editor.ICodeEditor) => void): monaco.IDisposable => {
+      createListeners.add(listener);
+      return { dispose: () => createListeners.delete(listener) };
+   },
+   EditorOption,
    registerEditorOpener: (opener: monaco.editor.ICodeEditorOpener): monaco.IDisposable => {
       openers.push(opener);
       return {
