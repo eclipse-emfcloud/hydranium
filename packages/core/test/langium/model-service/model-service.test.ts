@@ -397,6 +397,45 @@ describe('ModelService conflict gating', () => {
       expect(typeof doc.version).toBe('number');
    });
 
+   it('reports a numbered write from the version its text took, and forgets it once the session closes the document', async () => {
+      const { bundle, session } = buildConflictBundle(3);
+
+      await session.update({ uri: URI_A, model: 'name:first\n', baseVersion: 'any', write: 5 });
+      await session.update({ uri: URI_A, model: 'name:unnumbered\n', baseVersion: 'any' });
+      await session.update({ uri: URI_A, model: 'name:second\n', baseVersion: 'any', write: 6 });
+
+      expect([3, 4, 5, 6].map(version => session.heldWrite(URI_A, version))).toEqual([undefined, 5, 5, 6]);
+      bundle.textDocuments.fireClose(URI_A, 'editor-1');
+      expect(session.heldWrite(URI_A, 6)).toBeUndefined();
+   });
+
+   it('reports a numbered updateAll from the version its text took', async () => {
+      const { session } = buildConflictBundle(3);
+
+      await session.updateAll({ updates: [{ uri: URI_A, model: 'name:batched\n', baseVersion: 'any' }], write: 7 });
+
+      expect([3, 4].map(version => session.heldWrite(URI_A, version))).toEqual([undefined, 7]);
+   });
+
+   it('names no numbered write once the session ended, rather than throwing', async () => {
+      const { session } = buildConflictBundle(3);
+      await session.update({ uri: URI_A, model: 'name:first\n', baseVersion: 'any', write: 5 });
+
+      session.dispose();
+
+      expect(session.heldWrite(URI_A, 4)).toBeUndefined();
+   });
+
+   it("keeps the versions of a document's last 64 numbered writes only", async () => {
+      const { session } = buildConflictBundle(1);
+      for (let write = 1; write <= 65; write++) {
+         await session.update({ uri: URI_A, model: `name:w${write}\n`, baseVersion: 'any', write });
+      }
+
+      // Write n took version n + 1.
+      expect([2, 3, 66].map(version => session.heldWrite(URI_A, version))).toEqual([undefined, 2, 65]);
+   });
+
    it('save() gates on the same base version (delegates to update)', async () => {
       const { session } = buildConflictBundle(3);
       await expect(session.save({ uri: URI_A, model: 'name:newer\n', baseVersion: asModelVersion(1) })).rejects.toBeInstanceOf(

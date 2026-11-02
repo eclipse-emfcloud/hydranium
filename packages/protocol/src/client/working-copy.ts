@@ -20,7 +20,7 @@ import { type LoadedTransferDocument, type TextState, TransferDocument, type Tra
 import type { TransferElement } from '../transfer-element';
 import { Deferred } from '../util';
 import type { DataEvents } from './data-events';
-import type { DataSession, DataSessionRestoreEvent } from './data-session';
+import type { DataSession, DataSessionRegisterEvent, DataSessionRestoreEvent } from './data-session';
 
 /** What the write that carried an {@link WorkingCopy.edit} did. */
 export type WorkingCopyEditOutcome =
@@ -60,9 +60,10 @@ export interface WorkingCopyOpen<TTransfer extends TransferElement> {
    /** The last document the server sent. */
    snapshot: TransferDocument<TTransfer>;
    /**
-    * Whether {@link snapshot} was taken while a write was out, so it may hold
-    * the edits {@link sending} applies again. A base made on it then is
-    * unconfirmed, so its first write is reconciled, not sent.
+    * Whether {@link snapshot} was taken while a write was out, from a server
+    * that reports no writes, so it may hold the edits {@link sending} applies
+    * again. A base made on it then is unconfirmed, so its first write is
+    * reconciled, not sent.
     */
    snapshotUnderWrite?: boolean;
    /** Edits not yet written, in edit order, each until the write that carries it answers. */
@@ -74,21 +75,29 @@ export interface WorkingCopyOpen<TTransfer extends TransferElement> {
     * instead of being written over, and the copy's own write does not.
     * `epoch` is the server's when that root was taken. A server that does not
     * have it refuses the base's first write. `unconfirmed` marks a base whose
-    * write before a conflict dropped edits from. The root is then the one that
-    * write was made on with only the edits it kept, so an edit restating a
-    * dropped value conflicts, and its first write conflicts too.
-    * It also marks a base made on a {@link snapshotUnderWrite}. `dropped`
-    * makes any edit of a path a dropped edit wrote conflict, a revert to the
-    * value before it included.
+    * write before a conflict dropped edits from. The root is then the
+    * snapshot's it was made on with only the edits that write kept, so an
+    * edit restating a dropped value conflicts, and its first write conflicts
+    * too. It also marks a base made on a {@link snapshotUnderWrite}.
+    * `dropped` makes any edit of a path a dropped edit wrote conflict, a
+    * revert to the value before it included.
     */
    base?: VersionedModel<TTransfer> & {
       readonly epoch: string;
       readonly unconfirmed?: boolean;
-      /** The root the user saw before a conflict dropped edits, and the paths those edits wrote. */
+      /** The root the user saw before a conflict dropped edits, but for edits whose writes ran out, and the paths the dropped edits wrote. */
       readonly dropped?: { readonly seen: TTransfer; readonly paths: readonly string[] };
+      /** The snapshot's root the base was made on with the write out's edits over it, absent when the snapshot held them. */
+      readonly onto?: TTransfer;
    };
    /** Edits of the write in flight, in edit order. */
    sending: WorkingCopyOpen<TTransfer>['queued'];
+   /**
+    * The number of the first write sent for {@link sending}. A document whose
+    * `heldWrites` reaches it holds them, since a batch lands one write at most
+    * and the copy writes one batch at a time.
+    */
+   sendingWrite?: number;
    /** Whether a write loop runs. */
    writing: boolean;
    /** The server's dirty flag, as last sent. */
@@ -96,8 +105,8 @@ export interface WorkingCopyOpen<TTransfer extends TransferElement> {
    /** Requests out whose answer replaces the snapshot. */
    snapshotRequests: number;
    /**
-    * The newest document the server sent while a request is out, held until a
-    * request answers with no write out, or for
+    * The newest document without `heldWrites` the server sent while a request
+    * is out, held until a request answers with no write out, or for
     * {@link WorkingCopy.settleWritesMs} at most.
     */
    held?: TransferDocument<TTransfer>;
@@ -154,6 +163,19 @@ function keptOf<TTransfer>(
    return rootOrUndefined(() => batch.reduce((root, edit, index) => (left(outcomes[index]) ? root : edit.change(root)), base)) ?? base;
 }
 
+/** The highest write of `clientId` that `document` holds, as its `heldWrites` names it. */
+function heldWriteOf(document: TransferDocument<TransferElement>, clientId: string): number | undefined {
+   const heldWrites: Record<string, number> | undefined = document.heldWrites;
+   // Own keys only, so a session named `__proto__` reads its own entry, not the prototype.
+   return heldWrites && Object.hasOwn(heldWrites, clientId) ? heldWrites[clientId] : undefined;
+}
+
+/** Whether `document` reports the writes it holds, which one from a server before `heldWrites` does not. */
+function reportsWrites(document: TransferDocument<TransferElement>): boolean {
+   const heldWrites: Record<string, number> | undefined = document.heldWrites;
+   return heldWrites !== undefined;
+}
+
 /** Whether a batch's edit did not reach the server: a conflict dropped it, its writes ran out, or its write failed. */
 function isDropped(outcome: WorkingCopyEditOutcome | Promise<never>): boolean {
    return isLost(outcome) || ('status' in outcome && outcome.status === 'ran-out');
@@ -171,16 +193,14 @@ function isLost(outcome: WorkingCopyEditOutcome | Promise<never>): boolean {
  * The client's working copy of one data-server document: the server's latest
  * snapshot of it, plus the edits the server has not confirmed yet.
  *
- * - **Follows the server.** Another client's update replaces the snapshot and
- *   fires {@link onDidChange}. This session's own echoes are skipped while a
- *   write is out, since the write's answer carries them. A document the
- *   server sends while a write, a save, a reread or the open's second read is
- *   out waits. The newest is taken when one of them answers and no write is
- *   out, or once the first of them has waited {@link settleWritesMs}. A write
- *   still out then has its edits applied to a document that may hold them
- *   already, so an edit that does not give the same root twice may show twice
- *   until its write answers. A batch made on that document has its first
- *   write reconciled, so the edit is not written twice.
+ * - **Follows the server.** Every document the server sends replaces the
+ *   snapshot at once, unless it is older, and fires {@link onDidChange}.
+ *   {@link root} applies the edits of the write out on top only while the
+ *   snapshot does not hold that write, as its `heldWrites` tells. From a
+ *   server that reports no writes, a document sent while a request is out
+ *   waits, as it may hold the write out. The newest is taken when a request
+ *   answers and no write is out, or once the first has waited
+ *   {@link settleWritesMs}.
  * - **Batches edits behind a write.** An edit goes out at once when no write
  *   is out. The edits made while one is out go out after it, as one write of
  *   the whole root, gated on the version of the snapshot the first of them
@@ -196,10 +216,8 @@ function isLost(outcome: WorkingCopyEditOutcome | Promise<never>): boolean {
  *   true while an edit is unanswered, so a host never shows clean text with
  *   an edit still on its way.
  *
- * Its session's own writes of the document are taken as echoes while a
- * write is out, so the copy is the only writer of the document on its
- * session. One heard with none out is taken, as a late write of a copy
- * before it may be.
+ * The copy is the only writer of the document on its session. A late write
+ * of a copy before it is taken as another client's.
  *
  * One URI per copy, for its whole life. Opening another document is a new
  * copy, so no queued edit can land on a document it was not made for. Open a
@@ -234,8 +252,8 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    protected readonly maxWrites?: number;
    /**
     * How long {@link save}, {@link close} and {@link whenWritesSettled} wait
-    * for the copy's edits before going on anyway, and how long a document the
-    * server sends is held for a request at most.
+    * for the copy's edits before going on anyway, and how long a document
+    * from a server that reports no writes is held for a request at most.
     */
    protected readonly settleWritesMs: number = 30_000;
    /** The clock of {@link settleWritesMs}. */
@@ -276,7 +294,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    ) {
       // A deletion carries no document, so it has a channel of its own.
       this.subscriptions = [
-         session.onDidRegister(event => (this.registeredEpoch = event.epoch)),
+         session.onDidRegister(event => this.handleRegistered(event)),
          events.onDidUpdateDocument(event => this.handleDocumentUpdated(event)),
          events.onDidDeleteDocument(event => this.handleDocumentDeleted(event)),
          events.onDidChangeDocumentDirty(event => {
@@ -303,7 +321,8 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    get root(): TTransfer | undefined {
       const open = this.current;
       const root = open?.snapshot.model?.root;
-      return root && [...open.sending, ...open.queued].reduce((edited, edit) => edit.change(edited), root);
+      const unheld = open && !this.holdsSending(open, open.snapshot) ? open.sending : [];
+      return root && [...unheld, ...(open?.queued ?? [])].reduce((edited, edit) => edit.change(edited), root);
    }
 
    /**
@@ -374,12 +393,14 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          change(shown);
       }
       const edit: WorkingCopyOpen<TTransfer>['queued'][number] = { change, outcome: new Deferred<WorkingCopyEditOutcome>() };
+      const sent = this.holdsSending(open, loaded) ? [] : open.sending;
       open.base ??= {
          // A sent edit that throws on this root is measured as none.
-         model: rootOrUndefined(() => open.sending.reduce((root, sent) => sent.change(root), loaded.model.root)) ?? loaded.model.root,
+         model: rootOrUndefined(() => sent.reduce((root, edit) => edit.change(root), loaded.model.root)) ?? loaded.model.root,
          baseVersion: loaded.model.version,
          epoch: loaded.epoch,
-         unconfirmed: (open.snapshotUnderWrite && open.sending.length > 0) || undefined
+         unconfirmed: (open.snapshotUnderWrite && open.sending.length > 0) || undefined,
+         onto: sent.length > 0 ? loaded.model.root : undefined
       };
       open.queued.push(edit);
       this.editsInFlight.track(edit.outcome.promise).catch(() => undefined);
@@ -592,6 +613,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       } finally {
          open.writing = false;
          open.sending = [];
+         open.sendingWrite = undefined;
          this.announceDirty();
       }
    }
@@ -612,7 +634,6 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          edit.outcome.resolve({ status: 'unavailable' });
       let failed = true;
       let outcomes: (WorkingCopyEditOutcome | Promise<never>)[] = [];
-      let seen: TTransfer | undefined;
       open.snapshotRequests++;
       if (base) {
          try {
@@ -621,7 +642,6 @@ export class WorkingCopy<TTransfer extends TransferElement> {
             const lost = writesDropped(batch, base.dropped);
             const written = batch.filter((_, index) => !lost[index]);
             const roots = written.reduce((made, edit) => [...made, edit.change(made[made.length - 1])], [base.model]);
-            seen = rootOrUndefined(() => batch.reduce((root, edit) => edit.change(root), base.model));
             let writtenOutcomes: (WorkingCopyEditOutcome | Promise<never>)[] = written.map(() => ({ status: 'unchanged' }));
             // Written anyway, a batch that changes nothing would make the text dirty.
             if (compare(base.model, roots[written.length]).length > 0) {
@@ -641,6 +661,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          }
       }
       open.sending = [];
+      open.sendingWrite = undefined;
       if (open.base) {
          // The edits queued meanwhile were made over this batch, which the
          // server may not hold. Gated on a version it still has, their write
@@ -651,15 +672,19 @@ export class WorkingCopy<TTransfer extends TransferElement> {
                baseVersion: open.snapshot.model.version,
                epoch: open.snapshot.epoch
             };
-         } else if (base && outcomes.some(isDropped)) {
+         } else if (open.base.onto && outcomes.some(isDropped)) {
             // Dropped in part over a foreign edit, so reconciled against it,
             // and measured with only the edits that were not dropped, so an
             // edit restating a lost value conflicts too and one over a merged
-            // or run-out value does not.
-            const kept = keptOf(batch, outcomes, base.model);
-            const lost = keptOf(batch, outcomes, base.model, isLost);
-            const dropped = seen && { seen, paths: compare(lost, seen).map(operation => operation.path) };
-            open.base = { ...open.base, model: kept, unconfirmed: true, dropped };
+            // or run-out value does not. Rebuilt on the root the base was made
+            // on, which a document taken during the write may have moved past
+            // the batch's.
+            const onto = open.base.onto;
+            const kept = keptOf(batch, outcomes, onto);
+            // What the user saw but for a run-out's edits, which set no value.
+            const seen = keptOf(batch, outcomes, onto, outcome => isDropped(outcome) && !isLost(outcome));
+            const dropped = { seen, paths: compare(kept, seen).map(operation => operation.path) };
+            open.base = { ...open.base, model: kept, unconfirmed: true, dropped, onto: undefined };
          }
       }
       this.settleRequest(open, answer);
@@ -775,17 +800,24 @@ export class WorkingCopy<TTransfer extends TransferElement> {
                throw refused;
             }
             const gate = isModelVersion(baseVersion) ? { baseVersion, baseEpoch: epoch } : { baseVersion };
-            const answer = await this.session.updateDocument({ uri: this.uri, model, ...gate });
+            // Told as the write goes out, so a document that holds it is known as soon as it arrives.
+            const onWrite = (write: number): void => {
+               open.sendingWrite ??= write;
+            };
+            const answer = await this.session.updateDocument({ uri: this.uri, model, ...gate, onWrite });
             written = answer;
             landedOn = baseVersion;
             // The queued edits were made on the answer when it was built from
             // the write's own text, normalized or not, or holds its model
             // unchanged. Otherwise it holds another write they must reconcile.
+            // Their base may have moved during the write, to a document that
+            // holds exactly what it wrote.
             const queued = open.base;
             const landed =
                TransferDocument.isLoaded(answer) &&
                (answer.model.version === answer.written.version || compare(answer.model.root, model).length === 0);
-            if (whole && onBase && queued?.baseVersion === base.baseVersion && landed) {
+            const madeOnWrite = queued && (queued.baseVersion === base.baseVersion || compare(queued.model, model).length === 0);
+            if (whole && onBase && madeOnWrite && landed) {
                open.base = { model: answer.model.root, baseVersion: answer.model.version, epoch: answer.epoch };
             }
          },
@@ -836,7 +868,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          outcome.status === 'merged' &&
          theirs?.model &&
          landedOn === theirs.model.version &&
-         compare(theirs.model.root, base.model).length === 0
+         compare(theirs.model.root, base.dropped?.seen ?? base.model).length === 0
       ) {
          return { outcome: { status: 'persisted' }, answer: written };
       }
@@ -925,7 +957,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
             : event.document;
       if (restored && TransferDocument.isLoaded(restored)) {
          this.takeDirty(open, restored.text);
-         if (open.sending.length > 0) {
+         if (open.sending.length > 0 && !reportsWrites(restored)) {
             this.hold(open, restored);
          } else {
             this.adopt(open, restored);
@@ -934,6 +966,26 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       // A listener of the adoption may have ended the open.
       if (open === this.current) {
          void this.reread(open);
+      }
+   }
+
+   /**
+    * Note the epoch of a registration. After a reconnect, forget the number
+    * of the write out: a conflict's reread waits for the reconnect, so the
+    * batch is still out, and the restore that follows writes above the
+    * refused number, which no document holds.
+    */
+   protected handleRegistered(event: DataSessionRegisterEvent): void {
+      this.registeredEpoch = event.epoch;
+      const open = this.current;
+      if (!event.reconnected || open?.sendingWrite === undefined) {
+         return;
+      }
+      const before = rootOrUndefined(() => this.root);
+      open.sendingWrite = undefined;
+      const after = rootOrUndefined(() => this.root);
+      if (before !== after && (before === undefined || after === undefined || compare(before, after).length > 0)) {
+         this.changeEmitter.fire(undefined);
       }
    }
 
@@ -956,29 +1008,31 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       if (!open || event.document.uri !== open.snapshot.uri) {
          return;
       }
-      // While a write is out, its answer carries it. With none out it may be
-      // a late write of a copy before this one, which no answer carries, and
-      // `offer` skips an echo older than the snapshot.
-      if (open.sending.length > 0 && this.session.isOwnEcho(event.sourceClientId)) {
+      // An echo of the copy's own write is taken too: it holds the write, so
+      // `root` no longer applies its edits. One from a server that reports no
+      // writes is left while a write is out, since it may hold it.
+      if (!reportsWrites(event.document) && open.sending.length > 0 && this.session.isOwnEcho(event.sourceClientId)) {
          return;
       }
       this.offer(open, event.document, true);
    }
 
    /**
-    * Take the dirty flag of a document the server sent, and the document itself
-    * unless a request is out. A document older than the snapshot is skipped.
+    * Take the dirty flag of a document the server sent, and the document
+    * itself, unless it reports no writes and a request is out. A document
+    * older than the snapshot is skipped.
     */
    protected offer(open: WorkingCopyOpen<TTransfer>, document: TransferDocument<TTransfer>, announce: boolean): void {
       // Versions rise per server life, so an older one of the same epoch was
-      // built before the snapshot. Held, it would be taken when a request answers.
+      // built before the snapshot.
       const offered = document.model?.version;
       const current = open.snapshot.model?.version;
       if (offered !== undefined && current !== undefined && offered < current && document.epoch === open.snapshot.epoch) {
          return;
       }
       this.takeDirty(open, document.text);
-      if (open.snapshotRequests > 0) {
+      // Without `heldWrites`, it may hold a write out, which `root` would apply again.
+      if (open.snapshotRequests > 0 && !reportsWrites(document)) {
          const held = open.held?.model?.version;
          if (held === undefined || offered === undefined || offered >= held) {
             this.hold(open, document);
@@ -1015,28 +1069,38 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       return held;
    }
 
+   /** Whether `document` holds the write out for {@link WorkingCopyOpen.sending}. */
+   protected holdsSending(open: WorkingCopyOpen<TTransfer>, document: TransferDocument<TTransfer>): boolean {
+      const held = heldWriteOf(document, this.session.clientId);
+      return open.sendingWrite !== undefined && held !== undefined && held >= open.sendingWrite;
+   }
+
    /**
     * Take `document` as the new snapshot. Fires a change unless the model's
     * hash is the one held, which also means equally validated, or `announce`
     * is false, as for a write's answers, which {@link writeBatch} announces
-    * once the write's edits are off {@link root}.
+    * once the write's edits are off {@link root}. While a write is out, it
+    * fires when {@link root} or {@link diagnostics} changed instead.
     */
    protected adopt(open: WorkingCopyOpen<TTransfer>, document: TransferDocument<TTransfer>, announce = true): void {
       const held = open.snapshot.model?.hash;
+      const changed = announce && (held === undefined || held !== document.model?.hash);
+      // While a write is out, an echo can leave the root as it was, and a
+      // document of an equal hash that holds the write can change it.
+      const before =
+         announce && open.sending.length > 0 ? { root: rootOrUndefined(() => this.root), diagnostics: [...this.diagnostics] } : undefined;
       open.snapshot = document;
-      open.snapshotUnderWrite = open.sending.length > 0;
-      if (announce && (held === undefined || held !== document.model?.hash)) {
+      open.snapshotUnderWrite = open.sending.length > 0 && !reportsWrites(document);
+      const after = before && { root: rootOrUndefined(() => this.root), diagnostics: [...this.diagnostics] };
+      const comparable = before?.root !== undefined && after?.root !== undefined;
+      if (comparable ? compare(before, after).length > 0 : changed) {
          this.changeEmitter.fire(undefined);
       }
    }
 
    /**
-    * End a request, and take the newest document the server sent while
-    * requests were out, its answer included. None is taken while a write is
-    * out, since it may already hold that write's edits, which {@link root}
-    * would then apply again. Versions are compared only within that window,
-    * and a restore clears what it held, since a restarted server numbers
-    * afresh. {@link dirty} is announced once the answer is taken.
+    * End a request, and take its answer unless it is older than the snapshot.
+    * {@link dirty} is announced once the answer is taken.
     */
    protected settleRequest(open: WorkingCopyOpen<TTransfer>, answer: TransferDocument<TTransfer> | undefined, announce = false): void {
       if (open !== this.current) {

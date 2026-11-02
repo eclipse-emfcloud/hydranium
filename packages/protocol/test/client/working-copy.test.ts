@@ -28,7 +28,7 @@ import { bindRpcMethods } from '../../src/rpc/bind-rpc-methods';
 import { randomUuid } from '../../src/random-uuid';
 import { makeFakeDataPort } from '../../src/testing/data-doubles';
 import { type FakeClock, makeFakeClock } from '../../src/testing/fake-clock';
-import { makeDuplexConnectionPair } from '../../src/testing/node';
+import { captureUnhandledRejections, makeDuplexConnectionPair } from '../../src/testing/node';
 import { tick, waitFor } from '../../src/testing/wait-for';
 import type { TransferDiagnostic } from '../../src/transfer-diagnostic';
 import { TransferDocument } from '../../src/transfer-document';
@@ -84,10 +84,16 @@ class ProbeServer {
    /** Added to the text version for the model's, as a server that numbers the two apart. */
    modelOffset = 0;
    protected sequence = 0;
-   /** Another for each server, so a restarted one refuses the versions of the one before. */
-   readonly epoch = randomUuid();
+   /** Each numbered write that landed, at the version its text took. */
+   protected readonly writes: { readonly clientId: string; readonly write: number; readonly version: number }[] = [];
+   /** Reports the numbered writes a document holds, as a server keeping the contract does. Off, documents carry no `heldWrites`, as from a server before it. */
+   reportsWrites = true;
 
-   constructor(protected readonly connection: MessageConnection) {
+   /** The epoch is another for each server, so a restarted one refuses the versions of the one before. */
+   constructor(
+      protected readonly connection: MessageConnection,
+      readonly epoch: string = randomUuid()
+   ) {
       bindRpcMethods(
          connection,
          this,
@@ -145,6 +151,7 @@ class ProbeServer {
       baseVersion: number | 'any';
       baseEpoch?: string;
       model: ProbeElement;
+      write?: number;
    }): Promise<unknown> {
       this.updates++;
       const answerGate = this.answerGate;
@@ -168,7 +175,7 @@ class ProbeServer {
          throw new ConflictError(URI_A, asModelVersion(args.baseVersion), this.modelVersion);
       }
       // Read before the pushes are awaited, so a write of another client that lands meanwhile is not answered as this one.
-      const pushed = this.change(args.model, args.clientId);
+      const pushed = this.change(args.model, args.clientId, args.write);
       const written = { version: this.modelVersion };
       const answer = this.document();
       await pushed;
@@ -214,14 +221,20 @@ class ProbeServer {
       return this.connection.sendNotification(`${DATA_SERVER_WIRE_PREFIX}onDocumentDeleted`, { uri: URI_A, sourceClientId: OTHER_CLIENT });
    }
 
-   protected async change(root: ProbeElement, sourceClientId: string): Promise<void> {
+   protected async change(root: ProbeElement, sourceClientId: string, write?: number): Promise<void> {
       // As the server does, a write that changes no text makes no version.
       if (compare(this.root, root).length === 0) {
+         if (write !== undefined) {
+            this.writes.push({ clientId: sourceClientId, write, version: this.modelVersion });
+         }
          return;
       }
       const wasDirty = this.version !== this.saved;
       this.root = root;
       this.version++;
+      if (write !== undefined) {
+         this.writes.push({ clientId: sourceClientId, write, version: this.modelVersion });
+      }
       // As the server does, every watcher hears a flip, the writer included.
       if (!wasDirty) {
          await this.sendDirty();
@@ -260,9 +273,17 @@ class ProbeServer {
 
    /** The document as it is now, with diagnostics unless a read did not ask for them. */
    protected document(withDiagnostics = true): TransferDocument<ProbeElement> {
-      return {
+      const held = new Map<string, number>();
+      for (const { clientId, write, version } of this.writes) {
+         if (version <= this.modelVersion) {
+            held.set(clientId, Math.max(held.get(clientId) ?? write, write));
+         }
+      }
+      const heldWrites = Object.fromEntries(held);
+      const document: TransferDocument<ProbeElement> = {
          uri: URI_A,
          epoch: this.epoch,
+         heldWrites,
          model: {
             root: this.root,
             ...(withDiagnostics ? { diagnostics: this.problems } : {}),
@@ -272,6 +293,11 @@ class ProbeServer {
          },
          text: { version: this.version, hash: JSON.stringify(this.root), dirty: this.version !== this.saved }
       };
+      if (!this.reportsWrites) {
+         // As a server from before the field sends it, which the type does not allow.
+         Reflect.deleteProperty(document, 'heldWrites');
+      }
+      return document;
    }
 }
 
@@ -368,6 +394,12 @@ interface CopyHarness extends Harness {
     * numbered from version 1 again.
     */
    restart(root?: Partial<ProbeElement>): ProbeServer;
+   /**
+    * Drop the connection and serve the next one from the same server, which
+    * keeps its epoch, versions and text but not the sessions of the dropped
+    * connection.
+    */
+   reconnect(): ProbeServer;
 }
 
 const harnesses: CopyHarness[] = [];
@@ -409,23 +441,40 @@ function makeCopyHarness(settleBeforeCloseMs?: number): CopyHarness {
          : { sessionFactory: (clientId, host, label) => new ClosingSession(clientId, host, label, settleBeforeCloseMs) }
    );
    let disposed = false;
+   /** Drop the connection and serve the next one from what `make` builds on it. */
+   const serveNext = (make: (wire: MessageConnection) => ProbeServer): ProbeServer => {
+      const replaced = makeDuplexConnectionPair();
+      pairs.push(replaced);
+      server = make(replaced.left);
+      next = replaced.right;
+      port.fireDispose();
+      // Ends only, as a reply still being written would fail on a destroyed stream.
+      pair.left.dispose();
+      pair.right.dispose();
+      pair = replaced;
+      return server;
+   };
    const harness: CopyHarness = {
       server,
       session: connection.createSession('form', 'form'),
       events,
       restart: root => {
-         const restarted = makeDuplexConnectionPair();
-         pairs.push(restarted);
          const held = server.root;
-         server = new ProbeServer(restarted.left);
-         server.root = { ...held, ...root };
-         next = restarted.right;
-         port.fireDispose();
-         // Ends only, as a reply still being written would fail on a destroyed stream.
-         pair.left.dispose();
-         pair.right.dispose();
-         pair = restarted;
-         return server;
+         return serveNext(wire => {
+            const restarted = new ProbeServer(wire);
+            restarted.root = { ...held, ...root };
+            return restarted;
+         });
+      },
+      reconnect: () => {
+         const before = server;
+         return serveNext(wire => {
+            const same = new ProbeServer(wire, before.epoch);
+            same.root = before.root;
+            same.version = before.version;
+            same.saved = before.saved;
+            return same;
+         });
       },
       dispose: () => {
          if (disposed) {
@@ -433,7 +482,11 @@ function makeCopyHarness(settleBeforeCloseMs?: number): CopyHarness {
          }
          disposed = true;
          connection.dispose();
-         pairs.forEach(each => each.dispose());
+         // Ends only, as for a dropped connection.
+         pairs.forEach(each => {
+            each.left.dispose();
+            each.right.dispose();
+         });
       }
    };
    harnesses.push(harness);
@@ -441,32 +494,107 @@ function makeCopyHarness(settleBeforeCloseMs?: number): CopyHarness {
 }
 
 /**
- * Type an edit as the restore to `restarted` fires, on the base from before
- * it, since the write before fails. Resolves to the typed edit's outcome.
+ * Type an edit while the connection is down, on the base from before the
+ * restart, so its write reaches the restarted server gated on the epoch before.
  */
-async function typeOnBaseFromBeforeRestore(
-   harness: CopyHarness,
-   copy: WorkingCopy<ProbeElement>,
-   restarted: ProbeServer
-): Promise<WorkingCopyEditOutcome> {
-   restarted.failNext = new Error('refused');
-   const typed = new Deferred<WorkingCopyEditOutcome>();
-   harness.session.onDidRestoreDocument(() => {
-      copy.edit(root => ({ ...root, name: 'typed' })).then(typed.resolve, typed.reject);
-   });
-   await expect(copy.edit(root => ({ ...root, name: 'ours' }))).rejects.toThrow('refused');
-   return typed.promise;
+function typeWhileDown(copy: WorkingCopy<ProbeElement>): Promise<WorkingCopyEditOutcome> {
+   return copy.edit(root => ({ ...root, name: 'typed' }));
 }
 
-/** Resolves once the session has heard the next update of the document. */
-function nextUpdate(events: DataEvents<ProbeElement>): Promise<void> {
+/**
+ * Resolves once the session has heard the next update of the document from
+ * `sourceClientId`, so a late echo of the copy's own write is not taken for it.
+ */
+function nextUpdate(events: DataEvents<ProbeElement>, sourceClientId = OTHER_CLIENT): Promise<void> {
    const heard = new Deferred<void>();
-   const listener = events.onDidUpdateDocument(() => {
-      listener.dispose();
-      heard.resolve();
+   const listener = events.onDidUpdateDocument(event => {
+      if (event.sourceClientId === sourceClientId) {
+         listener.dispose();
+         heard.resolve();
+      }
    });
    return heard.promise;
 }
+
+/** Where a fault strikes an edit's write: at each await of the write that another request can pass. */
+const FAULT_POINTS = [
+   'before the write lands',
+   'once the write landed, before it answers',
+   'while a conflict of the write rereads'
+] as const;
+
+/** What strikes, resolving to the server serving once it struck. */
+const FAULTS = {
+   'another client writes': async (_harness: CopyHarness, server: ProbeServer): Promise<ProbeServer> => {
+      await server.foreignWrite({ name: 'theirs' });
+      return server;
+   },
+   'the server restarts': async (harness: CopyHarness): Promise<ProbeServer> => harness.restart(),
+   'the connection drops': async (harness: CopyHarness): Promise<ProbeServer> => harness.reconnect(),
+   'the copy closes': async (_harness: CopyHarness, server: ProbeServer, copy: WorkingCopy<ProbeElement>): Promise<ProbeServer> => {
+      copy.dispose();
+      return server;
+   },
+   'the next write is refused': async (_harness: CopyHarness, server: ProbeServer): Promise<ProbeServer> => {
+      server.failNext = new Error('refused');
+      return server;
+   }
+} as const;
+
+describe('WorkingCopy under a fault at each await of a write', () => {
+   afterEach(() => {
+      copies.splice(0).forEach(copy => copy.dispose());
+      harnesses.splice(0).forEach(harness => harness.dispose());
+   });
+
+   const cases = FAULT_POINTS.flatMap(point => Object.keys(FAULTS).map(fault => [point, fault as keyof typeof FAULTS] as const));
+
+   it.each(cases)('shows an edit that is not idempotent once at most, and follows the server, when %s and %s', async (point, fault) => {
+      const rejections = await captureUnhandledRejections(async caught => {
+         const harness = makeCopyHarness();
+         const copy = new HeldCopy(harness.session, harness.events, URI_A);
+         await copy.open();
+         const shown: string[] = [];
+         copy.onDidChange(() => shown.push(copy.root?.note ?? ''));
+         const server = harness.server;
+         const gate = new Deferred<void>();
+         if (point === 'once the write landed, before it answers') {
+            server.answerGate = gate.promise;
+         } else {
+            server.updateGate = gate.promise;
+         }
+
+         const written = copy.edit(root => ({ ...root, note: `${root.note}!` }));
+         if (point === 'once the write landed, before it answers') {
+            await waitFor(() => server.root.note === 'initial!');
+         } else {
+            await waitFor(() => server.updates === 1);
+         }
+         const rereading = new Deferred<void>();
+         if (point === 'while a conflict of the write rereads') {
+            await server.foreignWrite({ note: 'conflicting' });
+            const reads = server.reads;
+            server.readGate = rereading.promise;
+            gate.resolve();
+            await waitFor(() => server.reads > reads);
+         }
+         const serving = await FAULTS[fault](harness, server, copy);
+         gate.resolve();
+         rereading.resolve();
+         await written.catch(() => undefined);
+         await tick();
+
+         expect(shown.filter(note => (note.match(/!/g)?.length ?? 0) > 1)).toEqual([]);
+         if (fault !== 'the copy closes') {
+            await waitFor(() => compare(copy.root ?? {}, serving.root).length === 0);
+            expect(serving.root.note.match(/!/g)?.length ?? 0).toBeLessThanOrEqual(1);
+         }
+         return caught;
+      });
+
+      expect(rejections).toEqual([]);
+   });
+});
 
 describe('WorkingCopy', () => {
    afterEach(() => {
@@ -699,6 +827,298 @@ describe('WorkingCopy', () => {
       expect(shown.at(-1)).toBe('theirs');
    });
 
+   it("writes an edit made during its write once over another client's update from a server that sends no heldWrites", async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.reportsWrites = false;
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      const answered = new Deferred<void>();
+      server.answerGate = answered.promise;
+
+      const first = copy.edit(root => ({ ...root, note: `${root.note}!` }));
+      await waitFor(() => server.version === 2);
+      const heard = nextUpdate(events);
+      await server.foreignWrite({ name: 'theirs' });
+      await heard;
+      const second = copy.edit(root => ({ ...root, name: 'second' }));
+      answered.resolve();
+      await Promise.all([first, second]);
+      await tick();
+
+      expect(server.root.note).toBe('initial!');
+      expect(copy.root).toEqual(server.root);
+   });
+
+   it('writes an edit made during its write once to a server that sends no heldWrites', async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.reportsWrites = false;
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      const answered = new Deferred<void>();
+      server.answerGate = answered.promise;
+      const first = copy.edit(root => ({ ...root, note: `${root.note}!` }));
+      await waitFor(() => server.version === 2);
+      await tick();
+
+      const second = copy.edit(root => ({ ...root, name: 'second' }));
+      answered.resolve();
+
+      expect([await first, await second]).toEqual([{ status: 'applied' }, { status: 'applied' }]);
+      expect(server.root).toEqual({ $type: 'TypeOne', name: 'second', note: 'initial!' });
+   });
+
+   it("holds another client's update from a server that sends no heldWrites while its write is out, so an edit of the written field merges", async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.reportsWrites = false;
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      const shown: string[] = [];
+      copy.onDidChange(() => shown.push(copy.root?.note ?? ''));
+      const answered = new Deferred<void>();
+      server.answerGate = answered.promise;
+      const first = copy.edit(root => ({ ...root, note: `${root.note}!` }));
+      await waitFor(() => server.version === 2);
+      const heard = nextUpdate(events);
+      await server.foreignWrite({ name: 'theirs' });
+      await heard;
+      expect(copy.root).toMatchObject({ name: 'initial', note: 'initial!' });
+
+      const second = copy.edit(root => ({ ...root, note: `${root.note}?` }));
+      answered.resolve();
+
+      expect([await first, await second]).toEqual([{ status: 'applied' }, { status: 'merged' }]);
+      await tick();
+      expect(server.root).toEqual({ $type: 'TypeOne', name: 'theirs', note: 'initial!?' });
+      expect(copy.root).toEqual(server.root);
+      expect(shown.every(note => note === 'initial!' || note === 'initial!?')).toBe(true);
+   });
+
+   it("stops holding another client's update from a server that sends no heldWrites once a request answered with another still out", async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.reportsWrites = false;
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      await copy.edit(root => ({ ...root, name: 'mine' }));
+      const saved = new Deferred<void>();
+      server.saveGate = saved.promise;
+      const first = copy.save();
+      await waitFor(() => server.saved === server.version);
+      await server.foreignWrite({ note: 'theirs' });
+      await waitFor(() => copy.clock.pendingTimers() > 0);
+
+      // Gated on the version before the update, so it answers at once.
+      await expect(copy.save()).rejects.toBeInstanceOf(ConflictError);
+
+      expect({ note: copy.root?.note, timers: copy.clock.pendingTimers() }).toEqual({ note: 'theirs', timers: 0 });
+      saved.resolve();
+      await first;
+   });
+
+   it("holds another client's update from a server that sends no heldWrites while its write is unanswered, and shows it once the write fails", async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.reportsWrites = false;
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      const refused = new Deferred<void>();
+      server.updateGate = refused.promise;
+      const written = copy.edit(root => ({ ...root, name: 'ours' }));
+      await waitFor(() => server.updates === 1);
+      const heard = nextUpdate(events);
+      await server.foreignWrite({ note: 'theirs' });
+      await heard;
+
+      expect(copy.root).toEqual({ $type: 'TypeOne', name: 'ours', note: 'initial' });
+      refused.reject(new Error('refused'));
+
+      await expect(written).rejects.toThrow('refused');
+      expect(copy.root).toEqual({ $type: 'TypeOne', name: 'initial', note: 'theirs' });
+   });
+
+   it("shows another client's update from a server that sends no heldWrites once its write has not answered within its bound", async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.reportsWrites = false;
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      server.updateGate = new Deferred<void>().promise;
+      void copy.edit(root => ({ ...root, name: 'ours' })).catch(() => undefined);
+      await waitFor(() => server.updates === 1);
+      const heard = nextUpdate(events);
+      await server.foreignWrite({ note: 'theirs' });
+      await heard;
+      expect(copy.root?.note).toBe('initial');
+
+      copy.clock.advance(1_000);
+
+      expect(copy.root).toEqual({ $type: 'TypeOne', name: 'ours', note: 'theirs' });
+   });
+
+   it("stops the timer of another client's held update from a server that sends no heldWrites once disposed", async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.reportsWrites = false;
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      server.updateGate = new Deferred<void>().promise;
+      void copy.edit(root => ({ ...root, name: 'ours' })).catch(() => undefined);
+      await waitFor(() => server.updates === 1);
+      const heard = nextUpdate(events);
+      await server.foreignWrite({ note: 'theirs' });
+      await heard;
+      expect(copy.clock.pendingTimers()).toBeGreaterThan(0);
+
+      copy.dispose();
+
+      expect(copy.clock.pendingTimers()).toBe(0);
+   });
+
+   it('holds the document a restore read from a server that sends no heldWrites while a write is out, and shows it once the write answers', async () => {
+      const harness = makeCopyHarness();
+      const copy = new HeldCopy(harness.session, harness.events, URI_A);
+      await copy.open();
+      harness.restart({ name: 'down' }).reportsWrites = false;
+      let shown: string | undefined;
+      harness.session.onDidRestoreDocument(() => {
+         shown = copy.root?.name;
+      });
+
+      const written = copy.edit(root => ({ ...root, note: 'mine' }));
+      await waitFor(() => shown !== undefined);
+
+      expect(shown).toBe('initial');
+      expect(await written).toEqual({ status: 'merged' });
+      expect(copy.root).toMatchObject({ name: 'down', note: 'mine' });
+   });
+
+   it("writes an edit made once another client's update from a server that sends no heldWrites was shown at its bound, over the landed write once", async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.reportsWrites = false;
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      const answered = new Deferred<void>();
+      server.answerGate = answered.promise;
+      const first = copy.edit(root => ({ ...root, note: `${root.note}!` }));
+      await waitFor(() => server.version === 2);
+      const heard = nextUpdate(events);
+      await server.foreignWrite({ name: 'theirs' });
+      await heard;
+      copy.clock.advance(1_000);
+      expect(copy.root?.name).toBe('theirs');
+
+      const second = copy.edit(root => ({ ...root, name: 'second' }));
+      answered.resolve();
+      await Promise.all([first, second]);
+      await tick();
+
+      expect(server.root).toEqual({ $type: 'TypeOne', name: 'second', note: 'initial!' });
+      expect(copy.root).toEqual(server.root);
+   });
+
+   it('leaves its own echo from a server that sends no heldWrites past the bound, so an edit that is not idempotent shows once', async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.reportsWrites = false;
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      const answered = new Deferred<void>();
+      server.answerGate = answered.promise;
+      const written = copy.edit(root => ({ ...root, note: `${root.note}!` }));
+      await waitFor(() => server.version === 2);
+      await tick();
+
+      copy.clock.advance(1_000);
+
+      expect(copy.root?.note).toBe('initial!');
+      answered.resolve();
+      expect(await written).toEqual({ status: 'applied' });
+      expect(copy.root?.note).toBe('initial!');
+   });
+
+   it('shows the change when a document with the model it showed before its write now holds that write', async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      const shown: string[] = [];
+      copy.onDidChange(() => shown.push(copy.root?.note ?? ''));
+      // As a server that sends only its latest build, so the echo of the write never comes.
+      const push = server.push.bind(server);
+      server.push = (document, sourceClientId) =>
+         sourceClientId === session.clientId ? Promise.resolve() : push(document, sourceClientId);
+      const answered = new Deferred<void>();
+      server.answerGate = answered.promise;
+      const written = copy.edit(root => ({ ...root, note: `${root.note}!` }));
+      await waitFor(() => server.version === 2);
+      const heard = nextUpdate(events);
+
+      await server.foreignWrite({ note: 'initial' });
+      await heard;
+
+      expect(copy.root?.note).toBe('initial');
+      expect(shown).toEqual(['initial!', 'initial']);
+      answered.resolve();
+      expect(await written).toEqual({ status: 'applied' });
+   });
+
+   it.each(['restarts', 'drops the connection'] as const)(
+      'shows an edit that is not idempotent once when the server %s as a conflict of its write starts to reread',
+      async how => {
+         const harness = makeCopyHarness();
+         const copy = new HeldCopy(harness.session, harness.events, URI_A);
+         await copy.open();
+         const sampled: string[] = [];
+         const sample = (): void => void Promise.resolve().then(() => sampled.push(copy.root?.note ?? ''));
+         harness.events.onDidUpdateDocument(sample);
+         harness.session.onDidRestoreDocument(sample);
+         copy.onDidChange(sample);
+         const server = harness.server;
+         expect(await copy.edit(root => ({ ...root, name: 'earlier' }))).toEqual({ status: 'applied' });
+         const gate = new Deferred<void>();
+         server.updateGate = gate.promise;
+         const written = copy.edit(root => ({ ...root, note: `${root.note}!` }));
+         await waitFor(() => server.updates === 2);
+         await server.foreignWrite({ note: 'conflicting' });
+         // The conflict's reread is the first call to wait for the connection, so it waits out the restore.
+         let serving: ProbeServer | undefined;
+         const connected = harness.session.connected.bind(harness.session);
+         harness.session.connected = () => {
+            serving ??= how === 'restarts' ? harness.restart() : harness.reconnect();
+            return connected();
+         };
+
+         gate.resolve();
+
+         expect(await written).toEqual({ status: 'conflict' });
+         await tick();
+         expect(sampled.filter(note => (note.match(/!/g)?.length ?? 0) > 1)).toEqual([]);
+         expect(copy.root).toEqual(serving?.root);
+      }
+   );
+
+   it('keeps showing its write out while a restore during the conflict reread writes an earlier edit again above its number', async () => {
+      const harness = makeCopyHarness();
+      const copy = new HeldCopy(harness.session, harness.events, URI_A);
+      await copy.open();
+      const sampled: string[] = [];
+      expect(await copy.edit(root => ({ ...root, name: 'earlier' }))).toEqual({ status: 'applied' });
+      harness.events.onDidUpdateDocument(() => void Promise.resolve().then(() => sampled.push(copy.root?.note ?? '')));
+      // Refused without another client's write, so the session keeps the earlier edit to restore.
+      harness.server.failNext = new ConflictError(URI_A, asModelVersion(1), asModelVersion(2));
+      // Restarted without the earlier edit, as the conflict's reread waits for the connection.
+      const first = harness.server;
+      let serving: ProbeServer | undefined;
+      const connected = harness.session.connected.bind(harness.session);
+      harness.session.connected = () => {
+         if (first.updates === 2) {
+            serving ??= harness.restart({ name: 'initial', note: 'initial' });
+         }
+         return connected();
+      };
+
+      await copy.edit(root => ({ ...root, note: `${root.note}!` }));
+      await tick();
+
+      expect(serving?.updates).toBeGreaterThanOrEqual(1);
+      expect(sampled.filter(note => note !== 'initial!')).toEqual([]);
+      expect(copy.root).toEqual(serving?.root);
+   });
+
    it('shows an edit that is not idempotent once in every change, its answer included', async () => {
       const { session, events } = makeCopyHarness();
       const copy = new HeldCopy(session, events, URI_A);
@@ -883,6 +1303,33 @@ describe('WorkingCopy', () => {
       expect(copy.root).toEqual(server.root);
    });
 
+   it("writes an edit of a dropped field made once the split write's echo shows another client's value, before the batch answers", async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      const answered = new Deferred<void>();
+      server.updateGate = answered.promise;
+      const name = copy.edit(root => ({ ...root, name: 'ours' }));
+      const note = copy.edit(root => ({ ...root, note: 'unrelated' }));
+      await waitFor(() => server.updates === 1);
+      await server.foreignWrite({ name: 'theirs' });
+      const split = new Deferred<void>();
+      server.answerGate = split.promise;
+      server.updateGate = undefined;
+      answered.resolve();
+      await waitFor(() => server.root.note === 'unrelated');
+      await tick();
+      expect(copy.root).toMatchObject({ name: 'theirs', note: 'unrelated' });
+
+      const retyped = copy.edit(root => ({ ...root, name: 'retyped' }));
+      server.answerGate = undefined;
+      split.resolve();
+
+      expect([await name, await note, await retyped]).toEqual([{ status: 'conflict' }, { status: 'merged' }, { status: 'applied' }]);
+      expect(server.root).toEqual({ $type: 'TypeOne', name: 'retyped', note: 'unrelated' });
+      expect(copy.root).toEqual(server.root);
+   });
+
    it("keeps another client's update that arrived before the answer to its own earlier write", async () => {
       const { server, session, events } = makeCopyHarness();
       const copy = new HeldCopy(session, events, URI_A);
@@ -911,10 +1358,10 @@ describe('WorkingCopy', () => {
       server.answerLatest = true;
       const first = copy.edit(root => ({ ...root, name: 'ours' }));
       await waitFor(() => server.version === 2);
-      const heard = nextUpdate(events);
-      await server.foreignWrite({ note: 'theirs' });
-      await heard;
+      // Made before the other client's update arrives.
+      const pushed = server.foreignWrite({ note: 'theirs' });
       const second = copy.edit(root => ({ ...root, note: 'ours' }));
+      await pushed;
 
       answered.resolve();
       expect(await first).toEqual({ status: 'applied' });
@@ -932,10 +1379,10 @@ describe('WorkingCopy', () => {
       server.answerLatest = true;
       const first = copy.edit(root => ({ ...root, name: 'ours' }));
       await waitFor(() => server.version === 2);
-      const heard = nextUpdate(events);
-      await server.foreignWrite({ note: 'theirs' });
-      await heard;
+      // Made before the other client's update arrives.
+      const pushed = server.foreignWrite({ note: 'theirs' });
       const second = copy.edit(root => ({ ...root, name: 'again' }));
+      await pushed;
 
       answered.resolve();
       expect(await first).toEqual({ status: 'applied' });
@@ -1314,12 +1761,13 @@ describe('WorkingCopy', () => {
       await server.foreignWrite({ name: 'theirs' });
       await heard;
 
-      expect(copy.root?.name).toBe('ours');
+      expect(copy.root?.name).toBe('theirs');
       const second = copy.edit(root => ({ ...root, note: 'second' }));
       answered.resolve();
 
       expect(await first).toEqual({ status: 'applied' });
-      expect(await second).toEqual({ status: 'merged' });
+      // Made on the other client's edit, shown with the write it holds.
+      expect(await second).toEqual({ status: 'applied' });
       expect(server.root).toEqual({ $type: 'TypeOne', name: 'theirs', note: 'second' });
       expect(copy.root).toEqual(server.root);
    });
@@ -1341,6 +1789,65 @@ describe('WorkingCopy', () => {
 
       expect(await written).toEqual({ status: 'applied' });
       expect(server.root).toEqual({ $type: 'TypeOne', name: 'theirs', note: 'initial!' });
+      expect(copy.root).toEqual(server.root);
+   });
+
+   it("shows another client's update at once while its write has not landed", async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      const landed = new Deferred<void>();
+      server.updateGate = landed.promise;
+      const written = copy.edit(root => ({ ...root, note: `${root.note}!` }));
+      await waitFor(() => server.updates === 1);
+      const heard = nextUpdate(events);
+      await server.foreignWrite({ name: 'theirs' });
+      await heard;
+
+      expect(copy.root).toEqual({ $type: 'TypeOne', name: 'theirs', note: 'initial!' });
+      landed.resolve();
+
+      expect(await written).toEqual({ status: 'merged' });
+      expect(copy.root).toEqual(server.root);
+   });
+
+   it("shows another client's update at once over its landed write whose answer is out, with an edit that is not idempotent once", async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      const answered = new Deferred<void>();
+      server.answerGate = answered.promise;
+      const written = copy.edit(root => ({ ...root, note: `${root.note}!` }));
+      await waitFor(() => server.version === 2);
+      const heard = nextUpdate(events);
+      await server.foreignWrite({ name: 'theirs' });
+      await heard;
+
+      expect(copy.root).toEqual({ $type: 'TypeOne', name: 'theirs', note: 'initial!' });
+      answered.resolve();
+
+      expect(await written).toEqual({ status: 'applied' });
+      expect(copy.root).toEqual(server.root);
+   });
+
+   it('writes an edit made on a document that holds the write still out without reading the document again', async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      const answered = new Deferred<void>();
+      server.answerGate = answered.promise;
+      const first = copy.edit(root => ({ ...root, note: `${root.note}!` }));
+      await waitFor(() => server.version === 2);
+      const heard = nextUpdate(events);
+      await server.foreignWrite({ name: 'theirs' });
+      await heard;
+      const reads = server.reads;
+
+      const second = copy.edit(root => ({ ...root, name: `${root.name}?` }));
+      answered.resolve();
+
+      expect([await first, await second]).toEqual([{ status: 'applied' }, { status: 'applied' }]);
+      expect({ reads: server.reads, root: server.root }).toEqual({ reads, root: { $type: 'TypeOne', name: 'theirs?', note: 'initial!' } });
       expect(copy.root).toEqual(server.root);
    });
 
@@ -1511,108 +2018,29 @@ describe('WorkingCopy', () => {
       expect(await written).toEqual({ status: 'applied' });
    });
 
-   it("stops holding another client's update once a request answered with another still out", async () => {
-      const { server, session, events } = makeCopyHarness();
-      const copy = new HeldCopy(session, events, URI_A);
-      await copy.open();
-      await copy.edit(root => ({ ...root, name: 'mine' }));
-      const saved = new Deferred<void>();
-      server.saveGate = saved.promise;
-      const first = copy.save();
-      await waitFor(() => server.saved === server.version);
-      await server.foreignWrite({ note: 'theirs' });
-      await waitFor(() => copy.clock.pendingTimers() > 0);
-
-      // Gated on the version before the update, so it answers at once.
-      await expect(copy.save()).rejects.toBeInstanceOf(ConflictError);
-
-      expect({ note: copy.root?.note, timers: copy.clock.pendingTimers() }).toEqual({ note: 'theirs', timers: 0 });
-      saved.resolve();
-      await first;
-   });
-
-   it("holds another client's update while its write is unanswered, and shows it once the write fails", async () => {
-      const { server, session, events } = makeCopyHarness();
-      const copy = new HeldCopy(session, events, URI_A);
-      await copy.open();
-      const refused = new Deferred<void>();
-      server.updateGate = refused.promise;
-      const written = copy.edit(root => ({ ...root, name: 'ours' }));
-      await waitFor(() => server.updates === 1);
-      const heard = nextUpdate(events);
-      await server.foreignWrite({ note: 'theirs' });
-      await heard;
-
-      expect(copy.root).toEqual({ $type: 'TypeOne', name: 'ours', note: 'initial' });
-      refused.reject(new Error('refused'));
-
-      await expect(written).rejects.toThrow('refused');
-      expect(copy.root).toEqual({ $type: 'TypeOne', name: 'initial', note: 'theirs' });
-   });
-
-   it("shows another client's update once its write has not answered within its bound", async () => {
-      const { server, session, events } = makeCopyHarness();
-      const copy = new HeldCopy(session, events, URI_A);
-      await copy.open();
-      server.updateGate = new Deferred<void>().promise;
-      void copy.edit(root => ({ ...root, name: 'ours' })).catch(() => undefined);
-      await waitFor(() => server.updates === 1);
-      const heard = nextUpdate(events);
-      await server.foreignWrite({ note: 'theirs' });
-      await heard;
-      expect(copy.root?.note).toBe('initial');
-
-      copy.clock.advance(1_000);
-
-      expect(copy.root).toEqual({ $type: 'TypeOne', name: 'ours', note: 'theirs' });
-   });
-
-   it("stops the timer of another client's held update once disposed", async () => {
-      const { server, session, events } = makeCopyHarness();
-      const copy = new HeldCopy(session, events, URI_A);
-      await copy.open();
-      server.updateGate = new Deferred<void>().promise;
-      void copy.edit(root => ({ ...root, name: 'ours' })).catch(() => undefined);
-      await waitFor(() => server.updates === 1);
-      const heard = nextUpdate(events);
-      await server.foreignWrite({ note: 'theirs' });
-      await heard;
-      expect(copy.clock.pendingTimers()).toBeGreaterThan(0);
-
-      copy.dispose();
-
-      expect(copy.clock.pendingTimers()).toBe(0);
-   });
-
    it('takes an edit made while an edit out throws on the root shown', async () => {
       const { server, session, events } = makeCopyHarness();
       const copy = new HeldCopy(session, events, URI_A);
       await copy.open();
-      const answer = new Deferred<void>();
-      server.answerGate = answer.promise;
+      const landed = new Deferred<void>();
+      server.updateGate = landed.promise;
       const first = copy.edit(root => {
          if (root.name === 'theirs') {
             throw new TypeError('renamed');
          }
          return { ...root, note: 'first' };
       });
-      await waitFor(() => server.root.note === 'first');
-      server.answerGate = undefined;
+      await waitFor(() => server.updates === 1);
       await server.foreignWrite({ name: 'theirs' });
-      await waitFor(() => copy.clock.pendingTimers() > 0);
-      copy.clock.advance(1_000);
       await waitFor(() => copy.snapshot?.model?.root.name === 'theirs');
       expect(() => copy.root).toThrow('renamed');
 
-      const second = copy.edit(root => ({ ...root, note: 'second' }));
-      answer.resolve();
+      const second = copy.edit(root => ({ ...root, name: 'second' }));
+      landed.resolve();
 
-      expect(await first).toEqual({ status: 'applied' });
-      // Made over the other client's edit already shown, so it raced none.
-      expect((await second).status).toBe('applied');
-      expect(server.root).toMatchObject({ name: 'theirs', note: 'second' });
+      expect([await first, await second]).toEqual([{ status: 'merged' }, { status: 'merged' }]);
+      expect(server.root).toMatchObject({ name: 'second', note: 'first' });
    });
-
    it("keeps another client's edit of a field over an edit queued behind a write the server normalized to no change", async () => {
       const { server, session, events } = makeCopyHarness();
       const copy = new HeldCopy(session, events, URI_A);
@@ -1740,8 +2168,6 @@ describe('WorkingCopy', () => {
       await waitFor(() => server.root.note === 'initial!');
       server.answerGate = undefined;
       await server.foreignWrite({ name: 'theirs' });
-      await waitFor(() => copy.clock.pendingTimers() > 0);
-      copy.clock.advance(1_000);
       await waitFor(() => copy.snapshot?.model?.root.name === 'theirs');
 
       const second = copy.edit(root => ({ ...root, name: 'mine' }));
@@ -2389,8 +2815,8 @@ describe('WorkingCopy', () => {
       const second = copy.edit(root => ({ ...root, name: 'second' }));
       await second;
 
-      const heard = nextUpdate(events);
-      await server.push(echo ?? { uri: URI_A, epoch: server.epoch }, session.clientId);
+      const heard = nextUpdate(events, session.clientId);
+      await server.push(echo ?? TransferDocument.absent<ProbeElement>(URI_A, server.epoch), session.clientId);
       await heard;
 
       expect(copy.root?.name).toBe('second');
@@ -2400,7 +2826,7 @@ describe('WorkingCopy', () => {
       const { server, session, events } = makeCopyHarness();
       const copy = new HeldCopy(session, events, URI_A);
       await copy.open();
-      const before = copy.snapshot ?? { uri: URI_A, epoch: server.epoch };
+      const before = copy.snapshot ?? TransferDocument.absent<ProbeElement>(URI_A, server.epoch);
       const answered = new Deferred<void>();
       server.answerGate = answered.promise;
       const written = copy.edit(root => ({ ...root, name: 'ours' }));
@@ -2650,6 +3076,32 @@ describe('WorkingCopy', () => {
       expect(server.root).toMatchObject({ name: 'theirs', note: 'n2' });
    });
 
+   it("writes an edit that restates a value a conflict dropped once the copy shows the other client's value", async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      const held = new Deferred<void>();
+      server.updateGate = held.promise;
+      const first = copy.edit(root => ({ ...root, name: 'x' }));
+      await waitFor(() => server.updates === 1);
+      const other = copy.edit(root => ({ ...root, note: 'n' }));
+      server.updateGate = undefined;
+      await server.foreignWrite({ name: 'theirs' });
+      const answered = new Deferred<void>();
+      server.answerGate = answered.promise;
+      held.resolve();
+      await waitFor(() => server.root.note === 'n');
+      await tick();
+      expect(copy.root?.name).toBe('theirs');
+
+      const again = copy.edit(root => ({ ...root, name: 'x' }));
+      server.answerGate = undefined;
+      answered.resolve();
+
+      expect([await first, await other, await again]).toEqual([{ status: 'conflict' }, { status: 'merged' }, { status: 'applied' }]);
+      expect(server.root).toMatchObject({ name: 'x', note: 'n' });
+   });
+
    it('settles a split batch and the edit queued behind it when a kept edit throws without a dropped one', async () => {
       const { server, session, events } = makeCopyHarness();
       const copy = new HeldCopy(session, events, URI_A);
@@ -2741,7 +3193,7 @@ describe('WorkingCopy', () => {
       expect(restarted.root.name).toBe('typed');
    });
 
-   it('holds the document a restore read while a write is out, and shows it once the write answers', async () => {
+   it('shows the document a restore read while a write is out, and the write merged over it once it answers', async () => {
       const harness = makeCopyHarness();
       const copy = new HeldCopy(harness.session, harness.events, URI_A);
       await copy.open();
@@ -2754,18 +3206,53 @@ describe('WorkingCopy', () => {
       const written = copy.edit(root => ({ ...root, note: 'mine' }));
       await waitFor(() => shown !== undefined);
 
-      expect(shown).toBe('initial');
+      expect(shown).toBe('down');
       expect(await written).toEqual({ status: 'merged' });
       expect(copy.root).toMatchObject({ name: 'down', note: 'mine' });
    });
 
-   it('applies an edit typed as a reconnect that found its text unchanged fires, on the base from before it', async () => {
+   it('shows an edit typed while the connection is down over a restore that wrote an earlier edit again under a later number', async () => {
+      const harness = makeCopyHarness();
+      const copy = new HeldCopy(harness.session, harness.events, URI_A);
+      await copy.open();
+      expect(await copy.edit(root => ({ ...root, name: 'first' }))).toEqual({ status: 'applied' });
+      let shown: ProbeElement | undefined;
+      harness.session.onDidRestoreDocument(() => {
+         shown = copy.root;
+      });
+
+      // Restarted without the first edit, so the restore writes it again.
+      harness.restart({ name: 'initial' });
+      const second = copy.edit(root => ({ ...root, note: 'second' }));
+      await waitFor(() => shown !== undefined);
+
+      expect(shown).toMatchObject({ name: 'first', note: 'second' });
+      expect(await second).toEqual({ status: 'applied' });
+   });
+
+   it('shows an edit that is not idempotent once when typed while the connection to the same server is down', async () => {
+      const harness = makeCopyHarness();
+      const copy = new HeldCopy(harness.session, harness.events, URI_A);
+      await copy.open();
+      const shown: string[] = [];
+      copy.onDidChange(() => shown.push(copy.root?.note ?? ''));
+      const server = harness.reconnect();
+
+      const written = copy.edit(root => ({ ...root, note: `${root.note}!` }));
+
+      expect(await written).toEqual({ status: 'applied' });
+      await tick();
+      expect(shown.filter(note => note !== 'initial!')).toEqual([]);
+      expect(server.root.note).toBe('initial!');
+   });
+
+   it('applies an edit typed while the connection is down to a server that restarted with the text unchanged', async () => {
       const harness = makeCopyHarness();
       const copy = new HeldCopy(harness.session, harness.events, URI_A);
       await copy.open();
       const restarted = harness.restart();
 
-      expect(await typeOnBaseFromBeforeRestore(harness, copy, restarted)).toEqual({ status: 'applied' });
+      expect(await typeWhileDown(copy)).toEqual({ status: 'applied' });
       expect(restarted.root.name).toBe('typed');
    });
 
@@ -2789,9 +3276,9 @@ describe('WorkingCopy', () => {
       const restarted = harness.restart();
       restarted.modelOffset = 1;
 
-      expect(await typeOnBaseFromBeforeRestore(harness, copy, restarted)).toEqual({ status: 'applied' });
-      // The failed write, then the typed edit's refused write and its reconciled one.
-      expect(restarted.updates).toBe(3);
+      expect(await typeWhileDown(copy)).toEqual({ status: 'applied' });
+      // The typed edit's refused write and its reconciled one.
+      expect(restarted.updates).toBe(2);
       expect(restarted.root.name).toBe('typed');
    });
 
@@ -2854,7 +3341,7 @@ describe('WorkingCopy', () => {
       restarted.modelOffset = 1;
       race = () => restarted.foreignWrite({ note: 'theirs' });
 
-      expect(await typeOnBaseFromBeforeRestore(harness, copy, restarted)).toEqual({ status: 'merged' });
+      expect(await typeWhileDown(copy)).toEqual({ status: 'merged' });
    });
 
    it('shows the diagnostics its reread after a restore brings', async () => {

@@ -74,10 +74,15 @@ await form.withOpenDocument({ uri }, opened =>
    document's diagnostics to `TransferDiagnostic.hasSyntaxErrors`. It is a
    hint only, since the diagnostics can lag the build or miss an error.
 
-4. Ignore your own echoes. A `WorkingCopy` does this for you. Without one,
-   every change reaches you as an update event, your own included.
-   `session.isOwnEcho(event.sourceClientId)` tells you which ones you made
-   yourself.
+4. Tell your own writes from other clients' changes. A `WorkingCopy` does
+   this for you. Without one, every change reaches you as an update event,
+   your own included. `session.isOwnEcho(event.sourceClientId)` tells you
+   which ones you made yourself. To tell whether a document holds a write that
+   has not answered yet, pass `onWrite` to the update, which is told the
+   write's number as it is sent. Send each write of a document once the one
+   before answered. The document then holds a write that landed once its own
+   entry for `session.clientId` in `heldWrites` reaches that number. Read it
+   with `Object.hasOwn`, since a client id can be `__proto__`.
 
 5. Show whether a document has unsaved changes. A `WorkingCopy` tells you
    through `dirty` and `onDidChangeDirty`. Without one, every document the

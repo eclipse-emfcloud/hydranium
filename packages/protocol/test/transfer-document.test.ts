@@ -21,6 +21,7 @@ describe('TransferDocument.create', () => {
       expect(doc).toEqual({
          uri: 'file:///A.fake',
          epoch: 'epoch',
+         heldWrites: {},
          model: { root: { $type: 'FakeRoot', name: 'a' }, version: 3, hash: 'hash' }
       });
       expect(TransferDocument.isLoaded(doc)).toBe(true);
@@ -38,7 +39,7 @@ describe('TransferDocument.create', () => {
 describe('TransferDocument.absent', () => {
    it('carries neither a model nor a text block', () => {
       const doc = TransferDocument.absent<FakeRoot>('file:///A.fake', 'epoch');
-      expect(doc).toEqual({ uri: 'file:///A.fake', epoch: 'epoch' });
+      expect(doc).toEqual({ uri: 'file:///A.fake', epoch: 'epoch', heldWrites: {} });
       expect(TransferDocument.isLoaded(doc)).toBe(false);
    });
 });
