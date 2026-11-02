@@ -153,9 +153,11 @@ class ProbeServer {
       if (args.baseVersion !== 'any' && args.baseVersion !== this.modelVersion) {
          throw new ConflictError(URI_A, asModelVersion(args.baseVersion), this.modelVersion);
       }
-      await this.change(args.model, args.clientId);
+      // Read before the pushes are awaited, so a write of another client that lands meanwhile is not answered as this one.
+      const pushed = this.change(args.model, args.clientId);
       const written = { version: this.modelVersion };
       const answer = this.document();
+      await pushed;
       await answerGate;
       return { ...(this.answerLatest ? this.document() : answer), written };
    }

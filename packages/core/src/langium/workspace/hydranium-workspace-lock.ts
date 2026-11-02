@@ -56,6 +56,8 @@ export class HydraniumWorkspaceLock extends DefaultWorkspaceLock {
    protected readonly tracer: Tracer;
    protected readonly stalledWriteWarnMs: number;
    protected runningWrite?: RunningWrite;
+   /** Writes queued and not yet started. */
+   protected queuedWrites = 0;
 
    constructor(services: Pick<ServerSharedServicesMinimal, 'Clock' | 'Tracer'>, options: HydraniumWorkspaceLockOptions = {}) {
       super();
@@ -65,19 +67,28 @@ export class HydraniumWorkspaceLock extends DefaultWorkspaceLock {
    }
 
    /**
-    * How many calls have cancelled the lock's latest write: every `write`,
-    * which cancels the write before it, and every `cancelWrite`. A caller that
-    * reads this right after queuing a write, and reads the same number later,
-    * holds a write nothing has cancelled, whether it is still queued or
-    * already running. Its token answers that only once the write runs, since
-    * a queued write has not been handed it yet.
+    * How many calls to `write` or `cancelWrite` came while a write was still
+    * queued or running. A caller that reads this right after queuing a
+    * write, and reads the same number later, holds a write nothing has
+    * cancelled, whether it is still queued or already running. Its token
+    * answers that only once the write runs, since a queued write has not been
+    * handed it yet. A different number read after the caller's write ended
+    * does not prove that write was cancelled, since a later write that
+    * cancels another queued or running write counts too. A caller that
+    * retries on it builds once more than it needs to.
     */
    get writeCancellations(): number {
       return this.cancelledWriteCount;
    }
 
    override write(action: (token: CancellationToken) => MaybePromise<void>): Promise<void> {
-      return super.write(token => runInWriteLockScope(() => this.runWrite(action, token)));
+      const queued = super.write(token => {
+         this.queuedWrites--;
+         return runInWriteLockScope(() => this.runWrite(action, token));
+      });
+      // Counted after Langium's `write` has cancelled the write before it, so the new write does not count itself.
+      this.queuedWrites++;
+      return queued;
    }
 
    /** Run `action` as {@link runningWrite}, so a cancellation while it runs can time it. */
@@ -96,11 +107,15 @@ export class HydraniumWorkspaceLock extends DefaultWorkspaceLock {
 
    /**
     * Counted here rather than in {@link write}, because Langium's `write` cancels
-    * through this method too. A write running when this is called has been
-    * cancelled, by this call or an earlier one, so its timer starts here.
+    * through this method too. A write that has ended is not counted, so the
+    * next write does not count as cancelling it. A write running when this is
+    * called has been cancelled, by this call or an earlier one, so its timer
+    * starts here.
     */
    override cancelWrite(): void {
-      this.cancelledWriteCount++;
+      if (this.queuedWrites > 0 || this.runningWrite !== undefined) {
+         this.cancelledWriteCount++;
+      }
       const running = this.runningWrite;
       if (running && !running.stallTimer && this.stalledWriteWarnMs > 0) {
          running.stallTimer = this.clock.setTimer(() => this.reportStalledWrite(), this.stalledWriteWarnMs);
