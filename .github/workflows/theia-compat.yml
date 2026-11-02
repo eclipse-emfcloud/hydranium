@@ -198,10 +198,15 @@ jobs:
       # key that describes a tree nobody installed and a failure line that
       # reads as a defect. A weekly schedule also sits on the eviction
       # boundary, so a hit is not something to plan around.
+      #
+      # Leaving `cache` out is not enough. setup-node then enables the same
+      # cache from the manifest's `packageManager`, and only
+      # `package-manager-cache` stops that.
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
+          package-manager-cache: false
 
       # Mirrors ci.yml's step of the same name, and is not optional here.
       # Whatever npm ships inside the Node image `.nvmrc` selects CRASHES in

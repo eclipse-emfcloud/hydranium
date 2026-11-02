@@ -75,10 +75,15 @@ jobs:
       # strings: the alternative is the runner image's Node, which moves on
       # someone else's schedule. `node-version-file` matches the release job's
       # value, which is what the drift check in ci.yml compares.
+      #
+      # No npm cache. This job installs nothing, so the cache it would save
+      # under the lockfile's key is empty, and every later install restores
+      # that.
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
+          package-manager-cache: false
 
       # Both fallbacks publish, because the failure modes are asymmetric: an
       # over-trigger costs one content-identical version, an under-trigger
@@ -251,10 +256,10 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      # setup-node does not act on `packageManager`; see the twin step in
-      # ci.yml. Kept textually identical to it so the two toolchains cannot
-      # diverge, and derived from the manifest so neither can fall behind a
-      # bump to the pin.
+      # setup-node does not install `packageManager`'s version, so this step
+      # does. Kept textually identical to the same step in every workflow so
+      # the toolchains cannot diverge, and derived from the manifest so none
+      # can fall behind a bump to the pin.
       - name: Pin the toolchain
         run: |
           pinned=$(node -e "

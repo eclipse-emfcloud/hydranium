@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Project, type SourceFile } from 'ts-morph';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildTransferBuilderSource } from '../src/commands/generate-transfer-builder.js';
 import {
    generateTransferModel,
@@ -338,7 +338,7 @@ describe('generateTransferModel', () => {
       rmSync(scratch, { recursive: true, force: true });
    });
 
-   async function generate(ast = LANGIUM_AST): Promise<{ text: string; model: Record<string, unknown>; outFile: string }> {
+   async function generate(ast = LANGIUM_AST): Promise<{ text: string; model: Record<string, unknown> }> {
       scratch = mkdtempSync(path.join(tmpdir(), 'hydranium-transfer-model-'));
       const astFile = path.join(scratch, 'ast.ts');
       const augmentationFile = path.join(scratch, 'augmentation.ts');
@@ -349,20 +349,90 @@ describe('generateTransferModel', () => {
       generateTransferModel({ astFile, augmentationFile, outFile });
       return {
          text: readFileSync(outFile, 'utf-8'),
-         model: (await import(pathToFileURL(outFile).href)) as Record<string, unknown>,
-         outFile
+         model: (await import(pathToFileURL(outFile).href)) as Record<string, unknown>
       };
    }
 
-   function typecheck(file: string): { output: string; status: number | null } {
+   /** The ASTs whose output a test type-checks, each in a directory named by its key. */
+   const TYPECHECKED = {
+      utilityNamed: UTILITY_NAMED_AST,
+      mixedAlias: MIXED_ALIAS_AST,
+      quotedKeywords: QUOTED_KEYWORDS_AST,
+      keywordNamesPerLanguage: keywordNamesAst('LangA.KeywordNames | LangB.KeywordNames'),
+      noKeywordNames: keywordNamesAst('never')
+   };
+   type Fixture = keyof typeof TYPECHECKED;
+
+   /** Above vitest's hook default, which is not raised under CI as the test timeout is. */
+   const TYPECHECK_TIMEOUT_MS = 60_000;
+
+   let typecheckRoot: string;
+   let tscOutput = '';
+   const failures = new Map<Fixture | 'all', string>();
+
+   // One `tsc` for every fixture, because each start is slow on a CI runner.
+   // Failures are recorded rather than thrown, so each lands on its own test.
+   beforeAll(() => {
+      typecheckRoot = mkdtempSync(path.join(tmpdir(), 'hydranium-transfer-typecheck-'));
+      const outFiles: string[] = [];
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      try {
+         for (const name of Object.keys(TYPECHECKED) as Fixture[]) {
+            const dir = path.join(typecheckRoot, name);
+            mkdirSync(dir);
+            writeFileSync(path.join(dir, 'ast.ts'), TYPECHECKED[name]);
+            writeFileSync(path.join(dir, 'augmentation.ts'), "export * from './ast.js';\n");
+            const outFile = path.join(dir, 'transfer-model.ts');
+            try {
+               generateTransferModel({ astFile: path.join(dir, 'ast.ts'), augmentationFile: path.join(dir, 'augmentation.ts'), outFile });
+               outFiles.push(outFile);
+            } catch (err: unknown) {
+               failures.set(name, `generation failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+         }
+      } finally {
+         log.mockRestore();
+      }
       const manifest = findPackageJSON('typescript', import.meta.url);
       if (manifest === undefined) {
-         throw new Error('typescript does not resolve from this package');
+         failures.set('all', 'typescript does not resolve from this package');
+         return;
       }
       const tsc = path.join(path.dirname(manifest), 'bin', 'tsc');
-      const args = ['--ignoreConfig', '--noEmit', '--strict', '--target', 'ES2022', '--module', 'nodenext', file];
+      // Plain diagnostics, as CI's FORCE_COLOR would otherwise split `error` from its code.
+      const args = [
+         '--ignoreConfig',
+         '--noEmit',
+         '--strict',
+         '--pretty',
+         'false',
+         '--target',
+         'ES2022',
+         '--module',
+         'nodenext',
+         ...outFiles
+      ];
       const result = spawnSync(process.execPath, [tsc, ...args], { encoding: 'utf-8' });
-      return { output: result.stdout + result.stderr, status: result.status };
+      tscOutput = result.stdout + result.stderr;
+      // A failure no fixture owns would otherwise pass every test below.
+      const diagnostics = tscOutput.split('\n').filter(line => /error TS\d+/.test(line));
+      if ((result.status !== 0 && diagnostics.length === 0) || diagnostics.some(line => fixtureOf(line) === undefined)) {
+         failures.set('all', `tsc failed outside the fixtures (status ${result.status}):\n${tscOutput}`);
+      }
+   }, TYPECHECK_TIMEOUT_MS);
+
+   afterAll(() => {
+      rmSync(typecheckRoot, { recursive: true, force: true });
+   });
+
+   function fixtureOf(line: string): Fixture | undefined {
+      const slashed = line.replaceAll('\\', '/');
+      return (Object.keys(TYPECHECKED) as Fixture[]).find(name => slashed.includes(`/${name}/`));
+   }
+
+   function typeErrors(name: Fixture): string[] {
+      const failure = failures.get('all') ?? failures.get(name);
+      return failure !== undefined ? [failure] : tscOutput.split('\n').filter(line => fixtureOf(line) === name);
    }
 
    it("emits Langium's per-type constant under the type's own name, unions included", async () => {
@@ -423,18 +493,18 @@ describe('generateTransferModel', () => {
    });
 
    it("compiles for a grammar whose types are named like TypeScript's utility types", async () => {
-      const { model, outFile } = await generate(UTILITY_NAMED_AST);
+      const { model } = await generate(TYPECHECKED.utilityNamed);
 
       // vitest strips types on import, so only tsc sees a shadowed type name.
-      expect(typecheck(outFile)).toEqual({ output: '', status: 0 });
+      expect(typeErrors('utilityNamed'), tscOutput).toEqual([]);
       expect((model.ProjectTransferReflection as { getAllTypes(): string[] }).getAllTypes()).toEqual(['Readonly', 'Record']);
    });
 
    it('guards a data-type alias that mixes keywords with another rule, a terminal or a group', async () => {
-      const { text, model, outFile } = await generate(MIXED_ALIAS_AST);
+      const { text, model } = await generate(TYPECHECKED.mixedAlias);
       const guards = model as Record<string, (item: unknown) => boolean>;
 
-      expect(typecheck(outFile)).toEqual({ output: '', status: 0 });
+      expect(typeErrors('mixedAlias'), tscOutput).toEqual([]);
       expect(guards.isKeywordOrRule('none')).toBe(true);
       expect(guards.isKeywordOrRule('||')).toBe(true);
       expect(guards.isKeywordOrRule('one')).toBe(true);
@@ -448,10 +518,10 @@ describe('generateTransferModel', () => {
    });
 
    it('keeps a keyword that holds a quote or a backslash in the values and the guard', async () => {
-      const { model, outFile } = await generate(QUOTED_KEYWORDS_AST);
+      const { model } = await generate(TYPECHECKED.quotedKeywords);
       const guards = model as Record<string, (item: unknown) => boolean>;
 
-      expect(typecheck(outFile)).toEqual({ output: '', status: 0 });
+      expect(typeErrors('quotedKeywords'), tscOutput).toEqual([]);
       expect(model.ProjectKeywordNamesValues).toEqual(['"', "'", '\\', 'plain']);
       expect(model.QuoteValues).toEqual(['"', "'", 'plain']);
       expect(guards.isProjectKeywordNames('\\')).toBe(true);
@@ -460,20 +530,20 @@ describe('generateTransferModel', () => {
    });
 
    it('resolves the keyword names of a project with a language that has no keywords', async () => {
-      const { model, outFile } = await generate(keywordNamesAst('LangA.KeywordNames | LangB.KeywordNames'));
+      const { model } = await generate(TYPECHECKED.keywordNamesPerLanguage);
       const guards = model as Record<string, (item: unknown) => boolean>;
 
-      expect(typecheck(outFile)).toEqual({ output: '', status: 0 });
+      expect(typeErrors('keywordNamesPerLanguage'), tscOutput).toEqual([]);
       expect(model.ProjectKeywordNamesValues).toEqual(['one']);
       expect(guards.isProjectKeywordNames('one')).toBe(true);
       expect(guards.isProjectKeywordNames('other')).toBe(false);
    });
 
    it('guards the keyword names of a project without keywords', async () => {
-      const { model, outFile } = await generate(keywordNamesAst('never'));
+      const { model } = await generate(TYPECHECKED.noKeywordNames);
       const guards = model as Record<string, (item: unknown) => boolean>;
 
-      expect(typecheck(outFile)).toEqual({ output: '', status: 0 });
+      expect(typeErrors('noKeywordNames'), tscOutput).toEqual([]);
       expect(model.ProjectKeywordNamesValues).toEqual([]);
       expect(guards.isProjectKeywordNames('one')).toBe(false);
    });

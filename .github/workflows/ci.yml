@@ -77,10 +77,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      # No npm cache. This job installs nothing, so the cache it would save
+      # under the lockfile's key is empty, and every later install restores
+      # that.
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
+          package-manager-cache: false
 
       - name: Classify the change
         id: decide
@@ -363,15 +367,22 @@ jobs:
       # by the `npm ci` that a hit skips — restoring 146 MB nothing then opens
       # cost 21s per Windows run. On a MISS it is `npm`, which is when the
       # install actually happens and the cache is what keeps it off the
-      # network. Empty is how setup-node spells "no cache"; the alternative,
-      # dropping the input outright, trades a slower install on exactly the
-      # runs that change dependencies for a saving only hits can collect.
+      # network. The alternative, dropping the input outright, trades a slower
+      # install on exactly the runs that change dependencies for a saving only
+      # hits can collect. A hit whose tree proves unusable installs without the
+      # cache, because this step runs before the check that finds it.
+      #
+      # `'npm'` comes first in the expression because `''` is falsy, so
+      # `hit && '' || 'npm'` yields `npm` either way. An empty `cache` alone
+      # still caches, because setup-node then enables its cache from the
+      # manifest's `packageManager`, and only `package-manager-cache` stops that.
       - name: Setup Node
         if: env.PROSE_ONLY_LEG != 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: ${{ steps.node-modules-cache.outputs.cache-hit == 'true' && '' || 'npm' }}
+          cache: ${{ steps.node-modules-cache.outputs.cache-hit != 'true' && 'npm' || '' }}
+          package-manager-cache: false
 
       # A dispatch's inputs reach no API response and no log, so a run cannot
       # otherwise be told apart from one that took the defaults — and a knob
@@ -708,7 +719,8 @@ jobs:
           node-version-file: .nvmrc
           # Empty on a hit, for the gate job's reason: `~/.npm` is read only by
           # the `npm ci` a hit skips, so restoring it then is pure cost.
-          cache: ${{ steps.node-modules-cache.outputs.cache-hit == 'true' && '' || 'npm' }}
+          cache: ${{ steps.node-modules-cache.outputs.cache-hit != 'true' && 'npm' || '' }}
+          package-manager-cache: false
 
       - name: Install dependencies
         if: steps.node-modules-cache.outputs.cache-hit != 'true'
@@ -837,7 +849,8 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: ${{ steps.node-modules-cache.outputs.cache-hit == 'true' && '' || 'npm' }}
+          cache: ${{ steps.node-modules-cache.outputs.cache-hit != 'true' && 'npm' || '' }}
+          package-manager-cache: false
 
       - name: Install dependencies
         if: steps.node-modules-cache.outputs.cache-hit != 'true'
@@ -925,7 +938,8 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: ${{ steps.node-modules-cache.outputs.cache-hit == 'true' && '' || 'npm' }}
+          cache: ${{ steps.node-modules-cache.outputs.cache-hit != 'true' && 'npm' || '' }}
+          package-manager-cache: false
 
       - name: Install dependencies
         if: steps.node-modules-cache.outputs.cache-hit != 'true'
@@ -1031,12 +1045,23 @@ jobs:
             !**/node_modules/.vite
           key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('.nvmrc', 'package-lock.json') }}
 
-      # The npm cache even on a node_modules hit: the scaffold installs fetch.
+      # The npm cache even on a node_modules hit, because the scaffold installs
+      # fetch. Its own key, as they fetch more than the root lockfile names.
+      # The prefix restore keeps it warm when the key moves, and npm
+      # revalidates what it reuses. npm never prunes the cache, so `.nvmrc` in
+      # the prefix starts it afresh on each Node bump.
+      - name: Restore and save the npm cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: scaffold-npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.nvmrc') }}-${{ hashFiles('package-lock.json', 'packages/cli/src/commands/init*.ts', 'scripts/check-packed-consumer.mts', 'packages/cli/test/fixtures/yo-langium-root/**/package.json') }}
+          restore-keys: scaffold-npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.nvmrc') }}-
+
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+          package-manager-cache: false
 
       - name: Install dependencies
         if: steps.node-modules-cache.outputs.cache-hit != 'true'
