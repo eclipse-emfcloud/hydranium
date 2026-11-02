@@ -183,7 +183,7 @@ export class EditorArea {
       if (isNarrowViewport()) {
          // The whole pane rather than the editor: its header names the document,
          // which is the part that says the selection was honoured.
-         const region = pane.editor.getContainerDomNode().closest('.pane');
+         const region = pane.editor.getContainerDomNode().closest<HTMLElement>('.pane');
          expandRegion(region);
          pane.editor.layout();
          region?.scrollIntoView({ block: 'start' });

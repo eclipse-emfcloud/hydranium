@@ -96,7 +96,7 @@ export class PropertiesPanel {
    async applyDrafts(): Promise<boolean> {
       const applied = this.form.applyDrafts();
       if (!(await this.documents.whenWritesSettled())) {
-         throw new Error('the server has not answered a Properties edit yet, so nothing was saved');
+         throw new Error('the server has not answered a Properties edit yet');
       }
       return applied;
    }

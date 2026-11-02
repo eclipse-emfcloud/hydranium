@@ -189,15 +189,13 @@ export class PropertiesForm {
 
    /** Whether a field holds text that has not been applied. */
    get hasDrafts(): boolean {
-      return [...this.inputs].some(([name, input]) => input.value !== this.rendered.get(name));
+      return [...this.inputs.keys()].some(name => this.isPending(name));
    }
 
    /** Submit the drafts present at the call, retaining the marker on a refused write. */
    async applyDrafts(): Promise<boolean> {
       const shown = this.shown;
-      const drafts = [...this.inputs]
-         .filter(([name, input]) => input.value !== this.rendered.get(name))
-         .map(([name, input]) => [name, input.value] as const);
+      const drafts = [...this.inputs].filter(([name]) => this.isPending(name)).map(([name, input]) => [name, input.value] as const);
       await Promise.all(drafts.map(([name, value]) => this.write(name, value)));
       return shown === this.shown && !this.hasDrafts;
    }
@@ -333,6 +331,12 @@ export class PropertiesForm {
       }
    }
 
+   /** Whether the field differs from the last value drawn or successfully applied. */
+   protected isPending(name: string): boolean {
+      const input = this.inputs.get(name);
+      return input !== undefined && input.value !== this.rendered.get(name);
+   }
+
    /**
     * Mark `name` when its input no longer holds what was written into it.
     *
@@ -348,7 +352,7 @@ export class PropertiesForm {
       if (!input || !wrapper) {
          return;
       }
-      const pending = input.value !== this.rendered.get(name);
+      const pending = this.isPending(name);
       if (pending) {
          wrapper.setAttribute('data-pending', '');
       } else {

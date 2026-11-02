@@ -89,11 +89,9 @@ export function clearSavedSizes(): void {
 }
 
 /** Reveal a pane requested by navigation, including its accessible state. */
-export function expandRegion(region: Element | null): void {
+export function expandRegion(region: HTMLElement | null): void {
    region?.removeAttribute('data-collapsed');
-   if (isNarrowViewport()) {
-      region?.querySelector(':scope > .panel-head, :scope > .pane-head')?.setAttribute('aria-expanded', 'true');
-   }
+   headOf(region)?.setAttribute('aria-expanded', 'true');
 }
 
 function apply(isNarrow: boolean, onLayoutChange: ResizeListener): void {

@@ -217,9 +217,9 @@ let processDiagram: GlspDiagramMount | undefined;
 let propertiesPanel: PropertiesPanel | undefined;
 
 /**
- * What a reload would drop: the unsaved documents, the diagram's document
- * while an edit to it is in flight, and each the panel has a write of out, one
- * shown before included, which no dirty set shows until the server answers.
+ * What a reload would drop: unsaved documents, unapplied Properties drafts,
+ * the diagram's document while an edit is in flight, and each document with
+ * an unanswered panel write, including documents shown before.
  */
 function unsavedWork(): readonly string[] {
    const unsaved = new Set(unsavedDocuments());
@@ -668,14 +668,52 @@ async function saveWorkspace(client: MonacoLspClient, editors: EditorArea, only?
       if (settled.includes(false)) {
          throw new Error('the server has not answered an edit yet, so nothing was saved');
       }
+      let excluded: string | undefined;
+      let draftFailure: string | undefined;
       if (propertiesPanel && (only === undefined || only === propertiesPanel.documentUri)) {
-         if (!(await propertiesPanel.applyDrafts())) {
-            throw new Error('a Properties field could not be applied, so nothing was saved');
+         const uri = propertiesPanel.documentUri;
+         try {
+            if (!(await propertiesPanel.applyDrafts())) {
+               throw new Error('a Properties field could not be applied');
+            }
+         } catch (error: unknown) {
+            if (only !== undefined || uri === undefined) {
+               throw error;
+            }
+            excluded = uri;
+            draftFailure = describeError(error);
          }
       }
-      const saved = only === undefined ? await client.saveAll() : [await client.save(only)].filter(document => document !== undefined);
+      const saveOthers = async () => {
+         const results = await Promise.allSettled(
+            client
+               .dirtyDocuments()
+               .filter(document => document.uri !== excluded)
+               .map(document => client.save(document.uri))
+         );
+         const failures = results.filter(result => result.status === 'rejected');
+         if (failures.length > 0) {
+            throw new AggregateError(
+               failures.map(result => result.reason),
+               `${failures.length} document(s) could not be saved`
+            );
+         }
+         return results.flatMap(result => (result.status === 'fulfilled' && result.value ? [result.value] : []));
+      };
+      const saved =
+         only !== undefined
+            ? [await client.save(only)].filter(document => document !== undefined)
+            : excluded === undefined
+              ? await client.saveAll()
+              : await saveOthers();
       editors.refreshDirtyMarks();
-      setWorkspaceReport(saved.length === 0 ? 'nothing to save' : `saved ${saved.length} document(s) — a reload restores them`);
+      setWorkspaceReport(
+         excluded === undefined
+            ? saved.length === 0
+               ? 'nothing to save'
+               : `saved ${saved.length} document(s) — a reload restores them`
+            : `saved ${saved.length} document(s); ${excluded.slice(WORKSPACE_ROOT_URI.length + 1)} not saved: ${draftFailure}`
+      );
    } catch (error: unknown) {
       // Reported rather than swallowed, because the store can genuinely refuse:
       // a quota is finite and the origin's storage may have been evicted. A page
