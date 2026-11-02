@@ -187,6 +187,21 @@ export class PropertiesForm {
       this.heading.textContent = this.text(PROPERTIES_NO_DOCUMENT);
    }
 
+   /** Whether a field holds text that has not been applied. */
+   get hasDrafts(): boolean {
+      return [...this.inputs].some(([name, input]) => input.value !== this.rendered.get(name));
+   }
+
+   /** Submit the drafts present at the call, retaining the marker on a refused write. */
+   async applyDrafts(): Promise<boolean> {
+      const shown = this.shown;
+      const drafts = [...this.inputs]
+         .filter(([name, input]) => input.value !== this.rendered.get(name))
+         .map(([name, input]) => [name, input.value] as const);
+      await Promise.all(drafts.map(([name, value]) => this.write(name, value)));
+      return shown === this.shown && !this.hasDrafts;
+   }
+
    /** This panel's own `message`, in the reader's language. */
    protected text(message: MessageDefinition<string>): string {
       return this.renderMessage(resolve(message));

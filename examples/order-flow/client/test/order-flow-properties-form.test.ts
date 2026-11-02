@@ -508,3 +508,47 @@ describe('PropertiesForm pending marker', () => {
       expect(form.fieldOf('customerName').attributes['data-pending']).toBeUndefined();
    });
 });
+
+describe('PropertiesForm.applyDrafts', () => {
+   it('waits for the focused draft to be applied', async () => {
+      const answered = new Deferred<void>();
+      const writes: string[] = [];
+      const { form } = makeForm(async (_name, value) => {
+         writes.push(value);
+         await answered.promise;
+         return { status: 'applied' };
+      });
+      form.setFields([{ name: 'name', value: 'Before' }]);
+      form.inputOf('name').value = 'After';
+      expect(form.hasDrafts).toBe(true);
+      const applying = form.applyDrafts();
+      expect(writes).toEqual(['After']);
+      expect(form.hasDrafts).toBe(true);
+      answered.resolve();
+      expect(await applying).toBe(true);
+      expect(form.hasDrafts).toBe(false);
+   });
+
+   it('keeps a refused draft unsaved', async () => {
+      const { form } = makeForm(async () => ({ status: 'conflict' }));
+      form.setFields([{ name: 'name', value: 'Before' }]);
+      form.inputOf('name').value = 'After';
+      expect(await form.applyDrafts()).toBe(false);
+      expect(form.hasDrafts).toBe(true);
+   });
+
+   it('does not claim a newer draft was applied with the previous one', async () => {
+      const answered = new Deferred<void>();
+      const { form } = makeForm(async () => {
+         await answered.promise;
+         return { status: 'applied' };
+      });
+      form.setFields([{ name: 'name', value: 'Before' }]);
+      form.inputOf('name').value = 'First';
+      const applying = form.applyDrafts();
+      form.inputOf('name').value = 'Second';
+      answered.resolve();
+      expect(await applying).toBe(false);
+      expect(form.hasDrafts).toBe(true);
+   });
+});

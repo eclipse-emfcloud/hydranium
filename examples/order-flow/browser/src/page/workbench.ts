@@ -223,6 +223,10 @@ let propertiesPanel: PropertiesPanel | undefined;
  */
 function unsavedWork(): readonly string[] {
    const unsaved = new Set(unsavedDocuments());
+   const draft = propertiesPanel?.documentWithDrafts;
+   if (draft) {
+      unsaved.add(draft);
+   }
    if ((processDiagram?.editsInFlight ?? 0) > 0) {
       unsaved.add(GLSP_HEAD_DOCUMENT);
    }
@@ -663,6 +667,11 @@ async function saveWorkspace(client: MonacoLspClient, editors: EditorArea, only?
       // The waits are bounded; a save past one would miss the edit yet report success.
       if (settled.includes(false)) {
          throw new Error('the server has not answered an edit yet, so nothing was saved');
+      }
+      if (propertiesPanel && (only === undefined || only === propertiesPanel.documentUri)) {
+         if (!(await propertiesPanel.applyDrafts())) {
+            throw new Error('a Properties field could not be applied, so nothing was saved');
+         }
       }
       const saved = only === undefined ? await client.saveAll() : [await client.save(only)].filter(document => document !== undefined);
       editors.refreshDirtyMarks();

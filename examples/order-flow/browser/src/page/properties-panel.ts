@@ -87,6 +87,16 @@ export class PropertiesPanel {
       return this.documents.current?.uri;
    }
 
+   /** The document whose form holds unapplied text, for navigation guards. */
+   get documentWithDrafts(): string | undefined {
+      return this.form.hasDrafts ? this.documentUri : undefined;
+   }
+
+   /** Apply drafts before persisting the document they belong to. */
+   applyDrafts(): Promise<boolean> {
+      return this.form.applyDrafts();
+   }
+
    /** The documents with a field edit not answered yet, one shown before included, for the unload guard. */
    get documentsWithWritesInFlight(): readonly string[] {
       return this.documents.documentsWithWritesInFlight;
