@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       turbo_concurrency:
-        description: 'Task concurrency cap: an integer >= 1, or a percentage like 50%'
+        description: 'Task concurrency cap on every leg: an integer >= 1, or a percentage like 50%. Empty keeps turbo default, and 2 on macOS'
         type: string
       skip_e2e:
         description: 'Skip the e2e job'
@@ -173,9 +173,12 @@ jobs:
       NODE_OPTIONS: --report-on-fatalerror
       TURBO_UI: stream
       FORCE_COLOR: 1
-      # Empty is what turbo reads as unset, so a push and a pull request keep
-      # its default and only a dispatch that fills the input caps anything.
-      TURBO_CONCURRENCY: ${{ inputs.turbo_concurrency }}
+      # Empty is what turbo reads as unset, so the Linux and Windows legs keep
+      # its default unless a dispatch fills the input. macOS is capped at 2.
+      # Its 3 CPUs ran the Theia webpack builds several times slower at the
+      # default, and 2 nearly halved that leg. On 4 CPUs the same cap slowed
+      # the Windows gate.
+      TURBO_CONCURRENCY: ${{ inputs.turbo_concurrency || (startsWith(matrix.os, 'macos') && '2' || '') }}
       # `'true'` only when the scope job answered `full=false`; a failed or
       # missing verdict leaves it `'false'`, and the leg runs in full.
       PROSE_ONLY: ${{ needs.changes.outputs.full == 'false' }}
@@ -1017,12 +1020,27 @@ jobs:
   # Its own job so a scaffold that will not install, or whose heads fail,
   # reports as its own check. The check picks the npm that runs `init` and
   # installs each scaffold, whatever npm this job has.
+  #
+  # Two legs of about equal length: the first shape, which builds and smokes
+  # all four hosts, and every other shape. `shapes` slices the script's list,
+  # so a shape added at the end runs in the second leg.
   scaffold:
-    name: init scaffold
+    name: init scaffold (${{ matrix.leg }})
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.full != 'false' }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: all hosts
+            shapes: '0:1'
+            cache: all-hosts
+          - leg: other shapes
+            shapes: '1:'
+            cache: other-shapes
 
     env:
       NODE_OPTIONS: --report-on-fatalerror
@@ -1049,13 +1067,14 @@ jobs:
       # fetch. Its own key, as they fetch more than the root lockfile names.
       # The prefix restore keeps it warm when the key moves, and npm
       # revalidates what it reuses. npm never prunes the cache, so `.nvmrc` in
-      # the prefix starts it afresh on each Node bump.
+      # the prefix starts it afresh on each Node bump. One key per leg, as the
+      # legs fetch different packages and would race to save one key.
       - name: Restore and save the npm cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
-          key: scaffold-npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.nvmrc') }}-${{ hashFiles('package-lock.json', 'packages/cli/src/commands/init*.ts', 'scripts/check-packed-consumer.mts', 'packages/cli/test/fixtures/yo-langium-root/**/package.json') }}
-          restore-keys: scaffold-npm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.nvmrc') }}-
+          key: scaffold-npm-${{ matrix.cache }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.nvmrc') }}-${{ hashFiles('package-lock.json', 'packages/cli/src/commands/init*.ts', 'scripts/check-packed-consumer.mts', 'packages/cli/test/fixtures/yo-langium-root/**/package.json') }}
+          restore-keys: scaffold-npm-${{ matrix.cache }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.nvmrc') }}-
 
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1068,4 +1087,4 @@ jobs:
         run: npm ci --no-fund --no-audit
 
       - name: Scaffold, install, build and smoke
-        run: npm run check:init-scaffold
+        run: npm run check:init-scaffold -- --shapes=${{ matrix.shapes }}

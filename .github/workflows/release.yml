@@ -140,6 +140,9 @@ jobs:
       NODE_OPTIONS: --report-on-fatalerror
       TURBO_UI: stream
       FORCE_COLOR: 1
+      # CI's cap, for the same reason: the macOS runner's 3 CPUs build slower
+      # at turbo's default concurrency.
+      TURBO_CONCURRENCY: ${{ startsWith(matrix.os, 'macos') && '2' || '' }}
 
     steps:
       # Full history, as on CI's legs, so a check that reads git gives the
