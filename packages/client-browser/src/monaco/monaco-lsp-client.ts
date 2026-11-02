@@ -73,6 +73,7 @@ import {
    type ServerCapabilities,
    SnippetTextEdit,
    type TextDocumentContentChangeEvent,
+   TextDocumentContentRequest,
    TextDocumentEdit,
    type TextEdit,
    type WorkspaceEdit
@@ -100,8 +101,8 @@ export const DEFAULT_MARKER_OWNER = 'lsp';
  * to pass as `initializeLanguageClient`'s `capabilities`: the two workspace
  * answers of the default, plus every form the client renders, so a server that
  * gates a form on its capability sends it. Multi-line semantic tokens stay
- * undeclared, since Monaco cannot render one, and Langium then splits them
- * per line. Frozen: a host that declares more spreads it.
+ * undeclared, since Monaco cannot render one, and Langium then splits them per
+ * line. Frozen: a host that declares more spreads it.
  */
 export const MONACO_CLIENT_CAPABILITIES: ClientCapabilities = deepFreeze({
    workspace: { applyEdit: true, configuration: true, workspaceEdit: { documentChanges: true } },
@@ -663,6 +664,8 @@ export class MonacoLspClient {
    protected readonly connection: MessageConnection;
    /** Whether the server answers {@link SaveTextDocumentRequest}: only one whose host leaves it the files does. */
    protected readonly saveAdvertised: boolean;
+   /** The URI schemes whose text the server serves through {@link requestDocumentContent}. */
+   protected readonly contentSchemes: ReadonlySet<string>;
    /** Counts the {@link save} calls that sent a request, so their answers can be ordered. */
    protected saveCount = 0;
    /** Per URI, the newest {@link save} whose answer marked the document saved. */
@@ -676,6 +679,7 @@ export class MonacoLspClient {
       this.connection = sendByMethodName(connection);
       this.markerOwner = options.markerOwner ?? DEFAULT_MARKER_OWNER;
       this.saveAdvertised = capabilities.experimental?.[SaveTextDocumentRequest.method] === true;
+      this.contentSchemes = new Set(capabilities.workspace?.textDocumentContent?.schemes);
       // First: it is the one registration on the connection, which throws once
       // closed, and a constructor that throws leaves nothing to dispose.
       this.registerApplyEdit();
@@ -1348,8 +1352,8 @@ export class MonacoLspClient {
     *
     * `false` from `open` leaves the reader where they are, and that is the
     * honest answer for a target the host holds no text for rather than a
-    * failure: a `virtual:` in-code contribution is a document to the server and
-    * no file to anyone.
+    * failure. A `virtual:` in-code contribution has no file, and
+    * {@link requestDocumentContent} asks the server for its text.
     *
     * **A source editor on a model this client does not own is left to the next
     * opener.** Monaco calls every opener for every editor, so on a page with
@@ -1364,7 +1368,7 @@ export class MonacoLspClient {
     *
     * Released by {@link dispose} as well as by the returned disposable.
     */
-   registerEditorOpener(open: (uri: string, position: monaco.IPosition) => boolean): monaco.IDisposable {
+   registerEditorOpener(open: (uri: string, position: monaco.IPosition) => boolean | Promise<boolean>): monaco.IDisposable {
       const registration = monaco.editor.registerEditorOpener({
          openCodeEditor: (source, resource, selectionOrPosition) => {
             const model = source.getModel();
@@ -1376,6 +1380,22 @@ export class MonacoLspClient {
       });
       this.registrations.push(registration);
       return registration;
+   }
+
+   /**
+    * The text the server holds for `uri`, or `undefined` when it serves none:
+    * for a scheme it serves no text for, or for a URI it holds no document
+    * for, as after a delete. Show it in a read-only model rather than through
+    * {@link openDocument}: the server owns the text, and `didOpen` would make
+    * the reader's buffer its copy. Rejects when the request fails.
+    */
+   async requestDocumentContent(uri: string): Promise<string | undefined> {
+      const target = monaco.Uri.parse(uri);
+      if (!this.contentSchemes.has(target.scheme)) {
+         return undefined;
+      }
+      const content = await this.request(() => this.connection.sendRequest(TextDocumentContentRequest.type, { uri: target.toString() }));
+      return content?.text;
    }
 
    /**

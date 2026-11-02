@@ -880,6 +880,13 @@ describe('planInitFiles with hosts', () => {
       });
    });
 
+   it("pins the VS Code members' language client at the root, as the requirements ask", () => {
+      const root = JSON.parse(contentOf(filesFor(['lsp'], ['vscode']), 'package.json') ?? '{}') as {
+         devDependencies: Record<string, string>;
+      };
+      expect(root.devDependencies['vscode-languageclient']).toBe('10.1.2');
+   });
+
    it('keeps the client registration table keyed by the protocol ids, behind the names every host mounts', () => {
       const module = contentOf(filesFor(['lsp', 'glsp']), 'client/src/bookstore-diagram-module.ts') ?? '';
       expect(module).toContain(
@@ -1058,7 +1065,9 @@ describe('planInitFiles with hosts', () => {
       expect(host.contributes).not.toHaveProperty('customEditors');
       expect(contentOf(files, 'host-vscode/src/extension.ts')).not.toMatch(/Glsp|findPort/);
       const servers = JSON.parse(contentOf(files, 'vscode-servers/package.json') ?? '{}') as Record<string, Record<string, unknown>>;
-      expect(servers.dependencies).not.toHaveProperty('@hydranium/client-vscode');
+      // Still for the content middleware every language client takes.
+      expect(servers.dependencies).toHaveProperty('@hydranium/client-vscode');
+      expect(contentOf(files, 'vscode-servers/src/language-client.ts')).toContain('textDocumentContentMiddleware(() => client)');
       expect(contentOf(files, 'vscode-servers/src/extension.ts')).not.toContain('registerPortCommands');
    });
 

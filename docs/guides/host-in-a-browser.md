@@ -236,9 +236,11 @@ const fileSystem = persistentFileSystem({
      holds, and create the editor with `createEditor`, which keeps the
      settings a server-driven language needs under your theme and layout.
    - Go-to-definition needs an opener for a target in another document: pass
-     yours to `registerEditorOpener`. For a target with no text behind it,
-     such as a built-in library, answer `false` and tell the user: an editor
-     opened on made-up text would overwrite the server's copy.
+     yours to `registerEditorOpener`. For a target with no file behind it,
+     such as a built-in library, `requestDocumentContent` asks the server for
+     its text. Show that in a read-only model rather than through
+     `openDocument`, since the server owns it. Answer `false` when it serves
+     none.
 
 ## When something stays silent
 

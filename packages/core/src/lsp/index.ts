@@ -12,6 +12,7 @@ export * from './lsp-latency.js';
 export * from './connection-features.js';
 export * from './diagnostics-connection.js';
 export * from './edit-requests-guard.js';
+export * from './content-refresh.js';
 export * from './semantic-token-provider.js';
 export * from './language-module.js';
 export * from './shared-module.js';

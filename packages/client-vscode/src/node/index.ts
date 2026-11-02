@@ -9,3 +9,4 @@
 
 export * from './find-port';
 export * from './port-commands';
+export * from './text-document-content';
