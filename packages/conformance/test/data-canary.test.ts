@@ -58,6 +58,7 @@ const LAST_CLOSE = "the last close drops a document's unsaved text and keeps wha
 const UNSAVED_CREATE = 'a created document never saved leaves with its last close';
 const DELETE = 'deleting a saved document removes it';
 const DELETE_GATE = 'a delete on a stale base version conflicts and deletes nothing';
+const EPOCH_GATE = 'a write gated on a version of another epoch conflicts and changes nothing';
 const DELETE_OPEN = 'a session deletes only a document it has open';
 const DELETE_OTHERS = "a delete closes another session's open and names the deleting session";
 const DELETE_UNSAVED = 'a delete removes a created document never saved';
@@ -138,12 +139,12 @@ describe('the /data battery discriminates', () => {
       }
    });
 
-   it('plans exactly the thirty-six checks the must-fail cases below name', () => {
+   it('plans exactly the thirty-seven checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(36);
+      expect(titles).toHaveLength(37);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -180,9 +181,10 @@ describe('the /data battery discriminates', () => {
          DELETE_OPEN,
          DELETE_OTHERS,
          DELETE_UNSAVED,
-         SYNTAX_ERROR
+         SYNTAX_ERROR,
+         EPOCH_GATE
       ];
-      expect(matching(titles, covered)).toHaveLength(36);
+      expect(matching(titles, covered)).toHaveLength(37);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -199,9 +201,10 @@ describe('the /data battery discriminates', () => {
          // head that cannot report a whole one cannot be based on it either;
          // not the checks based on the created version, which is whole here.
          // Also the edit check, whose answer names the whole version written.
+         // And the epoch check, which reads the created version back.
          label: 'a non-integer envelope version',
          defects: { fractionalVersion: true },
-         expected: [VALID_ENVELOPE, EDIT_REFLECTED, CONFLICT_GATE, SET, PERSIST, DELETE]
+         expected: [VALID_ENVELOPE, EDIT_REFLECTED, CONFLICT_GATE, SET, PERSIST, DELETE, EPOCH_GATE]
       },
       { label: 'a diagnostic on a valid model', defects: { diagnosticsOnValid: true }, expected: [VALID_ENVELOPE] },
       {
@@ -255,7 +258,8 @@ describe('the /data battery discriminates', () => {
             PERSIST,
             CONFLICT_GATE,
             SET,
-            SYNTAX_ERROR
+            SYNTAX_ERROR,
+            EPOCH_GATE
          ]
       },
       {
@@ -326,22 +330,24 @@ describe('the /data battery discriminates', () => {
             DELETE,
             DELETE_GATE,
             DELETE_OTHERS,
-            DELETE_UNSAVED
+            DELETE_UNSAVED,
+            EPOCH_GATE
          ]
       },
       {
          // Also every check that writes, persists or deletes on the created version.
          label: 'a create answering without the version it made',
          defects: { createdVersionOmitted: true },
-         expected: [CREATE, CREATED_VERSION, PERSIST, DELETE_GATE]
+         expected: [CREATE, CREATED_VERSION, PERSIST, DELETE_GATE, EPOCH_GATE]
       },
       {
          // Also the create check, whose write on it conflicts, and the persist
          // and delete-gate checks: the later write takes the version named, so
-         // the base meant to be stale is current.
+         // the base meant to be stale is current. And the epoch check, which
+         // reads back another version than the one named.
          label: 'a create naming the version a later write would take',
          defects: { createNamesLaterVersion: true },
-         expected: [CREATE, CREATED_VERSION, PERSIST, DELETE_GATE]
+         expected: [CREATE, CREATED_VERSION, PERSIST, DELETE_GATE, EPOCH_GATE]
       },
       { label: 'a set applied one document at a time', defects: { partialSets: true }, expected: [SET] },
       { label: 'a session save opening its document implicitly', defects: { saveOpensImplicitly: true }, expected: [SESSION_SAVE] },
@@ -397,6 +403,8 @@ describe('the /data battery discriminates', () => {
       { label: 'a delete keeping a saved document', defects: { deleteKeepsSaved: true }, expected: [DELETE] },
       { label: 'a delete keeping a document never saved', defects: { deleteKeepsUnsaved: true }, expected: [DELETE_UNSAVED] },
       { label: 'a delete that ignores its base version', defects: { deleteUngated: true }, expected: [DELETE_GATE] },
+      { label: 'a write gate that ignores the epoch', defects: { epochUngated: true }, expected: [EPOCH_GATE] },
+      { label: 'a registration naming another epoch than the documents', defects: { sessionEpochDiffers: true }, expected: [EPOCH_GATE] },
       { label: 'a delete of a document the session has not opened', defects: { deleteWithoutOpen: true }, expected: [DELETE_OPEN] },
       { label: "a delete keeping other sessions' opens", defects: { deleteKeepsOtherOpens: true }, expected: [DELETE_OTHERS] },
       { label: 'a deletion naming no client', defects: { deletionUnattributed: true }, expected: [DELETE_OTHERS] }

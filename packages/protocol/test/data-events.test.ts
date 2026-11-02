@@ -81,7 +81,7 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
       events.onDidUpdateDocument(event => seen.push([...(event.document.model?.diagnostics ?? [])]));
 
       events.onDocumentUpdated({
-         document: TransferDocument.create('file:///widgets/gauge.widget', 3, WIDGET, 'hash', [auditedDiagnostic()]),
+         document: TransferDocument.create('file:///widgets/gauge.widget', 3, WIDGET, 'hash', 'epoch', [auditedDiagnostic()]),
          sourceClientId: 'widget-form',
          reason: 'changed',
          sequence: 1
@@ -112,7 +112,7 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
       events.onDidSaveDocument(event => saved.push(event.document.uri));
 
       events.onDocumentSaved({
-         document: TransferDocument.create('file:///widgets/gauge.widget', 4, WIDGET, 'hash', []),
+         document: TransferDocument.create('file:///widgets/gauge.widget', 4, WIDGET, 'hash', 'epoch', []),
          sourceClientId: 'widget-form'
       });
 
@@ -168,7 +168,7 @@ describe('DataEvents over adopter-specific diagnostic and project types', () => 
       events.dispose();
 
       events.onDocumentUpdated({
-         document: TransferDocument.create('file:///widgets/gauge.widget', 5, WIDGET, 'hash', []),
+         document: TransferDocument.create('file:///widgets/gauge.widget', 5, WIDGET, 'hash', 'epoch', []),
          sourceClientId: 'widget-form',
          reason: 'changed',
          sequence: 1

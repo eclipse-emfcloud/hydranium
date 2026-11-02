@@ -39,10 +39,10 @@ interface WidenedOpenArgs extends OpenModelArgs {
    extra?: string;
 }
 
-/** The same widening on the save path. */
-interface WidenedSaveArgs extends TransferSaveDocumentArgs<ProbeElement> {
+/** The same widening on the save path, an intersection since the args hold a union. */
+type WidenedSaveArgs = TransferSaveDocumentArgs<ProbeElement> & {
    extra?: string;
-}
+};
 
 /** The same widening on the close path. */
 interface WidenedCloseArgs extends CloseModelArgs {
@@ -70,7 +70,7 @@ function echoingServer(connection: MessageConnection): Record<string, unknown[]>
    };
    const target = {
       waitForReady: async (): Promise<void> => undefined,
-      createSession: async (): Promise<void> => undefined,
+      createSession: async (): Promise<{ epoch: string }> => ({ epoch: 'epoch' }),
       closeSession: async (): Promise<void> => undefined,
       openModelDocument: record('open'),
       watchModelDocument: record('watch'),

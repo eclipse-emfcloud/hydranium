@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type CanonicalUri, textHash } from '@hydranium/protocol';
+import { type CanonicalUri, randomUuid, textHash } from '@hydranium/protocol';
 import type { ApplyWorkspaceEditResult } from 'vscode-languageserver';
 import { Disposable, Emitter } from 'vscode-languageserver';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
@@ -71,6 +71,7 @@ export interface StubTextDocumentEntry {
  */
 export interface StubHydraniumTextDocuments extends Pick<
    HydraniumTextDocuments<TextDocument>,
+   | 'epoch'
    | 'version'
    | 'notifyDidChangeTextDocument'
    | 'applyContentChange'
@@ -200,6 +201,7 @@ export function makeStubHydraniumTextDocuments(): StubHydraniumTextDocuments {
    };
 
    const stub: StubHydraniumTextDocuments = {
+      epoch: randomUuid(),
       get changes() {
          return changes;
       },

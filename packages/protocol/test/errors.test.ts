@@ -375,6 +375,61 @@ describe('isConflictError', () => {
       }
    });
 
+   it.each<[string, () => readonly [Error, new (...args: never[]) => Error]]>([
+      [
+         'ConflictError',
+         () => {
+            class Own extends ConflictError {}
+            return [new Own('file:///A.fake', asModelVersion(3), 5), Own];
+         }
+      ],
+      [
+         'SessionClosedError',
+         () => {
+            class Own extends SessionClosedError {}
+            return [new Own('client'), Own];
+         }
+      ],
+      [
+         'DocumentNotOpenError',
+         () => {
+            class Own extends DocumentNotOpenError {}
+            return [new Own('file:///A.fake', 'client'), Own];
+         }
+      ],
+      [
+         'DuplicateClientIdError',
+         () => {
+            class Own extends DuplicateClientIdError {}
+            return [new Own('client'), Own];
+         }
+      ],
+      [
+         'ReservedClientIdError',
+         () => {
+            class Own extends ReservedClientIdError {}
+            return [new Own('client'), Own];
+         }
+      ],
+      [
+         'SaveFailedError',
+         () => {
+            class Own extends SaveFailedError {}
+            return [new Own([]), Own];
+         }
+      ],
+      [
+         'DocumentSyntaxError',
+         () => {
+            class Own extends DocumentSyntaxError {}
+            return [new Own('file:///A.fake'), Own];
+         }
+      ]
+   ])('keeps a subclass of %s an instance of the subclass', (_name, make) => {
+      const [error, subclass] = make();
+      expect(error).toBeInstanceOf(subclass);
+   });
+
    it('returns true for a subclass that names itself', () => {
       class EditorConflict extends ConflictError {
          constructor() {

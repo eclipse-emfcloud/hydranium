@@ -466,7 +466,8 @@ describe('order-flow cross-head coherence of the LSP, data and GLSP heads on one
             uri: processUri,
             clientId: 'stale-data-client',
             model: initial,
-            baseVersion: snapshot.model!.version
+            baseVersion: snapshot.model!.version,
+            baseEpoch: snapshot.epoch
          })
       ).rejects.toSatisfy(isConflictError);
 
@@ -557,7 +558,8 @@ describe('order-flow cross-head coherence of the LSP, data and GLSP heads on one
             uri: processUri,
             clientId: 'held-data-client',
             model: initial,
-            baseVersion: snapshot.model!.version
+            baseVersion: snapshot.model!.version,
+            baseEpoch: snapshot.epoch
          });
          // Observed here rather than at the assertion: the rejection lands
          // during the disconnect, and an unobserved one surfaces as an

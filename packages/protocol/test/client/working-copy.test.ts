@@ -25,6 +25,7 @@ import { ConflictError, DocumentNotOpenError, SaveFailedError } from '../../src/
 import { asModelVersion } from '../../src/model-service/base-version';
 import { ForceConflictResolver, type ReconcileOutcome, ReconcilingConflictResolver } from '../../src/patch-merge';
 import { bindRpcMethods } from '../../src/rpc/bind-rpc-methods';
+import { randomUuid } from '../../src/random-uuid';
 import { makeFakeDataPort } from '../../src/testing/data-doubles';
 import { type FakeClock, makeFakeClock } from '../../src/testing/fake-clock';
 import { makeDuplexConnectionPair } from '../../src/testing/node';
@@ -83,6 +84,8 @@ class ProbeServer {
    /** Added to the text version for the model's, as a server that numbers the two apart. */
    modelOffset = 0;
    protected sequence = 0;
+   /** Another for each server, so a restarted one refuses the versions of the one before. */
+   readonly epoch = randomUuid();
 
    constructor(protected readonly connection: MessageConnection) {
       bindRpcMethods(
@@ -105,7 +108,9 @@ class ProbeServer {
 
    async waitForReady(): Promise<void> {}
 
-   async createSession(): Promise<void> {}
+   async createSession(): Promise<{ epoch: string }> {
+      return { epoch: this.epoch };
+   }
 
    async closeSession(): Promise<void> {
       this.sessionsClosed++;
@@ -118,7 +123,7 @@ class ProbeServer {
    }
 
    async watchModelDocument(): Promise<unknown> {
-      return { uri: URI_A, exists: true, sequence: this.sequence, text: this.document().text };
+      return { uri: URI_A, epoch: this.epoch, exists: true, sequence: this.sequence, text: this.document().text };
    }
 
    async getModelDocument(args: { includeDiagnostics?: boolean }): Promise<unknown> {
@@ -126,7 +131,7 @@ class ProbeServer {
       // Each gate holds the requests received after a test set it.
       const readGate = this.readGate;
       await this.buildGate;
-      const answer = this.missing ? { uri: URI_A } : this.document(args.includeDiagnostics ?? false);
+      const answer = this.missing ? { uri: URI_A, epoch: this.epoch } : this.document(args.includeDiagnostics ?? false);
       await readGate;
       return answer;
    }
@@ -135,7 +140,12 @@ class ProbeServer {
       this.opens.delete(args.clientId);
    }
 
-   async updateModelDocument(args: { clientId: string; baseVersion: number | 'any'; model: ProbeElement }): Promise<unknown> {
+   async updateModelDocument(args: {
+      clientId: string;
+      baseVersion: number | 'any';
+      baseEpoch?: string;
+      model: ProbeElement;
+   }): Promise<unknown> {
       this.updates++;
       const answerGate = this.answerGate;
       await this.updateGate;
@@ -146,6 +156,10 @@ class ProbeServer {
       }
       if (this.updates === this.failAt) {
          throw new Error('refused');
+      }
+      // Before the open, as a data server checks it.
+      if (args.baseVersion !== 'any' && args.baseEpoch !== this.epoch) {
+         throw new ConflictError(URI_A, asModelVersion(args.baseVersion), this.modelVersion);
       }
       if (!this.opens.has(args.clientId)) {
          throw new DocumentNotOpenError(URI_A, args.clientId);
@@ -160,9 +174,12 @@ class ProbeServer {
       return { ...(this.answerLatest ? this.document() : answer), written };
    }
 
-   async persistModelDocument(args: { clientId: string; baseVersion: number }): Promise<unknown> {
+   async persistModelDocument(args: { clientId: string; baseVersion: number; baseEpoch: string }): Promise<unknown> {
       const answerGate = this.answerGate;
       const saveGate = this.saveGate;
+      if (args.baseEpoch !== this.epoch) {
+         throw new ConflictError(URI_A, asModelVersion(args.baseVersion), this.modelVersion);
+      }
       if (!this.opens.has(args.clientId)) {
          throw new DocumentNotOpenError(URI_A, args.clientId);
       }
@@ -243,6 +260,7 @@ class ProbeServer {
    protected document(withDiagnostics = true): TransferDocument<ProbeElement> {
       return {
          uri: URI_A,
+         epoch: this.epoch,
          model: {
             root: this.root,
             ...(withDiagnostics ? { diagnostics: this.problems } : {}),
@@ -2291,7 +2309,7 @@ describe('WorkingCopy', () => {
       await second;
 
       const heard = nextUpdate(events);
-      await server.push(echo ?? { uri: URI_A }, session.clientId);
+      await server.push(echo ?? { uri: URI_A, epoch: server.epoch }, session.clientId);
       await heard;
 
       expect(copy.root?.name).toBe('second');
@@ -2301,7 +2319,7 @@ describe('WorkingCopy', () => {
       const { server, session, events } = makeCopyHarness();
       const copy = new HeldCopy(session, events, URI_A);
       await copy.open();
-      const before = copy.snapshot ?? { uri: URI_A };
+      const before = copy.snapshot ?? { uri: URI_A, epoch: server.epoch };
       const answered = new Deferred<void>();
       server.answerGate = answered.promise;
       const written = copy.edit(root => ({ ...root, name: 'ours' }));
@@ -2368,6 +2386,37 @@ describe('WorkingCopy', () => {
       await note;
       expect(restarted.root.note).toBe('external');
    });
+
+   it.each([
+      ['a document', false, 'conflict'],
+      ['no document', true, 'unavailable']
+   ] as const)(
+      'shows the document of the restarted server over a conflict read of %s before the restart that answers after it',
+      async (_name, missing, status) => {
+         const harness = makeCopyHarness();
+         const copy = new HeldResolverCopy(harness.session, harness.events, 1);
+         await copy.open();
+         const name = copy.edit(root => ({ ...root, name: 'ours' }));
+         await harness.server.foreignWrite({ name: 'theirs' });
+         harness.server.missing = missing;
+         await copy.resolver.held.promise;
+
+         const restored = new Deferred<void>();
+         harness.session.onDidRestoreDocument(() => restored.resolve());
+         const restarted = harness.restart({ note: 'external' });
+         await restored.promise;
+         // The reread of the restore answers first, and is held behind the write.
+         await waitFor(() => restarted.reads >= 1);
+         await tick();
+         copy.resolver.merge.resolve();
+
+         expect(await name).toEqual({ status });
+         await waitFor(() => copy.snapshot?.epoch === restarted.epoch, {
+            message: 'The copy does not show the document of the restarted server'
+         });
+         expect(copy.snapshot?.model?.root).toMatchObject({ name: 'theirs', note: 'external' });
+      }
+   );
 
    it('keeps a change made while its server was down under an edit typed as the restore fires', async () => {
       const harness = makeCopyHarness();
@@ -2652,7 +2701,7 @@ describe('WorkingCopy', () => {
       expect(restarted.root).toMatchObject({ name: 'mine', note: 'theirs' });
    });
 
-   it('sends no edit on the base from before a reconnect that found its text at another model version, and reports it applied', async () => {
+   it('reconciles an edit on the base from before a restart, which the restarted server refuses, and reports it applied', async () => {
       const harness = makeCopyHarness();
       const copy = new HeldCopy(harness.session, harness.events, URI_A);
       await copy.open();
@@ -2660,8 +2709,8 @@ describe('WorkingCopy', () => {
       restarted.modelOffset = 1;
 
       expect(await typeOnBaseFromBeforeRestore(harness, copy, restarted)).toEqual({ status: 'applied' });
-      // The failed write and the typed edit's, reconciled before it was sent.
-      expect(restarted.updates).toBe(2);
+      // The failed write, then the typed edit's refused write and its reconciled one.
+      expect(restarted.updates).toBe(3);
       expect(restarted.root.name).toBe('typed');
    });
 

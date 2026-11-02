@@ -17,6 +17,9 @@ import {
    isDocumentSource,
    isElementSource,
    isResponseError,
+   type BaseVersionGate,
+   ConflictError,
+   isModelVersion,
    isSyntheticSource,
    messageData,
    messageError,
@@ -50,6 +53,8 @@ import {
    type TransferWrittenDocument,
    type TransferElement,
    UNKNOWN_CLIENT_ID,
+   STALE_BASE_VERSION_SAVE,
+   STALE_BASE_VERSION_UPDATE,
    textHash
 } from '@hydranium/protocol';
 import {
@@ -64,6 +69,7 @@ import {
    type StopProfilingArgs,
    type WriteServerHeapSnapshotArgs,
    type CloseSessionArgs,
+   type CreatedSession,
    type CreateModelDocumentArgs,
    type CreateSessionArgs,
    type GetModelDocumentArgs,
@@ -612,7 +618,7 @@ export class DataServer<
    // read, override on the ModelService subclass; to change how they are
    // written, on the session class the bound `ClientSessionFactory` builds.
 
-   async createSession(args: CreateSessionArgs): Promise<void> {
+   async createSession(args: CreateSessionArgs): Promise<CreatedSession> {
       // After teardown nothing would ever end a session registered now, and its
       // id would stay taken for the life of the process.
       if (this.disposed) {
@@ -633,6 +639,34 @@ export class DataServer<
          this.clientSessions.delete(args.clientId);
          this.tracer.debug(`Forget session ${args.clientId}: it ended as ${cause}`);
       });
+      return { epoch: this.epoch };
+   }
+
+   /**
+    * The epoch this server numbers versions in, which every registration and
+    * document names: the text store's, so every connection to the server
+    * answers the same one.
+    */
+   protected get epoch(): string {
+      return this.services.workspace.TextDocuments.epoch;
+   }
+
+   /**
+    * Refuse a write whose base version is numbered in another epoch, as a
+    * restarted server's predecessor numbered it. Versions start afresh with
+    * each epoch, so the session's gate would take the version for text the
+    * writer never saw. Checked once the session is found, before the open
+    * check and every other check of its documents.
+    */
+   protected assertEpoch(
+      uri: string,
+      gate: BaseVersionGate,
+      message: typeof STALE_BASE_VERSION_UPDATE | typeof STALE_BASE_VERSION_SAVE = STALE_BASE_VERSION_UPDATE
+   ): void {
+      if (isModelVersion(gate.baseVersion) && gate.baseEpoch !== this.epoch) {
+         this.tracer.withUri(uri).debug(`Conflict: base v${gate.baseVersion} is numbered in epoch ${gate.baseEpoch}, not ${this.epoch}`);
+         throw new ConflictError(uri, gate.baseVersion, this.services.workspace.TextDocuments.version(uri), message);
+      }
    }
 
    /** End a session this connection registered. */
@@ -670,7 +704,10 @@ export class DataServer<
    }
 
    async updateModelDocuments(args: TransferUpdateDocumentsArgs<TTransfer>): Promise<TransferWrittenDocument<TTransfer, TDiagnostic>[]> {
-      const astDocuments = await this.requireSession(args.clientId).updateAll({
+      const session = this.requireSession(args.clientId);
+      // Every one before any applies, so a set stays all or none.
+      args.updates.forEach(update => this.assertEpoch(update.uri, update));
+      const astDocuments = await session.updateAll({
          updates: args.updates.map(update => this.toSessionWrite(update))
       });
       // A page that reads unsaved work from its editor sees the writes only once their text reaches it.
@@ -761,20 +798,26 @@ export class DataServer<
    }
 
    async updateModelDocument(args: TransferUpdateDocumentArgs<TTransfer>): Promise<TransferWrittenDocument<TTransfer, TDiagnostic>> {
-      const astDocument = await this.requireSession(args.clientId).update(this.toSessionWrite(args));
+      const session = this.requireSession(args.clientId);
+      this.assertEpoch(args.uri, args);
+      const astDocument = await session.update(this.toSessionWrite(args));
       // A page that reads unsaved work from its editor sees the write only once the text reaches it.
       await this.modelService.settleLanguageClient(args.uri);
       return { ...this.encodeDocument(astDocument), written: astDocument.written };
    }
 
    async saveModelDocument(args: TransferSaveDocumentArgs<TTransfer>): Promise<TransferSavedDocument<TTransfer, TDiagnostic>> {
-      const astDocument = await this.requireSession(args.clientId).save(this.toSessionWrite(args));
+      const session = this.requireSession(args.clientId);
+      this.assertEpoch(args.uri, args, STALE_BASE_VERSION_SAVE);
+      const astDocument = await session.save(this.toSessionWrite(args));
       await this.modelService.settleLanguageClient(args.uri);
       return { ...this.encodeDocument(astDocument), persisted: astDocument.persisted };
    }
 
    async persistModelDocument(args: TransferPersistDocumentArgs): Promise<TransferSavedDocument<TTransfer, TDiagnostic>> {
-      const version = await this.requireSession(args.clientId).persist({ uri: args.uri, baseVersion: args.baseVersion });
+      const session = this.requireSession(args.clientId);
+      this.assertEpoch(args.uri, args, STALE_BASE_VERSION_SAVE);
+      const version = await session.persist({ uri: args.uri, baseVersion: args.baseVersion });
       await this.modelService.settleLanguageClient(args.uri);
       const astDocument = await this.modelService.ensureDocumentState(args.uri, this.services.workspace.DocumentBuilder.finalBuildState());
       return { ...this.encodeDocument(astDocument), persisted: { version } };
@@ -788,6 +831,7 @@ export class DataServer<
     */
    async deleteModelDocument(args: TransferDeleteDocumentArgs): Promise<void> {
       const session = this.requireSession(args.clientId);
+      this.assertEpoch(args.uri, args);
       // Keyed before the delete: once the file is gone, a symlink to it no
       // longer resolves to the key the watch is under.
       const uri = this.canonicalKey(args.uri);
@@ -834,7 +878,7 @@ export class DataServer<
       // the position and moves the text past the state answered.
       const answer = (exists: boolean): TransferWatchedDocument => {
          const text = exists ? this.serverTextState(args.uri) : undefined;
-         return { uri, exists, sequence: this.eventSequence, ...(text ? { text } : {}) };
+         return { uri, epoch: this.epoch, exists, sequence: this.eventSequence, ...(text ? { text } : {}) };
       };
       return this.modelService.ensureDocumentState(args.uri).then(
          () => answer(this.modelService.getDocument(args.uri) !== undefined),
@@ -1171,7 +1215,7 @@ export class DataServer<
          // so the compiler forces that decision. Adopters preferring to throw
          // override `envelope`. The builder's unparsed placeholder is no
          // document either: its root parses no text.
-         return TransferDocument.absent<TTransfer, TDiagnostic>(uri.toString());
+         return TransferDocument.absent<TTransfer, TDiagnostic>(uri.toString(), this.epoch);
       }
       const encoded = this.encoder.toTransferDocument(document);
       return this.withServerState(encoded, fingerprint ?? this.computeDocumentFingerprint(document.parseResult.value, encoded));
@@ -1216,6 +1260,7 @@ export class DataServer<
       }
       return {
          uri: encoded.uri,
+         epoch: this.epoch,
          // The encoder returns the structural base; `TTransfer` is the adopter's
          // declaration of the roots its languages produce, and nothing checks it.
          model: { ...encoded.model, hash } as TransferModelSnapshot<TTransfer, TDiagnostic>,

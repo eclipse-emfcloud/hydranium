@@ -253,16 +253,22 @@ No update event tells of a change made while the connection was down, so the
 session fires `onDidRestoreDocument` for each document it opened again, with
 what the restore read, which is missing when that read failed, and with
 `reopened: false` for one it could not open again and did not find deleted. A
-client that keeps a document or its version takes them from the event. A write,
-save, persist or delete called before a document's event and gated on a version
-is refused with a `ConflictError` rather than sent, since the restarted server's
-numbering can match that version by chance and the call would land on text its
-caller never saw. A re-open that found the text the session last saw, at its
-version, refuses nothing, so a brief drop costs no conflict. That text is the
-last one a call of the session was answered with, or another client's update
-event named, which the server sends only for a document someone watches. The
-gate knows only when a call was made, not where its version came from: a call
-made after the event with a version kept from before is sent.
+client that keeps a document or its version takes them from the event. A
+restarted server's numbering can match a version from before by chance, so a
+version names text only with the server's epoch. The registration answers it,
+every document carries it, and a write, save, persist or delete gated on a
+version sends it as `baseEpoch`. The server refuses one whose epoch is not its
+own with a `ConflictError`, whenever the call was made, so a version kept from
+before a restart never lands on text its caller never saw. A reconnect to the
+same server keeps the epoch, so a brief drop refuses nothing the server's
+version gate would take. Refusing on the server rather than in the session
+lets the session gate a version wherever it came from. A version from before a
+restart is refused even where the restarted server holds the same text at it.
+A `WorkingCopy` reconciles that refusal as it does any conflict, and a caller
+of the session gets the `ConflictError` and takes the version from
+`onDidRestoreDocument`. The session tells `onDidRegister` each registration's
+epoch, and whether a reconnect reached another one, before any restore event,
+so a client with no document open learns of a restart too.
 
 ### In Theia
 
@@ -300,19 +306,18 @@ before it included, since the server keeps the other client's, and an edit of a
 field the write merged does not.
 
 **A write never lands on text the copy has not seen.** A restarted server
-numbers versions afresh, so a write based before the latest restore, one that
-found the snapshot's text at its version aside, is refused before it is sent
-and reconciled against the restarted server's document. A field changed while
-the connection was down then reports a conflict. Until the copy reads the
-restored document again, it keeps the problems from before.
+numbers versions afresh in another epoch, so it refuses a write based on a
+version from before, which the copy then reconciles against the restarted
+server's document. A field changed while the connection was down then reports
+a conflict. Until the copy reads the restored document again, it keeps the
+problems from before.
 
 **A write that raced nobody reports `applied`.** A write refused and then
-written again, by the server or by the copy itself after a restore or on an
-unconfirmed base, reports `merged` when the document it read in between
-differs from the one the edit was made on, or when the write was not gated on
-that read. The two are compared as models, so another client's change to the
-text alone, such as a comment, counts as none, as does a change undone before
-the read.
+written again, by the server or by the copy itself on an unconfirmed base,
+reports `merged` when the document it read in between differs from the one the
+edit was made on, or when the write was not gated on that read. The two are
+compared as models, so another client's change to the text alone, such as a
+comment, counts as none, as does a change undone before the read.
 
 **An ended open stays ended.** A close, a deletion, a restore that could not
 open the document again, a failed second read of the open or a read that finds

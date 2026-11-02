@@ -45,10 +45,10 @@ it.each([
    const uri = scratch.workspace.uri(FILE);
    await head.proxy.createSession({ clientId: 'form' });
    await head.proxy.openModelDocument({ uri, clientId: 'form' });
-   const { model } = await head.proxy.getModelDocument({ uri });
+   const { model, epoch } = await head.proxy.getModelDocument({ uri });
 
    // Not a literal: a save's args have no `restore`, which only a client off the typed API sends.
-   const args = { uri, clientId: 'form', model: model!.root, baseVersion: model!.version, ...marks };
+   const args = { uri, clientId: 'form', model: model!.root, baseVersion: model!.version, baseEpoch: epoch, ...marks };
    const save = head.proxy.saveModelDocument(args);
 
    await expect(save).rejects.toSatisfy(isDocumentSyntaxError);
@@ -72,7 +72,13 @@ it.each([
    const opened = await head.proxy.openModelDocument({ uri, clientId: 'form' });
    const { model: valid } = await head.proxy.getModelDocument({ uri: scratch.workspace.uri('valid.process') });
 
-   await head.proxy.updateModelDocument({ uri, clientId: 'form', model: valid!.root, baseVersion: opened.model!.version });
+   await head.proxy.updateModelDocument({
+      uri,
+      clientId: 'form',
+      model: valid!.root,
+      baseVersion: opened.model!.version,
+      baseEpoch: opened.epoch
+   });
 
    expect(shared.workspace.TextDocuments.get(uri)?.getText()).toContain('process Valid for Solo');
 });

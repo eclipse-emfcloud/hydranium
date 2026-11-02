@@ -15,6 +15,8 @@ import {
    type MaybeObservableValue,
    type MaybePromise,
    ObservableValue,
+   STALE_BASE_VERSION_SAVE,
+   STALE_BASE_VERSION_UPDATE,
    type TextVersion,
    type Tracer,
    type TransferElement,
@@ -360,15 +362,20 @@ export class DefaultClientSession<
     * `currentVersion`. A write calls it at the door and again in the
     * synchronous step that applies the text, and has to call it synchronously
     * there: a check separated from the apply by an await lets two writes based
-    * on one version both apply.
+    * on one version both apply. `message` words what was refused.
     */
-   protected assertBaseVersion(uri: string, baseVersion: BaseVersion, currentVersion: number): void {
+   protected assertBaseVersion(
+      uri: string,
+      baseVersion: BaseVersion,
+      currentVersion: number,
+      message: typeof STALE_BASE_VERSION_UPDATE | typeof STALE_BASE_VERSION_SAVE = STALE_BASE_VERSION_UPDATE
+   ): void {
       if (isModelVersion(baseVersion) && currentVersion !== baseVersion) {
          // Distinct from the post-build "superseded" debug line of an update: this
          // is a stale-base-version rejection (the write never applies), not two
          // writes racing.
          this.tracer.debug(`Conflict on ${uri}: stale base, model v${baseVersion} / text v${currentVersion}`);
-         throw new ConflictError(uri, baseVersion, currentVersion);
+         throw new ConflictError(uri, baseVersion, currentVersion, message);
       }
    }
 
@@ -402,10 +409,13 @@ export class DefaultClientSession<
     * builder's final phase rather than the write's own build: a later write
     * cancels that build, and the one that takes over validates the document
     * after the answer was taken.
+    *
+    * `message` words a stale `baseVersion`'s refusal, a save's for a save.
     */
    protected async updateDocument(
       args: ClientSessionWriteArgs<TTransfer>,
-      cancelToken?: CancellationToken
+      cancelToken?: CancellationToken,
+      message: typeof STALE_BASE_VERSION_UPDATE | typeof STALE_BASE_VERSION_SAVE = STALE_BASE_VERSION_UPDATE
    ): Promise<WrittenAstDocument<TAst, TDiagnostic>> {
       const service = this.modelService;
       const slowWarn = this.slowUpdateWarn && { threshold: this.slowUpdateWarn, stopwatch: this.services.Clock.stopwatch() };
@@ -415,7 +425,7 @@ export class DefaultClientSession<
       const textDocuments = this.services.workspace.TextDocuments;
       const check = (): void => {
          this.assertOpen(uri);
-         this.assertBaseVersion(uri, args.baseVersion, textDocuments.version(uri));
+         this.assertBaseVersion(uri, args.baseVersion, textDocuments.version(uri), message);
          if (typeof args.model !== 'string' && !args.restore) {
             this.assertParses(uri);
          }
@@ -527,7 +537,7 @@ export class DefaultClientSession<
       args: ClientSessionWriteArgs<TTransfer>,
       cancelToken?: CancellationToken
    ): Promise<SavedAstDocument<TAst, TDiagnostic>> {
-      const doc = await this.updateDocument({ ...args, restore: undefined }, cancelToken);
+      const doc = await this.updateDocument({ ...args, restore: undefined }, cancelToken, STALE_BASE_VERSION_SAVE);
       const version = await this.persistDocument({ uri: args.uri, baseVersion: 'any' });
       return { ...doc, persisted: { version } };
    }
@@ -548,7 +558,7 @@ export class DefaultClientSession<
    protected async persistDocument(args: ClientSessionPersistArgs): Promise<TextVersion> {
       const uri = this.canonicalKey(args.uri);
       this.assertOpen(uri);
-      this.assertBaseVersion(uri, args.baseVersion, this.services.workspace.TextDocuments.version(uri));
+      this.assertBaseVersion(uri, args.baseVersion, this.services.workspace.TextDocuments.version(uri), STALE_BASE_VERSION_SAVE);
       return this.services.workspace.AstDocumentManager.save(uri, this.clientId);
    }
 

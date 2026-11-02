@@ -697,7 +697,8 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                   uri: createdUri,
                   clientId,
                   model: model.text,
-                  baseVersion: created.created.version
+                  baseVersion: created.created.version,
+                  baseEpoch: created.epoch
                });
 
                const existing = await rejectionOf(driver.proxy.createModelDocument({ uri: model.uri, clientId, text: model.text }));
@@ -720,7 +721,12 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const created = await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
                assert.strictEqual(typeof created.created?.version, 'number', `the create of ${uri} answered with no created version`);
                // Nothing wrote since the create, the fixture being held as written, so a persist on the version it made writes that version.
-               const persisted = await driver.proxy.persistModelDocument({ uri, clientId, baseVersion: created.created.version });
+               const persisted = await driver.proxy.persistModelDocument({
+                  uri,
+                  clientId,
+                  baseVersion: created.created.version,
+                  baseEpoch: created.epoch
+               });
                assert.strictEqual(
                   persisted.persisted?.version,
                   created.created.version,
@@ -800,7 +806,12 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
                const saved = await driver.proxy.saveModelDocument({ uri, clientId, model: model.text, baseVersion: 'any' });
 
-               await driver.proxy.deleteModelDocument({ uri, clientId, baseVersion: TransferDocument.assertLoaded(saved).model.version });
+               await driver.proxy.deleteModelDocument({
+                  uri,
+                  clientId,
+                  baseVersion: TransferDocument.assertLoaded(saved).model.version,
+                  baseEpoch: saved.epoch
+               });
 
                // Once the delete answers, with no wait: the protocol answers a
                // URI with no document with an envelope that has no model.
@@ -824,10 +835,50 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const created = await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
                await driver.proxy.updateModelDocument({ uri, clientId, model: `${model.text}\n`, baseVersion: 'any' });
 
-               const stale = await rejectionOf(driver.proxy.deleteModelDocument({ uri, clientId, baseVersion: created.created.version }));
+               const stale = await rejectionOf(
+                  driver.proxy.deleteModelDocument({ uri, clientId, baseVersion: created.created.version, baseEpoch: created.epoch })
+               );
 
                assert.ok(isConflictError(stale), `deleting ${uri} on a stale base version did not conflict: ${describeRefusal(stale)}`);
                TransferDocument.assertLoaded(await driver.proxy.getModelDocument({ uri }));
+               await driver.proxy.closeSession({ clientId });
+            } finally {
+               driver.dispose();
+            }
+         }
+      });
+
+      checks.push({
+         title: `a write gated on a version of another epoch conflicts and changes nothing ${tag}`,
+         body: async () => {
+            const driver = await connect();
+            try {
+               const model = resolveModel(valid);
+               const uri = siblingOf(model.uri, `conformance-epoch-${randomUuid()}-`);
+               const clientId = sessionId('conformance-session');
+               const { epoch } = await driver.proxy.createSession({ clientId, label: 'conformance-session' });
+               const created = await driver.proxy.createModelDocument({ uri, clientId, text: model.text });
+               assert.strictEqual(created.epoch, epoch, `the create of ${uri} named another epoch than the registration`);
+               // The version the server holds, as numbered by a server before a restart.
+               const gate = { baseVersion: created.created.version, baseEpoch: `${epoch}-before` };
+               const edited = `${model.text}\n`;
+
+               const refusals = {
+                  update: await rejectionOf(driver.proxy.updateModelDocument({ uri, clientId, model: edited, ...gate })),
+                  updates: await rejectionOf(driver.proxy.updateModelDocuments({ clientId, updates: [{ uri, model: edited, ...gate }] })),
+                  save: await rejectionOf(driver.proxy.saveModelDocument({ uri, clientId, model: edited, ...gate })),
+                  persist: await rejectionOf(driver.proxy.persistModelDocument({ uri, clientId, ...gate })),
+                  delete: await rejectionOf(driver.proxy.deleteModelDocument({ uri, clientId, ...gate }))
+               };
+
+               for (const [method, refusal] of Object.entries(refusals)) {
+                  assert.ok(
+                     isConflictError(refusal),
+                     `a ${method} of ${uri} gated on another epoch did not conflict: ${describeRefusal(refusal)}`
+                  );
+               }
+               const kept = TransferDocument.assertLoaded(await driver.proxy.getModelDocument({ uri }));
+               assert.strictEqual(kept.model.version, created.created.version, `a write of ${uri} gated on another epoch changed it`);
                await driver.proxy.closeSession({ clientId });
             } finally {
                driver.dispose();
@@ -967,11 +1018,21 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                const persister = await openAs(driver, uri, 'conformance-persister');
 
                const stale = await rejectionOf(
-                  driver.proxy.persistModelDocument({ uri, clientId: persister, baseVersion: created.created.version })
+                  driver.proxy.persistModelDocument({
+                     uri,
+                     clientId: persister,
+                     baseVersion: created.created.version,
+                     baseEpoch: created.epoch
+                  })
                );
                assert.ok(isConflictError(stale), `persisting ${uri} on a stale base version did not conflict: ${describeRefusal(stale)}`);
                const base = TransferDocument.assertLoaded(written).model.version;
-               const persisted = await driver.proxy.persistModelDocument({ uri, clientId: persister, baseVersion: base });
+               const persisted = await driver.proxy.persistModelDocument({
+                  uri,
+                  clientId: persister,
+                  baseVersion: base,
+                  baseEpoch: written.epoch
+               });
                assert.strictEqual(
                   persisted.persisted?.version,
                   base,
@@ -1229,7 +1290,8 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                           uri: model.uri,
                           clientId: author,
                           model: model.text,
-                          baseVersion: TransferDocument.assertLoaded(stale).model.version
+                          baseVersion: TransferDocument.assertLoaded(stale).model.version,
+                          baseEpoch: stale.epoch
                        })
                        .catch((error: unknown) => {
                           rejection = error;
@@ -1247,7 +1309,8 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        uri: model.uri,
                        clientId: author,
                        model: resolveDeferred(edit.to),
-                       baseVersion: TransferDocument.assertLoaded(fresh).model.version
+                       baseVersion: TransferDocument.assertLoaded(fresh).model.version,
+                       baseEpoch: fresh.epoch
                     });
                  } finally {
                     driver.dispose();
@@ -1322,7 +1385,7 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        await seed(driver, model);
                        await seed(driver, other);
                        const clientId = await startSession(driver, 'conformance-session');
-                       const { model: first } = TransferDocument.assertLoaded(
+                       const { model: first, epoch } = TransferDocument.assertLoaded(
                           await driver.proxy.openModelDocument({ uri: model.uri, clientId })
                        );
                        const { model: second } = TransferDocument.assertLoaded(
@@ -1336,8 +1399,8 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                           driver.proxy.updateModelDocuments({
                              clientId,
                              updates: [
-                                { uri: model.uri, model: edited, baseVersion: first.version },
-                                { uri: other.uri, model: other.text, baseVersion: asModelVersion(second.version + 1) }
+                                { uri: model.uri, model: edited, baseVersion: first.version, baseEpoch: epoch },
+                                { uri: other.uri, model: other.text, baseVersion: asModelVersion(second.version + 1), baseEpoch: epoch }
                              ]
                           })
                        );
@@ -1348,8 +1411,8 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
                        const answers = await driver.proxy.updateModelDocuments({
                           clientId,
                           updates: [
-                             { uri: model.uri, model: edited, baseVersion: first.version },
-                             { uri: other.uri, model: other.text, baseVersion: second.version }
+                             { uri: model.uri, model: edited, baseVersion: first.version, baseEpoch: epoch },
+                             { uri: other.uri, model: other.text, baseVersion: second.version, baseEpoch: epoch }
                           ]
                        });
                        const applied = await driver.proxy.getModelDocument({ uri: model.uri });

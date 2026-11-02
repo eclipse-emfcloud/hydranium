@@ -17,9 +17,15 @@ import type {
    TransferDocumentDirtyChangedEvent,
    TransferDocumentUpdatedEvent
 } from '../data';
-import { ConflictError, isConflictError, SessionClosedError, STALE_BASE_VERSION_SAVE, STALE_BASE_VERSION_UPDATE } from '../errors';
+import { isConflictError, SessionClosedError } from '../errors';
 import type { Logger } from '../logger';
-import { type BaseVersion, isModelVersion, type ModelVersion, type TextVersion, UNRECORDED_VERSION } from '../model-service/base-version';
+import {
+   type BaseVersionGate,
+   isModelVersion,
+   type ModelVersion,
+   type TextVersion,
+   UNRECORDED_VERSION
+} from '../model-service/base-version';
 import { type ResolvedMessage, defineMessage, describeError, resolve } from '../messages/primitives';
 import { NoopLogger } from '../noop-logger';
 import { PendingWorkTracker } from '../pending-work-tracker';
@@ -71,9 +77,14 @@ export const DATA_SESSION_UNSAVED_LOST = defineMessage(
  * Read off the SERVER's signature, not off the framework's own arg type: an
  * adopter server widens these, and a wrapper declared against the narrow
  * shape rejects the extra field on a fresh object literal, so that call
- * cannot go through a session at all.
+ * cannot go through a session at all. Omitted from each member of a union
+ * apart: `Omit` over the whole merges a write's `BaseVersionGate`, and a
+ * version would then go without its `baseEpoch`.
  */
-export type DataSessionArgs<TMethod extends (args: never) => unknown> = Omit<Parameters<TMethod>[0], 'clientId'>;
+export type DataSessionArgs<TMethod extends (args: never) => unknown> = OmitEach<Parameters<TMethod>[0], 'clientId'>;
+
+/** `Omit` from each member of the union `TUnion` apart. */
+type OmitEach<TUnion, TKey extends PropertyKey> = TUnion extends unknown ? Omit<TUnion, TKey> : never;
 
 /**
  * Open a document through a session; the session supplies `clientId`. Only the
@@ -144,6 +155,16 @@ export type DataSessionDocument<
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
 > = TransferDocument<TTransfer, DiagnosticOf<TServer>>;
 
+/** A registration of a session on its server, see {@link DataSession.onDidRegister}. */
+export interface DataSessionRegisterEvent {
+   /** The server's epoch, which every document it answers carries. */
+   readonly epoch: string;
+   /** Whether the session registered again after its connection dropped. */
+   readonly reconnected: boolean;
+   /** Whether that reconnect reached another epoch than the registration before, a restarted server. */
+   readonly restarted: boolean;
+}
+
 /**
  * A document a restore opened again, or could not, with the caller's URI and
  * what the restore read, `undefined` when that read failed. Not reopened, the
@@ -179,9 +200,10 @@ export interface DataSessionUnsavedWrite<
    readonly baseHash: string | undefined;
    /**
     * The model version the last of these writes was answered with, which
-    * orders its answers, and the `text.hash` of that answer.
+    * orders its answers, the epoch it was numbered in and the `text.hash` of
+    * that answer.
     */
-   readonly answer: { readonly version: ModelVersion; readonly hash?: string };
+   readonly answer: { readonly version: ModelVersion; readonly epoch: string; readonly hash?: string };
    /**
     * The call that made the last write, and for an `updateDocuments` call this
     * URI's index in it. Records whose `updates` is the same object were
@@ -335,12 +357,10 @@ export type DataSessionFactory<TTransfer extends TransferElement, TServer extend
  * is ready, so a reconnect that failed is not left to the session's own next
  * call; any session's next call does it too.
  *
- * A restarted server numbers versions afresh, so an update, save, persist or
- * delete gated on a version is refused with a `ConflictError` and not sent
- * when a restore ran between the call and its send. A restore that found the
- * text the session last saw, at its version, refuses nothing. A call made
- * later is not checked, so it takes its version from
- * {@link onDidRestoreDocument}.
+ * A restarted server numbers versions afresh in another epoch, and refuses a
+ * write gated on a version from the epoch before with a `ConflictError`,
+ * whenever the call is made. A caller that keeps a document takes the
+ * restarted server's from {@link onDidRestoreDocument}.
  *
  * Generic over the transfer root so this file names no grammar.
  *
@@ -401,7 +421,7 @@ export class DataSession<
     * Per URI this session has open, the text of the last document one of its
     * own calls was answered with, or another client's update event named. It
     * spares the read a first unsaved write otherwise makes for its base, see
-    * {@link baseHashOf}, and lets a restore that finds it refuse nothing.
+    * {@link baseHashOf}.
     */
    protected readonly lastAnswers = new Map<string, TextState>();
    /**
@@ -438,23 +458,26 @@ export class DataSession<
     * late subscriber checks {@link isDisposed} first.
     */
    readonly onDidDispose: Event<void> = this.disposeEmitter.event;
-   /**
-    * Per URI, the restores whose event has fired. A call gated on a version
-    * from before one is refused, see {@link refuseAcrossRestore}.
-    */
-   protected readonly restores = new Map<string, number>();
    /** Fires {@link onDidRestoreDocument}. */
    protected readonly restoreEmitter = new Emitter<DataSessionRestoreEvent<TTransfer, TServer>>();
    /**
     * Fires for each document a restore after a reconnect opened again, and
     * for each it could not open again and did not find deleted. No update
     * event tells of a change made while the connection was down, and a
-    * restarted server numbers versions afresh, so a client that keeps a
-    * document or its version takes them from here. A call gated on a version
-    * and made before this fires is refused, unless the restore found the text
-    * the session last saw, at its version.
+    * restarted server refuses a version from before it, so a client that
+    * keeps a document or its version takes them from here.
     */
    readonly onDidRestoreDocument: Event<DataSessionRestoreEvent<TTransfer, TServer>> = this.restoreEmitter.event;
+   /** Fires {@link onDidRegister}. */
+   protected readonly registerEmitter = new Emitter<DataSessionRegisterEvent>();
+   /**
+    * Fires once the server answers each registration, before a restore after a
+    * reconnect begins, so a client learns of a restart before the documents
+    * restored on it.
+    */
+   readonly onDidRegister: Event<DataSessionRegisterEvent> = this.registerEmitter.event;
+   /** The epoch the last registration answered. */
+   protected registeredEpoch?: string;
    /**
     * Sent with every registration, so the server lets this session register
     * its id again while the dropped connection's session is still live there:
@@ -716,9 +739,6 @@ export class DataSession<
       this.lastAnswers.delete(uri);
       this.savedVersions.delete(uri);
       this.createdUris.delete(uri);
-      // A call that took the count before is refused all the same, by the
-      // session when a restore was counted, else by the server, as not open.
-      this.restores.delete(uri);
       this.host.forgetDirty?.(serverUri);
    }
 
@@ -757,18 +777,12 @@ export class DataSession<
       }
    }
 
-   /**
-    * Write `args.model` back as this session. The session must have `args.uri`
-    * open. Refused unsent with a `ConflictError` when a restore ran between the
-    * call and its send, see the class doc.
-    */
+   /** Write `args.model` back as this session. The session must have `args.uri` open. */
    updateDocument(args: DataSessionUpdateArgs<TTransfer, TServer>): Promise<TransferWrittenDocument<TTransfer, DiagnosticOf<TServer>>> {
-      const restores = this.restoresOf(args.uri);
       return this.trackWrite([args.uri], async () => {
          const server = await this.connected();
-         this.refuseAcrossRestore(restores, args.uri, args.baseVersion);
          const update = { ...args };
-         const baseHash = await this.baseHashOf(server, args.uri, args.baseVersion);
+         const baseHash = await this.baseHashOf(server, args.uri, args);
          const open = this.opens.get(args.uri);
          const document = await server.updateModelDocument({ ...args, clientId: this.clientId });
          this.recordWrite(args.uri, open, document, baseHash, { update });
@@ -779,11 +793,9 @@ export class DataSession<
    /**
     * Write several documents this session has open, all or none: the server
     * refuses the whole set, before any text applies, when one is stale or not
-    * open. Resolves to the documents in the order given. Refused unsent with a
-    * `ConflictError` when a restore ran between the call and its send.
+    * open. Resolves to the documents in the order given.
     */
    updateDocuments(args: DataSessionUpdatesArgs<TTransfer, TServer>): Promise<TransferWrittenDocument<TTransfer, DiagnosticOf<TServer>>[]> {
-      const restores = args.updates.map(update => this.restoresOf(update.uri));
       return this.trackWrite(
          args.updates.map(update => update.uri),
          async () => {
@@ -791,8 +803,7 @@ export class DataSession<
             // records together.
             const updates = { ...args, updates: args.updates.map(update => ({ ...update })) };
             const server = await this.connected();
-            args.updates.forEach((update, index) => this.refuseAcrossRestore(restores[index], update.uri, update.baseVersion));
-            const baseHashes = await Promise.all(args.updates.map(update => this.baseHashOf(server, update.uri, update.baseVersion)));
+            const baseHashes = await Promise.all(args.updates.map(update => this.baseHashOf(server, update.uri, update)));
             const opens = args.updates.map(update => this.opens.get(update.uri));
             const documents = await server.updateModelDocuments({ ...args, clientId: this.clientId });
             args.updates.forEach((update, index) =>
@@ -803,22 +814,17 @@ export class DataSession<
       );
    }
 
-   /**
-    * Persist `args.model` to disk as this session. The session must have
-    * `args.uri` open. Refused unsent with a `ConflictError` when a restore
-    * ran between the call and its send, see the class doc.
-    */
+   /** Persist `args.model` to disk as this session. The session must have `args.uri` open. */
    saveDocument(args: DataSessionSaveArgs<TTransfer, TServer>): Promise<TransferSavedDocument<TTransfer, DiagnosticOf<TServer>>> {
-      return this.trackSave(args.uri, args.baseVersion, server => server.saveModelDocument({ ...args, clientId: this.clientId }));
+      return this.trackSave(args.uri, server => server.saveModelDocument({ ...args, clientId: this.clientId }));
    }
 
    /**
     * Persist the text the server holds for `args.uri` as this session, with no
-    * model of its own. The session must have `args.uri` open. Refused unsent
-    * with a `ConflictError` when a restore ran between the call and its send.
+    * model of its own. The session must have `args.uri` open.
     */
    persistDocument(args: DataSessionPersistArgs<TTransfer, TServer>): Promise<TransferSavedDocument<TTransfer, DiagnosticOf<TServer>>> {
-      return this.trackSave(args.uri, args.baseVersion, server => server.persistModelDocument({ ...args, clientId: this.clientId }));
+      return this.trackSave(args.uri, server => server.persistModelDocument({ ...args, clientId: this.clientId }));
    }
 
    /**
@@ -830,17 +836,14 @@ export class DataSession<
     * The session forgets the document once the delete has succeeded: on
     * hearing its own deletion, which the server sends before it answers, or
     * on the answer, for a client that hears no deletions. A refused delete
-    * leaves the document open, as the server does. Refused unsent with a
-    * `ConflictError` when a restore ran between the call and its send.
+    * leaves the document open, as the server does.
     */
    deleteDocument(args: DataSessionDeleteArgs<TTransfer, TServer>): Promise<void> {
-      const restores = this.restoresOf(args.uri);
       const deleting = this.trackEnding(args.uri, () =>
          this.track([args.uri], async () => {
             this.assertLive();
             await this.settle([this.inFlight.get(args.uri)]);
             const server = await this.connected();
-            this.refuseAcrossRestore(restores, args.uri, args.baseVersion);
             const open = this.opens.get(args.uri);
             await server.deleteModelDocument({ ...args, clientId: this.clientId });
             // Still the open it was sent under: the deletion was not heard.
@@ -857,13 +860,10 @@ export class DataSession<
    /** Run a save or persist of `uri` and record what it answered as saved. */
    protected trackSave(
       uri: string,
-      baseVersion: BaseVersion,
       send: (server: RpcProxy<TServer>) => Promise<TransferSavedDocument<TTransfer, DiagnosticOf<TServer>>>
    ): Promise<TransferSavedDocument<TTransfer, DiagnosticOf<TServer>>> {
-      const restores = this.restoresOf(uri);
       const saving = this.track([uri], async () => {
          const server = await this.connected();
-         this.refuseAcrossRestore(restores, uri, baseVersion, STALE_BASE_VERSION_SAVE);
          const open = this.opens.get(uri);
          const document = await send(server);
          // Sent under no open, or under one a close or deletion has ended
@@ -1015,6 +1015,7 @@ export class DataSession<
       this.disposeEmitter.fire(undefined);
       this.disposeEmitter.dispose();
       this.restoreEmitter.dispose();
+      this.registerEmitter.dispose();
    }
 
    /**
@@ -1073,7 +1074,7 @@ export class DataSession<
     * The mark in {@link createdUris} goes on any such event: the unsaved text
     * is then the other client's, and a record still kept reports the
     * session's own. Its text goes in {@link lastAnswers} unless that holds a
-    * later version, so a restore that finds it counts no change.
+    * later version.
     */
    protected forgetSupersededWrite(event: TransferDocumentUpdatedEvent<TTransfer, DiagnosticOf<TServer>>): void {
       if (event.reason !== 'changed' || this.isOwnEcho(event.sourceClientId)) {
@@ -1159,48 +1160,20 @@ export class DataSession<
     * had. Calls issued meanwhile wait for this.
     */
    protected async register(server: RpcProxy<TServer>, reconnected: boolean): Promise<void> {
-      await server.createSession({ clientId: this.clientId, label: this.label, resumeToken: this.resumeToken });
+      const { epoch } = await server.createSession({ clientId: this.clientId, label: this.label, resumeToken: this.resumeToken });
+      const restarted = reconnected && this.registeredEpoch !== undefined && epoch !== this.registeredEpoch;
+      this.registeredEpoch = epoch;
+      // The emitter logs a listener that throws, so a failed listener fails no registration.
+      this.registerEmitter.fire({ epoch, reconnected, restarted });
       if (reconnected) {
          await this.restore(server);
       }
    }
 
-   /** The restores of `uri` whose event has fired. */
-   protected restoresOf(uri: string): number {
-      return this.restores.get(uri) ?? 0;
-   }
-
-   /**
-    * Tell the listeners of a restore of `uri`, and count it when `counted`.
-    * Counted just before, so a call made with the version the event hands out
-    * is taken, and one made before it, which can only hold the old server's,
-    * is refused. A re-open that found the text the session last saw, at its
-    * version, is not counted, since a version from before still names it.
-    */
-   protected fireRestored(event: DataSessionRestoreEvent<TTransfer, TServer>, counted = true): void {
-      if (counted) {
-         this.restores.set(event.uri, this.restoresOf(event.uri) + 1);
-      }
+   /** Tell the listeners of a restore of `uri`. */
+   protected fireRestored(event: DataSessionRestoreEvent<TTransfer, TServer>): void {
       // The emitter logs a listener that throws, so a failed listener fails no restore.
       this.restoreEmitter.fire(event);
-   }
-
-   /**
-    * Refuse a call gated on `baseVersion` if `uri` was restored since the
-    * call was made, when its count in {@link restores} was `restores`. A
-    * restarted server numbers versions afresh, so the version can match text
-    * the caller never saw, and the server would take the call over it.
-    */
-   protected refuseAcrossRestore(
-      restores: number,
-      uri: string,
-      baseVersion: BaseVersion,
-      message: typeof STALE_BASE_VERSION_UPDATE | typeof STALE_BASE_VERSION_SAVE = STALE_BASE_VERSION_UPDATE
-   ): void {
-      if (restores !== this.restoresOf(uri) && isModelVersion(baseVersion)) {
-         // No version of the new server's text is known for the call.
-         throw new ConflictError(uri, baseVersion, UNRECORDED_VERSION, message);
-      }
    }
 
    /**
@@ -1254,7 +1227,6 @@ export class DataSession<
       // server numbers afresh, below the versions saved before it.
       this.savedVersions.clear();
       const reopened = new Map<string, DataSessionDocument<TTransfer, TServer>>();
-      const unchanged = new Set<string>();
       const lost: string[] = [];
       for (const uri of [...this.openUris]) {
          // Closed, or its file deleted, while the restore ran.
@@ -1292,11 +1264,6 @@ export class DataSession<
                const known = this.lastAnswers.get(uri);
                if (this.createdUris.has(uri) && document.text !== undefined && known !== undefined && document.text.hash !== known.hash) {
                   this.createdUris.delete(uri);
-               }
-               // The text the session last saw, at its version, so a version
-               // from before names the same text as on the server before.
-               if (document.text !== undefined && document.text.version === known?.version && document.text.hash === known.hash) {
-                  unchanged.add(uri);
                }
                this.recordText(uri, document);
             }
@@ -1391,7 +1358,7 @@ export class DataSession<
             }
          }
          if (this.openUris.has(uri)) {
-            this.fireRestored({ uri, reopened: true, document: current }, !unchanged.has(uri));
+            this.fireRestored({ uri, reopened: true, document: current });
          }
       }
       if (lost.length > 0) {
@@ -1406,15 +1373,15 @@ export class DataSession<
     * can be sent again (`'resend'`), or holds something else (`'lost'`).
     *
     * A document without `text` comes from a server that sends none, and
-    * counts as kept only at the version the write was answered with. One
-    * without a model has no version to send the write again on.
+    * counts as kept only at the version and epoch the write was answered
+    * with. One without a model has no version to send the write again on.
     */
    protected restoreOutcome(
       write: DataSessionUnsavedWrite<TTransfer, TServer>,
       document: DataSessionDocument<TTransfer, TServer>
    ): 'kept' | 'resend' | 'lost' {
       if (document.text === undefined) {
-         return document.model?.version === write.answer.version ? 'kept' : 'lost';
+         return document.epoch === write.answer.epoch && document.model?.version === write.answer.version ? 'kept' : 'lost';
       }
       if (document.text.hash === write.answer.hash) {
          return 'kept';
@@ -1472,7 +1439,7 @@ export class DataSession<
       // In the order of the call's updates, which is the order of its answers.
       const resend = outcomes
          .flatMap(({ uri, write, document, outcome }) =>
-            outcome === 'resend' && document?.model ? [{ uri, write, baseVersion: document.model.version }] : []
+            outcome === 'resend' && document?.model ? [{ uri, write, baseVersion: document.model.version, baseEpoch: document.epoch }] : []
          )
          .sort((left, right) => indexOf(left.write) - indexOf(right.write));
       if (resend.length === 0) {
@@ -1485,18 +1452,26 @@ export class DataSession<
          if ('update' in call) {
             documents = [
                await this.writesInFlight.track(
-                  server.updateModelDocument({ ...call.update, baseVersion: resend[0].baseVersion, restore: true, clientId: this.clientId })
+                  server.updateModelDocument({
+                     ...call.update,
+                     baseVersion: resend[0].baseVersion,
+                     baseEpoch: resend[0].baseEpoch,
+                     restore: true,
+                     clientId: this.clientId
+                  })
                )
             ];
          } else {
-            const baseVersion = new Map(resend.map(member => [indexOf(member.write), member.baseVersion]));
+            const bases = new Map(resend.map(member => [indexOf(member.write), member]));
             documents = await this.writesInFlight.track(
                server.updateModelDocuments({
                   ...call.updates,
                   clientId: this.clientId,
                   updates: call.updates.updates.flatMap((update, index) => {
-                     const version = baseVersion.get(index);
-                     return version === undefined ? [] : [{ ...update, baseVersion: version, restore: true }];
+                     const base = bases.get(index);
+                     return base === undefined
+                        ? []
+                        : [{ ...update, baseVersion: base.baseVersion, baseEpoch: base.baseEpoch, restore: true }];
                   })
                })
             );
@@ -1505,7 +1480,7 @@ export class DataSession<
          if (isConflictError(error)) {
             return lose();
          }
-         for (const { uri, write, baseVersion } of resend) {
+         for (const { uri, write, baseVersion, baseEpoch } of resend) {
             // Closed, saved or deleted while the write ran: nothing to restore.
             if (!current(uri, write)) {
                continue;
@@ -1514,7 +1489,7 @@ export class DataSession<
             // Kept for the next restore, and numbered from the re-opened
             // version, as the kept records are: a record numbered by a server
             // that has since restarted would have later answers ignored.
-            this.unsavedWrites.set(uri, { ...write, answer: { ...write.answer, version: baseVersion } });
+            this.unsavedWrites.set(uri, { ...write, answer: { ...write.answer, version: baseVersion, epoch: baseEpoch } });
          }
          return [];
       }
@@ -1530,17 +1505,20 @@ export class DataSession<
    }
 
    /**
-    * The text hash of the version `baseVersion` names for `uri`, for a write that
-    * starts the URI's record in {@link unsavedWrites}; `undefined` for any
-    * other write, whose record keeps the base it has.
+    * The text hash of the version `gate` names for `uri`, for a write that
+    * starts the URI's record in {@link unsavedWrites}. Any other write gets
+    * `undefined`, and its record keeps the base it has. A version of another
+    * epoch than the registration's names no text here, and the server refuses
+    * its write.
     *
     * Taken from {@link lastAnswers} when that is at the version, otherwise
     * read, and kept only when the read answers that version: a server's text
     * changes only with its version, so the text at a version is the text the
     * write, once it passes the gate, was applied to.
     */
-   protected async baseHashOf(server: RpcProxy<TServer>, uri: string, baseVersion: BaseVersion): Promise<string | undefined> {
-      if (this.unsavedWrites.has(uri) || !isModelVersion(baseVersion)) {
+   protected async baseHashOf(server: RpcProxy<TServer>, uri: string, gate: BaseVersionGate): Promise<string | undefined> {
+      const { baseVersion } = gate;
+      if (this.unsavedWrites.has(uri) || !isModelVersion(baseVersion) || gate.baseEpoch !== this.registeredEpoch) {
          return undefined;
       }
       const known = this.lastAnswers.get(uri);
@@ -1599,9 +1577,9 @@ export class DataSession<
       if (!document.model) {
          const reported = resolve(DATA_SESSION_ANSWER_WITHOUT_MODEL, { uri });
          this.host.reportError?.(new Error(reported.text), reported);
-         return { version: UNRECORDED_VERSION, hash: document.text?.hash };
+         return { version: UNRECORDED_VERSION, epoch: document.epoch, hash: document.text?.hash };
       }
-      return { version: document.model.version, hash: document.text?.hash };
+      return { version: document.model.version, epoch: document.epoch, hash: document.text?.hash };
    }
 
    /** Keep `document`'s text in {@link lastAnswers}, or forget it for a server that sends none. */

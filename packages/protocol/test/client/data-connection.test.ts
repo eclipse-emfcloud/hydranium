@@ -39,7 +39,8 @@ import {
    DATA_SESSION_UNSAVED_LOST,
    DataSession,
    type DataSessionFactory,
-   type DataSessionHost
+   type DataSessionHost,
+   type DataSessionRegisterEvent
 } from '../../src/client/data-session';
 import {
    DATA_SERVER_WIRE_PREFIX,
@@ -99,13 +100,19 @@ const URI_B = 'file:///b.x';
 const URI_C = 'file:///c.x';
 const MODEL = { $type: 'TypeOne' } as const;
 
+/** The epoch of the first server a harness connects to. */
+const EPOCH = 'epoch-1';
+/** The epoch of the server a harness's second connection reaches, restarted unless the server is the same. */
+const RESTARTED_EPOCH = 'epoch-2';
+
 /**
  * A document as the server answers with it: a text block whenever it knows the
  * text or its dirty state, and a model parsed from the text at `modelVersion`.
  */
-function document(uri: string, version = 1, dirty?: boolean, textHash?: string, modelVersion = version): unknown {
+function document(uri: string, version = 1, dirty?: boolean, textHash?: string, modelVersion = version, epoch = EPOCH): unknown {
    return {
       uri,
+      epoch,
       model: { root: { $type: 'TypeOne' }, diagnostics: [], version: modelVersion, hash: 'model' },
       ...(dirty !== undefined || textHash !== undefined ? { text: { version, hash: textHash ?? '', dirty: dirty ?? false } } : {})
    };
@@ -139,6 +146,8 @@ interface ServerBehaviour {
     * moves it on by one.
     */
    versions?: Map<string, number>;
+   /** Answer every connection in one epoch, as one server does. Absent, each connection is a restarted server with its own. */
+   sameServer?: boolean;
    /** Held before the registration answers. */
    createGate?: Promise<void>;
    /** Held before an update answers. */
@@ -212,9 +221,10 @@ function textOf(model: unknown): string {
 /**
  * Bind a server that records every call, on one connection generation. The
  * `calls` array is shared across generations; the versions it answers with
- * are not, see {@link ServerBehaviour.versions}.
+ * are not, see {@link ServerBehaviour.versions}. It answers in `epoch`, and
+ * refuses a write gated on a version of another, as a data server does.
  */
-function recordingServer(connection: MessageConnection, calls: ServerCall[], behaviour: ServerBehaviour): void {
+function recordingServer(connection: MessageConnection, calls: ServerCall[], behaviour: ServerBehaviour, epoch: string): void {
    const record = (
       method: Method,
       args: {
@@ -239,11 +249,18 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
       });
    };
    const answered = (uri: string): string => behaviour.canonical?.(uri) ?? uri;
+   const stamped = (uri: string, version?: number, dirty?: boolean, textHash?: string, modelVersion?: number): unknown =>
+      document(uri, version, dirty, textHash, modelVersion ?? version, epoch);
    const numbered = new Map<string, number>();
    const versionOf = (uri: string): number => behaviour.versions?.get(uri) ?? numbered.get(uri) ?? 1;
    const moveOn = (uri: string): number => {
       numbered.set(uri, (numbered.get(uri) ?? 1) + 1);
       return versionOf(uri);
+   };
+   const assertEpoch = (uri: string, gate: { baseVersion: unknown; baseEpoch?: unknown }): void => {
+      if (typeof gate.baseVersion === 'number' && gate.baseEpoch !== epoch) {
+         throw new ConflictError(uri, asModelVersion(gate.baseVersion), versionOf(uri));
+      }
    };
    const written = (uri: string, model: unknown): string | undefined => {
       behaviour.dirty?.set(uri, true);
@@ -256,21 +273,22 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
    // A write's answer, built from the text it wrote.
    const wrote = (uri: string, model: unknown): unknown => {
       const version = moveOn(uri);
-      return { ...(document(answered(uri), version, undefined, written(uri, model)) as object), written: { version } };
+      return { ...(stamped(answered(uri), version, undefined, written(uri, model)) as object), written: { version } };
    };
    const read = (uri: string): unknown =>
-      document(answered(uri), versionOf(uri), behaviour.dirty?.get(uri), behaviour.texts?.get(uri), behaviour.modelVersions?.get(uri));
+      stamped(answered(uri), versionOf(uri), behaviour.dirty?.get(uri), behaviour.texts?.get(uri), behaviour.modelVersions?.get(uri));
    const target = {
       waitForReady: async (): Promise<void> => {
          behaviour.beforeReady?.();
          await behaviour.readyGate;
       },
-      createSession: async (args: { clientId: string }): Promise<void> => {
+      createSession: async (args: { clientId: string }): Promise<{ epoch: string }> => {
          record('createSession', args);
          await behaviour.createGate;
          if (behaviour.refuseSessions) {
             throw new DuplicateClientIdError(args.clientId);
          }
+         return { epoch };
       },
       closeSession: async (args: { clientId: string }): Promise<void> => {
          record('closeSession', args);
@@ -290,7 +308,7 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
             throw new Error('read refused');
          }
          // A URI with no document reads back without a model.
-         return behaviour.gone?.has(args.uri) ? { uri: answered(args.uri) } : read(args.uri);
+         return behaviour.gone?.has(args.uri) ? { uri: answered(args.uri), epoch } : read(args.uri);
       },
       createModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
          record('create', args);
@@ -298,9 +316,7 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
          if (behaviour.writtenBeforeCreateAnswers?.has(args.uri)) {
             moveOn(args.uri);
          }
-         const answer = behaviour.answersWithoutText
-            ? document(answered(args.uri))
-            : document(answered(args.uri), versionOf(args.uri), true);
+         const answer = behaviour.answersWithoutText ? stamped(answered(args.uri)) : stamped(answered(args.uri), versionOf(args.uri), true);
          return { ...(answer as object), created: { version: created } };
       },
       watchModelDocument: async (args: { uri: string; clientId: string }): Promise<unknown> => {
@@ -317,6 +333,7 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
          const exists = !behaviour.gone?.has(args.uri);
          const answer = {
             uri: answered(args.uri),
+            epoch,
             exists,
             sequence: sent.sequence,
             ...(exists && !behaviour.answersWithoutText
@@ -344,9 +361,16 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
             throw new Error('close refused');
          }
       },
-      updateModelDocument: async (args: { uri: string; clientId: string; baseVersion: unknown; model: unknown }): Promise<unknown> => {
+      updateModelDocument: async (args: {
+         uri: string;
+         clientId: string;
+         baseVersion: unknown;
+         baseEpoch?: unknown;
+         model: unknown;
+      }): Promise<unknown> => {
          record('update', args);
          await behaviour.updateGate;
+         assertEpoch(args.uri, args);
          if (behaviour.refuseUpdates === 'conflict') {
             throw new ConflictError(args.uri, asModelVersion(0), 1);
          }
@@ -354,20 +378,28 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
             throw new Error('update refused');
          }
          if (behaviour.answerWithoutModel) {
-            return { uri: answered(args.uri) };
+            return { uri: answered(args.uri), epoch };
          }
          return wrote(args.uri, args.model);
       },
       updateModelDocuments: async (args: {
          clientId: string;
-         updates: { uri: string; baseVersion: unknown; model: unknown }[];
+         updates: { uri: string; baseVersion: unknown; baseEpoch?: unknown; model: unknown }[];
       }): Promise<unknown> => {
          record('updates', args);
          await behaviour.updatesGate;
+         args.updates.forEach(update => assertEpoch(update.uri, update));
          return args.updates.map(update => wrote(update.uri, update.model));
       },
-      saveModelDocument: async (args: { uri: string; clientId: string; model: unknown }): Promise<unknown> => {
+      saveModelDocument: async (args: {
+         uri: string;
+         clientId: string;
+         baseVersion: unknown;
+         baseEpoch?: unknown;
+         model: unknown;
+      }): Promise<unknown> => {
          record('save', args);
+         assertEpoch(args.uri, args);
          // Taken on arrival: a write landing while the save waits is not
          // what it wrote.
          const taken = versionOf(args.uri);
@@ -375,23 +407,30 @@ function recordingServer(connection: MessageConnection, calls: ServerCall[], beh
          const textHash = written(args.uri, args.model);
          behaviour.dirty?.set(args.uri, false);
          return {
-            ...(document(answered(args.uri), versionOf(args.uri), undefined, textHash) as object),
+            ...(stamped(answered(args.uri), versionOf(args.uri), undefined, textHash) as object),
             persisted: { version: taken }
          };
       },
-      persistModelDocument: async (args: { uri: string; clientId: string; baseVersion: unknown }): Promise<unknown> => {
+      persistModelDocument: async (args: {
+         uri: string;
+         clientId: string;
+         baseVersion: unknown;
+         baseEpoch?: unknown;
+      }): Promise<unknown> => {
          record('persist', args);
+         assertEpoch(args.uri, args);
          const taken = versionOf(args.uri);
          await behaviour.persistGate;
          behaviour.dirty?.set(args.uri, false);
          return {
-            ...(document(answered(args.uri), versionOf(args.uri), undefined, behaviour.texts?.get(args.uri)) as object),
+            ...(stamped(answered(args.uri), versionOf(args.uri), undefined, behaviour.texts?.get(args.uri)) as object),
             persisted: { version: behaviour.persistedVersions?.get(args.uri) ?? taken }
          };
       },
-      deleteModelDocument: async (args: { uri: string; clientId: string; baseVersion: unknown }): Promise<void> => {
+      deleteModelDocument: async (args: { uri: string; clientId: string; baseVersion: unknown; baseEpoch?: unknown }): Promise<void> => {
          record('delete', args);
          await behaviour.deleteGate;
+         assertEpoch(args.uri, args);
          if (behaviour.refuseDeletes) {
             throw new ConflictError(args.uri, asModelVersion(0), 1);
          }
@@ -467,11 +506,12 @@ function harness(
    const calls: ServerCall[] = [];
    const pairs: ReturnType<typeof makeDuplexConnectionPair>[] = [];
    const sent = (behaviour.sent ??= { sequence: 0 });
+   const epochOf = (): string => (behaviour.sameServer ? EPOCH : `epoch-${pairs.length}`);
    const port = makeFakeDataPort({
       connect: () => {
          const pair = makeDuplexConnectionPair();
          pairs.push(pair);
-         recordingServer(pair.left, calls, behaviour);
+         recordingServer(pair.left, calls, behaviour, epochOf());
          return pair.right;
       },
       logger
@@ -499,7 +539,7 @@ function harness(
             .left.sendNotification(`${DATA_SERVER_WIRE_PREFIX}onDocumentDirtyChanged`, { uri, text: { version: 1, hash: '', dirty } }),
       notifyUpdated: (uri, text, sourceClientId, reason = 'changed', version = 1) =>
          pairs.at(-1)!.left.sendNotification(`${DATA_SERVER_WIRE_PREFIX}onDocumentUpdated`, {
-            document: document(uri, version, undefined, text),
+            document: document(uri, version, undefined, text, version, epochOf()),
             sourceClientId,
             reason,
             sequence: ++sent.sequence
@@ -626,7 +666,7 @@ function deletionsOf(events: DataEvents<ProbeElement>): TransferDocumentDeletedE
 describe('DataConnection.lifecycle hooks', () => {
    it('reports connecting then ready around the two waits', async () => {
       const pair = makeDuplexConnectionPair();
-      recordingServer(pair.left, [], {});
+      recordingServer(pair.left, [], {}, EPOCH);
       const port = makeFakeDataPort({ connect: () => pair.right });
       const steps: string[] = [];
       const connection = new DataConnection<ProbeElement>(port, new DataEvents<ProbeElement>(), {
@@ -1120,41 +1160,133 @@ describe('DataSession after a dropped connection', () => {
       ['a save', 'save'],
       ['a persist', 'persist'],
       ['a deletion', 'delete']
-   ] as const)('refuses %s gated on a version from before a restore, and sends nothing', async (_name, method) => {
-      const { connection, calls, dropTransport, dispose } = harness();
+   ] as const)(
+      'sends %s gated on a version from before a restart with its epoch, which the restarted server refuses',
+      async (_name, method) => {
+         const { connection, calls, dropTransport, dispose } = harness();
+         try {
+            const panel = connection.createSession('panel', 'panel');
+            const opened = await panel.openDocument({ uri: URI_A });
+            const baseVersion = opened.model!.version;
+            const baseEpoch = opened.epoch;
+
+            dropTransport();
+            const sent =
+               method === 'update'
+                  ? panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion, baseEpoch })
+                  : method === 'updates'
+                    ? panel.updateDocuments({ updates: [{ uri: URI_A, model: MODEL, baseVersion, baseEpoch }] })
+                    : method === 'save'
+                      ? panel.saveDocument({ uri: URI_A, model: MODEL, baseVersion, baseEpoch })
+                      : method === 'persist'
+                        ? panel.persistDocument({ uri: URI_A, baseVersion, baseEpoch })
+                        : panel.deleteDocument({ uri: URI_A, baseVersion, baseEpoch });
+
+            await expect(sent).rejects.toThrow(ConflictError);
+            expect(of(calls, method)).toHaveLength(1);
+         } finally {
+            dispose();
+         }
+      }
+   );
+
+   it.each([
+      ['an update', 'update'],
+      ['an update of several documents', 'updates']
+   ] as const)('reads no base for %s gated on a version from before a restart', async (_name, method) => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, dropTransport, dispose } = harness(behaviour);
       try {
          const panel = connection.createSession('panel', 'panel');
-         await panel.openDocument({ uri: URI_A });
-         const baseVersion = asModelVersion(1);
-
+         const opened = await panel.openDocument({ uri: URI_A });
+         behaviour.versions = new Map([[URI_A, 2]]);
          dropTransport();
-         const sent =
-            method === 'update'
-               ? panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion })
-               : method === 'updates'
-                 ? panel.updateDocuments({ updates: [{ uri: URI_A, model: MODEL, baseVersion }] })
-                 : method === 'save'
-                   ? panel.saveDocument({ uri: URI_A, model: MODEL, baseVersion })
-                   : method === 'persist'
-                     ? panel.persistDocument({ uri: URI_A, baseVersion })
-                     : panel.deleteDocument({ uri: URI_A, baseVersion });
+         await panel.connected();
+         const reads: string[] = [];
+         behaviour.beforeRead = uri => reads.push(uri);
 
-         await expect(sent).rejects.toThrow(ConflictError);
-         expect(of(calls, method)).toEqual([]);
+         const update = { uri: URI_A, model: MODEL, baseVersion: opened.model!.version, baseEpoch: opened.epoch };
+         await expect(method === 'update' ? panel.updateDocument(update) : panel.updateDocuments({ updates: [update] })).rejects.toThrow(
+            ConflictError
+         );
+         expect({ reads, sent: of(calls, method).length }).toEqual({ reads: [], sent: 1 });
       } finally {
          dispose();
       }
    });
 
-   it('sends an update gated on a version from before a restore that found the text it last saw at that version', async () => {
-      const { connection, calls, dropTransport, dispose } = harness({ texts: new Map([[URI_A, 'clean']]) });
+   it('tells its listeners the epoch of each registration, and a reconnect to the same server as no restart', async () => {
+      const { connection, dropTransport, dispose } = harness({ sameServer: true });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const registrations: DataSessionRegisterEvent[] = [];
+         panel.onDidRegister(event => registrations.push(event));
+         await panel.connected();
+
+         dropTransport();
+         await panel.connected();
+
+         expect(registrations).toEqual([
+            { epoch: EPOCH, reconnected: false, restarted: false },
+            { epoch: EPOCH, reconnected: true, restarted: false }
+         ]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports no restart for a reconnect after a registration that never answered', async () => {
+      const held = gate();
+      const { connection, calls, dropTransport, dispose } = harness({ createGate: held.promise });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const registrations: DataSessionRegisterEvent[] = [];
+         panel.onDidRegister(event => registrations.push(event));
+         const first = panel.connected().catch(() => undefined);
+         await waitFor(() => of(calls, 'createSession').length === 1);
+
+         dropTransport();
+         held.release();
+         await first;
+         await panel.connected();
+
+         expect(registrations).toEqual([{ epoch: RESTARTED_EPOCH, reconnected: true, restarted: false }]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('tells its listeners of a reconnect to a restarted server before the documents restored on it', async () => {
+      const { connection, dropTransport, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const told: unknown[] = [];
+         panel.onDidRegister(event => told.push(event));
+         panel.onDidRestoreDocument(event => told.push(event.uri));
+         await panel.openDocument({ uri: URI_A });
+
+         dropTransport();
+         await panel.connected();
+
+         expect(told).toEqual([
+            { epoch: EPOCH, reconnected: false, restarted: false },
+            { epoch: RESTARTED_EPOCH, reconnected: true, restarted: true },
+            URI_A
+         ]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('sends an update gated on a version from before a reconnect to the same server', async () => {
+      const { connection, calls, dropTransport, dispose } = harness({ texts: new Map([[URI_A, 'clean']]), sameServer: true });
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.openDocument({ uri: URI_A });
          const before = calls.length;
 
          dropTransport();
-         const sent = panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: asModelVersion(1) });
+         const sent = panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: asModelVersion(1), baseEpoch: EPOCH });
 
          await expect(sent).resolves.toBeDefined();
          expect(of(calls.slice(before), 'update').map(call => call.uri)).toEqual([URI_A]);
@@ -1163,10 +1295,10 @@ describe('DataSession after a dropped connection', () => {
       }
    });
 
-   it("sends a persist gated on the version of another client's update after a restore that found that text", async () => {
+   it("sends a persist gated on the version of another client's update after a reconnect to the same server", async () => {
       const texts = new Map([[URI_A, 'clean']]);
       const versions = new Map([[URI_A, 1]]);
-      const { connection, events, calls, dropTransport, notifyUpdated, dispose } = harness({ texts, versions });
+      const { connection, events, calls, dropTransport, notifyUpdated, dispose } = harness({ texts, versions, sameServer: true });
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.openDocument({ uri: URI_A });
@@ -1178,46 +1310,10 @@ describe('DataSession after a dropped connection', () => {
          const before = calls.length;
 
          dropTransport();
-         const sent = panel.persistDocument({ uri: URI_A, baseVersion: asModelVersion(2) });
+         const sent = panel.persistDocument({ uri: URI_A, baseVersion: asModelVersion(2), baseEpoch: EPOCH });
 
          await expect(sent).resolves.toBeDefined();
          expect(of(calls.slice(before), 'persist').map(call => call.uri)).toEqual([URI_A]);
-      } finally {
-         dispose();
-      }
-   });
-
-   it('refuses an update gated on a version from before a restore that found the text it last saw at another version', async () => {
-      const versions = new Map([[URI_A, 1]]);
-      const { connection, calls, dropTransport, dispose } = harness({ texts: new Map([[URI_A, 'clean']]), versions });
-      try {
-         const panel = connection.createSession('panel', 'panel');
-         await panel.openDocument({ uri: URI_A });
-         versions.set(URI_A, 3);
-
-         dropTransport();
-         const sent = panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: asModelVersion(1) });
-
-         await expect(sent).rejects.toThrow(ConflictError);
-         expect(of(calls, 'update')).toEqual([]);
-      } finally {
-         dispose();
-      }
-   });
-
-   it('refuses an update pending across a restore that could not open its document again, and sends nothing', async () => {
-      const behaviour: ServerBehaviour = {};
-      const { connection, calls, dropTransport, dispose } = harness(behaviour);
-      try {
-         const panel = connection.createSession('panel', 'panel');
-         await panel.openDocument({ uri: URI_A });
-         behaviour.failOpens = new Set([URI_A]);
-
-         dropTransport();
-         const sent = panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: asModelVersion(1) });
-
-         await expect(sent).rejects.toThrow(ConflictError);
-         expect(of(calls, 'update')).toEqual([]);
       } finally {
          dispose();
       }
@@ -1240,34 +1336,31 @@ describe('DataSession after a dropped connection', () => {
       }
    });
 
-   it('refuses a set of updates one of whose versions is from before its restore, and sends none of it', async () => {
-      const { connection, calls, dropTransport, dispose } = harness();
+   it('sends each member of a set with its own epoch, so a restarted server refuses one gated before the restart', async () => {
+      const { connection, dropTransport, dispose } = harness();
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.openDocument({ uri: URI_A });
-         await panel.openDocument({ uri: URI_B });
-         const kept = asModelVersion(1);
+         const kept = await panel.openDocument({ uri: URI_B });
          let sent: Promise<unknown> | undefined;
          panel.onDidRestoreDocument(event => {
-            const baseVersion = event.document?.model?.version;
-            if (event.uri === URI_A && baseVersion !== undefined) {
+            const reopened = event.document;
+            if (event.uri === URI_A && reopened?.model) {
                sent = panel.updateDocuments({
                   updates: [
-                     { uri: URI_A, model: MODEL, baseVersion },
-                     { uri: URI_B, model: MODEL, baseVersion: kept }
+                     { uri: URI_A, model: MODEL, baseVersion: reopened.model.version, baseEpoch: reopened.epoch },
+                     { uri: URI_B, model: MODEL, baseVersion: kept.model!.version, baseEpoch: kept.epoch }
                   ]
                });
                // Handled at once, since the refusal can land before the test awaits it.
                sent.catch(() => undefined);
             }
          });
-         const before = calls.length;
 
          dropTransport();
          await waitFor(() => sent !== undefined, { message: 'A never restored' });
 
          await expect(sent).rejects.toThrow(ConflictError);
-         expect(of(calls.slice(before), 'updates')).toEqual([]);
       } finally {
          dispose();
       }
@@ -1281,9 +1374,9 @@ describe('DataSession after a dropped connection', () => {
          await panel.openDocument({ uri: URI_B });
          let sent: Promise<unknown> | undefined;
          panel.onDidRestoreDocument(event => {
-            const baseVersion = event.document?.model?.version;
-            if (event.uri === URI_A && baseVersion !== undefined) {
-               sent = panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion });
+            const reopened = event.document;
+            if (event.uri === URI_A && reopened?.model) {
+               sent = panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: reopened.model.version, baseEpoch: reopened.epoch });
             }
          });
 
@@ -1293,36 +1386,6 @@ describe('DataSession after a dropped connection', () => {
 
          await expect(sent).resolves.toBeDefined();
          expect(of(calls.slice(before), 'update').map(call => call.uri)).toEqual([URI_A]);
-      } finally {
-         dispose();
-      }
-   });
-
-   it('forgets the restores of a document once it is closed', async () => {
-      class CountingSession extends DataSession<ProbeElement> {
-         get restoredUris(): number {
-            return this.restores.size;
-         }
-      }
-      let session: CountingSession | undefined;
-      const { connection, dropTransport, dispose } = harness({}, undefined, undefined, undefined, undefined, (clientId, host, label) => {
-         session = new CountingSession(clientId, host, label);
-         return session;
-      });
-      try {
-         const panel = connection.createSession('panel', 'panel');
-         await panel.openDocument({ uri: URI_A });
-         let restored = false;
-         panel.onDidRestoreDocument(() => {
-            restored = true;
-         });
-         dropTransport();
-         await waitFor(() => restored, { message: 'A never restored' });
-         expect(session?.restoredUris).toBe(1);
-
-         await panel.closeDocument({ uri: URI_A });
-
-         expect(session?.restoredUris).toBe(0);
       } finally {
          dispose();
       }
@@ -1349,6 +1412,25 @@ describe('DataSession after a dropped connection', () => {
          // queued when the harness tears the pair down fails its write outside
          // any caller, as an unhandled rejection.
          await panel.connected();
+      } finally {
+         dispose();
+      }
+   });
+
+   it('reports the unsaved write of a server sending no text lost when the restarted server re-opens at its answered version', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, port, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         const written = await panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: 'any' });
+
+         // Numbered afresh, the restarted server reaches the same version for other text.
+         behaviour.versions = new Map([[URI_A, written.model!.version]]);
+         dropTransport();
+         await panel.connected();
+
+         expect(port.reported.map(entry => entry.message.code)).toEqual([DATA_SESSION_UNSAVED_LOST.code]);
       } finally {
          dispose();
       }
@@ -1397,7 +1479,7 @@ describe('DataSession after a dropped connection', () => {
 
    it('reports nothing for a write the re-opened document still holds', async () => {
       const versions = new Map([[URI_A, 5]]);
-      const { connection, calls, port, dropTransport, dispose } = harness({ versions });
+      const { connection, calls, port, dropTransport, dispose } = harness({ versions, sameServer: true });
       try {
          const panel = connection.createSession('panel', 'panel');
          await panel.openDocument({ uri: URI_A });
@@ -1441,7 +1523,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          const before = calls.length;
 
          dropTransport();
@@ -1462,8 +1544,13 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         const first = await panel.updateDocument({ uri: URI_A, model: 'first', baseVersion: opened.model!.version });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: first.model!.version });
+         const first = await panel.updateDocument({
+            uri: URI_A,
+            model: 'first',
+            baseVersion: opened.model!.version,
+            baseEpoch: opened.epoch
+         });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: first.model!.version, baseEpoch: first.epoch });
          const before = calls.length;
 
          dropTransport();
@@ -1496,7 +1583,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          const before = calls.length;
 
          dropTransport();
@@ -1541,7 +1628,7 @@ describe('DataSession after a dropped connection', () => {
          texts.set(URI_A, 'theirs');
          versions.set(URI_A, 7);
          const read = await (await panel.connected()).getModelDocument({ uri: URI_A });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: read.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: read.model!.version, baseEpoch: read.epoch });
          const before = calls.length;
 
          dropTransport();
@@ -1567,8 +1654,8 @@ describe('DataSession after a dropped connection', () => {
          const openedB = await panel.openDocument({ uri: URI_B });
          await panel.updateDocuments({
             updates: [
-               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version },
-               { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version }
+               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version, baseEpoch: openedA.epoch },
+               { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version, baseEpoch: openedB.epoch }
             ]
          });
          const before = calls.length;
@@ -1610,7 +1697,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          const before = calls.length;
 
          dropTransport();
@@ -1640,7 +1727,7 @@ describe('DataSession after a dropped connection', () => {
          const panel = connection.createSession('panel', 'panel');
          await panel.openDocument({ uri: URI_A });
          versions.set(URI_A, 9);
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: asModelVersion(5) });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: asModelVersion(5), baseEpoch: EPOCH });
          const before = calls.length;
 
          dropTransport();
@@ -1666,8 +1753,8 @@ describe('DataSession after a dropped connection', () => {
          const openedB = await panel.openDocument({ uri: URI_B });
          await panel.updateDocuments({
             updates: [
-               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version },
-               { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version }
+               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version, baseEpoch: openedA.epoch },
+               { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version, baseEpoch: openedB.epoch }
             ]
          });
          const before = calls.length;
@@ -1696,11 +1783,16 @@ describe('DataSession after a dropped connection', () => {
          const openedA = await panel.openDocument({ uri: URI_A });
          const openedB = await panel.openDocument({ uri: URI_B });
          // B first, alone, so the session met B before A.
-         const single = await panel.updateDocument({ uri: URI_B, model: 'single-b', baseVersion: openedB.model!.version });
+         const single = await panel.updateDocument({
+            uri: URI_B,
+            model: 'single-b',
+            baseVersion: openedB.model!.version,
+            baseEpoch: openedB.epoch
+         });
          await panel.updateDocuments({
             updates: [
-               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version },
-               { uri: URI_B, model: 'edited-b', baseVersion: single.model!.version }
+               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version, baseEpoch: openedA.epoch },
+               { uri: URI_B, model: 'edited-b', baseVersion: single.model!.version, baseEpoch: single.epoch }
             ]
          });
 
@@ -1735,8 +1827,8 @@ describe('DataSession after a dropped connection', () => {
          const openedB = await panel.openDocument({ uri: URI_B });
          await panel.updateDocuments({
             updates: [
-               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version },
-               { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version }
+               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version, baseEpoch: openedA.epoch },
+               { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version, baseEpoch: openedB.epoch }
             ]
          });
          const before = calls.length;
@@ -1763,7 +1855,7 @@ describe('DataSession after a dropped connection', () => {
          const opened = await panel.openDocument({ uri: URI_A });
          behaviour.answerWithoutModel = true;
 
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
 
          expect(port.reported.map(entry => entry.message.code)).toEqual([DATA_SESSION_ANSWER_WITHOUT_MODEL.code]);
          expect(port.reported[0].message.params).toEqual({ uri: URI_A });
@@ -1806,7 +1898,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
 
          dropTransport();
          texts.set(URI_A, 'clean');
@@ -1833,7 +1925,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          const before = calls.length;
          const held = gate();
          behaviour.updateGate = held.promise;
@@ -1865,8 +1957,8 @@ describe('DataSession after a dropped connection', () => {
          const openedB = await panel.openDocument({ uri: URI_B });
          await panel.updateDocuments({
             updates: [
-               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version },
-               { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version }
+               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version, baseEpoch: openedA.epoch },
+               { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version, baseEpoch: openedB.epoch }
             ]
          });
          const before = calls.length;
@@ -1895,7 +1987,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          const before = calls.length;
          const held = gate();
          behaviour.openGate = held.promise;
@@ -1926,7 +2018,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          const before = calls.length;
          const held = gate();
          behaviour.openGate = held.promise;
@@ -1954,9 +2046,9 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         const saved = panel.saveDocument({ uri: URI_A, model: 'clean', baseVersion: opened.model!.version });
+         const saved = panel.saveDocument({ uri: URI_A, model: 'clean', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          await waitFor(() => of(calls, 'save').length === 1, { message: 'the save never reached the server' });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          saving.release();
          await saved;
          const before = calls.length;
@@ -1981,7 +2073,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         const late = panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         const late = panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          await waitFor(() => of(calls, 'update').length === 1, { message: 'the write never reached the server' });
          // The save persists the write, whose answer then comes last.
          versions.set(URI_A, 2);
@@ -2012,7 +2104,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         const late = panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         const late = panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          await waitFor(() => of(calls, 'update').length === 1, { message: 'the write never reached the server' });
          // The write is applied, and a repeat open answers at its version first.
          versions.set(URI_A, 2);
@@ -2041,8 +2133,13 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         const edited = await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
-         await panel.persistDocument({ uri: URI_A, baseVersion: edited.model!.version });
+         const edited = await panel.updateDocument({
+            uri: URI_A,
+            model: 'edited',
+            baseVersion: opened.model!.version,
+            baseEpoch: opened.epoch
+         });
+         await panel.persistDocument({ uri: URI_A, baseVersion: edited.model!.version, baseEpoch: edited.epoch });
          const before = calls.length;
 
          // The re-open finds another client's text, which a record of the
@@ -2068,7 +2165,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         const late = panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         const late = panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          await waitFor(() => of(calls, 'update').length === 1, { message: 'the write never reached the server' });
          // The persist wrote the text at version 1, and the write lands at 2
          // before the persist answers with the model built from it.
@@ -2108,7 +2205,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         const write = panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         const write = panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          await waitFor(() => of(calls, 'update').length === 1, { message: 'the write never reached the server' });
          const persisted = panel.persistDocument({ uri: URI_A, baseVersion: 'any' });
          await waitFor(() => of(calls, 'persist').length === 1, { message: 'the persist never reached the server' });
@@ -2140,8 +2237,8 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         await panel.saveDocument({ uri: URI_A, model: 'clean', baseVersion: opened.model!.version });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.saveDocument({ uri: URI_A, model: 'clean', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          const before = calls.length;
 
          dropTransport();
@@ -2163,9 +2260,9 @@ describe('DataSession after a dropped connection', () => {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
          versions.set(URI_A, 2);
-         await panel.saveDocument({ uri: URI_A, model: 'saved', baseVersion: opened.model!.version });
+         await panel.saveDocument({ uri: URI_A, model: 'saved', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          // The server holds the text already, so the write mints no version.
-         await panel.updateDocument({ uri: URI_A, model: 'saved', baseVersion: asModelVersion(2) });
+         await panel.updateDocument({ uri: URI_A, model: 'saved', baseVersion: asModelVersion(2), baseEpoch: EPOCH });
          const before = calls.length;
 
          // The re-open finds another client's text, which a record of the
@@ -2188,14 +2285,14 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         await panel.saveDocument({ uri: URI_A, model: 'clean', baseVersion: opened.model!.version });
+         await panel.saveDocument({ uri: URI_A, model: 'clean', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
 
          // The restarted server numbers afresh, below the save's v5.
          dropTransport();
          versions.set(URI_A, 1);
          await panel.connected();
          versions.set(URI_A, 2);
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: asModelVersion(1) });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: asModelVersion(1), baseEpoch: RESTARTED_EPOCH });
          const before = calls.length;
 
          dropTransport();
@@ -2220,13 +2317,18 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         const earlier = panel.updateDocument({ uri: URI_A, model: 'earlier', baseVersion: opened.model!.version });
+         const earlier = panel.updateDocument({
+            uri: URI_A,
+            model: 'earlier',
+            baseVersion: opened.model!.version,
+            baseEpoch: opened.epoch
+         });
          await waitFor(() => of(calls, 'update').length === 1, { message: 'the first write never reached the server' });
          const saving = panel.saveDocument({ uri: URI_A, model: 'saved', baseVersion: 'any' });
          await waitFor(() => of(calls, 'save').length === 1, { message: 'the save never reached the server' });
          behaviour.updateGate = undefined;
          versions.set(URI_A, 6);
-         await panel.updateDocument({ uri: URI_A, model: 'later', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'later', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          // The save answers v4 and the earlier write v5, both below the later
          // write's v6.
          versions.set(URI_A, 4);
@@ -2257,11 +2359,11 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         const first = panel.updateDocument({ uri: URI_A, model: 'first', baseVersion: opened.model!.version });
+         const first = panel.updateDocument({ uri: URI_A, model: 'first', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          await waitFor(() => of(calls, 'update').length === 1, { message: 'the first write never reached the server' });
          behaviour.updateGate = undefined;
          versions.set(URI_A, 3);
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          versions.set(URI_A, 2);
          held.release();
          await first;
@@ -2286,13 +2388,13 @@ describe('DataSession after a dropped connection', () => {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
          versions.set(URI_A, 6);
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
 
          dropTransport();
          versions.set(URI_A, 1);
          await panel.connected();
          versions.set(URI_A, 2);
-         await panel.updateDocument({ uri: URI_A, model: 'later', baseVersion: asModelVersion(1) });
+         await panel.updateDocument({ uri: URI_A, model: 'later', baseVersion: asModelVersion(1), baseEpoch: RESTARTED_EPOCH });
          const before = calls.length;
 
          dropTransport();
@@ -2315,7 +2417,7 @@ describe('DataSession after a dropped connection', () => {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
          versions.set(URI_A, 6);
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
 
          // The re-open answers v1, and the write sent again v2.
          dropTransport();
@@ -2325,7 +2427,7 @@ describe('DataSession after a dropped connection', () => {
          await panel.connected();
          behaviour.beforeWatch = undefined;
          versions.set(URI_A, 3);
-         await panel.updateDocument({ uri: URI_A, model: 'later', baseVersion: asModelVersion(2) });
+         await panel.updateDocument({ uri: URI_A, model: 'later', baseVersion: asModelVersion(2), baseEpoch: RESTARTED_EPOCH });
          const before = calls.length;
 
          dropTransport();
@@ -2348,7 +2450,7 @@ describe('DataSession after a dropped connection', () => {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
          versions.set(URI_A, 6);
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
 
          dropTransport();
          texts.set(URI_A, 'clean');
@@ -2357,7 +2459,7 @@ describe('DataSession after a dropped connection', () => {
          await panel.connected();
          behaviour.refuseUpdates = undefined;
          versions.set(URI_A, 2);
-         await panel.updateDocument({ uri: URI_A, model: 'later', baseVersion: asModelVersion(1) });
+         await panel.updateDocument({ uri: URI_A, model: 'later', baseVersion: asModelVersion(1), baseEpoch: RESTARTED_EPOCH });
          const before = calls.length;
 
          dropTransport();
@@ -2376,7 +2478,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          await notifyDirty(URI_A, true);
          await waitFor(() => connection.toldDirty.get(URI_A) === true, { message: 'the dirty flip never arrived' });
          const before = calls.length;
@@ -2411,7 +2513,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          const heard = new Promise<void>(resolve => events.onDidUpdateDocument(() => resolve()));
          texts.set(URI_A, 'theirs');
          await notifyUpdated(URI_A, 'theirs', 'other');
@@ -2437,7 +2539,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          let heard = 0;
          events.onDidUpdateDocument(() => heard++);
          await notifyUpdated(URI_A, 'an earlier write', 'panel');
@@ -2466,7 +2568,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: spelled });
-         await panel.updateDocument({ uri: spelled, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: spelled, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          await notifyDirty(canonical, false);
          await waitFor(() => connection.toldDirty.get(canonical) === false, { message: 'the clean flip never arrived' });
          const before = calls.length;
@@ -2494,7 +2596,7 @@ describe('DataSession after a dropped connection', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: spelled });
-         await panel.updateDocument({ uri: spelled, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: spelled, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
 
          // The server resolves the caller's URI to another file after the
          // drop, as a link retargeted meanwhile does.
@@ -3525,8 +3627,8 @@ describe('DataConnection.watchDocument', () => {
       const calls: ServerCall[] = [];
       const first = makeDuplexConnectionPair();
       const shared = makeDuplexConnectionPair();
-      recordingServer(first.left, calls, {});
-      recordingServer(shared.left, calls, options.behaviour ?? {});
+      recordingServer(first.left, calls, {}, EPOCH);
+      recordingServer(shared.left, calls, options.behaviour ?? {}, 'epoch-2');
       let connects = 0;
       const port = makeFakeDataPort({ connect: () => (++connects === 1 ? first.right : shared.right) });
       class ThrowingConnection extends DataConnection<ProbeElement> {
@@ -4184,7 +4286,7 @@ describe('DataConnection.reportError', () => {
 describe('DataConnectionWithEvents', () => {
    function eventsHarness(): { connection: DataConnectionWithEvents<ProbeElement>; notify: (uri: string) => void; dispose(): void } {
       const pair = makeDuplexConnectionPair();
-      recordingServer(pair.left, [], {});
+      recordingServer(pair.left, [], {}, EPOCH);
       const fakePort = makeFakeDataPort({ connect: () => pair.right });
       const connection = new DataConnectionWithEvents<ProbeElement>(fakePort);
       return {
@@ -4698,7 +4800,7 @@ describe('DataSession.restore and the dirty state', () => {
          const flips = dirtyFlips(events);
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          await notifyDirty(URI_A, true);
          await waitFor(() => flips.length === 1);
 
@@ -5177,7 +5279,7 @@ describe('DataSession when a document is deleted', () => {
       try {
          const panel = connection.createSession('panel', 'panel');
          const opened = await panel.openDocument({ uri: URI_A });
-         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version });
+         await panel.updateDocument({ uri: URI_A, model: 'edited', baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          const before = calls.length;
          const held = gate();
          behaviour.updateGate = held.promise;
@@ -5495,7 +5597,7 @@ describe('DataSession when a document is deleted', () => {
          const opened = await panel.openDocument({ uri: URI_A });
          const held = gate();
          behaviour.updateGate = held.promise;
-         const writing = panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: opened.model!.version });
+         const writing = panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: opened.model!.version, baseEpoch: opened.epoch });
          await waitFor(() => of(calls, 'update').length === 1);
 
          await deleted(target, URI_A);
@@ -5931,7 +6033,7 @@ describe('DataSession.deleteDocument', () => {
          await panel.updateDocument({ uri: URI_A, model: MODEL, baseVersion: 'any' });
          const before = calls.length;
 
-         await panel.deleteDocument({ uri: URI_A, baseVersion: asModelVersion(2) });
+         await panel.deleteDocument({ uri: URI_A, baseVersion: asModelVersion(2), baseEpoch: EPOCH });
          await tick();
 
          expect(of(calls.slice(before), 'delete')).toEqual([{ method: 'delete', clientId: panel.clientId, uri: URI_A, baseVersion: 2 }]);
@@ -6604,8 +6706,8 @@ describe('DataSession.restore of a document that is gone', () => {
          await connection.watchDocument(URI_B);
          await panel.updateDocuments({
             updates: [
-               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version },
-               { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version }
+               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version, baseEpoch: openedA.epoch },
+               { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version, baseEpoch: openedB.epoch }
             ]
          });
          const before = calls.length;
@@ -6636,8 +6738,8 @@ describe('DataSession.restore of a document that is gone', () => {
       const openedB = await panel.openDocument({ uri: URI_B });
       await panel.updateDocuments({
          updates: [
-            { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version },
-            { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version }
+            { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version, baseEpoch: openedA.epoch },
+            { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version, baseEpoch: openedB.epoch }
          ]
       });
       return panel;
@@ -6843,7 +6945,7 @@ describe('DataSession.restore of a document that is gone', () => {
          connect: () => {
             const pair = makeDuplexConnectionPair();
             pairs.push(pair);
-            recordingServer(pair.left, calls, behaviour);
+            recordingServer(pair.left, calls, behaviour, `epoch-${pairs.length}`);
             return pair.right;
          }
       });
@@ -6900,7 +7002,7 @@ describe('DataSession.restore of a document that is gone', () => {
          connect: () => {
             const pair = makeDuplexConnectionPair();
             pairs.push(pair);
-            recordingServer(pair.left, calls, behaviour);
+            recordingServer(pair.left, calls, behaviour, `epoch-${pairs.length}`);
             return pair.right;
          }
       });
@@ -6975,8 +7077,8 @@ describe('DataSession.restore of a document that is gone', () => {
          const openedB = await panel.openDocument({ uri: URI_B });
          await panel.updateDocuments({
             updates: [
-               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version },
-               { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version }
+               { uri: URI_A, model: 'edited-a', baseVersion: openedA.model!.version, baseEpoch: openedA.epoch },
+               { uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version, baseEpoch: openedB.epoch }
             ]
          });
          const before = calls.length;
@@ -7137,7 +7239,7 @@ describe('DataSession.restore of a document that is gone', () => {
          const panel = connection.createSession('panel', 'panel');
          await panel.openDocument({ uri: URI_A });
          const openedB = await panel.openDocument({ uri: URI_B });
-         await panel.updateDocument({ uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version });
+         await panel.updateDocument({ uri: URI_B, model: 'edited-b', baseVersion: openedB.model!.version, baseEpoch: openedB.epoch });
          await notifyDirty(URI_A, false);
          await waitFor(() => connection.toldDirty.get(URI_A) === false, { message: 'the clean state never arrived' });
          const flips: unknown[] = [];

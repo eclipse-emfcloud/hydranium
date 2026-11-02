@@ -46,14 +46,14 @@ function makeStubProxy(
       async getModelDocument(args) {
          calls.getModelDocument.push(args);
          if (options.absent) {
-            return TransferDocument.absent<FakeRoot>(args.uri);
+            return TransferDocument.absent<FakeRoot>(args.uri, 'epoch');
          }
-         return TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'echo', uri: args.uri }, 'hash');
+         return TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'echo', uri: args.uri }, 'hash', 'epoch');
       },
       async updateModelDocument(args) {
          calls.updateModelDocument.push(args);
          return {
-            ...TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'updated' }, 'hash'),
+            ...TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'updated' }, 'hash', 'epoch'),
             written: { version: 1 }
          };
       },
@@ -70,7 +70,8 @@ function makeStubProxy(
                $type: 'FakeRoot',
                name: typeof args.model === 'string' ? args.model : 'structured'
             },
-            'hash'
+            'hash',
+            'epoch'
          );
          return { ...saved, persisted: { version: 1 } };
       },
@@ -79,7 +80,7 @@ function makeStubProxy(
          if (options.failPersist) {
             throw new Error('disk refused');
          }
-         const persisted = TransferDocument.create<FakeRoot>(args.uri, 3, { $type: 'FakeRoot', name: 'persisted' }, 'hash');
+         const persisted = TransferDocument.create<FakeRoot>(args.uri, 3, { $type: 'FakeRoot', name: 'persisted' }, 'hash', 'epoch');
          return { ...persisted, persisted: { version: 3 } };
       },
       async deleteModelDocument(args) {
@@ -93,10 +94,11 @@ function makeStubProxy(
          if (options.failOpen) {
             throw new Error(options.failOpen);
          }
-         return TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'opened' }, 'hash');
+         return TransferDocument.create<FakeRoot>(args.uri, 1, { $type: 'FakeRoot', name: 'opened' }, 'hash', 'epoch');
       },
       async createSession(args) {
          calls.sequence.push(`session ${args.clientId}`);
+         return { epoch: 'epoch' };
       },
       async closeSession(args) {
          calls.sequence.push(`end ${args.clientId}`);
@@ -111,11 +113,19 @@ function makeStubProxy(
          }
          // Another client's write before the answer moves the state past the version the create made.
          const version = options.writeBeforeAnswer ? 4 : 3;
-         const document = TransferDocument.create<FakeRoot>(args.uri, version, { $type: 'FakeRoot', name: 'created' }, 'hash', undefined, {
+         const document = TransferDocument.create<FakeRoot>(
+            args.uri,
             version,
-            hash: 'hash',
-            dirty: true
-         });
+            { $type: 'FakeRoot', name: 'created' },
+            'hash',
+            'epoch',
+            undefined,
+            {
+               version,
+               hash: 'hash',
+               dirty: true
+            }
+         );
          return { ...document, created: { version: asModelVersion(3) } };
       },
       closeModelDocument: () => Promise.reject(new Error('not exercised')),

@@ -78,6 +78,6 @@ function createPersisted(
 ): Promise<unknown> {
    return withClientSession(server, clientId, async () => {
       const created = await server.createModelDocument({ uri, clientId, text });
-      return server.persistModelDocument({ uri, clientId, baseVersion: created.created.version });
+      return server.persistModelDocument({ uri, clientId, baseVersion: created.created.version, baseEpoch: created.epoch });
    });
 }

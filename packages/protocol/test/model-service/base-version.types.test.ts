@@ -40,7 +40,7 @@ declare const liveVersion: number;
 
 function typeAssertions(): void {
    const snapshot = TransferDocument.assertLoaded(
-      TransferDocument.create<Root>(URI_A, 7, { $type: 'TypeOne' }, 'hash', [], { version: 8, hash: 'text', dirty: true })
+      TransferDocument.create<Root>(URI_A, 7, { $type: 'TypeOne' }, 'hash', 'epoch', [], { version: 8, hash: 'text', dirty: true })
    );
 
    // Accepted: the version a read returned, sent straight back.
@@ -48,7 +48,8 @@ function typeAssertions(): void {
       uri: URI_A,
       clientId: CLIENT,
       model: { $type: 'TypeOne' },
-      baseVersion: snapshot.model.version
+      baseVersion: snapshot.model.version,
+      baseEpoch: snapshot.epoch
    };
    void fromRead;
 
@@ -86,6 +87,15 @@ function typeAssertions(): void {
    // @ts-expect-error the opt-out is one specific word, not any string
    const misspelled: BaseVersion = 'unchecked';
    void misspelled;
+
+   // @ts-expect-error a version without the epoch it was numbered in
+   const unnumbered: TransferUpdateDocumentArgs<Root> = {
+      uri: URI_A,
+      clientId: CLIENT,
+      model: { $type: 'TypeOne' },
+      baseVersion: snapshot.model.version
+   };
+   void unnumbered;
 
    // @ts-expect-error omitting it is a compile error, which is why it is required
    const omitted: TransferUpdateDocumentArgs<Root> = { uri: URI_A, clientId: CLIENT, model: { $type: 'TypeOne' } };

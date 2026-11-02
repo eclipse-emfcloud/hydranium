@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type CanonicalUri, type TextVersion, textHash } from '@hydranium/protocol';
+import { type CanonicalUri, randomUuid, type TextVersion, textHash } from '@hydranium/protocol';
 import { type TextDocument } from 'vscode-languageserver-textdocument';
 
 /** What {@link TextLedger} holds for a document: where its version sequence stands, kept across closes and reopens. */
@@ -26,6 +26,12 @@ export interface TextRecord {
  * text pass the base-version gate. Authors last only until the release.
  */
 export interface TextLedger {
+   /**
+    * Names this ledger's sequences to clients, so a version from another
+    * ledger, as a restarted server's, is told apart from one of these. A
+    * ledger whose records outlive the process keeps its epoch with them.
+    */
+   readonly epoch: string;
    /**
     * The version a first open of `key` with `text` starts at: the record's
     * version when the text is unchanged, one step on when it changed;
@@ -50,6 +56,7 @@ export interface TextLedger {
 }
 
 export class DefaultTextLedger implements TextLedger {
+   readonly epoch: string = randomUuid();
    protected readonly records = new Map<CanonicalUri, TextRecord>();
    protected readonly authors = new Map<CanonicalUri, string[]>();
    protected readonly hashes = new WeakMap<TextDocument, { readonly version: number; readonly hash: string }>();
