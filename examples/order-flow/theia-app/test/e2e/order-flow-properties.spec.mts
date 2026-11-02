@@ -24,6 +24,9 @@
 
 import { expect } from '@playwright/test';
 import { type TheiaApp, TheiaTextEditor } from '@theia/playwright';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { loadOrderFlowApp, openPropertiesPanel, PROPERTIES_PANEL as PANEL, selectFile, test } from './order-flow-app.mjs';
 
 /**
@@ -50,7 +53,16 @@ test.describe.serial('order-flow properties panel in Theia', () => {
    let app: TheiaApp;
 
    test.beforeAll(async ({ playwright, browser }) => {
-      app = await loadOrderFlowApp({ playwright, browser });
+      // This suite observes dirty state until an explicit editor save. A
+      // diagram's autosave would persist the same document in the meantime.
+      const overlay = mkdtempSync(join(tmpdir(), 'order-flow-properties-settings-'));
+      try {
+         mkdirSync(join(overlay, '.theia'));
+         writeFileSync(join(overlay, '.theia', 'settings.json'), JSON.stringify({ 'files.autoSave': 'off' }));
+         app = await loadOrderFlowApp({ playwright, browser }, [overlay]);
+      } finally {
+         rmSync(overlay, { recursive: true, force: true });
+      }
    });
 
    test.afterAll(async () => {
