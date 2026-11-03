@@ -242,29 +242,96 @@ function sameClients(taken: readonly string[] | undefined, current: readonly str
    return taken !== undefined && taken.length === current.length && taken.every((client, i) => client === current[i]);
 }
 
+/**
+ * Build coordination used by every server head. Replacements must preserve
+ * document-phase delivery, version-aware waits and locked updates; phase
+ * notification mechanics belong to the implementation.
+ */
 export interface HydraniumDocumentBuilder extends DocumentBuilder {
+   /**
+    * Stage a diagnostic reason for the next update; undefined clears a staged
+    * reason.
+    */
    markNextReason(reason: string | undefined): void;
+   /**
+    * Notify only after every listener of the document phase has run without
+    * cancellation skipping one. Include the text version those listeners
+    * observed, even if a listener subsequently changed it.
+    */
    onDocumentPhaseDelivered(state: DocumentState, listener: DocumentPhaseDeliveredListener): Disposable;
+   /**
+    * Notify after a completed build, or after the lock drains following failed
+    * builds. Failures before one drain may share a notification. Listeners run
+    * synchronously and must not await another build.
+    */
    onBuildEnded(listener: BuildEndedListener): Disposable;
+   /**
+    * Whether an explicit build is synchronously invoking onUpdate listeners.
+    * Read before the listener’s first await to distinguish that path from
+    * update.
+    */
    isInsideBuildUpdate(): boolean;
+   /**
+    * Resolves without rejection once every active build has ended; undefined
+    * between builds. Overlapping builds remain represented until the last ends.
+    */
    readonly activeBuild: Promise<void> | undefined;
+   /** Describe the document and active build state for timeout diagnostics. */
    formatBuildStatus(uri: URI): string;
+   /**
+    * The final phase reached by rebuilds under the current validation policy.
+    * Must not name a phase those rebuilds never reach, or callers waiting for
+    * settled writes cannot finish.
+    */
    finalBuildState(): DocumentState;
+   /**
+    * Whether the build carrying this document validates it. Before a running
+    * build’s first phase, answer for the last build that carried it.
+    */
    shouldValidateDocument(document: LangiumDocument): boolean;
+   /**
+    * Wait for the workspace, or the document at uri, to reach the phase.
+    * Requeue a document that no build carries; rejectWhenStuck allows document
+    * waits to reject when repeated builds cannot advance it.
+    */
    waitUntil(state: DocumentState, cancelToken?: CancellationToken): Promise<void>;
+   /**
+    * Wait for the workspace, or the document at uri, to reach the phase.
+    * Requeue a document that no build carries; rejectWhenStuck allows document
+    * waits to reject when repeated builds cannot advance it.
+    */
    waitUntil(state: DocumentState, uri?: URI, cancelToken?: CancellationToken, options?: WaitUntilOptions): Promise<URI>;
+   /**
+    * Schedule changed and deleted URIs under the workspace write lock. The
+    * promise settles when the carrying build ends, including cancellation.
+    * Coincident requests may share a build; when merged, the latest change or
+    * deletion of a URI and latest supplied reason win.
+    */
    scheduleUpdate(changed: URI[], deleted: URI[], reason?: string): Promise<void>;
+   /**
+    * Return the owning build while its phase batch is being delivered,
+    * including across listener awaits; otherwise undefined.
+    */
    buildForBatch(documents: readonly LangiumDocument[]): RunningBuild | undefined;
+   /**
+    * Refresh a dependent after cause changed during a Linked phase listener.
+    * Reuse the cause’s running build and its later indexing and validation.
+    * Return whether the document reached Linked; return false when no running
+    * build can carry it or it remains unlinked.
+    */
    relinkInRunningBuild(document: LangiumDocument, cause: LangiumDocument, cancelToken: CancellationToken): Promise<boolean>;
+   /**
+    * Reparse from the current shared text, else disk, into the same document at
+    * Parsed. The caller holds the write lock and updates the authoritative text
+    * first.
+    */
    reparse(document: LangiumDocument, cancelToken?: CancellationToken): Promise<void>;
+   /**
+    * Reparse and link in place through Linked, rerunning per-document
+    * derivations. The caller is inside the Linked build phase, which carries
+    * later phases, and must also relink dependents whose nodes became stale.
+    */
    reparseAndRelink(document: LangiumDocument, cancelToken?: CancellationToken): Promise<void>;
-   notifyDocumentPhase(document: LangiumDocument, state: DocumentState, cancelToken: CancellationToken): Promise<void>;
-   notifyBuildPhase(
-      documents: LangiumDocument[],
-      state: DocumentState,
-      cancelToken: CancellationToken,
-      build?: RunningBuild
-   ): Promise<void>;
 }
 
 /**

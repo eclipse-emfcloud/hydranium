@@ -126,8 +126,7 @@ to `session.onDidRegister`. It fires before the restore events, and its
 
 How long the server keeps your unsaved text after a drop is its
 `releaseGraceMs`, an option of `DefaultHydraniumTextDocuments` in the server's
-shared
-module. A client that is back within it finds its edits still there.
+shared module. A client that is back within it finds its edits still there.
 
 ## In Theia
 

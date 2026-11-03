@@ -37,11 +37,17 @@ export const NO_LANGUAGE_FOR_STAND_IN = defineMessage(
 );
 
 /**
- * The registry surface the framework adds on top of Langium's
- * {@link LangiumDocuments}. A structural slot contract keeps a replacement
- * registry independent of the default implementation's protected state.
+ * The registry surface the framework adds on top of Langium's {@link
+ * LangiumDocuments}. A structural slot contract keeps a replacement registry
+ * independent of the default implementation's protected state.
  */
 export interface HydraniumLangiumDocuments extends LangiumDocuments {
+   /**
+    * Parse empty text into an unregistered probe. An explicit languageId
+    * selects the grammar independently of the URI; without it the URI must
+    * route to a registered language. Keep parse errors from mandatory syntax.
+    * The result is not persistent content and a later update may read its URI.
+    */
    createEmptyDocument(uri: URI, languageId?: string): LangiumDocument<AstNode>;
 }
 

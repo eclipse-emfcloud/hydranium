@@ -41,7 +41,17 @@ interface WithSerializer {
    serializer?: { Serializer?: Serializer };
 }
 
+/**
+ * Document creation with an explicit grammar for URIs that carry no language
+ * routing signal. Replacements must also report produced roots through
+ * VersionSyncService so the model ledger tracks the text each root describes.
+ */
 export interface HydraniumLangiumDocumentFactory extends LangiumDocumentFactory {
+   /**
+    * Parse under the registered languageId even when the URI routes to another
+    * grammar or none. Throws for an unregistered id. The returned document is
+    * not registered; callers decide whether it becomes workspace content.
+    */
    fromStringInLanguage<T extends AstNode = AstNode>(text: string, uri: URI, languageId: string): LangiumDocument<T>;
 }
 

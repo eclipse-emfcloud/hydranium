@@ -131,8 +131,21 @@ export interface HydraniumWorkspaceManagerOptions extends LogNameOptions {
    warnUnservedDocuments?: boolean;
 }
 
+/**
+ * Workspace startup and URI presentation shared by the server heads. Project
+ * discovery must precede indexing so documents are assigned to their projects
+ * during the first build.
+ */
 export interface HydraniumWorkspaceManager extends WorkspaceManager {
+   /**
+    * Settles when workspace initialization has finished; consumers await it
+    * before handling document opens.
+    */
    readonly workspaceInitialized: Promise<unknown>;
+   /**
+    * Format relative to the supplied workspace URI, or the first workspace
+    * folder. Return the URI string when no workspace folder is known.
+    */
    wsRelativePath(uri: URI | string, workspace?: string): string;
 }
 

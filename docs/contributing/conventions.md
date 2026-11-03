@@ -326,10 +326,9 @@ configurable name.
 ### Diagnostics are rendered once, before they are published
 
 `DefaultHydraniumDocumentBuilder` renders every diagnostic at `Validated`,
-before
-Langium publishes, so every head receives the same sentence and an adopter
-binds one slot; it is also the only placement that covers lexer and parser
-errors. The framework claims Langium's and chevrotain's linker, lexer and
+before Langium publishes, so every head receives the same sentence and an
+adopter binds one slot; it is also the only placement that covers lexer and
+parser errors. The framework claims Langium's and chevrotain's linker, lexer and
 parser sentences under `hydranium/core/*` codes, attached only when the text is
 byte-identical, so a reworded or custom diagnostic keeps its prose. "Every"
 holds for serialised builds: under `ModelServiceOptions.allowReentrantBuilds` a

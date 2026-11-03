@@ -46,7 +46,7 @@ type Register<P, A extends unknown[], R, E> = (handler: (params: P, ...rest: A) 
  */
 export function guardEditRequests(connection: Connection, services: LangiumSharedServices): void {
    const store = services.workspace.TextDocuments;
-   if (wrappedConnections.has(connection) || !supportsEditGuard(store)) {
+   if (wrappedConnections.has(connection) || !isEditGuardStore(store)) {
       return;
    }
    wrappedConnections.add(connection);
@@ -145,7 +145,7 @@ export function guardEditRequests(connection: Connection, services: LangiumShare
 type EditGuardStore = LangiumSharedServices['workspace']['TextDocuments'] &
    Pick<HydraniumTextDocuments, 'onDidReleaseDocument' | 'getAuthor' | 'isLanguageClientBehind' | 'version'>;
 
-function supportsEditGuard(store: LangiumSharedServices['workspace']['TextDocuments']): store is EditGuardStore {
+function isEditGuardStore(store: LangiumSharedServices['workspace']['TextDocuments']): store is EditGuardStore {
    const candidate = store as Partial<EditGuardStore>;
    return (
       typeof candidate.onDidReleaseDocument === 'function' &&

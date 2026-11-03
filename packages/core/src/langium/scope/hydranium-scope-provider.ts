@@ -96,12 +96,43 @@ export interface ScopeContext {
    readonly universalEntries: readonly AstNodeDescription[];
 }
 
+/**
+ * Reference resolution shared by LSP and non-textual heads. Protocol contexts
+ * and Langium references must use the same visibility rules and ordering.
+ */
 export interface HydraniumScopeProvider extends ScopeProvider {
+   /**
+    * Invalidate both global and project-filtered scope results before a change
+    * to indexed visibility can be observed by another reference.
+    */
    clearScopeCaches(): void;
+   /**
+    * Filter the supplied global scope by the source document’s project
+    * visibility and reference type, retaining own-project, dependency and
+    * universal tiers.
+    */
    getProjectScope(sourceUri: URI, globalScope: Scope, referenceType: string): Scope;
+   /**
+    * Build reference information from a protocol context, including synthetic
+    * containment when requested. Throws for an unresolvable source; use
+    * resolveReferenceSource when the actual source node is needed.
+    */
    referenceContextToInfo(ctx: ReferenceContext): ReferenceInfo;
+   /**
+    * Resolve the requested target through its context’s scope. Return undefined
+    * for a missing or unresolvable target; an invalid source context may throw.
+    */
    resolveReference(reference: ReferenceRequest): AstNode | undefined;
+   /**
+    * Resolve the source and walk its containment path into the actual tree.
+    * Return undefined at a missing step; do not fabricate the synthetic nodes
+    * used for scope queries.
+    */
    resolveReferenceSource(source: ReferenceSource | ReferenceContext): AstNode | undefined;
+   /**
+    * Return the ordering key shared by reference candidates and LSP completion,
+    * so both present descriptions in the same order.
+    */
    sortText(description: AstNodeDescription): string;
 }
 

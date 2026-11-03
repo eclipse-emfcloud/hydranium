@@ -77,7 +77,17 @@ export interface HydraniumDocumentUpdateHandlerOptions {
    readonly willSaveGateMs?: number;
 }
 
+/**
+ * LSP document events with a drain for deferred updates. Server settling calls
+ * the drain before waiting for builds, so a handler must not leave changes held
+ * only by a timer after it returns.
+ */
 export interface HydraniumDocumentUpdateHandler extends DocumentUpdateHandler {
+   /**
+    * Cancel any pending debounce and dispatch the accumulated changes and
+    * deletions. Does not wait for the resulting build; callers settle the
+    * builder separately.
+    */
    flushPending(): void;
 }
 

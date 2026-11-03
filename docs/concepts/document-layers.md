@@ -115,9 +115,8 @@ way back.
 
 One counter numbers a document's text: the text store's
 (`DefaultHydraniumTextDocuments`, carried as `TextDocument.version`). It moves
-exactly
-when the shared text changes and never goes back while the server runs. Every
-other version names one value of that counter:
+exactly when the shared text changes and never goes back while the server runs.
+Every other version names one value of that counter:
 
 - A **model version** (`ModelVersion`) is the value for the text a model was
   parsed from.

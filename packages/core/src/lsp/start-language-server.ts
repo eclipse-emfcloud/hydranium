@@ -50,6 +50,8 @@ export function assertLspHeadComposed(services: LangiumSharedServices): void {
       throw new Error(
          '[hydranium] the LSP head is starting without its shared module: `lsp.DocumentUpdateHandler` holds ' +
             `'${handler?.constructor?.name ?? 'nothing'}' without the required flushPending method. ` +
+            "Langium's default handler omits echo suppression for the server's own writes, the didChangeContent debounce, " +
+            'build-reason stamping and the last-client-close rebuild. ' +
             'Add `createLspServerSharedModule(context)` to the shared tier — as ' +
             '`sharedModules.extra` when composing through `createIntegrationServices`, or as an `inject(...)` argument ' +
             'after `createServerSharedModule(context)` — or supply a handler implementing `HydraniumDocumentUpdateHandler`.'

@@ -119,7 +119,7 @@ describe('DefaultHydraniumServiceRegistry', () => {
          } as unknown as LangiumSharedCoreServices;
       }
 
-      function twoLanguages(shared?: LangiumSharedCoreServices): HydraniumServiceRegistry {
+      function twoLanguages(shared?: LangiumSharedCoreServices): DefaultHydraniumServiceRegistry {
          const registry = new DefaultHydraniumServiceRegistry(shared);
          registry.register(makeServices<AlphaServices>('alpha', 'alpha', ['.a']));
          registry.register(makeServices<BetaServices>('beta', 'beta', ['.b']));

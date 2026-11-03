@@ -22,27 +22,52 @@ import type { LogNameOptions } from '../diagnostics/logger.js';
 import type { HydraniumLanguageServices } from '../language-module.js';
 import { type DescriptionTier, type TieredAstNodeDescription } from './scoped-ast-node-description.js';
 
+/**
+ * Descriptions with explicit visibility tiers and source segments. Each factory
+ * needs the owning document even for synthetic nodes, so descriptions retain a
+ * resolvable URI and AST path.
+ */
 export interface HydraniumAstNodeDescriptionProvider extends AstNodeDescriptionProvider {
+   /**
+    * Create a local-tier description, deriving the name when omitted. Use an
+    * explicit tier factory when exporting one node at several visibility
+    * levels.
+    */
    createDescription(node: AstNode, name: string | undefined, document?: LangiumDocument): TieredAstNodeDescription;
+   /**
+    * Describe a symbol visible only within its owning document; it must not
+    * enter the global index.
+    */
    createLocal(options: { readonly node: AstNode; readonly name: string; readonly document: LangiumDocument }): TieredAstNodeDescription;
+   /** Describe a symbol visible only within the named owning project. */
    createProject(options: {
       readonly node: AstNode;
       readonly name: string;
       readonly document: LangiumDocument;
       readonly projectId: string;
    }): TieredAstNodeDescription;
+   /** Describe a symbol exported by the named project for its dependents. */
    createPublic(options: {
       readonly node: AstNode;
       readonly name: string;
       readonly document: LangiumDocument;
       readonly projectId: string;
    }): TieredAstNodeDescription;
+   /** Describe a symbol visible independently of project ownership. */
    createUniversal(options: {
       readonly node: AstNode;
       readonly name: string;
       readonly document: LangiumDocument;
    }): TieredAstNodeDescription;
+   /**
+    * Return the name segment, falling back to the whole node. Restore a shed
+    * CST before computing it; return undefined when no source segment exists.
+    */
    nameSegmentOf(node: AstNode): DocumentSegment | undefined;
+   /**
+    * Return the whole node’s segment, restoring a shed CST first; return
+    * undefined when no source segment exists.
+    */
    selectionSegmentOf(node: AstNode): DocumentSegment | undefined;
 }
 

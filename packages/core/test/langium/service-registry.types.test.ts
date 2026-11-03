@@ -12,7 +12,7 @@ import type { ServerSharedServices } from '../../src/langium/module.js';
 import type { ServerSharedServicesMinimal } from '../../src/langium/shared-services.js';
 
 type Registry = ServerSharedServices['ServiceRegistry'];
-type PublicRegistry = Pick<Registry, keyof Registry>;
+type PublicRegistry = Omit<Pick<Registry, keyof Registry>, 'acceptSharedServices'>;
 
 function acceptsIndependentRegistry(registry: PublicRegistry): void {
    const full: ServerSharedServices['ServiceRegistry'] = registry;

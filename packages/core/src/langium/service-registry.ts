@@ -70,17 +70,64 @@ function isLanguageMetaData(arg: unknown): arg is TypedLanguageMetaData<LangiumC
  * an adopter need not inherit the framework implementation.
  */
 export interface HydraniumServiceRegistry<TServices extends LangiumCoreServices = LangiumCoreServices> extends ServiceRegistry {
+   /**
+    * Count successful registrations, including replacement of an already
+    * registered language. This is not the number of distinct languages.
+    */
    readonly registrations: number;
+   /**
+    * The currently registered language services, with the same service type as
+    * URI lookups.
+    */
    readonly all: readonly TServices[];
-   acceptSharedServices(services: LangiumSharedCoreServices): void;
+   /**
+    * Register or replace a language and invalidate derived routing results so
+    * later lookups see it.
+    */
    register(language: TServices): void;
+   /**
+    * For a typed metadata handle, look up its language id and return undefined
+    * on a miss. For a URI, prefer an open document’s registered language id,
+    * then file-name and extension routing; throw when no language answers.
+    */
    getServices<TMetaServices extends LangiumCoreServices>(metadata: TypedLanguageMetaData<TMetaServices>): TMetaServices | undefined;
+   /**
+    * For a typed metadata handle, look up its language id and return undefined
+    * on a miss. For a URI, prefer an open document’s registered language id,
+    * then file-name and extension routing; throw when no language answers.
+    */
    getServices(uri: URI): TServices;
+   /**
+    * Route a URI, URI string or an AST node’s owning document. Return undefined
+    * for an unrouteable target or a node without a document.
+    */
    getServicesFor(target: LanguageTarget | undefined): TServices | undefined;
+   /**
+    * Return services for the declared language id, or undefined when it is
+    * unregistered.
+    */
    getServicesById(languageId: string): TServices | undefined;
+   /**
+    * Return services registered for the extension, or undefined when none
+    * match.
+    */
    getServicesByExtension(extension: string): LangiumCoreServices | undefined;
+   /**
+    * Return every registered grammar that can produce the AST type from its
+    * entry rule, in registration order. A mentioned but unreachable type is not
+    * a match.
+    */
    getServicesByType(type: string): readonly TServices[];
+   /**
+    * Return the only producer of the AST type, or undefined for no producers or
+    * an ambiguous result.
+    */
    soleServicesByType(type: string): TServices | undefined;
+   /**
+    * Try the declared language id, then the target’s document, then the only
+    * registered language, then the sole producer of the type. Return undefined
+    * when no signal resolves.
+    */
    getLanguageFor(hint: { readonly languageId?: string; readonly target?: LanguageTarget; readonly type?: string }): TServices | undefined;
 }
 

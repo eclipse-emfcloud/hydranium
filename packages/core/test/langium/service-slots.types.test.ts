@@ -8,11 +8,14 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import type { ScopeComputation, WorkspaceLock } from '@hydranium/langium';
+import type { LangiumDocumentFactory, ScopeComputation, WorkspaceLock } from '@hydranium/langium';
 import type { CompletionProvider, DocumentUpdateHandler } from '@hydranium/langium/lsp';
 import type { Logger } from '@hydranium/protocol';
 import type { ServerAddedSharedServices, ServerSharedServices } from '../../src/langium/module.js';
 import type { ServerAddedServices, ServerLanguageServices } from '../../src/langium/language-module.js';
+import type { ServerSharedServicesMinimal } from '../../src/langium/shared-services.js';
+import type { HydraniumLangiumDocumentFactory } from '../../src/langium/workspace/hydranium-langium-document-factory.js';
+import type { HydraniumDocumentBuilder } from '../../src/langium/document-builder/document-builder.js';
 import type { LspServerAddedSharedServices } from '../../src/lsp/shared-module.js';
 
 type PublicContract<T> = T extends object ? Pick<T, keyof T> : T;
@@ -49,10 +52,28 @@ function requiresFlush(handler: DocumentUpdateHandler): void {
    void slot;
 }
 
+function requiresLanguageExplicitFactory(factory: LangiumDocumentFactory, replacement: HydraniumLangiumDocumentFactory): void {
+   // @ts-expect-error empty-document probes can select a language independently of the URI
+   const full: ServerSharedServices['workspace']['LangiumDocumentFactory'] = factory;
+   // @ts-expect-error the minimal services must carry the same language-explicit contract
+   const minimal: ServerSharedServicesMinimal['workspace']['LangiumDocumentFactory'] = factory;
+   const fullReplacement: ServerSharedServices['workspace']['LangiumDocumentFactory'] = replacement;
+   const minimalReplacement: ServerSharedServicesMinimal['workspace']['LangiumDocumentFactory'] = replacement;
+   void [full, minimal, fullReplacement, minimalReplacement];
+}
+
+function acceptsBuilderWithoutNotificationHooks(builder: Omit<HydraniumDocumentBuilder, 'notifyDocumentPhase' | 'notifyBuildPhase'>): void {
+   const full: ServerSharedServices['workspace']['DocumentBuilder'] = builder;
+   const minimal: ServerSharedServicesMinimal['workspace']['DocumentBuilder'] = builder;
+   void [full, minimal];
+}
+
 describe('service slots', () => {
    it('accepts public contracts without implementation inheritance', () => {
       expect(acceptsIndependentServices).toBeTypeOf('function');
       expect(acceptsInheritedContracts).toBeTypeOf('function');
       expect(requiresFlush).toBeTypeOf('function');
+      expect(requiresLanguageExplicitFactory).toBeTypeOf('function');
+      expect(acceptsBuilderWithoutNotificationHooks).toBeTypeOf('function');
    });
 });

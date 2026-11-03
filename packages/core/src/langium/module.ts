@@ -29,7 +29,10 @@ import { HydraniumConfigurationProvider } from './config/configuration-provider.
 import { DefaultHydraniumIndexManager, type HydraniumIndexManager } from './workspace/index-manager.js';
 import { DefaultHydraniumWorkspaceManager, type HydraniumWorkspaceManager } from './workspace/hydranium-workspace-manager.js';
 import { HydraniumWorkspaceLock } from './workspace/hydranium-workspace-lock.js';
-import { DefaultHydraniumLangiumDocumentFactory } from './workspace/hydranium-langium-document-factory.js';
+import {
+   DefaultHydraniumLangiumDocumentFactory,
+   type HydraniumLangiumDocumentFactory
+} from './workspace/hydranium-langium-document-factory.js';
 import { DefaultHydraniumLangiumDocuments, type HydraniumLangiumDocuments } from './workspace/langium-documents.js';
 import { type AdditionalDocumentContribution } from './workspace/additional-document-contribution.js';
 import { DefaultDocumentUriPolicy, type DocumentUriPolicy } from './workspace/document-uri-policy.js';
@@ -150,6 +153,8 @@ export interface ServerAddedSharedServices<
        * wanted by a scope provider querying a URI before the file exists.
        */
       /* override */ LangiumDocuments: HydraniumLangiumDocuments;
+      /** Empty-document probes can select a grammar independently of the URI. */
+      /* override */ LangiumDocumentFactory: HydraniumLangiumDocumentFactory;
       /**
        * Narrow Langium's `IndexManager` slot to the framework contract, which exposes
        * `getElementByName` / `resolveElement` / `resolveElementByName` — an O(1)
