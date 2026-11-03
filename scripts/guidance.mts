@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import ts from 'typescript-api';
 
 export function isGuidance(file: string): boolean {
@@ -48,7 +49,58 @@ export function missingNames(
    });
 }
 
-/** A backlink must be a comment inside a runnable test, not a string or a file-level decoration. */
+function literalBoolean(node: ts.Expression | undefined): boolean | undefined {
+   if (!node) return undefined;
+   if (ts.isParenthesizedExpression(node)) return literalBoolean(node.expression);
+   if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
+   if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
+   if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) {
+      const value = literalBoolean(node.operand);
+      return value === undefined ? undefined : !value;
+   }
+   return undefined;
+}
+
+/** Unknown conditions cannot establish that the evidence runs on the gate's platform. */
+function testChain(expression: ts.Expression): { root: string; runnable: boolean } | undefined {
+   if (ts.isIdentifier(expression)) {
+      return ['it', 'test', 'describe', 'suite'].includes(expression.text) ? { root: expression.text, runnable: true } : undefined;
+   }
+   if (ts.isPropertyAccessExpression(expression)) {
+      const chain = testChain(expression.expression);
+      if (!chain) return undefined;
+      return { ...chain, runnable: chain.runnable && ['concurrent', 'sequential', 'only', 'fails'].includes(expression.name.text) };
+   }
+   if (ts.isCallExpression(expression) && ts.isPropertyAccessExpression(expression.expression)) {
+      const chain = testChain(expression.expression.expression);
+      if (!chain) return undefined;
+      const modifier = expression.expression.name.text;
+      const condition = literalBoolean(expression.arguments[0]);
+      return {
+         ...chain,
+         runnable:
+            chain.runnable &&
+            (modifier === 'each' || (modifier === 'skipIf' && condition === false) || (modifier === 'runIf' && condition === true))
+      };
+   }
+   if (ts.isTaggedTemplateExpression(expression) && ts.isPropertyAccessExpression(expression.tag)) {
+      const chain = testChain(expression.tag.expression);
+      if (chain) return { ...chain, runnable: chain.runnable && expression.tag.name.text === 'each' };
+   }
+   return undefined;
+}
+
+function optionsAllowRun(options: ts.Expression | undefined): boolean {
+   if (!options || ts.isArrowFunction(options) || ts.isFunctionExpression(options)) return true;
+   if (!ts.isObjectLiteralExpression(options)) return false;
+   return options.properties.every(property => {
+      if (ts.isSpreadAssignment(property) || !property.name || ts.isComputedPropertyName(property.name)) return false;
+      const name = ts.isIdentifier(property.name) || ts.isStringLiteral(property.name) ? property.name.text : '';
+      return !['skip', 'todo'].includes(name) || (ts.isPropertyAssignment(property) && literalBoolean(property.initializer) === false);
+   });
+}
+
+/** A backlink must be a comment inside a statically runnable test, not a string or a file-level decoration. */
 function testClaims(file: string, text: string): string[] {
    if (!text.includes('guidance-claim:')) return [];
    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
@@ -57,10 +109,15 @@ function testClaims(file: string, text: string): string[] {
    function visit(node: ts.Node): void {
       for (const comment of [...(ts.getLeadingCommentRanges(text, node.pos) ?? []), ...(ts.getTrailingCommentRanges(text, node.end) ?? [])])
          comments.set(comment.pos, comment);
-      if (ts.isCallExpression(node) && /^(?:describe|it|test)\.(?:skip|todo)(?:\.|$)/.test(node.expression.getText(source))) return;
-      if (ts.isCallExpression(node) && /^(?:it|test)(?:\.each\([\s\S]*\))?$/.test(node.expression.getText(source))) {
-         for (const argument of node.arguments)
-            if (ts.isArrowFunction(argument) || ts.isFunctionExpression(argument)) bodies.push(argument.body);
+      if (ts.isCallExpression(node)) {
+         const chain = testChain(node.expression);
+         if (chain) {
+            if (!chain.runnable || !optionsAllowRun(node.arguments[1])) return;
+            if (chain.root === 'it' || chain.root === 'test') {
+               for (const argument of node.arguments)
+                  if (ts.isArrowFunction(argument) || ts.isFunctionExpression(argument)) bodies.push(argument.body);
+            }
+         }
       }
       ts.forEachChild(node, visit);
    }
@@ -110,8 +167,7 @@ export function checkGuidance(pages: ReadonlyMap<string, string>, files: readonl
    // whose private fields need not appear in a framework import or re-export.
    const upstream = `${root}/node_modules/langium/lib`;
    for (const file of readdirSync(upstream, { recursive: true, encoding: 'utf8' })) {
-      if (/\.[cm]?[jt]s$/.test(file))
-         for (const token of readFileSync(`${upstream}/${file}`, 'utf8').matchAll(/[\w$]+/g)) tokens.add(token[0]);
+      if (/\.[cm]?[jt]s$/.test(file)) addSourceNames(file, readFileSync(`${upstream}/${file}`, 'utf8'), tokens);
    }
    for (const file of files) {
       if (/\.(?:test|spec)\.[cm]?tsx?$/.test(file)) tests.set(file, readFileSync(`${root}/${file}`, 'utf8'));
@@ -125,13 +181,28 @@ export function checkGuidance(pages: ReadonlyMap<string, string>, files: readonl
             for (const key of Object.keys(manifest.exports ?? {})) if (key.startsWith('./')) packages.add(manifest.name + key.slice(1));
          }
       }
-      if (/\.[cm]?[jt]sx?$/.test(file) && !file.includes('/test/') && !file.includes('/fixtures/')) {
-         for (const token of readFileSync(`${root}/${file}`, 'utf8').matchAll(/[\w$]+/g)) tokens.add(token[0]);
+      if (
+         /\.[cm]?[jt]sx?$/.test(file) &&
+         !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(file) &&
+         !file.includes('/test/') &&
+         !file.includes('/fixtures/')
+      ) {
+         addSourceNames(file, readFileSync(`${root}/${file}`, 'utf8'), tokens);
       }
    }
    return [...guidance]
       .flatMap(([file, text]) => missingNames(text, files, tokens, packages, scripts).map(name => `${file}: missing guidance name ${name}`))
       .concat(claimErrors(guidance, tests));
+}
+
+/** Comments and string fixtures must not keep a removed source identifier alive. */
+function addSourceNames(file: string, text: string, tokens: Set<string>): void {
+   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest);
+   function visit(node: ts.Node): void {
+      if (ts.isIdentifier(node)) tokens.add(node.text);
+      ts.forEachChild(node, visit);
+   }
+   visit(source);
 }
 
 export function guidanceSelfTests(): void {
@@ -143,6 +214,61 @@ export function guidanceSelfTests(): void {
       if (!condition) throw new Error(`guidance self-test: ${name}`);
    };
    assert(claimErrors(pages, tests).length === 0, 'reciprocal claim');
+   for (const modifier of [
+      'concurrent',
+      'sequential',
+      'only',
+      'fails',
+      'each([1])',
+      'concurrent.each([1])',
+      'skipIf(false)',
+      'runIf(true)'
+   ]) {
+      assert(claimErrors(pages, new Map([['a.test.ts', test.replace('it(', `it.${modifier}(`)]])).length === 0, `runnable ${modifier}`);
+   }
+   for (const modifier of ['skipIf(true)', 'runIf(false)', 'skipIf(condition)', 'runIf(condition)', 'concurrent.skip', 'each([1]).skip']) {
+      assert(claimErrors(pages, new Map([['a.test.ts', test.replace('it(', `it.${modifier}(`)]])).length > 0, `disabled ${modifier}`);
+      assert(
+         claimErrors(pages, new Map([['a.test.ts', `describe.${modifier}('suite', () => { ${test} });`]])).length > 0,
+         `disabled suite ${modifier}`
+      );
+   }
+   for (const options of ['{ skip: true }', "{ skip: 'reason' }", '{ todo: true }', '{ skip: condition }', '{ ...options }', 'options']) {
+      assert(
+         claimErrors(pages, new Map([['a.test.ts', test.replace("'works',", `'works', ${options},`)]])).length > 0,
+         `disabled options ${options}`
+      );
+      assert(
+         claimErrors(pages, new Map([['a.test.ts', `describe('suite', ${options}, () => { ${test} });`]])).length > 0,
+         `disabled suite options ${options}`
+      );
+   }
+   assert(
+      claimErrors(pages, new Map([['a.test.ts', test.replace("'works',", "'works', { skip: false, todo: false },")]])).length === 0,
+      'enabled node options'
+   );
+   assert(
+      checkGuidance(
+         new Map([['AGENTS.md', '`SingleProjectManager`']]),
+         ['scripts/guidance.mts'],
+         fileURLToPath(new URL('../', import.meta.url))
+      ).some(error => error.includes('missing guidance name')),
+      'checker fixtures cannot supply a production name'
+   );
+   const sourceNames = new Set<string>();
+   addSourceNames(
+      'source.ts',
+      'const liveName = `deadTemplate`; // deadComment\nconst message = "deadString";\nconst template = `text ${liveMember.value}`;',
+      sourceNames
+   );
+   assert(
+      ['liveName', 'liveMember', 'value'].every(name => sourceNames.has(name)),
+      'source identifiers are indexed'
+   );
+   assert(
+      ['deadTemplate', 'deadComment', 'deadString'].every(name => !sourceNames.has(name)),
+      'prose and string literals are not identifiers'
+   );
    assert(claimErrors(new Map([['AGENTS.md', `\`\`\`html\n${page}\n\`\`\``]]), new Map()).length === 0, 'marker example is not a claim');
    assert(missingNames('`npm run gone`', [], new Set(), new Set(), new Set()).length === 1, 'removed npm command');
    assert(

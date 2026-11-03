@@ -283,8 +283,9 @@ Markdown.
 
 For repository contributors, `check:docs` also checks names in `AGENTS.md`,
 `CLAUDE.md`, and our rules and skills. Recognizable identifiers and dotted
-members in code spans must occur in repository or pinned Langium source;
-file names must exist, package names must be declared, and script names
+members in code spans must occur as identifiers in repository or pinned
+Langium source; comments, string literals and test fixtures do not count.
+File names must exist, package names must be declared, and script names
 must occur in a manifest. Plain words and commands other than `npm run` are
 skipped. This detects removals, not whether a member belongs to a particular
 class or whether a claim is true.
@@ -303,8 +304,13 @@ Inside the test that asserts it, put a line comment with the same id:
 ```
 
 The gate requires one matching backlink inside a runnable test, and rejects
-orphan backlinks and duplicate claim ids. Search the id to reach the prose
-when changing the assertion. The marker is checked metadata; it is the
+orphan backlinks and duplicate claim ids. It follows test and suite modifier
+chains, including concurrent and sequential tests. A conditional modifier or
+Node skip/todo option must be statically known to enable the test;
+unknown conditions cannot establish that the test runs on the gate's platform.
+This checks the declaration, not whether the runner selected or executed it.
+Search the id to reach the prose when changing the assertion. The marker is
+checked metadata; it is the
 exception to the ban on pointers in comments. A marker cannot prove that
 the test asserts the paragraph, and unmarked prose is not interpreted by
 the gate. Add a marker when a rule relies on behavior covered by a test;
