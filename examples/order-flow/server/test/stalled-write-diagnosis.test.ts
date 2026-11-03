@@ -15,7 +15,7 @@
  * request cancelling its enclosing build rather than joining it.
  */
 
-import { HydraniumWorkspaceLock, IntegrityPhase, type IntegrityRule, setWriteLockScope } from '@hydranium/core';
+import { DefaultHydraniumWorkspaceLock, IntegrityPhase, type IntegrityRule, setWriteLockScope } from '@hydranium/core';
 import { nodeWriteLockScope } from '@hydranium/core/node';
 import { type AstNode, type LangiumDocument, URI } from '@hydranium/langium';
 import { waitFor } from '@hydranium/protocol/testing';
@@ -25,7 +25,7 @@ import { makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from './ord
 
 const FILE = 'reentrant.domain';
 
-class RecordingLock extends HydraniumWorkspaceLock {
+class RecordingLock extends DefaultHydraniumWorkspaceLock {
    reported = 0;
    protected override reportStalledWrite(): void {
       this.reported++;

@@ -12,7 +12,6 @@ import { type Tracer, UNRECORDED_VERSION, describeError, describeErrorWithStack 
 import { Disposable, Emitter, type Event } from 'vscode-languageserver-protocol';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { type ServerSharedServices } from '../langium/module.js';
-import { HydraniumWorkspaceLock } from '../langium/workspace/hydranium-workspace-lock.js';
 import { refuseWaitInRead, runInReadLockScope } from '../langium/workspace/read-lock-scope.js';
 
 /** A build {@link VersionSyncService.requestRecoveryBuild} schedules. */
@@ -252,8 +251,6 @@ export class DefaultVersionSyncService implements VersionSyncService {
    protected async runBuilds(key: string, uri: URI, entry: PendingRecoveryBuilds): Promise<void> {
       const tracer = this.tracer.withUri(key);
       const lock = this.services.workspace.WorkspaceLock;
-      // Any other lock resolves a cancelled write as if it had completed, unnoticed.
-      const counting = lock instanceof HydraniumWorkspaceLock ? lock : undefined;
       while (entry.queued.length > 0) {
          let carried: QueuedRecoveryBuild[] = [];
          let build: Promise<void> | undefined;
@@ -272,12 +269,12 @@ export class DefaultVersionSyncService implements VersionSyncService {
                      needed.map(queued => queued.request)
                   );
                   // Read after the build is queued, which cancels the write before it.
-                  cancellations = counting?.writeCancellations;
+                  cancellations = lock.writeCancellations;
                }
             });
             await build;
             // A write cancelled the build, before it ran or while it did.
-            if (cancellations !== undefined && counting?.writeCancellations !== cancellations) {
+            if (cancellations !== undefined && lock.writeCancellations !== cancellations) {
                entry.queued.unshift(...carried);
                continue;
             }

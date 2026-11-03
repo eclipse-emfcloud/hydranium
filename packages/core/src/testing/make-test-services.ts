@@ -22,7 +22,7 @@ import {
 import { DefaultServerLocale, type ServerLocale } from '../locale/server-locale.js';
 import { DefaultMessageRenderer, type MessageRenderer } from '../messages/renderer.js';
 import type { Harness } from '@hydranium/protocol/testing';
-import { type AstNode, type AstNodeDescription, type WorkspaceLock } from '@hydranium/langium';
+import { type AstNode, type AstNodeDescription } from '@hydranium/langium';
 import {
    type ClientSessionFactory,
    type ClientSessionFactoryOptions,
@@ -33,7 +33,7 @@ import type { ServerSharedServices } from '../langium/module.js';
 import type { AstDiagnostic } from '../langium/validation/document-validator.js';
 import { DefaultTransferEncoder, type TransferEncoder } from '../langium/transfer/transfer-encoder.js';
 import { DefaultDocumentUriPolicy, type DocumentUriPolicy } from '../langium/workspace/document-uri-policy.js';
-import { HydraniumWorkspaceLock } from '../langium/workspace/hydranium-workspace-lock.js';
+import { DefaultHydraniumWorkspaceLock, type HydraniumWorkspaceLock } from '../langium/workspace/hydranium-workspace-lock.js';
 import { DefaultFileSystemTaskQueue, type FileSystemTaskQueue } from '../documents/file-system-task-queue.js';
 import { DefaultModelLedger, type ModelLedger } from '../documents/model-ledger.js';
 import { DefaultDocumentReleaseHandler, type DocumentReleaseHandler } from '../documents/document-release-handler.js';
@@ -103,7 +103,7 @@ export interface TestSharedServices<
        */
       IndexManager?: StubIndexManager;
       /**
-       * The REAL `HydraniumWorkspaceLock`, not a stub — it is a few lines of
+       * The REAL `DefaultHydraniumWorkspaceLock`, not a stub — it is a few lines of
        * promise queueing with no I/O, and `ModelService`'s build path serialises
        * through it, so a no-op stub would hide exactly the interleaving the lock
        * exists to prevent. The framework subclass rather than Langium's default
@@ -111,7 +111,7 @@ export interface TestSharedServices<
        * guard reads; binding the default here would make the guard untestable
        * through this tree and let a reentrant write pass unnoticed.
        */
-      WorkspaceLock: WorkspaceLock;
+      WorkspaceLock: HydraniumWorkspaceLock;
       /** The REAL ledger: it is a weak map with no dependencies. */
       ModelLedger: ModelLedger;
       /** The REAL service, over this tree's stubs; it reconciles nothing against the stub store. */
@@ -325,7 +325,7 @@ export function makeTestServices<
    const logger = options.logger ?? new NoopLogger();
    const clock = options.clock ?? new SystemClock();
    const tracer = new DefaultTracer(logger, clock);
-   const workspaceLock = new HydraniumWorkspaceLock({ Clock: clock, Tracer: tracer });
+   const workspaceLock = new DefaultHydraniumWorkspaceLock({ Clock: clock, Tracer: tracer });
    const documentBuilder = makeStubDocumentBuilder(workspaceLock);
    const selfSaveRegistry = makeStubSelfSaveRegistry();
    const fileSystem = makeStubWritableFileSystem(selfSaveRegistry);
@@ -351,7 +351,7 @@ export function makeTestServices<
    // the omission surfaces as a runtime `undefined` inside whichever package
    // happens to drive that path — typically several layers from the change, and
    // in a package that did not touch the edit. Prefer the REAL service when it
-   // is dependency-free (as `HydraniumWorkspaceLock` is) — a no-op stub of a
+   // is dependency-free (as `DefaultHydraniumWorkspaceLock` is) — a no-op stub of a
    // synchronisation primitive hides the very interleaving it exists to prevent.
    //
    // The `model` slots are populated below

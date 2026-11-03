@@ -86,15 +86,13 @@ export interface HydraniumServiceRegistry<TServices extends LangiumCoreServices 
     */
    register(language: TServices): void;
    /**
-    * For a typed metadata handle, look up its language id and return undefined
-    * on a miss. For a URI, prefer an open document’s registered language id,
-    * then file-name and extension routing; throw when no language answers.
+    * Look up the metadata handle’s language id. Return undefined when that
+    * language is unregistered.
     */
    getServices<TMetaServices extends LangiumCoreServices>(metadata: TypedLanguageMetaData<TMetaServices>): TMetaServices | undefined;
    /**
-    * For a typed metadata handle, look up its language id and return undefined
-    * on a miss. For a URI, prefer an open document’s registered language id,
-    * then file-name and extension routing; throw when no language answers.
+    * Prefer an open document’s registered language id, then file-name and
+    * extension routing. Throw when no language answers.
     */
    getServices(uri: URI): TServices;
    /**

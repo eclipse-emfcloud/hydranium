@@ -28,7 +28,7 @@ import { DefaultVersionSyncService } from '../../../src/documents/version-sync-s
 import type { ServerSharedServices } from '../../../src/langium/module.js';
 import { type ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { type DocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
-import { HydraniumWorkspaceLock } from '../../../src/langium/workspace/hydranium-workspace-lock.js';
+import { DefaultHydraniumWorkspaceLock } from '../../../src/langium/workspace/hydranium-workspace-lock.js';
 import { type ReadLockMark, ReadLockWaitError, runInReadLockScope } from '../../../src/langium/workspace/read-lock-scope.js';
 import { BuildSession, type BuildSessionContext } from '../../../src/langium/document-builder/build-session.js';
 import {
@@ -178,7 +178,7 @@ function makeStubServices(
             loadUri: (uri: URI | string) => (typeof uri === 'string' ? URI.parse(uri) : uri)
          },
          // A build that throws checks its waits from a read of the lock.
-         WorkspaceLock: new HydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() })
+         WorkspaceLock: new DefaultHydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() })
       }
    });
 }
@@ -1335,7 +1335,7 @@ describe('DefaultHydraniumDocumentBuilder', () => {
             Logger: logger,
             workspace: {
                LangiumDocuments: { getDocument: () => document, all: { filter: () => ({ map: () => ({ toArray: () => [] }) }) } },
-               WorkspaceLock: new HydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() })
+               WorkspaceLock: new DefaultHydraniumWorkspaceLock({ Clock: new SystemClock(), Tracer: makeNoopTracer() })
             }
          });
          services.workspace.VersionSyncService = new DefaultVersionSyncService(services as unknown as ServerSharedServices);

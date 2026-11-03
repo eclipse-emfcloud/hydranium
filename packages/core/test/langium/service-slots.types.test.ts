@@ -15,6 +15,7 @@ import type { ServerAddedSharedServices, ServerSharedServices } from '../../src/
 import type { ServerAddedServices, ServerLanguageServices } from '../../src/langium/language-module.js';
 import type { ServerSharedServicesMinimal } from '../../src/langium/shared-services.js';
 import type { HydraniumLangiumDocumentFactory } from '../../src/langium/workspace/hydranium-langium-document-factory.js';
+import type { HydraniumWorkspaceLock } from '../../src/langium/workspace/hydranium-workspace-lock.js';
 import type { HydraniumDocumentBuilder } from '../../src/langium/document-builder/document-builder.js';
 import type { LspServerAddedSharedServices } from '../../src/lsp/shared-module.js';
 
@@ -38,12 +39,21 @@ function acceptsIndependentServices(
    void [sharedSlots, referenceSlots, languageSlots, lspSlots, sharedLspSlots, loggerSlot];
 }
 
-function acceptsInheritedContracts(lock: WorkspaceLock, scope: ScopeComputation, completion: CompletionProvider, logger: Logger): void {
-   const lockSlot: ServerSharedServices['workspace']['WorkspaceLock'] = lock;
+function acceptsInheritedContracts(scope: ScopeComputation, completion: CompletionProvider, logger: Logger): void {
    const scopeSlot: ServerLanguageServices['references']['ScopeComputation'] = scope;
    const completionSlot: ServerLanguageServices['lsp']['CompletionProvider'] = completion;
    const loggerSlot: ServerSharedServices['Logger'] = logger;
-   void [lockSlot, scopeSlot, completionSlot, loggerSlot];
+   void [scopeSlot, completionSlot, loggerSlot];
+}
+
+function requiresCancellationTracking(lock: WorkspaceLock, replacement: PublicContract<HydraniumWorkspaceLock>): void {
+   // @ts-expect-error a resolved write can have been cancelled, so recovery needs the counter
+   const full: ServerSharedServices['workspace']['WorkspaceLock'] = lock;
+   // @ts-expect-error the minimal services must preserve cancellation tracking too
+   const minimal: ServerSharedServicesMinimal['workspace']['WorkspaceLock'] = lock;
+   const fullReplacement: ServerSharedServices['workspace']['WorkspaceLock'] = replacement;
+   const minimalReplacement: ServerSharedServicesMinimal['workspace']['WorkspaceLock'] = replacement;
+   void [full, minimal, fullReplacement, minimalReplacement];
 }
 
 function requiresFlush(handler: DocumentUpdateHandler): void {
@@ -73,6 +83,7 @@ describe('service slots', () => {
       expect(acceptsIndependentServices).toBeTypeOf('function');
       expect(acceptsInheritedContracts).toBeTypeOf('function');
       expect(requiresFlush).toBeTypeOf('function');
+      expect(requiresCancellationTracking).toBeTypeOf('function');
       expect(requiresLanguageExplicitFactory).toBeTypeOf('function');
       expect(acceptsBuilderWithoutNotificationHooks).toBeTypeOf('function');
    });

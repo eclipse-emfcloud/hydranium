@@ -28,7 +28,7 @@ import { makeFakeClock } from '@hydranium/protocol/testing';
 import { AbstractProjectManager, type ProjectManagerOptions } from '../../../src/langium/project/abstract-project-manager.js';
 import type { ProjectChangeEvent } from '../../../src/langium/project/project-change-event.js';
 import { notFound } from '../../../src/langium/workspace/file-not-found.js';
-import { HydraniumWorkspaceLock } from '../../../src/langium/workspace/hydranium-workspace-lock.js';
+import { DefaultHydraniumWorkspaceLock } from '../../../src/langium/workspace/hydranium-workspace-lock.js';
 import {
    makeCapturingLogger,
    makeFakeAstNode,
@@ -1315,7 +1315,7 @@ describe('AbstractProjectManager with deferMemberRelink', () => {
       try {
          const clock = makeFakeClock();
          const { stubs, mgr } = await setup(
-            new HydraniumWorkspaceLock({ Clock: clock, Tracer: makeNoopTracer() }, { readWaitGraceMs: 10 })
+            new DefaultHydraniumWorkspaceLock({ Clock: clock, Tracer: makeNoopTracer() }, { readWaitGraceMs: 10 })
          );
          await changeInWrite(stubs, mgr, URI_DESCRIPTOR_A, 'A@1', 'A-renamed');
 
@@ -1336,7 +1336,7 @@ describe('AbstractProjectManager with deferMemberRelink', () => {
    it('waits inside a request for no relink once none is pending', async () => {
       setReadLockScope(nodeReadLockScope);
       try {
-         const { mgr } = await setup(new HydraniumWorkspaceLock({ Clock: makeFakeClock(), Tracer: makeNoopTracer() }));
+         const { mgr } = await setup(new DefaultHydraniumWorkspaceLock({ Clock: makeFakeClock(), Tracer: makeNoopTracer() }));
 
          await expect(mgr.lock.read(() => mgr.memberRelinkSettled().then(() => 'settled'), ReadPriority.Immediate)).resolves.toBe(
             'settled'

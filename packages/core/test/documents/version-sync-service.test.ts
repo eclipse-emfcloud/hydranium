@@ -14,10 +14,11 @@
 
 import { describe, expect, it } from 'vitest';
 import { DocumentState, OperationCancelled, URI } from '@hydranium/langium';
-import { STALE_VERSION, UNRECORDED_VERSION } from '@hydranium/protocol';
+import { Deferred, STALE_VERSION, UNRECORDED_VERSION } from '@hydranium/protocol';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DefaultHydraniumTextDocuments, type HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { type RecoveryBuildRequest, DefaultVersionSyncService } from '../../src/documents/version-sync-service.js';
+import { DefaultHydraniumWorkspaceLock } from '../../src/langium/workspace/hydranium-workspace-lock.js';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { makeCapturingLogger, makeFakeAstNode, makeTestServices } from '../../src/testing/index.js';
 
@@ -43,7 +44,7 @@ interface SyncRig {
    readonly errors: () => string[];
 }
 
-function makeRig(delegating = false): SyncRig {
+function makeRig(delegating = false, independentLock = false): SyncRig {
    const { logger, lines } = makeCapturingLogger();
    const bundle = makeTestServices({ logger });
    const backing = new DefaultHydraniumTextDocuments(bundle.services);
@@ -55,9 +56,20 @@ function makeRig(delegating = false): SyncRig {
            }
         })
       : backing;
+   const lock = new DefaultHydraniumWorkspaceLock(bundle.services);
+   const workspaceLock = independentLock
+      ? {
+           read: lock.read.bind(lock),
+           write: lock.write.bind(lock),
+           cancelWrite: lock.cancelWrite.bind(lock),
+           get writeCancellations() {
+              return lock.writeCancellations;
+           }
+        }
+      : bundle.services.workspace.WorkspaceLock;
    const services = {
       ...bundle.services,
-      workspace: { ...bundle.services.workspace, TextDocuments: textDocuments }
+      workspace: { ...bundle.services.workspace, TextDocuments: textDocuments, WorkspaceLock: workspaceLock }
    } as ServerSharedServices;
    const sync = new DefaultVersionSyncService(services);
    services.workspace.VersionSyncService = sync;
@@ -519,6 +531,56 @@ describe('DefaultVersionSyncService.requestRecoveryBuild', () => {
          builds: 2,
          warnings: [],
          errors: []
+      });
+   });
+
+   it.each(['queued', 'running'])('retries a recovery cancelled while %s with an independent lock', async stage => {
+      const rig = makeRig(false, true);
+      const lock = rig.services.workspace.WorkspaceLock;
+      open(rig, URI_A, 2, 'newer');
+      const document = register(rig, URI_A, 'older', 1);
+      rig.services.workspace.ModelLedger.record(document.parseResult.value, 1);
+      const entered = new Deferred<void>();
+      const release = new Deferred<void>();
+      let completed = 0;
+      rig.outcomes.push(
+         () => {
+            const build = lock.write(async token => {
+               if (stage === 'running') {
+                  entered.resolve();
+                  await release.promise;
+               }
+               if (token.isCancellationRequested) {
+                  throw OperationCancelled;
+               }
+               completed++;
+            });
+            if (stage === 'queued') {
+               queueMicrotask(() => void lock.write(() => undefined));
+            }
+            return build;
+         },
+         () =>
+            lock.write(() => {
+               completed++;
+               rig.services.workspace.ModelLedger.record(document.parseResult.value, 2);
+            })
+      );
+
+      const recovery = rig.sync.syncTo(uri, 2);
+      if (stage === 'running') {
+         await entered.promise;
+         const superseding = lock.write(() => undefined);
+         release.resolve();
+         await superseding;
+      }
+      await recovery;
+
+      expect({ attempts: rig.builds.length, completed, synced: rig.sync.isSyncedTo(uri, 2), warnings: rig.warnings() }).toEqual({
+         attempts: 2,
+         completed: 1,
+         synced: true,
+         warnings: []
       });
    });
 

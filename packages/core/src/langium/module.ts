@@ -28,7 +28,7 @@ import { DefaultCstResidencyService, type CstResidencyService } from './residenc
 import { HydraniumConfigurationProvider } from './config/configuration-provider.js';
 import { DefaultHydraniumIndexManager, type HydraniumIndexManager } from './workspace/index-manager.js';
 import { DefaultHydraniumWorkspaceManager, type HydraniumWorkspaceManager } from './workspace/hydranium-workspace-manager.js';
-import { HydraniumWorkspaceLock } from './workspace/hydranium-workspace-lock.js';
+import { DefaultHydraniumWorkspaceLock, type HydraniumWorkspaceLock } from './workspace/hydranium-workspace-lock.js';
 import {
    DefaultHydraniumLangiumDocumentFactory,
    type HydraniumLangiumDocumentFactory
@@ -175,6 +175,8 @@ export interface ServerAddedSharedServices<
        * session write that takes the lock, at run time.
        */
       /* override */ DocumentBuilder: HydraniumDocumentBuilder;
+      /** Recovery must distinguish cancelled writes from completed builds. */
+      /* override */ WorkspaceLock: HydraniumWorkspaceLock;
       /**
        * Tighten Langium's read-only `FileSystemProvider` slot to a
        * {@link FileSystemProviderRegistry}, which is writable: the
@@ -539,7 +541,7 @@ export function createServerSharedModule(
          DocumentBuilder: services => new DefaultHydraniumDocumentBuilder(services),
          // The write-lock scope this marks is inert unless a host installs a
          // scope tracker — `@hydranium/core/node` does.
-         WorkspaceLock: services => new HydraniumWorkspaceLock(services),
+         WorkspaceLock: services => new DefaultHydraniumWorkspaceLock(services),
          ProjectManager: services => new SingleProjectManager(services),
          SelfSaveRegistry: services => new DefaultSelfSaveRegistry(services),
          DocumentUriPolicy: () => new DefaultDocumentUriPolicy(),

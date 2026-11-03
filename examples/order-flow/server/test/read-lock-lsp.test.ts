@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { HydraniumWorkspaceLock, ReadLockWaitError, serverSharedFactory } from '@hydranium/core';
+import { DefaultHydraniumWorkspaceLock, ReadLockWaitError, serverSharedFactory } from '@hydranium/core';
 import { startLanguageServer } from '@hydranium/core/lsp';
 import { createRequestHandler } from '@hydranium/langium/lsp';
 import { DefaultFileSystemProvider } from '@hydranium/core/node';
@@ -54,7 +54,8 @@ async function startServer(): Promise<{ client: LspServerConnection['client']; u
          extraSharedModules: [
             {
                workspace: {
-                  WorkspaceLock: (context: OrderFlowSharedServices) => new HydraniumWorkspaceLock(context, { readWaitGraceMs: GRACE_MS })
+                  WorkspaceLock: (context: OrderFlowSharedServices) =>
+                     new DefaultHydraniumWorkspaceLock(context, { readWaitGraceMs: GRACE_MS })
                }
             }
          ]

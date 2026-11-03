@@ -28,7 +28,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DocumentState, OperationCancelled, ReadPriority, URI, type DocumentBuilder, type LangiumDocument } from '@hydranium/langium';
 import { makeFakeClock, tick } from '@hydranium/protocol/testing';
-import { HydraniumWorkspaceLock } from '../../src/langium/workspace/hydranium-workspace-lock.js';
+import { DefaultHydraniumWorkspaceLock } from '../../src/langium/workspace/hydranium-workspace-lock.js';
 import { createSynchronousReadLockScope, ReadLockWaitError, setReadLockScope } from '../../src/langium/workspace/read-lock-scope.js';
 import { nodeReadLockScope } from '../../src/node/write-lock-scope-node.js';
 import { CancellationToken, CancellationTokenSource } from 'vscode-languageserver';
@@ -125,9 +125,9 @@ describe('makeStubDocumentBuilder waitUntil gate', () => {
       ])('a held call %s, as the real builder', async (_title, ownLock) => {
          setReadLockScope(nodeReadLockScope);
          const clock = makeFakeClock();
-         const lock = new HydraniumWorkspaceLock({ Clock: clock, Tracer: makeCapturingTracer(clock).tracer });
+         const lock = new DefaultHydraniumWorkspaceLock({ Clock: clock, Tracer: makeCapturingTracer(clock).tracer });
          const builder = makeStubDocumentBuilder(
-            ownLock ? lock : new HydraniumWorkspaceLock({ Clock: clock, Tracer: makeCapturingTracer(clock).tracer })
+            ownLock ? lock : new DefaultHydraniumWorkspaceLock({ Clock: clock, Tracer: makeCapturingTracer(clock).tracer })
          );
          const gate = builder.gateNextWaitUntil();
 
