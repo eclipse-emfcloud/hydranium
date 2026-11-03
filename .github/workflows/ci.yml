@@ -115,7 +115,7 @@ jobs:
           printf '%s\n' "$changed" | node "$RUNNER_TEMP/ci-changed.mts"
 
   build:
-    name: build & test (${{ matrix.os }})
+    name: build & test (${{ matrix.os }})${{ matrix.node && format(' Node {0}', matrix.node) || '' }}
     runs-on: ${{ matrix.os }}
     needs: changes
     # Not cancelled rather than succeeded, so a failed or skipped classifier
@@ -152,6 +152,12 @@ jobs:
         # arm64 image, so a native module is rebuilt for a second ARCHITECTURE
         # rather than only a second OS. Pinned for the same reason Windows is.
         os: [ubuntu-22.04, windows-2025, macos-26]
+        node: ['']
+        # Empty uses the contributor pin. A fixed second major makes runtime
+        # regressions reproducible without multiplying the platform matrix.
+        include:
+          - os: ubuntu-22.04
+            node: '24.22.1'
 
     env:
       # `--report-on-fatalerror` makes a V8 fatal error drop a report naming the
@@ -182,8 +188,8 @@ jobs:
       # `'true'` only when the scope job answered `full=false`; a failed or
       # missing verdict leaves it `'false'`, and the leg runs in full.
       PROSE_ONLY: ${{ needs.changes.outputs.full == 'false' }}
-      # A prose-only Windows or macOS leg runs no step, and reports passing.
-      PROSE_ONLY_LEG: ${{ needs.changes.outputs.full == 'false' && matrix.os != 'ubuntu-22.04' }}
+      # Only the contributor Ubuntu leg runs on a prose-only change.
+      PROSE_ONLY_LEG: ${{ needs.changes.outputs.full == 'false' && (matrix.os != 'ubuntu-22.04' || matrix.node != '') }}
 
     steps:
       - name: Prose-only change
@@ -206,22 +212,19 @@ jobs:
           # shallow checkout turns it into a silent no-op rather than a red.
           fetch-depth: 0
 
-      # Every workflow listed below installs this repository and runs Node, so
-      # anything that differs between them is drift, not a decision. Compared
+      # Every workflow listed below shares the contributor runtime and build
+      # options. CI and release also share an explicit runtime override. Compared
       # rather than duplicated so it fires in BOTH directions: change or drop a
       # key in one file without the others and this reddens here, on a pull
       # request, where it costs nothing. The same divergence discovered in
       # release.yml lands after the version PR has merged and the tags are cut,
       # and in the compat workflows it waits for a schedule nobody is watching.
       #
-      # The comparison cannot express "equal except where we meant it", so a
-      # workflow joins the list only once it matches the others.
-      #
       # This and the gate-ordering check below read the workflow FILES, so their
       # verdict cannot vary by runner. Pinned to one leg of the matrix so a
       # future divergence is reported once rather than once per platform.
       - name: Every workflow carries the same build environment
-        if: matrix.os == 'ubuntu-22.04'
+        if: matrix.os == 'ubuntu-22.04' && matrix.node == ''
         run: |
           workflows="ci release theia-compat glsp-compat"
           compare() {
@@ -262,7 +265,20 @@ jobs:
           compare NODE_OPTIONS
           # release.yml's gate lists the same legs, or a leg added here cannot
           # block a publish.
-          workflows="ci release" compare os
+          workflows="ci release" compare node-version
+          matrix() {
+            awk '
+              /^      matrix:$/ { inside = 1; next }
+              inside && /^    [^ ]/ { exit }
+              inside && $0 !~ /^[[:space:]]*(#|$)/ { sub(/^ +/, ""); print }
+            ' "$1"
+          }
+          ci_matrix=$(matrix .github/workflows/ci.yml)
+          release_matrix=$(matrix .github/workflows/release.yml)
+          if [ -z "$ci_matrix" ] || [ "$ci_matrix" != "$release_matrix" ]; then
+            echo "CI and release gate matrices differ or are missing." >&2
+            exit 1
+          fi
 
       # The release workflow gates itself, in its own file, because the two
       # workflows share a `push: main` trigger with no dependency between them —
@@ -273,7 +289,7 @@ jobs:
       # you take back. The gate runs in its own job, so the property is that
       # the publishing job `needs:` it.
       - name: Release workflow gates itself before publishing
-        if: matrix.os == 'ubuntu-22.04'
+        if: matrix.os == 'ubuntu-22.04' && matrix.node == ''
         run: |
           # awk rather than a `grep | head` pipeline: a non-matching grep under
           # `pipefail` aborts the step at the assignment, so the very case this
@@ -330,8 +346,8 @@ jobs:
       #
       # The key carries the OS and the arch because `node_modules` holds
       # compiled binaries and actions/cache does NOT namespace by runner: one
-      # shared key hands Windows a Linux tree. `.nvmrc` joins them because a
-      # Node major re-ABIs every native module.
+      # shared key hands Windows a Linux tree. The contributor pin and any
+      # matrix override join them because a Node major re-ABIs native modules.
       #
       # No `restore-keys`. A prefix match would restore a tree resolved from a
       # different lockfile, which is worse than installing rather than a
@@ -358,13 +374,11 @@ jobs:
             packages/*/node_modules
             examples/*/*/node_modules
             !**/node_modules/.vite
-          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('.nvmrc', 'package-lock.json') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('.nvmrc', 'package-lock.json') }}${{ matrix.node && format('-node-{0}', matrix.node) || '' }}
 
-      # Read from `.nvmrc` rather than stated here, so one edit moves both
-      # workflows and a local `nvm use` together. A version literal repeated in
-      # three places is three chances to satisfy `engines.node` by coincidence:
-      # a major-only spec is a semver RANGE, and it clears the floor only for as
-      # long as the newest release in that major happens to be above it.
+      # An empty matrix override falls back to the contributor pin. setup-node
+      # gives a nonempty node-version precedence over node-version-file, so the
+      # additional leg selects its fixed runtime without moving local nvm use.
       #
       # `cache` is empty on a node_modules HIT, because `~/.npm` is read only
       # by the `npm ci` that a hit skips — restoring 146 MB nothing then opens
@@ -384,6 +398,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
+          node-version: ${{ matrix.node }}
           cache: ${{ steps.node-modules-cache.outputs.cache-hit != 'true' && 'npm' || '' }}
           package-manager-cache: false
 
@@ -511,7 +526,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/AppData/Local/node-gyp/Cache
-          key: node-gyp-headers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.nvmrc') }}
+          key: node-gyp-headers-${{ runner.os }}-${{ runner.arch }}-${{ matrix.node || hashFiles('.nvmrc') }}
 
       # After the toolchain pin, which is what puts npm, and the node-gyp it
       # bundles, under `npm root -g`.
@@ -571,7 +586,7 @@ jobs:
       # tree the build changed holds a generated file nobody regenerated. One
       # leg, the one that runs every gate target.
       - name: Generated sources are committed
-        if: env.PROSE_ONLY_LEG != 'true' && matrix.os == 'ubuntu-22.04'
+        if: env.PROSE_ONLY_LEG != 'true' && matrix.os == 'ubuntu-22.04' && matrix.node == ''
         run: |
           changed=$(git status --porcelain --untracked-files=all)
           if [ -n "$changed" ]; then
@@ -591,7 +606,7 @@ jobs:
       # measurement; `check:gate-targets`, which runs inside that tail on BOTH
       # legs, is what stops the subset widening by accident.
       #
-      # Conditioned on ubuntu rather than on windows because that is the shape
+      # Conditioned on the contributor Ubuntu leg because that is the shape
       # of the rule: ONE leg runs every target, and any other leg runs the
       # platform-sensitive subset. Naming windows instead would read as an
       # exemption for one image and would leave a third entry running a gate
@@ -600,8 +615,12 @@ jobs:
       # `run:` stays directly under the name, `if:` after it: the release check
       # above reads the gate command as the line right after `- name: Full gate`.
       - name: Full gate
-        run: npm run ${{ matrix.os == 'ubuntu-22.04' && 'check' || 'check:platform' }}
+        run: npm run ${{ matrix.os == 'ubuntu-22.04' && matrix.node == '' && 'check' || 'check:platform' }}
         if: env.PROSE_ONLY != 'true'
+
+      - name: Rehearse the release
+        if: matrix.os == 'ubuntu-22.04' && matrix.node == '' && env.PROSE_ONLY != 'true'
+        run: node scripts/release.mts next --rehearse
 
       # A prose-only change on the Ubuntu leg: the gate tail, which holds every
       # docs check, without the tests and lint prose cannot affect.
@@ -626,7 +645,7 @@ jobs:
         if: ${{ always() && env.PROSE_ONLY != 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: test-reports-${{ matrix.os }}
+          name: test-reports-${{ matrix.os }}${{ matrix.node && format('-node-{0}', matrix.node) || '' }}
           path: |
             packages/*/test-results/
             examples/*/*/test-results/

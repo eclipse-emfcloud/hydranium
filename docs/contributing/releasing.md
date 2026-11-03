@@ -77,12 +77,32 @@ remember to flip on the day it stops being true.
 The gate lives here rather than in CI because both workflows fire on the same
 `push: main` with no dependency either way, so a red CI run cannot stop a
 publish. CI asserts the arrangement instead: it fails unless `release.yml`'s
-gate runs CI's command on CI's `os:` list and the publishing job needs the gate
-job.
+gate runs CI's command on CI's platform and Node matrix and the publishing
+job needs the gate job.
 
 The install-shape smokes in
 [Testing](testing.md#install-shape-smokes-on-demand) are not part of the
 release gate; run them before merging a package or export change.
+
+## Rehearsing a release
+
+After `npm run build:all`, run `node scripts/release.mts next --rehearse`.
+It copies the built packages into a temporary directory, stamps their versions
+and exact intra-framework pins, then runs each package's `npm publish
+--dry-run`. The temporary directory is removed even when a publish check
+fails. The checkout's manifests and lockfile stay unchanged.
+
+CI and the release gate run this on the contributor Node pin. Both also build
+and test on the fixed second Node version in their matrix; native dependency
+caches are separated by runtime. The contributor gate needs the root
+`engines.node` floor, so this matrix does not test the lower adopter floor in
+the published packages.
+
+`--dry-run` alone leaves stamping out and packs the committed versions. For
+`next`, both modes read the registry to choose a dist-tag but write nothing
+to it. They exercise package lifecycle scripts and packing; they cannot verify
+OIDC permissions or registry acceptance of an actual publish. Use `latest` in
+place of `next` to rehearse a stable base.
 
 ## Trusted publishing
 

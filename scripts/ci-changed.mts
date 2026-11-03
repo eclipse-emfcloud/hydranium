@@ -155,13 +155,17 @@ function jobsWithoutStatusFunction(jobs: Guarded[]): string[] {
       .map(job => job.name);
 }
 
-/** The `build` job's steps whose `if:` neither names the prose verdict nor confines the step to the Ubuntu leg. */
+/** The `build` job's steps whose `if:` neither names the prose verdict nor confines the step to the contributor Ubuntu leg. */
 function buildStepsWithoutProseGuard(steps: Guarded[]): string[] {
    if (steps.length === 0) {
       return ['<no build job found>'];
    }
    return steps
-      .filter(step => !step.condition.includes('PROSE_ONLY') && !step.condition.includes("matrix.os == 'ubuntu-22.04'"))
+      .filter(
+         step =>
+            !step.condition.includes('PROSE_ONLY') &&
+            !(step.condition.includes("matrix.os == 'ubuntu-22.04'") && step.condition.includes("matrix.node == ''"))
+      )
       .map(step => step.name);
 }
 
@@ -184,7 +188,7 @@ const PINNED_GUARDS = {
    },
    env: {
       PROSE_ONLY: "${{ needs.changes.outputs.full == 'false' }}",
-      PROSE_ONLY_LEG: "${{ needs.changes.outputs.full == 'false' && matrix.os != 'ubuntu-22.04' }}"
+      PROSE_ONLY_LEG: "${{ needs.changes.outputs.full == 'false' && (matrix.os != 'ubuntu-22.04' || matrix.node != '') }}"
    }
 };
 
@@ -279,8 +283,8 @@ function selfTest(): void {
       console.error('✗ self-test: the turbo dry run listed no input, so the build-input check checks nothing');
       failed = true;
    }
-   // A prose-only Windows or macOS leg has no checkout, so a build step that would run there has to
-   // say so: its condition names the prose verdict, or confines it to the Ubuntu leg, which builds.
+   // Skipped prose-only legs have no checkout. A step must name the prose verdict or select the
+   // contributor Ubuntu leg, the only one that builds prose changes.
    const workflow = readFileSync('.github/workflows/ci.yml', 'utf8');
    const jobs = jobsOf(workflow);
    const build = buildJobOf(workflow);
@@ -292,7 +296,7 @@ function selfTest(): void {
    }
    for (const step of buildStepsWithoutProseGuard(build.steps)) {
       console.error(
-         `✗ self-test: ci.yml build step "${step}" names neither PROSE_ONLY nor the Ubuntu leg in its \`if:\`, so it runs on a prose-only leg with no checkout`
+         `✗ self-test: ci.yml build step "${step}" names neither PROSE_ONLY nor the contributor Ubuntu leg in its \`if:\`, so it runs on a prose-only leg with no checkout`
       );
       failed = true;
    }
@@ -330,7 +334,7 @@ if (process.argv.includes('--self-test')) {
    }
    if (verdict.proseOnly && process.env.GITHUB_ACTIONS) {
       console.log(
-         '::notice title=Prose-only change::e2e, the init scaffold and the Windows and macOS gates are skipped; the docs gates still run.'
+         '::notice title=Prose-only change::e2e, the init scaffold and the additional platform and Node gates are skipped; the docs gates still run.'
       );
    }
    // Last, so a step that fails anywhere before this leaves no verdict, and no verdict runs everything.
