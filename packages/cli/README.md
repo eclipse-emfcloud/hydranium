@@ -15,6 +15,8 @@ and the other commands drive your built head from a shell or a CI step.
   own docs.
 - Generate the serializable transfer model from Langium's generated AST.
 - Measure model-store memory and analyze a V8 heap snapshot.
+- Install optional coding-agent skills after scaffolding and check their
+  declared compatibility with your project's installed dependencies.
 - List, read, create, save and watch documents through a spawned data server,
   printing JSON a script can pipe, and delete them.
 
@@ -61,6 +63,9 @@ lists each command's flags.
   `--hosts theia-electron`, and a starter workspace.
 - **Grammar and workspace.** Boot your built head to reflect its grammar, lint
   it, write a model reference, validate a workspace, or count its AST nodes.
+- **Agent skills.** The wizard offers Hydranium and upstream Langium skills
+  after scaffolding. `check-skills` checks installed skill metadata against
+  your dependencies; see *Work with coding-agent skills* in the adopter guides.
 - **Codegen.** `generate-transfer-model` turns the AST into a transfer model,
   once or on watch, and can also write each grammar's language id and
   extensions for a package your clients share without Langium, and a

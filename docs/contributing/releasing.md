@@ -193,6 +193,23 @@ reports a FALSE CLEAN and `--write` re-derives from the *previous* template,
 baking a stale README into the published example and certifying it as
 matching.
 
+## Skill compatibility across releases
+
+Adopter skills are installed from Git independently of npm releases. Their
+version alternatives and named contracts are described in
+[Work with coding-agent skills](../guides/coding-agent-skills.md#compatibility-declarations).
+Release stamping preserves the packages' `hydraniumSkillContracts` fields.
+
+The core and CLI profiling contract covers the capture schema, artifact names
+and interpretation, CLI capture and analyzer options, and the ownership
+semantics described by the profiling references. When changing those behaviors,
+review the skill in the same PR. Keep the contract revision for compatible
+changes; change it when the existing guidance becomes wrong. The skill must
+explicitly accept the replacement revision after its guidance is validated.
+This applies to development builds as well as published packages. A new release
+number alone does not grant compatibility, and a prose-only skill update does
+not require an npm release.
+
 ## Changesets
 
 Changesets feed only the CHANGELOG for the stable cut, never the version; when

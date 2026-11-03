@@ -63,8 +63,13 @@ Three flags shape it:
 ## Build and test
 
 By default, `init` stays offline. Add `--install`, or accept the standalone
-wizard's final installation prompt, to run `npm install` after scaffolding,
+wizard's dependency installation prompt, to run `npm install` after scaffolding,
 including dependency lifecycle scripts, and skip that step below.
+
+After scaffolding, the wizard separately offers to install coding-agent skills.
+That optional download does not install project dependencies. See
+[Work with coding-agent skills](../guides/coding-agent-skills.md) for scripted
+installation, independent updates and compatibility checks.
 
 ```bash
 cd my-lang

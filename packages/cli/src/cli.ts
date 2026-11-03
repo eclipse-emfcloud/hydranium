@@ -14,6 +14,7 @@ import { readCliVersion } from './cli-version.js';
 import { runAnalyzeHeapCommand } from './commands/analyze-heap-args.js';
 import { runAstGroundTruthCommand } from './commands/ast-ground-truth-args.js';
 import { runCreateCommand } from './commands/create-args.js';
+import { runCheckSkillsCommand } from './commands/check-skills-args.js';
 import { runDeleteCommand } from './commands/delete-args.js';
 import { runGenerateTransferModelCommand } from './commands/generate-transfer-model-args.js';
 import { runInitCommand } from './commands/init-args.js';
@@ -49,6 +50,7 @@ const COMMANDS: Record<string, { readonly summary: string; readonly run: (args: 
       run: runAstGroundTruthCommand
    },
    create: { summary: 'Create a new document and its file via a data-server subprocess.', run: runCreateCommand },
+   'check-skills': { summary: 'Check installed agent skills against project dependency versions.', run: runCheckSkillsCommand },
    delete: { summary: 'Delete a document, its file included, via a data-server subprocess.', run: runDeleteCommand },
    'generate-transfer-model': {
       summary: 'Generate a transfer-model TypeScript file from a Langium AST.',

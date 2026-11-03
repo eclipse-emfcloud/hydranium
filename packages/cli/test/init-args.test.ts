@@ -152,6 +152,10 @@ describe('the wizard argv round-trips through the parser', () => {
 });
 
 describe('parseInitArgs', () => {
+   it('preserves explicit skill choices through the wizard command', () => {
+      const answers: InitAnswers = { ...ANSWERS[0].answers, skills: 'langium', agents: 'codex,claude-code' };
+      expect(parse(composeInitArgv(answers))).toMatchObject({ skills: 'langium', agents: 'codex,claude-code' });
+   });
    /** The order-dependence that keeps this parser hand-written. */
    it('attaches a scoped flag to the grammar it follows, not to the last one named', () => {
       const parsed = parse(['./x', '--grammar', 'A', '--extensions', 'a-ext', '--grammar', 'B', '--diagram']);
