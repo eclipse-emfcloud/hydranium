@@ -15,6 +15,9 @@ import URI from '@theia/core/lib/common/uri';
 import { injectable } from '@theia/core/shared/inversify';
 import { OrderFlowProcessDiagramLanguage } from '../common/order-flow-diagram-language';
 
+// Positive priorities appear in Open With; staying below the text editor keeps layouts opening as text.
+const LAYOUT_DIAGRAM_OPENER_PRIORITY = 50;
+
 /** Opens process diagrams, redirecting layouts to their owning process. */
 @injectable()
 export class OrderFlowProcessDiagramManager extends AbstractHydraniumGlspDiagramManager {
@@ -26,7 +29,7 @@ export class OrderFlowProcessDiagramManager extends AbstractHydraniumGlspDiagram
 
    override canHandle(uri: URI, options?: WidgetOpenerOptions): number {
       const processUri = processUriFor(uri.toString());
-      return processUri !== uri.toString() ? 50 : super.canHandle(uri, options);
+      return processUri !== uri.toString() ? LAYOUT_DIAGRAM_OPENER_PRIORITY : super.canHandle(uri, options);
    }
 
    override open(uri: URI, options?: GLSPWidgetOpenerOptions): Promise<GLSPDiagramWidget> {

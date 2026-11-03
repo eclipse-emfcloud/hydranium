@@ -10,7 +10,7 @@
 import { DefaultHydraniumScopeProvider } from '@hydranium/core';
 import { AstUtils, EMPTY_SCOPE, type ReferenceInfo, type Scope, URI } from '@hydranium/langium';
 import { type DiagramNode, isDiagramNode, isProcessModel } from './ast.js';
-import { processUriFor } from './layout-file.js';
+import { processUriFor } from '@hydranium/example-order-flow-protocol';
 
 /**
  * Scope provider for the `*.layout` language, narrowing the one reference the

@@ -38,4 +38,16 @@ describe('OrderFlowLayoutDiagramEditorProvider', () => {
       expect(dispose).toHaveBeenCalledOnce();
       expect(executeCommand.mock.invocationCallOrder[0]).toBeLessThan(dispose.mock.invocationCallOrder[0]);
    });
+
+   it('disposes the redirect panel and propagates a failed process open', async () => {
+      const provider = new OrderFlowLayoutDiagramEditorProvider();
+      const dispose = vi.fn();
+      const panel = { viewColumn: 2, dispose } as unknown as WebviewPanel;
+      const document = { uri: { toString: () => 'file:///a.layout' }, dispose() {} } as Parameters<typeof provider.resolveCustomEditor>[0];
+      const failure = new Error('process editor failed to open');
+      executeCommand.mockRejectedValueOnce(failure);
+
+      await expect(provider.resolveCustomEditor(document, panel)).rejects.toBe(failure);
+      expect(dispose).toHaveBeenCalledOnce();
+   });
 });

@@ -27,6 +27,7 @@ hosts cannot drift on `documentSelector` or the file watcher.
 | activation, and what it wires    | [`extension.ts`](src/extension.ts)                                                                                                            |
 | the properties panel             | [`properties-panel.ts`](src/properties-panel.ts), [`webview/properties.ts`](src/webview/properties.ts)                                        |
 | the `.process` diagram editor    | [`process-diagram-editor.ts`](src/process-diagram-editor.ts), [`webview/diagram.ts`](src/webview/diagram.ts)                                  |
+| Open With from a layout to its process diagram | [`layout-diagram-editor.ts`](src/layout-diagram-editor.ts) |
 | the two webview bundles          | [`esbuild.mjs`](esbuild.mjs)                                                                                                                  |
 | what the extension contributes   | `contributes` in [`package.json`](package.json)                                                                                               |
 | the extension-host tests         | [`test/host/`](test/host/), [`.vscode-test.mjs`](.vscode-test.mjs)                                                                            |
@@ -36,11 +37,13 @@ hosts cannot drift on `documentSelector` or the file watcher.
 ## What it contributes
 
 The manifest declares the command `order-flow.properties.show` (_Order Flow:
-Show Properties_), the custom editor `orderFlow.processDiagram`, the three
-languages with their TextMate grammars, and the settings `order-flow.log.level`
-and `order-flow.trace.server`. The editor selects `*.process` at
-`priority: "default"`, so double-clicking opens the diagram and the text editor
-is under _Open With_, the same way round as the Theia app.
+Show Properties_), the custom editors `orderFlow.processDiagram` and
+`orderFlow.layoutDiagram`, the three languages with their TextMate grammars,
+and the settings `order-flow.log.level` and `order-flow.trace.server`.
+Double-clicking a `.process` opens the diagram; its text editor is under
+_Open With_, the same way round as the Theia app. A `.layout` opens as text by
+default. Its optional diagram editor under _Open With_ redirects to the
+same-named `.process`, reusing that diagram if it is already open.
 
 VS Code reads `contributes` statically, so none of those values can be imported
 from the source that must match them, and a mismatch compiles. The manifest's

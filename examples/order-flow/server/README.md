@@ -54,7 +54,7 @@ generated separately, is in
 | Grammars | [`src/grammar/`](src/grammar) |
 | Service composition | [`order-flow-module.ts`](src/language-server/order-flow-module.ts), [`services.ts`](src/services.ts) |
 | Folder-scoped projects and visibility | [`order-flow-project-manager.ts`](src/language-server/order-flow-project-manager.ts), [`order-flow-scope-computation.ts`](src/language-server/order-flow-scope-computation.ts) |
-| Dependent references | [`process-scope-provider.ts`](src/language-server/process-scope-provider.ts), [`layout-scope-provider.ts`](src/language-server/layout-scope-provider.ts), [`layout-file.ts`](src/language-server/layout-file.ts) |
+| Dependent references | [`process-scope-provider.ts`](src/language-server/process-scope-provider.ts), [`layout-scope-provider.ts`](src/language-server/layout-scope-provider.ts), [`layout-file.ts`](../protocol/src/layout-file.ts) |
 | Primitive types | [`order-flow-stdlib.ts`](src/language-server/order-flow-stdlib.ts) |
 | Validation | [`process-validation.ts`](src/language-server/process-validation.ts), [`process-transition-rules.ts`](src/language-server/process-transition-rules.ts), [`layout-validation.ts`](src/language-server/layout-validation.ts) |
 | Integrity repair | [`order-flow-integrity.ts`](src/language-server/order-flow-integrity.ts) |

@@ -20,12 +20,15 @@ export class OrderFlowLayoutDiagramEditorProvider implements CustomReadonlyEdito
    }
 
    async resolveCustomEditor(document: CustomDocument, panel: WebviewPanel): Promise<void> {
-      await commands.executeCommand(
-         'vscode.openWith',
-         Uri.parse(processUriFor(document.uri.toString())),
-         ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE,
-         { viewColumn: panel.viewColumn }
-      );
-      panel.dispose();
+      try {
+         await commands.executeCommand(
+            'vscode.openWith',
+            Uri.parse(processUriFor(document.uri.toString())),
+            ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE,
+            { viewColumn: panel.viewColumn }
+         );
+      } finally {
+         panel.dispose();
+      }
    }
 }
