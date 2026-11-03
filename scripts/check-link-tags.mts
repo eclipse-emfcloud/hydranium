@@ -119,7 +119,7 @@ function unresolvedLinks(sourceFile: ts.SourceFile, checker: ts.TypeChecker): { 
    const walk = (node: ts.Node): void => {
       if ((ts.isJSDocLink(node) || ts.isJSDocLinkCode(node) || ts.isJSDocLinkPlain(node)) && node.name) {
          const name = node.name;
-         if (/^https?:\/\//.test(name.getText(sourceFile) + node.text)) return;
+         if (/^[a-z][a-z0-9+.-]*:/i.test(name.getText(sourceFile) + node.text)) return;
          const rightmost = ts.isIdentifier(name) ? name : name.right;
          if (!checker.getSymbolAtLocation(rightmost)) {
             hits.push({
@@ -270,7 +270,9 @@ function resolutionSelfTest(): boolean {
             "import type { Imported as Alias } from './link-resolution-dependency.js';",
             'interface Local { member: string }',
             '/** {@link Local} {@link Local.member} {@link Alias} {@link Alias.member}',
-            ' * {@link Missing} {@link Local.missing label} {@linkcode MissingCode} {@linkplain MissingPlain}',
+            ' * {@link Missing} {@link Local.missing label} {@linkcode MissingCode} {@linkplain MissingPlain} {@link MissingLabel | https://example.com}',
+            ' * {@link ftp://example.com} {@linkcode mailto:user@example.com} {@linkplain urn:example:item}',
+            ' * {@link file:///example.ts} {@link git+ssh://example.com/repo} {@link custom.v1-test:resource} {@link FTP://example.com}',
             ' * {@link https://example.com} {@link} */',
             'export const value = 1;',
             'const text = "{@link NotAComment}";',
@@ -295,7 +297,7 @@ function resolutionSelfTest(): boolean {
    };
    const program = ts.createProgram([...sources.keys()], options, host);
    const hits = unresolvedLinks(program.getSourceFile(file)!, program.getTypeChecker());
-   const expected = ['Missing', 'Local.missing', 'MissingCode', 'MissingPlain'];
+   const expected = ['Missing', 'Local.missing', 'MissingCode', 'MissingPlain', 'MissingLabel'];
    if (JSON.stringify(hits.map(hit => hit.target)) !== JSON.stringify(expected) || hits.some(hit => hit.line !== 4)) {
       console.error(`✗ SELF-TEST FAILED: JSDoc resolution — expected ${expected.join(', ')}, got ${JSON.stringify(hits)}`);
       return true;
