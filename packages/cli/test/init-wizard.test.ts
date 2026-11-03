@@ -122,7 +122,8 @@ describe('composeInitArgv', () => {
          grammars: [{ name: 'Bookstore', extension: 'bookstore', diagram: false }],
          force: false,
          monorepo: false,
-         public: false
+         public: false,
+         install: false
       });
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore']);
    });
@@ -141,7 +142,8 @@ describe('composeInitArgv', () => {
          grammars: [{ name: 'OrderFlow', extension: 'order', diagram: false }],
          force: false,
          monorepo: false,
-         public: false
+         public: false,
+         install: false
       });
       expect(argv).toEqual(['./order-flow', '--name', 'OrderFlow', '--grammar', 'OrderFlow', '--extensions', 'order']);
       // And the argv still means what it says: the grammar stays unqualified,
@@ -165,7 +167,8 @@ describe('composeInitArgv', () => {
          force: false,
          monorepo: true,
          scope: '@acme',
-         public: true
+         public: true,
+         install: false
       });
       expect(argv).toEqual([
          './order-flow',
@@ -201,6 +204,14 @@ describe('pascalCase', () => {
 });
 
 describe('runInitWizard', () => {
+   it('keeps an explicit install standalone when an enclosing workspace is detected', async () => {
+      const prompt = scriptedPrompt(['Example', ['data'], 'Example', 'example', false, false]);
+      const argv = await runInitWizard(prompt, () => DETECTION, { targetDir: './example', install: true, isOccupied: () => false });
+      expect(argv).toEqual(['./example', '--name', 'Example', '--heads', 'data', '--install']);
+      expect(prompt.asked).not.toContain('Scaffold as a member of that workspace?');
+      expect(prompt.notes.join('\n')).toContain('--install requires a standalone project');
+   });
+
    it.each([true, false])('ends a standalone wizard with the installation choice %s', async install => {
       const prompt = scriptedPrompt(['Example', ['data'], 'Example', 'example', false, false, install]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './example', isOccupied: () => false });

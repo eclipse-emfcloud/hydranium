@@ -44,7 +44,8 @@ const ANSWERS: ReadonlyArray<{ label: string; answers: InitAnswers }> = [
          grammars: [{ name: 'Bookstore', extension: 'bookstore', diagram: false }],
          force: false,
          monorepo: false,
-         public: false
+         public: false,
+         install: false
       }
    },
    {
@@ -57,7 +58,8 @@ const ANSWERS: ReadonlyArray<{ label: string; answers: InitAnswers }> = [
          grammars: [{ name: 'OrderFlow', extension: 'order', diagram: false }],
          force: false,
          monorepo: false,
-         public: false
+         public: false,
+         install: false
       }
    },
    {
@@ -75,14 +77,15 @@ const ANSWERS: ReadonlyArray<{ label: string; answers: InitAnswers }> = [
          force: true,
          monorepo: true,
          scope: '@acme',
-         public: true
+         public: true,
+         install: false
       }
    },
    {
       // Reachable through the wizard only because publishability is asked on the
       // common path: a standalone project answering "yes" is the one shape where
       // `--public` travels without `--monorepo` beside it.
-      label: 'a standalone project that opted into publication',
+      label: 'a standalone project that opted into publication and installation',
       answers: {
          targetDir: './bookstore',
          name: 'Bookstore',
@@ -91,7 +94,8 @@ const ANSWERS: ReadonlyArray<{ label: string; answers: InitAnswers }> = [
          grammars: [{ name: 'Bookstore', extension: 'bookstore', diagram: false }],
          force: false,
          monorepo: false,
-         public: true
+         public: true,
+         install: true
       }
    },
    {
@@ -104,7 +108,8 @@ const ANSWERS: ReadonlyArray<{ label: string; answers: InitAnswers }> = [
          grammars: [{ name: 'Bookstore', extension: 'bookstore', diagram: true }],
          force: false,
          monorepo: false,
-         public: false
+         public: false,
+         install: false
       }
    },
    {
@@ -117,7 +122,8 @@ const ANSWERS: ReadonlyArray<{ label: string; answers: InitAnswers }> = [
          grammars: [{ name: 'Plain', extension: 'plain', diagram: false }],
          force: false,
          monorepo: false,
-         public: false
+         public: false,
+         install: false
       }
    }
 ];
@@ -132,6 +138,7 @@ describe('the wizard argv round-trips through the parser', () => {
       expect(parsed.monorepo).toBe(answers.monorepo);
       expect(parsed.scope).toBe(answers.scope);
       expect(parsed.public).toBe(answers.public);
+      expect(parsed.install).toBe(answers.install);
 
       // The composition is what the scaffolder actually reads, so the claim is
       // only proved once the parsed argv resolves to the answers' own shape.

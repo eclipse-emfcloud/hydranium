@@ -696,16 +696,35 @@ export function runInit(options: InitCommandOptions): void {
    }
    if (options.install) {
       write('\nRunning npm install...\n');
+      const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+      // --prefix also changes npm's default globalconfig. Resolve it first without walking into an enclosing workspace.
+      const config = spawnSync(npm, ['config', 'get', 'globalconfig', '--workspaces=false'], {
+         cwd: targetDir,
+         encoding: 'utf8',
+         stdio: ['ignore', 'pipe', 'inherit'],
+         shell: process.platform === 'win32'
+      });
+      const globalconfig = config.stdout?.trim();
+      if (config.error || config.signal || config.status !== 0 || !globalconfig) {
+         const reason = config.error?.message ?? (config.signal ? `signal ${config.signal}` : `exit code ${config.status}`);
+         throw new Error(
+            `Could not read npm global configuration (${reason}). Scaffold kept at ${targetDir}; installation was not started.`
+         );
+      }
       // An explicit prefix keeps npm from selecting an enclosing workspace instead of this standalone root.
       // Windows resolves npm through a command shim; only fixed arguments reach the shell.
-      const result = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--prefix', '.', 'install'], {
+      const result = spawnSync(npm, ['--prefix', '.', 'install'], {
          cwd: targetDir,
          stdio: 'inherit',
-         shell: process.platform === 'win32'
+         shell: process.platform === 'win32',
+         env: { ...process.env, npm_config_globalconfig: globalconfig }
       });
       if (result.error || result.signal || result.status !== 0) {
          const reason = result.error?.message ?? (result.signal ? `signal ${result.signal}` : `exit code ${result.status}`);
-         throw new Error(`npm install failed (${reason}). Scaffold kept at ${targetDir}. Run npm --prefix . install there to retry.`);
+         throw new Error(
+            `npm install failed (${reason}). Scaffold kept at ${targetDir}. ` +
+               `Set npm_config_globalconfig to ${globalconfig} to preserve npm's global configuration. Run npm --prefix . install there to retry.`
+         );
       }
    }
    write('\n');

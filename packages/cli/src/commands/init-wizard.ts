@@ -95,7 +95,7 @@ export interface InitAnswers {
    /** Leave the package publishable, which the scaffold does not do by default. */
    readonly public: boolean;
    /** Run npm install after writing the scaffold. */
-   readonly install?: boolean;
+   readonly install: boolean;
 }
 
 /** PascalCase a directory name, splitting on any non-alphanumeric run. */
@@ -400,9 +400,13 @@ export async function runInitWizard(
    } while (await prompt.confirm({ message: 'Add another grammar?', initialValue: false }));
 
    const withDiagram = await askDiagramGrammar(prompt, heads, grammars);
-   const packaging = await askPackaging(prompt, detect(targetDir), heads, hosts);
+   const detection = detect(targetDir);
+   if (options.install && detection !== undefined) {
+      prompt.note('--install requires a standalone project; workspace membership is skipped.', 'Installation');
+   }
+   const packaging = await askPackaging(prompt, options.install ? undefined : detection, heads, hosts);
    const install =
-      options.install ||
+      (options.install ?? false) ||
       (!packaging.monorepo &&
          (await prompt.confirm({
             message: 'Install dependencies now (npm install)?',

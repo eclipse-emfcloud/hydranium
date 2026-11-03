@@ -40,6 +40,10 @@ describe('init --install', () => {
       });
       vi.mocked(spawnSync).mockImplementation((command, args) => {
          if (command === 'npm' || command === 'npm.cmd') {
+            if (args?.[0] === 'config') {
+               expect(args).toEqual(['config', 'get', 'globalconfig', '--workspaces=false']);
+               return { pid: 1, output: [], stdout: '/global npm/etc/npmrc\n', stderr: '', status: 0, signal: null };
+            }
             expect(args).toEqual(['--prefix', '.', 'install']);
             expect(fs.existsSync(path.join(target, 'server/langium-config.json'))).toBe(true);
             return { pid: 1, output: [], stdout: '', stderr: '', status, signal, error };
@@ -55,7 +59,8 @@ describe('init --install', () => {
       expect(spawnSync).toHaveBeenCalledWith(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--prefix', '.', 'install'], {
          cwd: target,
          stdio: 'inherit',
-         shell: process.platform === 'win32'
+         shell: process.platform === 'win32',
+         env: { ...process.env, npm_config_globalconfig: '/global npm/etc/npmrc' }
       });
       expect(output.join('')).not.toContain('  npm install\n');
       expect(output.join('')).toContain('  npm run build');
@@ -77,6 +82,7 @@ describe('init --install', () => {
       const result = runInitCommand([target, '--name', 'Example', '--install']);
       await expect(result).rejects.toThrow(reason);
       await expect(result).rejects.toThrow('Run npm --prefix . install there to retry.');
+      await expect(result).rejects.toThrow('Set npm_config_globalconfig to /global npm/etc/npmrc');
       expect(fs.existsSync(path.join(target, 'package.json'))).toBe(true);
       expect(output.join('')).not.toContain('Next steps:');
    });
@@ -97,5 +103,19 @@ describe('init --install', () => {
       await expect(runInitCommand([target, '--name', 'Example', '--install'])).rejects.toThrow('not empty');
       expect(spawnSync).not.toHaveBeenCalled();
       expect(fs.readFileSync(path.join(target, 'existing.txt'), 'utf8')).toBe('keep');
+   });
+
+   it('keeps the scaffold and stops when npm cannot report its global configuration', async () => {
+      const { target } = setup();
+      const original = vi.mocked(spawnSync).getMockImplementation()!;
+      vi.mocked(spawnSync).mockImplementation((command, args, options) => {
+         if (args?.[0] === 'config') {
+            return { pid: 1, output: [], stdout: '', stderr: '', status: 1, signal: null };
+         }
+         return original(command, args, options);
+      });
+      await expect(runInitCommand([target, '--name', 'Example', '--install'])).rejects.toThrow('Could not read npm global configuration');
+      expect(fs.existsSync(path.join(target, 'package.json'))).toBe(true);
+      expect(vi.mocked(spawnSync).mock.calls.some(([, args]) => args?.includes('install'))).toBe(false);
    });
 });
