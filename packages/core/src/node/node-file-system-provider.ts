@@ -13,14 +13,26 @@ import { NodeFileSystemProvider } from '@hydranium/langium/node';
 import { randomUUID } from 'node:crypto';
 import { readlinkSync, realpathSync } from 'node:fs';
 import * as fsp from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { type WritableFileSystemProvider } from '../langium/workspace/file-system-provider.js';
 import { isFileNotFound } from '../langium/workspace/file-not-found.js';
 import { type SelfSaveRegistry } from '../langium/workspace/self-save-registry.js';
 import { RENAME_GAP_BUDGET_MS, renameOverOpenReaders } from './rename-over-open-readers.js';
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { serverSharedFactory, type ServerSharedServicesMinimal } from '../langium/shared-services.js';
-import { NO_SUCH_FILE, NO_SUCH_PATH, UNSUPPORTED_DELETE, UNSUPPORTED_WRITE } from '../langium/workspace/in-memory-file-system-provider.js';
+import {
+   FILE_ACCESS_DENIED,
+   NO_SUCH_FILE,
+   NO_SUCH_PATH,
+   UNSUPPORTED_DELETE,
+   UNSUPPORTED_WRITE
+} from '../langium/workspace/in-memory-file-system-provider.js';
+
+/** Host-owned additions to the workspace roots the Node filesystem may access. */
+export interface NodeFileSystemOptions extends LogNameOptions {
+   /** Extra directory roots, including libraries loaded before workspace initialization. Never populate these from document requests. */
+   readonly additionalRoots?: readonly URI[];
+}
 
 /**
  * Node-based default {@link WritableFileSystemProvider}. Extends Langium's
@@ -29,6 +41,10 @@ import { NO_SUCH_FILE, NO_SUCH_PATH, UNSUPPORTED_DELETE, UNSUPPORTED_WRITE } fro
  * that would break a hard link, and registers the resulting mtime with the
  * {@link SelfSaveRegistry} bound at `services.workspace.SelfSaveRegistry` — so
  * consumers can suppress the `didChangeWatchedFiles` echo for their own writes.
+ *
+ * Disk operations are confined to workspace roots and explicit additional roots
+ * (see {@link isAccessible}). {@link realpath} and {@link resolveLinks} answer
+ * for any path, since identity grants no permission to read or write.
  *
  * Its read surface refuses to derive a disk path from a URI that names no disk
  * location — see {@link servesFromDisk}, which is the one place that judgement
@@ -46,10 +62,12 @@ import { NO_SUCH_FILE, NO_SUCH_PATH, UNSUPPORTED_DELETE, UNSUPPORTED_WRITE } fro
 export class DefaultFileSystemProvider extends NodeFileSystemProvider implements WritableFileSystemProvider {
    readonly selfSaveRegistry: SelfSaveRegistry;
    protected readonly tracer: Tracer;
+   /** The last {@link resolvedRoots} answer and the lists it was resolved from. */
+   protected roots?: { folders: unknown; additional: unknown; paths: readonly string[] };
 
    constructor(
       protected readonly services: ServerSharedServicesMinimal,
-      options: LogNameOptions = {}
+      protected readonly options: NodeFileSystemOptions = {}
    ) {
       super();
       this.selfSaveRegistry = services.workspace.SelfSaveRegistry;
@@ -78,50 +96,138 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
       return uri.scheme === 'file';
    }
 
+   /**
+    * Whether the resolved `uri` lies under a permitted root: a workspace folder
+    * or one of the host's `additionalRoots`. A lexical prefix check would admit
+    * sibling names and links leading out of a root, so the target is resolved
+    * first, through the nearest existing parent for a file not yet created.
+    * `'entry'` resolves only the parent, for an unlink or a replace, which
+    * changes the directory entry even where a final link points inside a root.
+    *
+    * Resolution is the native one, as the kernel follows a path, except that
+    * the text of a link to nothing is joined lexically. The JS
+    * `realpath` behind {@link realpath} folds a `dir-link/..` inside a link's
+    * text lexically, which can name a different file than the one opened. The
+    * host must protect the roots from concurrent symlink replacement, which no
+    * path check can.
+    */
+   protected async isAccessible(uri: URI, location: AccessLocation = 'target'): Promise<boolean> {
+      if (hasParentSegment(uri)) {
+         return false;
+      }
+      const path = location === 'entry' ? dirname(uri.fsPath) : uri.fsPath;
+      const resolved = await followLinksAsync(path);
+      return this.isUnderRoot(location === 'entry' ? join(resolved, basename(uri.fsPath)) : resolved);
+   }
+
+   /** The blocking {@link isAccessible}, for the synchronous read surface. */
+   protected isAccessibleSync(uri: URI, location: AccessLocation = 'target'): boolean {
+      if (hasParentSegment(uri)) {
+         return false;
+      }
+      const resolve = (path: string): string => followLinks(path, realpathSync.native);
+      return this.isUnderRoot(location === 'entry' ? join(resolve(dirname(uri.fsPath)), basename(uri.fsPath)) : resolve(uri.fsPath));
+   }
+
+   /** Rejects with `EACCES` unless {@link isAccessible}. */
+   protected async assertAccess(uri: URI, location?: AccessLocation): Promise<void> {
+      if (!(await this.isAccessible(uri, location))) {
+         throw this.accessDenied(uri);
+      }
+   }
+
+   /** Throws `EACCES` unless {@link isAccessibleSync}. */
+   protected assertAccessSync(uri: URI, location?: AccessLocation): void {
+      if (!this.isAccessibleSync(uri, location)) {
+         throw this.accessDenied(uri);
+      }
+   }
+
+   protected isUnderRoot(resolved: string): boolean {
+      return this.resolvedRoots().some(root => {
+         const path = relative(root, resolved);
+         return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+      });
+   }
+
+   /**
+    * The permitted roots with their links followed. Read on use, since the
+    * provider exists before the workspace is initialized, and resolved again
+    * only when the folder list or the host's root list is replaced.
+    */
+   protected resolvedRoots(): readonly string[] {
+      const folders = this.services.workspace.WorkspaceManager?.workspaceFolders;
+      const additional = this.options.additionalRoots;
+      if (!this.roots || this.roots.folders !== folders || this.roots.additional !== additional) {
+         const paths = [...(folders ?? []).map(folder => URI.parse(folder.uri)), ...(additional ?? [])]
+            .filter(root => root.scheme === 'file')
+            .map(root => followLinks(root.fsPath, realpathSync.native));
+         this.roots = { folders, additional, paths };
+      }
+      return this.roots.paths;
+   }
+
    // Each read answers from disk for a path this provider can reach, and
    // otherwise with the filesystem's own "nothing here" — never a probe
    // against a path derived from a URI that names no disk location.
-   override readFile(uri: URI): Promise<string> {
-      return this.servesFromDisk(uri) ? super.readFile(uri) : Promise.reject(this.noSuchFile(uri));
+   // A path outside the permitted roots is refused with `EACCES`.
+   override async readFile(uri: URI): Promise<string> {
+      if (!this.servesFromDisk(uri)) {
+         throw this.noSuchFile(uri);
+      }
+      await this.assertAccess(uri);
+      return super.readFile(uri);
    }
 
    override readFileSync(uri: URI): string {
       if (!this.servesFromDisk(uri)) {
          throw this.noSuchFile(uri);
       }
+      this.assertAccessSync(uri);
       return super.readFileSync(uri);
    }
 
-   override readBinary(uri: URI): Promise<Uint8Array> {
-      return this.servesFromDisk(uri) ? super.readBinary(uri) : Promise.reject(this.noSuchFile(uri));
+   override async readBinary(uri: URI): Promise<Uint8Array> {
+      if (!this.servesFromDisk(uri)) {
+         throw this.noSuchFile(uri);
+      }
+      await this.assertAccess(uri);
+      return super.readBinary(uri);
    }
 
    override readBinarySync(uri: URI): Uint8Array {
       if (!this.servesFromDisk(uri)) {
          throw this.noSuchFile(uri);
       }
+      this.assertAccessSync(uri);
       return super.readBinarySync(uri);
    }
 
-   override stat(uri: URI): Promise<FileSystemNode> {
-      return this.servesFromDisk(uri) ? super.stat(uri) : Promise.reject(this.noSuchPath(uri));
+   override async stat(uri: URI): Promise<FileSystemNode> {
+      if (!this.servesFromDisk(uri)) {
+         throw this.noSuchPath(uri);
+      }
+      await this.assertAccess(uri);
+      return super.stat(uri);
    }
 
    override statSync(uri: URI): FileSystemNode {
       if (!this.servesFromDisk(uri)) {
          throw this.noSuchPath(uri);
       }
+      this.assertAccessSync(uri);
       return super.statSync(uri);
    }
 
    // Delegating to `existsSync` would be shorter and would put a blocking stat
-   // on the async path.
+   // on the async path. A path outside the roots answers `false`, the same as
+   // a missing one, so the answer reveals nothing about it.
    override async exists(uri: URI): Promise<boolean> {
-      return this.servesFromDisk(uri) ? super.exists(uri) : false;
+      return this.servesFromDisk(uri) && (await this.isAccessible(uri)) && super.exists(uri);
    }
 
    override existsSync(uri: URI): boolean {
-      return this.servesFromDisk(uri) ? super.existsSync(uri) : false;
+      return this.servesFromDisk(uri) && this.isAccessibleSync(uri) && super.existsSync(uri);
    }
 
    /**
@@ -133,7 +239,7 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
       if (await this.exists(uri)) {
          return true;
       }
-      if (!this.servesFromDisk(uri) || process.platform !== 'win32') {
+      if (process.platform !== 'win32' || !this.servesFromDisk(uri) || !(await this.isAccessible(uri))) {
          return false;
       }
       // A stopwatch, not two `now()` readings: a wall-clock jump would end the
@@ -150,15 +256,15 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
       return false;
    }
 
-   // A URI this provider cannot reach on disk has no children rather than an
-   // error: a workspace walk enumerates folders it was handed, and failing one
-   // aborts the walk where an empty listing simply contributes nothing.
-   override readDirectory(uri: URI): Promise<FileSystemNode[]> {
-      return this.servesFromDisk(uri) ? super.readDirectory(uri) : Promise.resolve([]);
+   // A URI this provider cannot reach on disk, or may not, has no children
+   // rather than an error: a workspace walk enumerates folders it was handed,
+   // and failing one aborts the walk where an empty listing contributes nothing.
+   override async readDirectory(uri: URI): Promise<FileSystemNode[]> {
+      return this.servesFromDisk(uri) && (await this.isAccessible(uri)) ? super.readDirectory(uri) : [];
    }
 
    override readDirectorySync(uri: URI): FileSystemNode[] {
-      return this.servesFromDisk(uri) ? super.readDirectorySync(uri) : [];
+      return this.servesFromDisk(uri) && this.isAccessibleSync(uri) ? super.readDirectorySync(uri) : [];
    }
 
    /**
@@ -178,13 +284,14 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
     * serialise writers: two writers still race, and the loser's content is
     * replaced wholesale rather than interleaved.
     *
-    * The destination is the RESOLVED path, via {@link realpath}: a `rename`
-    * onto a symlink replaces the link itself with a regular file and leaves the
-    * file it pointed at holding the previous revision, where an in-place write
-    * would have followed the link. A URI that resolves to nothing is the create
-    * case and stages beside its own path — which includes a DANGLING link,
-    * matching {@link realpath}, whose `undefined` there is the same "absent"
-    * answer the document-identity policy acts on.
+    * The destination is the RESOLVED path, resolved natively as
+    * {@link isAccessible} resolves it: a `rename` onto a symlink replaces the
+    * link itself with a regular file and leaves the file it pointed at holding
+    * the previous revision, where an in-place write would have followed the
+    * link. A URI that resolves to nothing is the create case and stages beside
+    * its own path — which includes a DANGLING link, matching {@link realpath},
+    * whose `undefined` there is the same "absent" answer the document-identity
+    * policy acts on.
     *
     * Three constraints on the staging file. It is a sibling of the RESOLVED
     * DESTINATION and not of `uri` — `rename` is only indivisible within one
@@ -223,8 +330,12 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
       if (!this.servesFromDisk(uri)) {
          throw this.unsupportedWrite(uri);
       }
+      // The write lands on the resolved target and replaces the entry, so both
+      // must lie under a root.
+      await this.assertAccess(uri);
+      await this.assertAccess(uri, 'entry');
       await fsp.mkdir(UriUtils.dirname(uri).fsPath, { recursive: true });
-      const destination = this.realpath(uri)?.fsPath ?? uri.fsPath;
+      const destination = await fsp.realpath(uri.fsPath).catch(() => uri.fsPath);
       const replaced = await replacedFile(destination);
       if (replaced !== undefined && replaced.links > 1) {
          // Keeping the inode is the only way this write reaches the other names.
@@ -265,6 +376,7 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
       if (!this.servesFromDisk(uri)) {
          throw new Error(this.services.MessageRenderer.renderMessage(UNSUPPORTED_DELETE, { uri: uri.toString() }));
       }
+      await this.assertAccess(uri, 'entry');
       try {
          await fsp.unlink(uri.fsPath);
       } catch (error: unknown) {
@@ -280,8 +392,9 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
       // rather than the modification time of whatever occupies its `fsPath`.
       // A stamp borrowed from an unrelated file is worse than none: the
       // self-save registry keys on it to suppress a watcher echo, so a
-      // coincidental match would drop a real external change.
-      if (!this.servesFromDisk(uri)) {
+      // coincidental match would drop a real external change. A path outside
+      // the roots is "unknown" too.
+      if (!this.servesFromDisk(uri) || !(await this.isAccessible(uri))) {
          return undefined;
       }
       try {
@@ -336,16 +449,32 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
       return new Error(this.services.MessageRenderer.renderMessage(NO_SUCH_PATH, { uri: uri.toString() }));
    }
 
+   /** The `EACCES` rejection, for a path outside the permitted roots. */
+   protected accessDenied(uri: URI): Error {
+      return Object.assign(new Error(this.services.MessageRenderer.renderMessage(FILE_ACCESS_DENIED, { uri: uri.toString() })), {
+         code: 'EACCES'
+      });
+   }
+
    /** The "nowhere to put this" rejection, for a write to a URI with no disk backing. */
    protected unsupportedWrite(uri: URI): Error {
       return new Error(this.services.MessageRenderer.renderMessage(UNSUPPORTED_WRITE, { uri: uri.toString() }));
    }
 }
 
+/** Which path {@link DefaultFileSystemProvider.isAccessible} resolves: the file, or the directory entry naming it. */
+export type AccessLocation = 'target' | 'entry';
+
+// Node normalizes `link/..` lexically while the kernel follows the link, so a
+// path with a parent segment is refused before it is resolved or used.
+function hasParentSegment(uri: URI): boolean {
+   return uri.fsPath.split(sep).includes('..');
+}
+
 /** `path` with its links followed; see `DefaultFileSystemProvider.resolveLinks`. */
-function followLinks(path: string, hops = 0): string {
+function followLinks(path: string, real: (path: string) => string = realpathSync, hops = 0): string {
    try {
-      return realpathSync(path);
+      return real(path);
    } catch {
       // Absent somewhere along the way.
    }
@@ -359,11 +488,28 @@ function followLinks(path: string, hops = 0): string {
          // Not a link, or not there.
       }
       if (target !== undefined) {
-         return followLinks(resolve(dirname(path), target), hops + 1);
+         return followLinks(resolve(dirname(path), target), real, hops + 1);
       }
    }
    const parent = dirname(path);
-   return parent === path ? path : join(followLinks(parent, hops), basename(path));
+   return parent === path ? path : join(followLinks(parent, real, hops), basename(path));
+}
+
+/** {@link followLinks} with the native resolution, off the event loop. */
+async function followLinksAsync(path: string, hops = 0): Promise<string> {
+   try {
+      return await fsp.realpath(path);
+   } catch {
+      // Absent somewhere along the way.
+   }
+   if (hops < 40) {
+      const target = await fsp.readlink(path).catch(() => undefined);
+      if (target !== undefined) {
+         return followLinksAsync(resolve(dirname(path), target), hops + 1);
+      }
+   }
+   const parent = dirname(path);
+   return parent === path ? path : join(await followLinksAsync(parent, hops), basename(path));
 }
 
 /**
@@ -404,6 +550,14 @@ async function replacedFile(path: string): Promise<ReplacedFile | undefined> {
  * `DefaultEmptyFileSystemProvider` and the host gets no-op writes and a
  * throwing `readFile` instead of disk access.
  */
-export const NodeFileSystem = {
-   fileSystemProvider: serverSharedFactory(services => new DefaultFileSystemProvider(services))
-};
+export const NodeFileSystem = nodeFileSystem();
+
+/**
+ * {@link NodeFileSystem} with options, such as the `additionalRoots` a host
+ * grants for libraries it loads outside the workspace folders.
+ */
+export function nodeFileSystem(options: NodeFileSystemOptions = {}): {
+   fileSystemProvider: (services: unknown) => DefaultFileSystemProvider;
+} {
+   return { fileSystemProvider: serverSharedFactory(services => new DefaultFileSystemProvider(services, options)) };
+}

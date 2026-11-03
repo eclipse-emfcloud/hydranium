@@ -7,9 +7,9 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
    asModelVersion,
@@ -71,8 +71,7 @@ import {
    REFERENCE_SETTLE_TIMEOUT,
    REFERENCE_SETTLE_TIMEOUT_CODE
 } from '../src/data-server.js';
-import { defaultDataServerDiagnostics as browserDefaultDiagnostics } from '../src/default-diagnostics.browser.js';
-import { nodeDataServerDiagnostics } from '../src/node/node-diagnostics-provider.js';
+import { diagnosticsFromArgs, nodeDataServerDiagnostics } from '../src/node/node-diagnostics-provider.js';
 import { type DataServerHarness, makeDataServerHarness } from '../src/testing/data-server-harness.js';
 import { recordSessionEndings } from './session-endings.js';
 
@@ -2097,11 +2096,7 @@ describe('DataServer', () => {
          }
       });
 
-      it('defaults the diagnostics provider so a Node host passes nothing', async () => {
-         // The default is selected by package.json's `browser` field, so under
-         // Node this resolves to the real implementation with no wiring. A
-         // browser bundle gets the twin instead; that swap is a bundler
-         // behaviour, so `check:neutral` is what proves it, not this suite.
+      it('rejects privileged diagnostics unless the host supplies a provider', async () => {
          const bundle = buildBundle();
          const pair = makeDuplexConnectionPair();
          try {
@@ -2109,21 +2104,55 @@ describe('DataServer', () => {
             const diagnostics = createRpcProxy<DataServerDiagnosticsProtocol>(pair.right, {
                methodNamespace: DATA_SERVER_WIRE_PREFIX
             });
-            expect(await diagnostics.dumpPodMemory()).toContain('Pod memory snapshot');
+            await expect(diagnostics.dumpPodMemory()).rejects.toThrow('disabled');
+            await expect(diagnostics.dumpServerState({})).rejects.toThrow('disabled');
+            await expect(diagnostics.writeHeapSnapshot({})).rejects.toThrow('disabled');
+            await expect(diagnostics.startProfiling({})).rejects.toThrow('disabled');
          } finally {
             pair.dispose();
          }
       });
 
-      it('the browser default rejects each method by naming the absent capability', async () => {
-         // Asserted against the module directly: it is the branch a browser
-         // bundle binds, and no Node test run can reach it through the bundler.
-         // It must THROW rather than no-op — an empty snapshot reads as a
-         // healthy server, which is the same shape as a real answer.
-         const provider = browserDefaultDiagnostics();
-         await expect(provider.dumpPodMemory()).rejects.toThrow('no process to inspect');
-         await expect(provider.writeHeapSnapshot({})).rejects.toThrow('no process to inspect');
-         await expect(provider.startProfiling({})).rejects.toThrow('no process to inspect');
+      it('enables diagnostics from the command line only for --enable-diagnostics', () => {
+         expect(diagnosticsFromArgs([])).toBeUndefined();
+         expect(diagnosticsFromArgs(['--stdio', 'workspace', '--diagnostics-directory', 'out'])).toBeUndefined();
+         expect(diagnosticsFromArgs(['--stdio', '--enable-diagnostics', 'workspace'])).toBeDefined();
+         expect(diagnosticsFromArgs(['--enable-diagnostics', '--diagnostics-directory=out'])).toBeDefined();
+      });
+
+      it.for([
+         ['--enable-diagnostics=false'],
+         ['--diagnostics-directory'],
+         ['--diagnostics-directory', '--stdio'],
+         ['--diagnostics-directory', '-x'],
+         ['--diagnostics-directory=']
+      ])('refuses the malformed diagnostics arguments %j', args => {
+         expect(() => diagnosticsFromArgs(args)).toThrow(args[0].split('=')[0]);
+      });
+
+      it('keeps profiling artifacts in the host directory despite a client directory', async () => {
+         const dir = mkdtempSync(join(tmpdir(), 'hydranium-diagnostics-policy-'));
+         const pair = makeDuplexConnectionPair();
+         const server = new TestDataServer(pair.left, buildBundle().services, {
+            diagnostics: nodeDataServerDiagnostics({ directory: join(dir, 'host') })
+         });
+         try {
+            const diagnostics = createRpcProxy<DataServerDiagnosticsProtocol>(pair.right, {
+               methodNamespace: DATA_SERVER_WIRE_PREFIX
+            });
+            await diagnostics.startProfiling({});
+            rmSync(join(dir, 'host'), { recursive: true });
+            await diagnostics.stopProfiling({ directory: join(dir, 'client') });
+            expect(existsSync(join(dir, 'client'))).toBe(false);
+            expect(existsSync(join(dir, 'host', 'server-summary.json'))).toBe(true);
+            if (process.platform !== 'win32') {
+               expect(statSync(join(dir, 'host')).mode & 0o077).toBe(0);
+            }
+         } finally {
+            server.dispose();
+            pair.dispose();
+            rmSync(dir, { recursive: true, force: true });
+         }
       });
 
       it('startProfiling then stopProfiling captures a window and returns a formatted report', async () => {
@@ -2145,18 +2174,18 @@ describe('DataServer', () => {
          }
       });
 
-      it('stopProfiling folds the window report into server-summary.json when a directory is given', async () => {
+      it('stopProfiling folds the window report into server-summary.json in the host directory', async () => {
          const bundle = buildBundle();
          const pair = makeDuplexConnectionPair();
          const dir = mkdtempSync(join(tmpdir(), 'hydranium-ds-summary-'));
          try {
-            new TestDataServer(pair.left, bundle.services, { diagnostics: nodeDataServerDiagnostics() });
+            new TestDataServer(pair.left, bundle.services, { diagnostics: nodeDataServerDiagnostics({ directory: dir }) });
             const diagnostics = createRpcProxy<DataServerDiagnosticsProtocol>(pair.right, {
                methodNamespace: DATA_SERVER_WIRE_PREFIX
             });
             await diagnostics.startProfiling({ gc: true });
             await new Promise(resolve => setTimeout(resolve, 5));
-            await diagnostics.stopProfiling({ directory: dir, label: 'scenario' });
+            await diagnostics.stopProfiling({ label: 'scenario' });
             const summary = JSON.parse(readFileSync(join(dir, 'server-summary.json'), 'utf8'));
             expect(typeof summary.scenario.durationMs).toBe('number');
          } finally {
@@ -2406,20 +2435,31 @@ describe('DataServer', () => {
          // that pause is charged to whatever CPU the runner has left.
       }, 30_000);
 
-      it('writeHeapSnapshot writes a snapshot file to the given directory', async () => {
+      it('writeHeapSnapshot restores the host directory after cleanup', async () => {
          const bundle = buildBundle();
          const pair = makeDuplexConnectionPair();
          const dir = mkdtempSync(join(tmpdir(), 'hydranium-ds-heap-'));
+         let filePath: string | undefined;
          try {
-            new TestDataServer(pair.left, bundle.services, { diagnostics: nodeDataServerDiagnostics() });
+            new TestDataServer(pair.left, bundle.services, { diagnostics: nodeDataServerDiagnostics({ directory: dir }) });
             const diagnostics = createRpcProxy<DataServerDiagnosticsProtocol>(pair.right, {
                methodNamespace: DATA_SERVER_WIRE_PREFIX
             });
-            const filePath = await diagnostics.writeHeapSnapshot({ directory: dir });
+            await diagnostics.startProfiling({});
+            await diagnostics.stopProfiling({});
+            rmSync(dir, { recursive: true });
+            filePath = await diagnostics.writeHeapSnapshot({ directory: join(dir, 'client'), label: basename(dir) });
+            expect(dirname(filePath)).toBe(dir);
             expect(filePath.endsWith('.heapsnapshot')).toBe(true);
             expect(existsSync(filePath)).toBe(true);
+            if (process.platform !== 'win32') {
+               expect(statSync(dir).mode & 0o077).toBe(0);
+            }
          } finally {
             pair.dispose();
+            if (filePath) {
+               rmSync(filePath, { force: true });
+            }
             rmSync(dir, { recursive: true, force: true });
          }
          // Generous timeout: a V8 heap snapshot serializes the whole heap to
@@ -2428,6 +2468,27 @@ describe('DataServer', () => {
          // bounds both far below a developer machine. Headroom, not a weaker
          // assertion — the path and the file's existence are still asserted.
       }, 30_000);
+
+      it('rejects every profiling attempt when the host directory cannot be created', async () => {
+         const root = mkdtempSync(join(tmpdir(), 'hydranium-diagnostics-blocked-'));
+         const blocked = join(root, 'blocked');
+         writeFileSync(blocked, 'file instead of directory');
+         const provider = nodeDataServerDiagnostics({ directory: join(blocked, 'output') });
+         try {
+            for (let i = 0; i < 2; i++) {
+               const attempt = provider.startProfiling({});
+               try {
+                  await expect(attempt).rejects.toThrow();
+               } finally {
+                  const capture = await attempt.catch(() => undefined);
+                  await capture?.stop({}).catch(() => undefined);
+               }
+            }
+            expect(ProfileCapture.isActive()).toBe(false);
+         } finally {
+            rmSync(root, { recursive: true, force: true });
+         }
+      });
 
       it('throws when additionalMethods overlaps with a built-in framework method', () => {
          const bundle = buildBundle();

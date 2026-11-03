@@ -38,13 +38,16 @@
  * that member where the server resolves it, as the scaffold's workspace would.
  */
 
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import * as fs from 'node:fs';
 import { findPackageJSON } from 'node:module';
+import { createConnection } from 'node:net';
+import { startSpawnedServer } from '@hydranium/core/testing/node';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { StreamMessageReader, StreamMessageWriter, createMessageConnection, type MessageConnection } from 'vscode-jsonrpc/node';
 import { describe, expect, it } from 'vitest';
 import { generateTransferModel } from '../src/commands/generate-transfer-model.js';
 import { type InitGrammarSpec, type InitHead, runInit } from '../src/commands/init.js';
@@ -107,7 +110,7 @@ const CASES: readonly CompileCase[] = [
  * process is stopped and has exited when this settles. Rejects with its stderr
  * when it exits before printing the line.
  */
-async function portsLine(server: string, args: readonly string[]): Promise<string> {
+async function portsLine(server: string, args: readonly string[], inspect?: (line: string) => Promise<void>): Promise<string> {
    const child = spawn(process.execPath, ['lib/main.js', ...args], { cwd: server, stdio: ['ignore', 'pipe', 'pipe'] });
    const stderr: string[] = [];
    child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk.toString()));
@@ -116,7 +119,9 @@ async function portsLine(server: string, args: readonly string[]): Promise<strin
    const exit = once(child, 'exit');
    const exited = exit.then(([code]) => Promise.reject(new Error(`main.js exited ${String(code)}:\n${stderr.join('')}`)));
    try {
-      return await Promise.race([line, exited]);
+      const result = await Promise.race([line, exited]);
+      await inspect?.(result);
+      return result;
    } finally {
       exited.catch(() => undefined);
       child.kill();
@@ -158,6 +163,88 @@ function runTool(targetDir: string, packageName: string, command: string, args: 
    } catch (err: unknown) {
       const output = err as { stdout?: string; stderr?: string };
       throw new Error(`${command} failed:\n${output.stdout ?? ''}${output.stderr ?? ''}`);
+   }
+}
+
+async function verifyDiagnostics(rpc: MessageConnection, enabled: boolean, directory: string): Promise<void> {
+   await rpc.sendRequest('data-server/waitForReady');
+   if (enabled) {
+      expect(await rpc.sendRequest<string>('data-server/dumpServerState', {})).toMatch(/heap .* used/);
+      await rpc.sendRequest('data-server/startProfiling', {});
+      await rpc.sendRequest('data-server/stopProfiling', { directory: `${directory}-client` });
+      expect(fs.existsSync(path.join(directory, 'server-summary.json'))).toBe(true);
+      expect(fs.existsSync(`${directory}-client`)).toBe(false);
+   } else {
+      await expect(rpc.sendRequest('data-server/dumpServerState', {})).rejects.toThrow('disabled');
+      expect(fs.existsSync(directory)).toBe(false);
+   }
+}
+
+async function verifySocketDiagnostics(port: number, enabled: boolean, directory: string): Promise<void> {
+   const socket = createConnection({ host: '127.0.0.1', port });
+   const rpc = createMessageConnection(new StreamMessageReader(socket), new StreamMessageWriter(socket));
+   try {
+      await once(socket, 'connect');
+      rpc.listen();
+      await verifyDiagnostics(rpc, enabled, directory);
+   } finally {
+      rpc.dispose();
+      socket.destroy();
+   }
+}
+
+async function verifyGeneratedDiagnostics(server: string, workspace: string, projectId: string, lsp: boolean): Promise<void> {
+   for (const entry of ['main', 'data-server-main']) {
+      for (const invalid of [
+         ['--enable-diagnostics=false'],
+         ['--diagnostics-directory'],
+         ['--diagnostics-directory', '--stdio', '--enable-diagnostics']
+      ]) {
+         const result = spawnSync(process.execPath, [path.join(server, `lib/${entry}.js`), ...invalid], {
+            encoding: 'utf8',
+            timeout: 5_000
+         });
+         expect(result.status).not.toBeNull();
+         expect(result.status).not.toBe(0);
+         expect(result.stderr).toContain(invalid[0].split('=')[0]);
+      }
+   }
+   // guidance-claim: scaffold-diagnostics-opt-in
+   for (const mode of ['default', 'directory-only', 'enabled']) {
+      const enabled = mode === 'enabled';
+      const directory = path.join(server, `diagnostics-${mode}`);
+      const flags = mode === 'default' ? [] : [...(enabled ? ['--enable-diagnostics'] : []), '--diagnostics-directory', directory];
+      const child = spawn(process.execPath, [path.join(server, 'lib/data-server-main.js'), workspace, ...flags], {
+         stdio: ['pipe', 'pipe', 'pipe']
+      });
+      const exited = once(child, 'exit');
+      const rpc = createMessageConnection(new StreamMessageReader(child.stdout), new StreamMessageWriter(child.stdin));
+      rpc.listen();
+      try {
+         await verifyDiagnostics(rpc, enabled, directory);
+      } finally {
+         rpc.dispose();
+         child.kill();
+         await exited;
+      }
+      fs.rmSync(directory, { recursive: true, force: true });
+      if (lsp) {
+         const launched = await startSpawnedServer({
+            serverModule: path.join(server, 'lib/main.js'),
+            workspaceRoot: workspace,
+            args: ['--stdio', ...flags]
+         });
+         try {
+            await verifySocketDiagnostics(await launched.port(`${projectId}/data-server/port`), enabled, directory);
+         } finally {
+            await launched.dispose();
+         }
+      } else {
+         await portsLine(server, [...flags, workspace], async line => {
+            const ports = JSON.parse(line) as { dataServer: number };
+            await verifySocketDiagnostics(ports.dataServer, enabled, directory);
+         });
+      }
    }
 }
 
@@ -322,6 +409,14 @@ describe('the emitted scaffold compiles', () => {
             if (heads !== undefined && !heads.includes('lsp')) {
                const ports = JSON.parse(await portsLine(server, [path.join(targetDir, 'workspace')])) as unknown;
                expect(ports).toEqual({ dataServer: expect.any(Number), glspServer: expect.any(Number) });
+            }
+            if (heads === undefined || heads.includes('data')) {
+               await verifyGeneratedDiagnostics(
+                  server,
+                  path.join(targetDir, 'workspace'),
+                  name.toLowerCase(),
+                  heads === undefined || heads.includes('lsp')
+               );
             }
          } finally {
             // In `finally`, so a failing case cannot leave a directory that

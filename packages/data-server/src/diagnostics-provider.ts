@@ -27,7 +27,7 @@ import type { DumpServerStateArgs, StartProfilingArgs, StopProfilingArgs, WriteS
  *
  * Node hosts get the real implementation from `@hydranium/data-server/node`.
  * Hosts that supply nothing keep the whole rest of the protocol and reject only
- * these four methods, with a message naming the import that would satisfy them.
+ * process-inspection requests until the host explicitly authorizes them.
  */
 export interface DataServerDiagnosticsProvider {
    /**

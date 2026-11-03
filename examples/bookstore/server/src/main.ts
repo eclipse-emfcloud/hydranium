@@ -26,6 +26,7 @@ import { GlspClientLogger, HydraniumGlspAppModule } from '@hydranium/glsp-server
 import { startGlspServer } from '@hydranium/glsp-server/node';
 import { NodeFileSystem, publishPortOnLspConnection, startSocketServer } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
+import { diagnosticsFromArgs } from '@hydranium/data-server/node';
 import { describeErrorWithStack } from '@hydranium/protocol';
 // The framework's entry point, NOT Langium's `@hydranium/langium/lsp` one. It is
 // signature-compatible and delegates straight through; what it adds first is
@@ -47,6 +48,9 @@ import { createBookstoreServices } from './language-server/bookstore-module.js';
 
 import { BOOKSTORE_DATA_SERVER_PORT_COMMAND, BOOKSTORE_GLSP_SERVER_PORT_COMMAND } from '@hydranium/bookstore-protocol';
 
+// The host opts in for every connection to this process.
+const diagnostics = diagnosticsFromArgs();
+
 const connection = createConnection(withHydraniumLspFeatures(ProposedFeatures.all));
 const { shared } = createBookstoreServices({ connection, ...NodeFileSystem });
 startLanguageServer(shared);
@@ -58,7 +62,7 @@ startLanguageServer(shared);
 // head serving text edits while every data client waits on a port command that was
 // never registered, and the launcher reports a bind failure only if given a logger.
 const dataServer = startSocketServer({ shared, port: 0, logTag: 'ModelServer', logger: shared.Logger }, dataConnection => {
-   new DataServer<BookstoreModel>(dataConnection, shared);
+   new DataServer<BookstoreModel>(dataConnection, shared, { diagnostics });
    return { dispose: () => undefined };
 });
 dataServer.started

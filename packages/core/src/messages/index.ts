@@ -35,6 +35,7 @@ export {
 export { NO_LOADABLE_CONTENT } from '../langium/workspace/langium-documents.js';
 export {
    DELETE_DIRECTORY_REFUSED,
+   FILE_ACCESS_DENIED,
    NO_SUCH_FILE,
    NO_SUCH_PATH,
    UNSUPPORTED_DELETE,

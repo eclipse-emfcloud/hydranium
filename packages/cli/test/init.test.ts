@@ -259,8 +259,8 @@ describe('planInitFiles with heads', () => {
       // over the LSP connection, which no `--server` client can ask for.
       const entry = contentOf(filesFor(['lsp', 'data']), 'server/src/data-server-main.ts');
       expect(entry).toContain("import { NodeFileSystem, startStdioServer } from '@hydranium/core/node';");
-      expect(entry).toContain('new DataServer<BookstoreModel>(connection, shared)');
-      expect(entry).toContain('workspace: process.argv[2] ?? process.cwd()');
+      expect(entry).toContain('new DataServer<BookstoreModel>(connection, shared, { diagnostics })');
+      expect(entry).toContain('workspace: positionals[0] ?? process.cwd()');
       expect(contentOf(filesFor(['lsp', 'data']), 'server/package.json')).toContain('"bookstore-data-server": "lib/data-server-main.js"');
    });
 
@@ -554,7 +554,7 @@ describe('planInitFiles', () => {
    });
 
    it('types the single-grammar data head with that grammar’s transfer root', () => {
-      expect(byPath('server/src/main.ts')?.content).toContain('new DataServer<BookstoreModel>(dataConnection, shared)');
+      expect(byPath('server/src/main.ts')?.content).toContain('new DataServer<BookstoreModel>(dataConnection, shared, { diagnostics })');
    });
 
    it('separates the shared and per-language generated symbols by name role', () => {
@@ -738,17 +738,16 @@ describe('planInitFiles with several grammars', () => {
 
    it('types the data head with the union of every transfer root', () => {
       // One data server per process serves every grammar.
-      expect(byPath('server/src/main.ts')).toContain('new DataServer<DomainModel | LayoutModel | ProcessModel>(dataConnection, shared)');
+      expect(byPath('server/src/main.ts')).toContain(
+         'new DataServer<DomainModel | LayoutModel | ProcessModel>(dataConnection, shared, { diagnostics })'
+      );
       expect(byPath('server/src/main.ts')).toContain("import type { DomainModel, LayoutModel, ProcessModel } from 'order-flow-protocol';");
    });
 
-   it('leaves the diagnostics provider to the platform default', () => {
-      // A scaffolded host is a Node host and gets the real implementation with
-      // no wiring, because the default is selected by the data-server package's
-      // `browser` field. Asserted as an ABSENCE so the scaffold cannot quietly
-      // regrow a line every adopter would have to understand and none needs.
-      expect(byPath('server/src/main.ts')).not.toContain('nodeDataServerDiagnostics');
-      expect(byPath('server/src/main.ts')).not.toContain('diagnostics:');
+   it('reads the diagnostics opt-in from the command line in generated servers', () => {
+      for (const entry of ['server/src/main.ts', 'server/src/data-server-main.ts']) {
+         expect(byPath(entry)).toContain('const diagnostics = diagnosticsFromArgs();');
+      }
    });
 
    it('asserts every registered language in the scaffolded test', () => {
@@ -925,7 +924,7 @@ describe('planInitFiles with hosts', () => {
          'await showDataStatus(heads.data,',
          'shownDiagram = await mountDiagram(heads.glsp, shownFile, logger, settleDiagramEdits);'
       ];
-      expect(calls.map(call => page.indexOf(call))).toEqual([...calls.map(call => page.indexOf(call))].sort((left, right) => left - right));
+      expect(calls.map(call => page.indexOf(call))).toEqual(calls.map(call => page.indexOf(call)).sort((left, right) => left - right));
       expect(calls.every(call => page.includes(call))).toBe(true);
       const worker = contentOf(files, 'host-browser/src/worker.ts') ?? '';
       // Before any module carrying a decorator is evaluated.

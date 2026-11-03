@@ -76,17 +76,18 @@ has dispatched every message sent before the signal, under either
 `vscode-jsonrpc` runtime, so a `closeSession` already sent still ends its
 session as closed.
 
-## Diagnostics default themselves
+## Diagnostics require host authorization
 
-The data head's diagnostics requests need a process to inspect. The extension
-point is `DataServerDiagnosticsProvider`, not `DataServer`. `package.json`'s
-`browser` field selects the Node implementation on Node and a rejecting twin in
-a browser bundle, the same mechanism `@eclipse-glsp/server` uses to swap its
-builds, so a host supplies nothing; `DataServerOptions.diagnostics` exists to
-override, not to be required. The browser twin throws rather than no-ops,
-because an empty snapshot reads as a healthy server. In a browser these
-measurements are taken from outside the page, over CDP, so an in-process API is
-the wrong shape for them rather than an unfilled gap.
+The data head rejects process diagnostics until the host supplies a
+`DataServerDiagnosticsProvider`. A Node runtime alone grants no permission to
+inspect the process, so both platforms use the same rejecting default. The
+Node implementation lives behind `/node` and the host binds it per connection.
+It also owns the output directory: a caller allowed to request a snapshot
+does not thereby get to choose a filesystem destination.
+
+Rejection matters because an empty snapshot would look like a healthy server.
+Browser measurements come from outside the page, over CDP. There is no Node
+process for a provider in the worker to inspect.
 
 ## Why persistence is a mirror
 

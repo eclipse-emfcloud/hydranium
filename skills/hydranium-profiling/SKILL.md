@@ -68,3 +68,39 @@ module; its package configuration may already supply it. `--profile` selects
 dimensions, including `framework` for instrumented passes. Build the adopter's
 code first. Capturing every dimension adds overhead and is rarely necessary
 for every comparison.
+
+## Capture from a running Node server
+
+Process diagnostics are disabled by default. Before requesting a capture,
+check the host's launch entry: a compatible analysis contract does not tell
+you whether that host permits process inspection. Only enable it when the
+user has authorized a capture and every caller of that data connection may
+inspect the process. Workspace access alone does not grant that permission.
+
+<!-- guidance-claim: scaffold-diagnostics-opt-in test=packages/cli/test/init-scaffold-compiles.test.ts -->
+Current Node scaffolds accept `--enable-diagnostics` on both `main.js` and
+`data-server-main.js`. Add `--diagnostics-directory <path>` when CI needs
+artifacts in a known location. The directory option alone leaves diagnostics
+disabled, and a directory sent in an RPC request cannot change the host's
+destination. Use an absolute path in CI so a change to the server's working
+directory cannot move the output. These flags authorize all data connections
+to that process.
+
+Check the generated source before using these flags on an older project.
+For a host without them, bind `nodeDataServerDiagnostics` from
+`@hydranium/data-server/node` through `DataServerOptions.diagnostics` for the
+authorized connection. The
+[data-client guide](../../docs/guides/connect-a-data-client.md#process-diagnostics)
+covers that binding. Without an output directory, the provider uses a private
+temporary directory. Keep captures private and arrange their cleanup: heap
+snapshots can contain secrets from every client in the process.
+
+After launching with the opt-in, call `dumpServerState` before taking a large
+snapshot. A reply with heap usage confirms the provider is available. If it
+reports that diagnostics are disabled, check the host launch configuration.
+Do not widen workspace roots or change client directory arguments. The
+`writeHeapSnapshot` request returns the snapshot's file path, including when
+the provider chose a temporary directory. For a profiling window, call
+`startProfiling` with the dimensions needed, run the authorized workload, and
+call `stopProfiling`. The headless `measure-memory` workflow above does not use
+this RPC permission.

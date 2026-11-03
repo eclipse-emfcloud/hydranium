@@ -30,6 +30,7 @@ import { GlspClientLogger, HydraniumGlspAppModule } from '@hydranium/glsp-server
 import { startGlspServer } from '@hydranium/glsp-server/node';
 import { NodeFileSystem, publishPortOnLspConnection, startSocketServer } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
+import { diagnosticsFromArgs } from '@hydranium/data-server/node';
 import { describeErrorWithStack } from '@hydranium/protocol';
 // The framework's entry point, NOT Langium's `@hydranium/langium/lsp` one. It is
 // signature-compatible and delegates straight through; what it adds first is
@@ -49,6 +50,9 @@ import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND, ORDER_FLOW_GLSP_SERVER_PORT_COMMAN
 import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
 import { createOrderFlowServices } from './language-server/order-flow-module.js';
 
+// The host opts in for every connection to this process.
+const diagnostics = diagnosticsFromArgs();
+
 const connection = createConnection(withHydraniumLspFeatures(ProposedFeatures.all));
 const { shared } = createOrderFlowServices({ connection, ...NodeFileSystem });
 startLanguageServer(shared);
@@ -60,7 +64,9 @@ startLanguageServer(shared);
 // head serving text edits while every data client waits on a port command that was
 // never registered, and the launcher reports a bind failure only if given a logger.
 const dataServer = startSocketServer({ shared, port: 0, logTag: 'ModelServer', logger: shared.Logger }, dataConnection => {
-   new DataServer<DomainModel | LayoutModel | ProcessModel>(dataConnection, shared);
+   new DataServer<DomainModel | LayoutModel | ProcessModel>(dataConnection, shared, {
+      diagnostics
+   });
    return { dispose: () => undefined };
 });
 dataServer.started

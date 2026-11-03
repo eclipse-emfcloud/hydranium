@@ -1193,6 +1193,11 @@ ${diagrams.map(grammar => `export * from './glsp/${grammar.grammarId}/diagram-mo
  */
 const SHEBANG = '#!/usr/bin/env node\n';
 
+const DIAGNOSTICS_ARGUMENTS = "'enable-diagnostics': { type: 'boolean' }, 'diagnostics-directory': { type: 'string' }";
+const DIAGNOSTICS_BINDING = `// The host opts in for every connection to this process.
+const diagnostics = diagnosticsFromArgs();
+`;
+
 /**
  * The launcher, assembled from the head set.
  *
@@ -1261,7 +1266,7 @@ ${importList(roots, memberPackageName(composition, 'protocol'), columns, true)}
 const dataServer = startSocketServer(
    { shared, workspace, port: portFrom('data-server-port', ${upper}_DATA_SERVER_PORT_ENV), logTag: 'ModelServer', logger: shared.Logger },
    dataConnection => {
-      new DataServer<${roots.join(' | ')}>(dataConnection, shared);
+      new DataServer<${roots.join(' | ')}>(dataConnection, shared, { diagnostics });
       return { dispose: () => undefined };
    }
 );
@@ -1274,7 +1279,7 @@ const dataServer = startSocketServer(
 // head serving text edits while every data client waits on a port command that was
 // never registered, and the launcher reports a bind failure only if given a logger.
 const dataServer = startSocketServer({ shared, port: 0, logTag: 'ModelServer', logger: shared.Logger }, dataConnection => {
-   new DataServer<${roots.join(' | ')}>(dataConnection, shared);
+   new DataServer<${roots.join(' | ')}>(dataConnection, shared, { diagnostics });
    return { dispose: () => undefined };
 });
 dataServer.started
@@ -1343,7 +1348,12 @@ import { ProposedFeatures, createConnection } from 'vscode-languageserver/node';
 `;
 
    const lspStart = `
-const connection = createConnection(withHydraniumLspFeatures(ProposedFeatures.all));
+${
+   data
+      ? `${DIAGNOSTICS_BINDING}
+`
+      : ''
+}const connection = createConnection(withHydraniumLspFeatures(ProposedFeatures.all));
 const { shared } = create__NAME__Services({ connection, ...NodeFileSystem });
 startLanguageServer(shared);
 `;
@@ -1353,14 +1363,14 @@ startLanguageServer(shared);
    const servers = [...(data ? ['dataServer'] : []), ...(glsp ? ['glspServer'] : [])];
    const socketStart = `
 const { values, positionals } = parseArgs({
-   options: { ${portFlags.map(flag => `'${flag.slice(2)}': { type: 'string' }`).join(', ')} },
+   options: { ${[...portFlags.map(flag => `'${flag.slice(2)}': { type: 'string' }`), ...(data ? [DIAGNOSTICS_ARGUMENTS] : [])].join(', ')} },
    allowPositionals: true
 });
 // The workspace root: the first argument, else the process cwd.
 const workspace = positionals[0] ?? process.cwd();
-
+${data ? '\n' + DIAGNOSTICS_BINDING : ''}
 /** A head's port: its flag, else its environment variable, else 0 for any free port. */
-function portFrom(flag: keyof typeof values, variable: string): number {
+function portFrom(flag: ${portFlags.map(flag => `'${flag.slice(2)}'`).join(' | ')}, variable: string): number {
    const text = values[flag] ?? process.env[variable] ?? '0';
    const port = Number(text);
    // Decimal digits only: \`Number\` also reads '' as 0 and takes '1e3' or '0x10'.
@@ -1411,7 +1421,7 @@ ${invocation}${dataNote}
 // than a library entry — import \`./index.js\` instead to compose the language.
 
 ${reflectImport}${glspImports}${importList(coreNodeSymbols, '@hydranium/core/node', columns)}
-${data ? "import { DataServer } from '@hydranium/data-server';\n" : ''}${data && lsp ? "import { describeErrorWithStack } from '@hydranium/protocol';\n" : ''}${lsp ? lspImports : "import { parseArgs } from 'node:util';\n"}${diagramImports}${transferImports}import { create__NAME__Services } from './language-server/__PROJECT_ID__-module.js';
+${data ? "import { DataServer } from '@hydranium/data-server';\nimport { diagnosticsFromArgs } from '@hydranium/data-server/node';\n" : ''}${data && lsp ? "import { describeErrorWithStack } from '@hydranium/protocol';\n" : ''}${lsp ? lspImports : "import { parseArgs } from 'node:util';\n"}${diagramImports}${transferImports}import { create__NAME__Services } from './language-server/__PROJECT_ID__-module.js';
 ${portImports === '' ? '' : '\n' + portImports}${lsp ? lspStart : socketStart}${dataBlock}${glspBlock}${lsp ? '' : portsLine}`;
    return project(text, composition);
 }
@@ -1463,10 +1473,17 @@ ${
 
 ${importList(['NodeFileSystem', 'startStdioServer'], '@hydranium/core/node', columns)}
 import { DataServer } from '@hydranium/data-server';
+import { diagnosticsFromArgs } from '@hydranium/data-server/node';
+import { parseArgs } from 'node:util';
 // The TRANSFER root${plural}, not the AST one${plural} — same reasoning as \`main.ts\`.
 ${importList(roots, memberPackageName(composition, 'protocol'), columns, true)}
 import { create__NAME__Services } from './language-server/__PROJECT_ID__-module.js';
 
+const { positionals } = parseArgs({
+   options: { ${DIAGNOSTICS_ARGUMENTS} },
+   allowPositionals: true
+});
+${DIAGNOSTICS_BINDING}
 const { shared } = create__NAME__Services({ ...NodeFileSystem });
 
 // \`startStdioServer\` owns the transport AND the workspace bring-up, including
@@ -1480,12 +1497,12 @@ const server = startStdioServer(
       shared,
       // Defaults to the process cwd, which is what the CLI's \`--cwd\` sets on the
       // spawned child; an explicit path argument overrides it.
-      workspace: process.argv[2] ?? process.cwd(),
+      workspace: positionals[0] ?? process.cwd(),
       logger: shared.Logger,
       logTag: 'ModelServer'
    },
    connection => {
-      new DataServer<${roots.join(' | ')}>(connection, shared);
+      new DataServer<${roots.join(' | ')}>(connection, shared, { diagnostics });
       // The DataServer self-cleans via \`connection.onClose\`, so there is nothing
       // extra to tear down here.
       return { dispose: () => undefined };
@@ -1822,6 +1839,15 @@ function readme(composition: InitComposition): string {
          : []),
       '```',
       '',
+      ...(data
+         ? [
+              'For an authorized process capture, add `--enable-diagnostics` to either',
+              'Node server entry. `--diagnostics-directory <path>` chooses where it writes',
+              'artifacts. A directory alone does not enable diagnostics.',
+              'Only enable this for callers you trust to inspect the whole process.',
+              ''
+           ]
+         : []),
       '## Layout',
       '',
       ...grammarBullets,

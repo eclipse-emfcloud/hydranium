@@ -40,7 +40,7 @@
  */
 
 import { type ScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/testing/node';
-import { createRpcProxy } from '@hydranium/protocol';
+import { createRpcProxy, type DataServerDiagnosticsProtocol } from '@hydranium/protocol';
 import {
    DATA_CLIENT_PROTOCOL_METHODS,
    DATA_SERVER_WIRE_PREFIX,
@@ -123,10 +123,13 @@ function uriOf(relativePath: string): string {
    return workspace.uri(relativePath);
 }
 
-describe('order-flow data-server socket smoke', () => {
+describe.each([false, true])('order-flow data-server socket with diagnostics enabled=%s', enableDiagnostics => {
    beforeAll(async () => {
       workspace = makeScratchWorkspace({ seed: WORKSPACE_ROOT, prefix: 'order-flow-smoke-data-' });
-      server = await startSpawnedOrderFlowServer({ workspaceRoot: workspace.root });
+      server = await startSpawnedOrderFlowServer({
+         workspaceRoot: workspace.root,
+         args: ['--stdio', ...(enableDiagnostics ? ['--enable-diagnostics'] : [])]
+      });
       publishedPort = await server.port(PORT_COMMAND);
    }, SPAWN_TIMEOUT_MS);
 
@@ -167,6 +170,18 @@ describe('order-flow data-server socket smoke', () => {
       // the accepted connection reached a real `DataServer` over a built
       // workspace, rather than a `DataServer` over an empty one.
       expect(projects.map(project => project.id).sort()).toEqual(['commerce-core', 'orders']);
+   });
+
+   it('allows process diagnostics only when the host enables them at startup', async () => {
+      await dataServerProxy().waitForReady();
+      const diagnostics = createRpcProxy<DataServerDiagnosticsProtocol>(rpc!, { methodNamespace: DATA_SERVER_WIRE_PREFIX });
+      if (enableDiagnostics) {
+         expect(await diagnostics.dumpServerState({})).toMatch(/heap .* used/);
+         expect(await diagnostics.dumpPodMemory()).toContain('Pod memory snapshot');
+      } else {
+         await expect(diagnostics.dumpServerState({})).rejects.toThrow('disabled');
+         await expect(diagnostics.dumpPodMemory()).rejects.toThrow('disabled');
+      }
    });
 
    it('routes a second grammar to its own serializer over the same socket', async () => {

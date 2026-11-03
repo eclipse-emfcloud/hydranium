@@ -15,7 +15,9 @@
  *
  * The fixture brackets a scenario: start the server-side capture + the in-page
  * timeline BEFORE the body, then AFTER stop the capture (the server writes its
- * profile files into the shared session dir — local e2e shares the filesystem),
+ * profile files to its host-configured diagnostics directory, so a run that
+ * wants them indexed launches the server with `--diagnostics-directory` set to
+ * the session dir — local e2e shares the filesystem),
  * pull latency over RPC, bridge the browser state to disk, and assemble ONE
  * manifest indexing everything gathered. The server-RPC calls are adopter hooks
  * (only the adopter knows how to reach its model-service from the page); the
@@ -98,7 +100,11 @@ export const DEFAULT_E2E_DIMENSIONS: ProfileCaptureOptions = { cpu: true, alloca
 export interface E2EProfilingHooks {
    /** Begin the server-side sampled capture for the given dimensions. */
    startProfiling(options: ProfileCaptureOptions): Promise<void>;
-   /** Stop the capture, writing the profile artefacts into `directory` (the session dir). */
+   /**
+    * Stop the capture. `directory` is the session dir, a hint the Node provider
+    * ignores: its artefacts land in the session dir only when the host
+    * launched the server with that directory.
+    */
    stopProfiling(directory: string): Promise<unknown>;
    /** Return the per-method RPC/LSP latency collected during the scenario. */
    getLatency(): Promise<LatencyReport>;
@@ -275,7 +281,7 @@ export async function startE2EProfiling(options: E2EProfilingOptions): Promise<E
 
 /**
  * End capture — call AFTER the scenario body. Stops the server capture (its files
- * land in the session dir), writes `server-latency.json` from the RPC, bridges the
+ * land in the session dir when the server was launched with it), writes `server-latency.json` from the RPC, bridges the
  * browser state to disk (`browser-timeline.json` + a single source-graded
  * `browser-runtime.json` — the richer two-point CDP read superseding the coarse
  * `page.evaluate` read when a CDP session is given), folds in `server.log` when

@@ -44,7 +44,8 @@ them and binds from here.
   save writes a file an editor can have open.
 - For the backend diagnostics commands, call `bindHostDiagnostics` in the
   frontend and export `createHostDiagnosticsBackendModule()` from a backend
-  module.
+  module. Pass `{ heapSnapshots: true }` only if every client may inspect the
+  backend process, since a snapshot holds all their data.
 - In the backend, export
   `createDataServerConnectionContainerModule(MyHandler)`, where `MyHandler`
   extends `DataServerConnectionHandler` and names your server's port command.
