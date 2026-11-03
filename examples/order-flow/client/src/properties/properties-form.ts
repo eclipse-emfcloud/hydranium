@@ -310,6 +310,9 @@ export class PropertiesForm {
     * precede a refused write's answer; replacing the draft then would erase the
     * value and its unload protection. Only an accepted write moves that draft's
     * baseline. Fields without drafts continue to follow the model when unfocused.
+    * A successful submission reconciles the retained model value even while
+    * focused, provided the same input still holds the submitted text. Text
+    * typed since submission and inputs replaced by a rebuild stay untouched.
     */
    setFields(fields: readonly PropertyField[]): void {
       if (this.loading && fields.length === 0) {
@@ -486,6 +489,7 @@ export class PropertiesForm {
       const shown = this.shown;
       const uri = this.documentUri;
       const modelValues = this.modelValues;
+      const input = this.inputs.get(name);
       try {
          const outcome = await this.handlers.setField(name, value);
          if (shown !== this.shown) {
@@ -498,15 +502,19 @@ export class PropertiesForm {
          }
          this.report(OUTCOME_MESSAGES[outcome.status] ?? '', OUTCOME_KINDS[outcome.status]);
          if (SETTLED_ON_THE_WRITTEN_VALUE.has(outcome.status)) {
+            // A rebuild gives the replacement input its own baseline and draft.
+            // The old input's response cannot acknowledge either one.
+            if (!input || this.inputs.get(name) !== input) {
+               return true;
+            }
             // A model redraw cannot acknowledge a draft: it may precede a
             // refused response. Only a successful outcome moves its baseline.
             this.rendered.set(name, value);
-            const input = this.inputs.get(name);
             const latest = this.modelValues.get(name);
             // A model update may arrive before the response, while the draft
             // still prevents a redraw. Do not replace text typed since submission
             // or restore a snapshot from before the write began.
-            if (input?.value === value && this.modelValues !== modelValues && latest !== undefined) {
+            if (input.value === value && this.modelValues !== modelValues && latest !== undefined) {
                input.value = latest;
                this.rendered.set(name, latest);
             }
