@@ -11,17 +11,17 @@ import {
    type Action,
    type GModelElement,
    type SelectableElement,
-   RankedSelectMouseListener,
    SelectAction,
    findParentByFeature,
    isSelectable
 } from '@eclipse-glsp/client';
 import { PROCESS_EFFECT_TYPE, PROCESS_TASK_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
+import { HydraniumSelectMouseListener } from '@hydranium/glsp-client';
 import { injectable } from 'inversify';
 
 /** A press arms the task for dragging; a click selects the effect for editing. */
 @injectable()
-export class OrderFlowProcessSelectMouseListener extends RankedSelectMouseListener {
+export class OrderFlowProcessSelectMouseListener extends HydraniumSelectMouseListener {
    protected pressedEffect?: GModelElement;
 
    override mouseDown(target: GModelElement, event: MouseEvent): (Action | Promise<Action>)[] {
@@ -45,12 +45,7 @@ export class OrderFlowProcessSelectMouseListener extends RankedSelectMouseListen
       if (effect && event.button === 0 && !this.hasDragged && target.id === effect.id) {
          this.isMouseDown = false;
          this.hasDragged = false;
-         return [
-            SelectAction.create({
-               selectedElementsIDs: [effect.id],
-               deselectedElementsIDs: this.collectElementsToDeselect(target, undefined).map(element => element.id)
-            })
-         ];
+         return [SelectAction.setSelection([effect.id])];
       }
       return super.mouseUp(target, event);
    }
