@@ -33,4 +33,10 @@ export {
    UNRESOLVED_REFERENCE
 } from '../langium/validation/document-validator.js';
 export { NO_LOADABLE_CONTENT } from '../langium/workspace/langium-documents.js';
-export { NO_SUCH_FILE, NO_SUCH_PATH, UNSUPPORTED_DELETE, UNSUPPORTED_WRITE } from '../langium/workspace/in-memory-file-system-provider.js';
+export {
+   DELETE_DIRECTORY_REFUSED,
+   NO_SUCH_FILE,
+   NO_SUCH_PATH,
+   UNSUPPORTED_DELETE,
+   UNSUPPORTED_WRITE
+} from '../langium/workspace/in-memory-file-system-provider.js';

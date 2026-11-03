@@ -21,12 +21,15 @@ import {
    SetMarkersAction,
    type SetModelAction
 } from '@eclipse-glsp/server';
-import { IntegrityService } from '@hydranium/core';
+import { type ServerSharedServices, IntegrityService } from '@hydranium/core';
 import { inject, injectable } from 'inversify';
 import { type AstNode, type DocumentState } from '@hydranium/langium';
-import { describeErrorWithStack } from '@hydranium/protocol';
+import { defineMessage, describeErrorWithStack } from '@hydranium/protocol';
 import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
+import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { DiagramStatus } from '../state/diagram-status.js';
+
+export const DIAGRAM_VALIDATING = defineMessage('hydranium/glsp-server/diagram-validating', 'Validating model...');
 
 /**
  * GLSP {@link ModelSubmissionHandler} base shared by all hydranium adopters.
@@ -60,6 +63,7 @@ import { DiagramStatus } from '../state/diagram-status.js';
 @injectable()
 export class HydraniumGlspSubmissionHandler<TRoot extends AstNode, TSourceModel = string> extends ModelSubmissionHandler {
    @inject(ModelState) declare protected modelState: AbstractHydraniumGlspState<TRoot, TSourceModel>;
+   @inject(HydraniumTypes.SharedCoreServices) protected readonly sharedServices!: ServerSharedServices;
    @inject(ClientSessionManager) protected readonly sessionManager!: ClientSessionManager;
 
    /**
@@ -202,7 +206,10 @@ export class HydraniumGlspSubmissionHandler<TRoot extends AstNode, TSourceModel 
       if (this.sessionEnded()) {
          return;
       }
-      this.modelState.setStatus(DiagramStatus.VALIDATION, { message: 'Validate Model...', severity: 'INFO' });
+      this.modelState.setStatus(DiagramStatus.VALIDATION, {
+         message: this.sharedServices.MessageRenderer.renderMessage(DIAGRAM_VALIDATING),
+         severity: 'INFO'
+      });
       try {
          const markers = await validator.validate([this.modelState.root], MarkersReason.LIVE);
          await this.actionDispatcher.dispatch(SetMarkersAction.create(markers, { reason: MarkersReason.LIVE })).catch((error: unknown) => {

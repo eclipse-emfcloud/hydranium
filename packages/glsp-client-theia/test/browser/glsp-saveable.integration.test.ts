@@ -188,6 +188,7 @@ function stubSharedServices(): ServerSharedServices {
    // The index keys the root through its language; one key serves the fixture.
    const language = { references: { ElementKeyProvider: { getElementKey: () => 'root' } } };
    return {
+      MessageRenderer: { renderMessage: (message: { text: string }) => message.text, renderError: (error: Error) => error.message },
       ServiceRegistry: { getServicesFor: () => language },
       Tracer: { for: () => ({ withUri: () => childLogger }) },
       workspace: { LangiumDocuments: { getDocument: () => undefined }, ModelLedger: new DefaultModelLedger() },

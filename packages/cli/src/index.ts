@@ -17,3 +17,4 @@ export * from './commands/save.js';
 export * from './commands/watch.js';
 export * from './package-name.js';
 export * from './spawn-data-server.js';
+export * from './commands/message-catalogue.js';

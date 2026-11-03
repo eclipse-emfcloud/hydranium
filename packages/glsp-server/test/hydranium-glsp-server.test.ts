@@ -231,7 +231,10 @@ function stubSharedServices(): ServerSharedServices {
    };
    return {
       Tracer: { for: () => ({ withUri: () => childLogger }) },
-      MessageRenderer: { renderError: (error: Error) => error.message },
+      MessageRenderer: {
+         renderMessage: (message: { text: string }) => `rendered: ${message.text}`,
+         renderError: (error: Error) => error.message
+      },
       workspace: { LangiumDocuments: { getDocument: () => undefined } },
       model: { ModelService: { ensureDocumentState: () => Promise.resolve(), snapshot: () => undefined, getDocument: () => undefined } }
    } as unknown as ServerSharedServices;
@@ -290,9 +293,10 @@ describe('a failed GLSP request', () => {
       });
    });
 
-   it('names the request in the message of any other failure, as upstream does', async () => {
+   it('renders a generic failure and keeps technical details out of the user message', async () => {
       const reject = await rejectFor(new Error('plain failure'));
-      expect(reject.message).toMatch(/^Failed to handle request 'requestModel' \(.+\)$/);
+      expect(reject.message).toBe('rendered: The diagram request could not be completed.');
+      expect(reject.detail).toBe('Error: plain failure');
    });
 
    it('answers a request whose typed error carries data JSON cannot hold with the error as text', async () => {
@@ -436,7 +440,14 @@ describe('HydraniumGlspServer logging the failures it ends', () => {
       const bare = new RecordingServer();
       bare.failAction(error);
       const rendering = new RecordingServer();
-      Object.assign(rendering, { sharedServices: { MessageRenderer: { renderError: (typed: Error) => `rendered: ${typed.message}` } } });
+      Object.assign(rendering, {
+         sharedServices: {
+            MessageRenderer: {
+               renderMessage: (message: { text: string }) => `rendered: ${message.text}`,
+               renderError: (typed: Error) => `rendered: ${typed.message}`
+            }
+         }
+      });
       rendering.failAction(error);
       expect([bare.sent[0].action, rendering.sent[0].action]).toMatchObject([
          { message: error.message },

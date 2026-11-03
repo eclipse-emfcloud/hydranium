@@ -20,13 +20,19 @@ import {
    type OperationHandler
 } from '@eclipse-glsp/server';
 import { type ServerSharedServices } from '@hydranium/core';
-import { describeErrorWithStack, isResponseError } from '@hydranium/protocol';
+import { defineMessage, describeErrorWithStack, isResponseError } from '@hydranium/protocol';
 import { inject, injectable } from 'inversify';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
+import { DIAGRAM_ACTION_FAILED } from '../launcher/hydranium-glsp-server.js';
 import { logActionFailure } from './diagram-write-errors.js';
 import { HydraniumGlspOperationCommand, openOperationOf, runOperation } from './hydranium-glsp-operation-command.js';
 import { type HydraniumGlspRecordingState } from './hydranium-glsp-recording-command.js';
 import { trackQueuedDelivery } from './queued-deliveries.js';
+
+export const DIAGRAM_EDIT_READONLY = defineMessage(
+   'hydranium/glsp-server/diagram-edit-readonly',
+   'The diagram is read-only. The edit was not applied.'
+);
 
 /**
  * GLSP's operation action handler, running each operation as a
@@ -112,9 +118,7 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
    protected async runOperation(operation: Operation, handler: OperationHandler): Promise<Action[]> {
       // A queued operation can find the diagram read-only by the time it runs.
       if (this.modelState.isReadonly) {
-         return [
-            MessageAction.create(`Server is in readonly-mode! Could not execute operation: ${operation.kind}`, { severity: 'WARNING' })
-         ];
+         return [MessageAction.create(this.sharedServices.MessageRenderer.renderMessage(DIAGRAM_EDIT_READONLY), { severity: 'WARNING' })];
       }
       const command = new HydraniumGlspOperationCommand(this.modelState);
       const outcome = await runOperation(command, () => handler.execute(operation));
@@ -158,13 +162,15 @@ export class HydraniumGlspOperationActionHandler extends OperationActionHandler 
          return;
       }
       logActionFailure(this.logger, operation, error);
-      let message = `Could not process action: '${operation.kind}`;
+      let message: string;
       let details = error instanceof Error ? error.toString() : String(error);
       if (error instanceof GLSPServerError) {
          details = String(error.cause);
          message = error.message;
       } else if (isResponseError(error)) {
          message = this.sharedServices.MessageRenderer.renderError(error);
+      } else {
+         message = this.sharedServices.MessageRenderer.renderMessage(DIAGRAM_ACTION_FAILED);
       }
       // An error even for a write the log calls declined, any refusal, since the gesture is lost.
       // A refused undo is a warning instead: it keeps its history and works once the text parses.

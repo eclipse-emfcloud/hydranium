@@ -34,13 +34,23 @@ class RecordingHandler extends HydraniumGlspOperationActionHandler {
       Object.assign(this, {
          logger,
          modelState: this.state,
-         sharedServices: { MessageRenderer: { renderError: (error: Error) => `rendered: ${error.message}` } },
+         sharedServices: {
+            MessageRenderer: {
+               renderMessage: (message: { text: string }) => `rendered: ${message.text}`,
+               renderError: (error: Error) => `rendered: ${error.message}`
+            }
+         },
          clientProxy: { process: (message: ActionMessage): void => void this.sent.push(message) }
       });
    }
 
    fail(error: unknown): void {
       this.reportFailure({ kind: 'someOperation', isOperation: true } as Operation, error);
+   }
+
+   readOnlyOperation(): Promise<Action[]> {
+      Object.assign(this.state, { isReadonly: true });
+      return this.runOperation({ kind: 'someOperation', isOperation: true } as Operation, {} as OperationHandler);
    }
 
    /** Run an operation the way the server runs one no other operation holds up. */
@@ -55,12 +65,23 @@ class RecordingHandler extends HydraniumGlspOperationActionHandler {
 }
 
 describe('HydraniumGlspOperationActionHandler.reportFailure', () => {
+   it('renders the warning when a queued edit finds the diagram read-only', async () => {
+      const handler = new RecordingHandler();
+      await expect(handler.readOnlyOperation()).resolves.toEqual([
+         { kind: 'message', message: 'rendered: The diagram is read-only. The edit was not applied.', severity: 'WARNING' }
+      ]);
+   });
+
    it('logs a failure once, with its stack, and reports it to the client', () => {
       const handler = new RecordingHandler();
       handler.fail(new Error('boom'));
       expect(handler.errors).toHaveLength(1);
       expect(handler.errors[0]).toMatch(/someOperation[\s\S]*boom[\s\S]*\n\s+at /);
       expect(handler.sent.map(message => message.action.kind)).toEqual(['message']);
+      expect(handler.sent[0].action).toMatchObject({
+         message: 'rendered: The diagram action could not be completed.',
+         details: 'Error: boom'
+      });
    });
 
    it("heads the notification with a typed error's rendered message", () => {

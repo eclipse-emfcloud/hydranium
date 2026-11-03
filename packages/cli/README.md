@@ -65,6 +65,8 @@ lists each command's flags.
   once or on watch, and can also write each grammar's language id and
   extensions for a package your clients share without Langium, and a
   `transferNode` builder for your tests.
+- **Translations.** `message-catalogue` writes an English starter catalogue
+  from the message barrels of your installed heads and your language.
 - **Memory.** Measure a workspace's model-store memory, and analyze a heap
   snapshot.
 - **Data server.** Spawn your data head and list projects, or query, create,

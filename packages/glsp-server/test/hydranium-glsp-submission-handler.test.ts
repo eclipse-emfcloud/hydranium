@@ -348,23 +348,34 @@ describe('HydraniumGlspSubmissionHandler', () => {
       function makeLiveValidatingHandler(dispatch: () => Promise<void>) {
          const { logger, lines } = makeCapturingGlspLogger();
          const handler = new LiveValidatingHandler();
+         Object.assign(handler, {
+            sharedServices: { MessageRenderer: { renderMessage: (message: { text: string }) => `rendered: ${message.text}` } }
+         });
          const actionDispatcher = { dispatch };
+         const statuses: unknown[] = [];
          const sessions = new Map<string, { actionDispatcher: unknown }>([['client', { actionDispatcher }]]);
          (handler as unknown as { modelState: unknown }).modelState = {
             root: new GModelRoot(),
             clientId: 'client',
             logger,
-            setStatus: () => undefined
+            setStatus: (_status: unknown, entry: unknown) => statuses.push(entry)
          };
          (handler as unknown as { actionDispatcher: unknown }).actionDispatcher = actionDispatcher;
          (handler as unknown as { sessionManager: unknown }).sessionManager = { getSession: (id: string) => sessions.get(id) };
          return {
             handler,
+            statuses,
             logged: () => lines.map(line => [line.level, line.message]),
             endSession: () => sessions.delete('client'),
             reopenSession: () => sessions.set('client', { actionDispatcher: { dispatch } })
          };
       }
+
+      it('renders the validation status and withdraws it when validation ends', async () => {
+         const live = makeLiveValidatingHandler(() => Promise.resolve());
+         await live.handler.validateForTest({ validate: async () => [] } as unknown as ModelValidator);
+         expect(live.statuses).toEqual([{ message: 'rendered: Validating model...', severity: 'INFO' }, undefined]);
+      });
 
       it('skips a run for a session that has ended, or whose id a new session took', async () => {
          for (const close of ['end', 'reopen'] as const) {

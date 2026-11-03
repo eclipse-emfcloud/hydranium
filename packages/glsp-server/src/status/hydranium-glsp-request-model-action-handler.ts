@@ -8,10 +8,15 @@
  ********************************************************************************/
 
 import { ModelState, type ProgressMonitor, RequestModelActionHandler } from '@eclipse-glsp/server';
+import { type ServerSharedServices } from '@hydranium/core';
+import { defineMessage } from '@hydranium/protocol';
+import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { type AstNode } from '@hydranium/langium';
 import { inject, injectable } from 'inversify';
 import { type AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
 import { DiagramStatus } from '../state/diagram-status.js';
+
+export const DIAGRAM_LOADING = defineMessage('hydranium/glsp-server/diagram-loading', 'Loading diagram...');
 
 /**
  * Reports model loading as {@link DiagramStatus.MODEL_LOAD} rather than
@@ -26,7 +31,10 @@ import { DiagramStatus } from '../state/diagram-status.js';
 export class HydraniumGlspRequestModelActionHandler extends RequestModelActionHandler {
    @inject(ModelState) declare protected modelState: AbstractHydraniumGlspState<AstNode, unknown>;
 
-   protected override reportModelLoading(message: string): ProgressMonitor | undefined {
+   @inject(HydraniumTypes.SharedCoreServices) protected readonly sharedServices!: ServerSharedServices;
+
+   protected override reportModelLoading(_message: string): ProgressMonitor | undefined {
+      const message = this.sharedServices.MessageRenderer.renderMessage(DIAGRAM_LOADING);
       this.modelState.setStatus(DiagramStatus.MODEL_LOAD, { message, severity: 'INFO' });
       return this.progressService.start(message);
    }

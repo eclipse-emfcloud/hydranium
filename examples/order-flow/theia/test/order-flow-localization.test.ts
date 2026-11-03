@@ -7,8 +7,8 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { collectMessages, renderFrameworkMessage, resolve } from '@hydranium/protocol';
-import { findSharedCodes, findUndeclaredCodes, flattenCatalogue } from '@hydranium/protocol/testing';
+import { renderFrameworkMessage, resolve } from '@hydranium/protocol';
+import { findMissingCodes, findSharedCodes, findUndeclaredCodes, flattenCatalogue } from '@hydranium/protocol/testing';
 import * as protocolMessages from '@hydranium/protocol/messages';
 import { DATA_SERVER_CONNECT_FAILED, SESSION_CLOSED } from '@hydranium/protocol/messages';
 import * as coreMessages from '@hydranium/core/messages';
@@ -105,11 +105,8 @@ describe('the German catalogue', () => {
       // rendering side's decision and is asserted separately; here the two are
       // unioned, because a code translated on the wrong side still reaches no
       // reader and the disjointness test is what catches that.
-      const covered = new Set([...Object.keys(translations), ...Object.keys(serverTranslations)]);
-      const untranslated = BARRELS.flatMap(barrel => collectMessages(barrel))
-         .map(declaration => declaration.code)
-         .filter(code => !covered.has(code))
-         .sort();
+      const covered = [...Object.keys(translations), ...Object.keys(serverTranslations)];
+      const untranslated = findMissingCodes(covered, BARRELS).sort();
 
       expect(untranslated).toEqual([]);
    });

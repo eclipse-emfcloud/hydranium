@@ -26,6 +26,9 @@ export const NO_SUCH_FILE = defineMessage('hydranium/core/no-such-file', 'No suc
 /** The same for a node of any kind, so it also covers a directory. */
 export const NO_SUCH_PATH = defineMessage('hydranium/core/no-such-path', 'No such file or directory: {uri}');
 
+/** A file deletion addressed a directory, which this provider refuses. */
+export const DELETE_DIRECTORY_REFUSED = defineMessage('hydranium/core/delete-directory-refused', 'Cannot delete {uri}: it is a directory');
+
 /**
  * A write addressed a URI the provider cannot reach on disk.
  *
@@ -146,7 +149,7 @@ export class InMemoryFileSystemProvider implements WritableFileSystemProvider {
    async deleteFile(uri: URI): Promise<void> {
       const key = normalize(uri);
       if (this.hasChildren(key)) {
-         throw new Error(`Cannot delete ${uri.toString()}: it is a directory`);
+         throw new Error(this.services.MessageRenderer.renderMessage(DELETE_DIRECTORY_REFUSED, { uri: uri.toString() }));
       }
       this.files.delete(key);
    }
@@ -168,7 +171,7 @@ export class InMemoryFileSystemProvider implements WritableFileSystemProvider {
    readFileSync(uri: URI): string {
       const content = this.files.get(normalize(uri));
       if (content === undefined) {
-         throw notFound(NO_SUCH_FILE.format({ uri: uri.toString() }), uri);
+         throw notFound(this.services.MessageRenderer.renderMessage(NO_SUCH_FILE, { uri: uri.toString() }), uri);
       }
       return content;
    }
@@ -193,7 +196,7 @@ export class InMemoryFileSystemProvider implements WritableFileSystemProvider {
       if (this.hasChildren(path)) {
          return { isFile: false, isDirectory: true, uri };
       }
-      throw notFound(NO_SUCH_PATH.format({ uri: uri.toString() }), uri);
+      throw notFound(this.services.MessageRenderer.renderMessage(NO_SUCH_PATH, { uri: uri.toString() }), uri);
    }
 
    exists(uri: URI): Promise<boolean> {

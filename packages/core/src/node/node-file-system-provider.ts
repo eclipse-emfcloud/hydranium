@@ -82,34 +82,34 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
    // otherwise with the filesystem's own "nothing here" — never a probe
    // against a path derived from a URI that names no disk location.
    override readFile(uri: URI): Promise<string> {
-      return this.servesFromDisk(uri) ? super.readFile(uri) : Promise.reject(noSuchFile(uri));
+      return this.servesFromDisk(uri) ? super.readFile(uri) : Promise.reject(this.noSuchFile(uri));
    }
 
    override readFileSync(uri: URI): string {
       if (!this.servesFromDisk(uri)) {
-         throw noSuchFile(uri);
+         throw this.noSuchFile(uri);
       }
       return super.readFileSync(uri);
    }
 
    override readBinary(uri: URI): Promise<Uint8Array> {
-      return this.servesFromDisk(uri) ? super.readBinary(uri) : Promise.reject(noSuchFile(uri));
+      return this.servesFromDisk(uri) ? super.readBinary(uri) : Promise.reject(this.noSuchFile(uri));
    }
 
    override readBinarySync(uri: URI): Uint8Array {
       if (!this.servesFromDisk(uri)) {
-         throw noSuchFile(uri);
+         throw this.noSuchFile(uri);
       }
       return super.readBinarySync(uri);
    }
 
    override stat(uri: URI): Promise<FileSystemNode> {
-      return this.servesFromDisk(uri) ? super.stat(uri) : Promise.reject(noSuchPath(uri));
+      return this.servesFromDisk(uri) ? super.stat(uri) : Promise.reject(this.noSuchPath(uri));
    }
 
    override statSync(uri: URI): FileSystemNode {
       if (!this.servesFromDisk(uri)) {
-         throw noSuchPath(uri);
+         throw this.noSuchPath(uri);
       }
       return super.statSync(uri);
    }
@@ -221,7 +221,7 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
       // `untitled:` document has nowhere for it to go, and inventing a
       // destination from the path component is never what it meant.
       if (!this.servesFromDisk(uri)) {
-         throw unsupportedWrite(uri);
+         throw this.unsupportedWrite(uri);
       }
       await fsp.mkdir(UriUtils.dirname(uri).fsPath, { recursive: true });
       const destination = this.realpath(uri)?.fsPath ?? uri.fsPath;
@@ -263,7 +263,7 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
       // Before the path is derived, for the reason `writeFile` gives: `fsPath`
       // would name an unrelated file for a URI naming no disk location.
       if (!this.servesFromDisk(uri)) {
-         throw new Error(UNSUPPORTED_DELETE.format({ uri: uri.toString() }));
+         throw new Error(this.services.MessageRenderer.renderMessage(UNSUPPORTED_DELETE, { uri: uri.toString() }));
       }
       try {
          await fsp.unlink(uri.fsPath);
@@ -325,6 +325,21 @@ export class DefaultFileSystemProvider extends NodeFileSystemProvider implements
    resolveLinks(uri: URI): URI {
       return uri.scheme === 'file' ? URI.file(followLinks(uri.fsPath)) : uri;
    }
+
+   /** The "no content here" rejection, for a URI naming no readable file. */
+   protected noSuchFile(uri: URI): Error {
+      return new Error(this.services.MessageRenderer.renderMessage(NO_SUCH_FILE, { uri: uri.toString() }));
+   }
+
+   /** The "nothing occupies this" rejection, for a URI naming no filesystem node. */
+   protected noSuchPath(uri: URI): Error {
+      return new Error(this.services.MessageRenderer.renderMessage(NO_SUCH_PATH, { uri: uri.toString() }));
+   }
+
+   /** The "nowhere to put this" rejection, for a write to a URI with no disk backing. */
+   protected unsupportedWrite(uri: URI): Error {
+      return new Error(this.services.MessageRenderer.renderMessage(UNSUPPORTED_WRITE, { uri: uri.toString() }));
+   }
 }
 
 /** `path` with its links followed; see `DefaultFileSystemProvider.resolveLinks`. */
@@ -349,21 +364,6 @@ function followLinks(path: string, hops = 0): string {
    }
    const parent = dirname(path);
    return parent === path ? path : join(followLinks(parent, hops), basename(path));
-}
-
-/** The "no content here" rejection, for a URI naming no readable file. */
-function noSuchFile(uri: URI): Error {
-   return new Error(NO_SUCH_FILE.format({ uri: uri.toString() }));
-}
-
-/** The "nothing occupies this" rejection, for a URI naming no filesystem node. */
-function noSuchPath(uri: URI): Error {
-   return new Error(NO_SUCH_PATH.format({ uri: uri.toString() }));
-}
-
-/** The "nowhere to put this" rejection, for a write to a URI with no disk backing. */
-function unsupportedWrite(uri: URI): Error {
-   return new Error(UNSUPPORTED_WRITE.format({ uri: uri.toString() }));
 }
 
 /**

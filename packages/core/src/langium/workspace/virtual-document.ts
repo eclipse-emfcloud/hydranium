@@ -108,11 +108,11 @@ export class VirtualFileSystemProvider implements WritableFileSystemProvider {
    }
 
    async writeFile(uri: URI, _content: string): Promise<void> {
-      throw new Error(UNSUPPORTED_WRITE.format({ uri: uri.toString() }));
+      throw new Error(this.services.MessageRenderer.renderMessage(UNSUPPORTED_WRITE, { uri: uri.toString() }));
    }
 
    async deleteFile(uri: URI): Promise<void> {
-      throw new Error(UNSUPPORTED_DELETE.format({ uri: uri.toString() }));
+      throw new Error(this.services.MessageRenderer.renderMessage(UNSUPPORTED_DELETE, { uri: uri.toString() }));
    }
 
    async readFile(uri: URI): Promise<string> {
@@ -122,7 +122,7 @@ export class VirtualFileSystemProvider implements WritableFileSystemProvider {
    readFileSync(uri: URI): string {
       const text = this.text(uri);
       if (text === undefined) {
-         throw notFound(NO_SUCH_FILE.format({ uri: uri.toString() }), uri);
+         throw notFound(this.services.MessageRenderer.renderMessage(NO_SUCH_FILE, { uri: uri.toString() }), uri);
       }
       return text;
    }
@@ -141,7 +141,7 @@ export class VirtualFileSystemProvider implements WritableFileSystemProvider {
 
    statSync(uri: URI): FileSystemNode {
       if (this.text(uri) === undefined) {
-         throw notFound(NO_SUCH_PATH.format({ uri: uri.toString() }), uri);
+         throw notFound(this.services.MessageRenderer.renderMessage(NO_SUCH_PATH, { uri: uri.toString() }), uri);
       }
       return { isFile: true, isDirectory: false, uri };
    }

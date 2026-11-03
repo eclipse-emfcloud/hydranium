@@ -267,6 +267,10 @@ function stubSharedServices(): ServerSharedServices {
       }
    };
    return {
+      MessageRenderer: {
+         renderMessage: (message: { text: string }) => `rendered: ${message.text}`,
+         renderError: (error: Error) => `rendered: ${error.message}`
+      },
       Clock: clock,
       Tracer: { for: () => ({ withUri: () => childLogger }) },
       workspace: {
@@ -381,8 +385,8 @@ describe.each(['node', 'browser'] as const)('HydraniumGlspRequestEditsSettledAct
       // The cause once, as a request that throws directly is answered.
       await expect(server.nextAction<RejectAction>(RejectAction.KIND)).resolves.toMatchObject({
          responseId: 'settle-1',
-         message: expect.stringContaining('settle-1'),
-         detail: 'Error: no write set'
+         message: 'rendered: The diagram request could not be completed.',
+         detail: 'Error: rendered: The diagram edits could not be synchronized with the text editor.: no write set'
       });
       expect(answers(server)).toEqual([]);
       // Once, with the cause's stack, which the server's rejection does not carry.

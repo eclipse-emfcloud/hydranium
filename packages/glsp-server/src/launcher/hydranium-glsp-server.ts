@@ -21,12 +21,22 @@ import {
    SourceModelStorage
 } from '@eclipse-glsp/server';
 import { type ServerSharedServices } from '@hydranium/core';
-import { describeErrorWithStack, isResponseError, RequestSaveModelAction } from '@hydranium/protocol';
+import { defineMessage, describeErrorWithStack, isResponseError, RequestSaveModelAction } from '@hydranium/protocol';
 import { inject, injectable, optional } from 'inversify';
 import { logActionFailure } from '../command/diagram-write-errors.js';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { HydraniumGlspStorage } from '../storage/hydranium-glsp-storage.js';
 import { takeSettleFailureLogged } from '../storage/logged-settle-failures.js';
+
+export const DIAGRAM_ACTION_FAILED = defineMessage(
+   'hydranium/glsp-server/diagram-action-failed',
+   'The diagram action could not be completed.'
+);
+
+export const DIAGRAM_REQUEST_FAILED = defineMessage(
+   'hydranium/glsp-server/diagram-request-failed',
+   'The diagram request could not be completed.'
+);
 
 /**
  * The GLSP server the framework binds in place of upstream's
@@ -163,10 +173,18 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
     * The message of the client's {@link RejectAction} when a request fails,
     * which a host shows as the request's failure. A {@link GLSPServerError}'s
     * message is written for the user, as the error notification shows it, so it
-    * is the message. Anything else gets upstream's, naming the request.
+    * is the message. Typed errors use the shared renderer; other failures get
+    * a rendered heading. Causes remain in the detail, the request ID in
+    * `responseId`, and the request kind in the server log.
     */
-   protected requestFailureMessage(action: RequestAction<ResponseAction>, error: unknown): string {
-      return error instanceof GLSPServerError ? error.message : `Failed to handle request '${action.kind}' (${action.requestId})`;
+   protected requestFailureMessage(_action: RequestAction<ResponseAction>, error: unknown): string {
+      if (error instanceof GLSPServerError) {
+         return error.message;
+      }
+      if (isResponseError(error)) {
+         return this.sharedServices?.MessageRenderer.renderError(error) ?? error.message;
+      }
+      return this.sharedServices?.MessageRenderer.renderMessage(DIAGRAM_REQUEST_FAILED) ?? DIAGRAM_REQUEST_FAILED.text;
    }
 
    /**
@@ -183,15 +201,16 @@ export class HydraniumGlspServer extends DefaultGLSPServer {
     * for {@link handleClientRequest}.
     */
    protected override handleProcessError(message: ActionMessage, reason: unknown): void {
-      const kind = message.action.kind;
       logActionFailure(this.logger, message.action, reason);
-      let errorMsg = `Could not process action: '${kind}`;
+      let errorMsg: string;
       let details = stringifyAsUpstream(reason);
       if (reason instanceof GLSPServerError) {
          details = stringifyAsUpstream(reason.cause);
          errorMsg = reason.message;
       } else if (isResponseError(reason)) {
          errorMsg = this.sharedServices?.MessageRenderer.renderError(reason) ?? reason.message;
+      } else {
+         errorMsg = this.sharedServices?.MessageRenderer.renderMessage(DIAGRAM_ACTION_FAILED) ?? DIAGRAM_ACTION_FAILED.text;
       }
       this.sendToClient({ clientId: message.clientId, action: MessageAction.create(errorMsg, { severity: 'ERROR', details }) });
    }
