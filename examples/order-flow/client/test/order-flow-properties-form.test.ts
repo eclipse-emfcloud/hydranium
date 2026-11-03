@@ -510,6 +510,26 @@ describe('PropertiesForm pending marker', () => {
 });
 
 describe('PropertiesForm.applyDrafts', () => {
+   it.each(['applied', 'unchanged', 'merged'] as const)('refreshes a retained model value after a write is %s', async status => {
+      const answered = new Deferred<void>();
+      const { form } = makeForm(async () => {
+         await answered.promise;
+         return { status };
+      });
+      documentStub.activeElement = null;
+      form.setFields([{ name: 'name', value: 'Before' }]);
+      form.inputOf('name').value = 'Submitted';
+      const applying = form.applyDrafts();
+      form.setFields([{ name: 'name', value: 'Submitted' }]);
+      form.setFields([{ name: 'name', value: 'Latest' }]);
+      expect(form.inputOf('name').value).toBe('Submitted');
+      answered.resolve();
+      expect(await applying).toBe(true);
+      expect(form.inputOf('name').value).toBe('Latest');
+      expect(form.hasDrafts).toBe(false);
+      expect(form.fieldOf('name').attributes['data-pending']).toBeUndefined();
+   });
+
    it('waits for the focused draft to be applied', async () => {
       const answered = new Deferred<void>();
       const writes: string[] = [];
@@ -527,6 +547,7 @@ describe('PropertiesForm.applyDrafts', () => {
       answered.resolve();
       expect(await applying).toBe(true);
       expect(form.hasDrafts).toBe(false);
+      expect(form.inputOf('name').value).toBe('After');
    });
 
    it('keeps a refused draft unsaved', async () => {
@@ -550,7 +571,7 @@ describe('PropertiesForm.applyDrafts', () => {
       form.setFields([{ name: 'name', value: 'Before' }]);
       form.inputOf('name').value = 'After';
       const applying = form.applyDrafts();
-      form.setFields([{ name: 'name', value: 'Before' }]);
+      form.setFields([{ name: 'name', value: 'Latest' }]);
       answered.resolve();
       expect(await applying).toBe(false);
       expect(form.inputOf('name').value).toBe('After');
@@ -581,8 +602,10 @@ describe('PropertiesForm.applyDrafts', () => {
       form.inputOf('name').value = 'First';
       const applying = form.applyDrafts();
       form.inputOf('name').value = 'Second';
+      form.setFields([{ name: 'name', value: 'Latest' }]);
       answered.resolve();
       expect(await applying).toBe(false);
+      expect(form.inputOf('name').value).toBe('Second');
       expect(form.hasDrafts).toBe(true);
    });
 });

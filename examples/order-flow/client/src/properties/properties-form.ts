@@ -154,6 +154,8 @@ export class PropertiesForm {
     * instead would mark a field the reader never touched.
     */
    protected rendered = new Map<string, string>();
+   /** Latest model values, including updates hidden by a pending draft. */
+   protected modelValues = new Map<string, string>();
    /** Whether {@link rebuild} has ever run — see {@link sameNames}. */
    protected built = false;
    /** Whether a document load is in flight — see {@link setLoading}. */
@@ -284,6 +286,7 @@ export class PropertiesForm {
       this.built = false;
       this.inputs = new Map();
       this.rendered = new Map();
+      this.modelValues = new Map();
       this.fieldsHost.replaceChildren();
       this.diagnosticsHost.replaceChildren();
       // The load of the one before, if any, is abandoned. The next sets its own.
@@ -313,6 +316,7 @@ export class PropertiesForm {
          // A model still opening. See setLoading.
          return;
       }
+      this.modelValues = new Map(fields.map(field => [field.name, field.value]));
       const names = fields.map(field => field.name);
       if (!this.sameNames(names)) {
          this.rebuild(fields);
@@ -481,6 +485,7 @@ export class PropertiesForm {
    protected async write(name: string, value: string): Promise<boolean> {
       const shown = this.shown;
       const uri = this.documentUri;
+      const modelValues = this.modelValues;
       try {
          const outcome = await this.handlers.setField(name, value);
          if (shown !== this.shown) {
@@ -496,6 +501,15 @@ export class PropertiesForm {
             // A model redraw cannot acknowledge a draft: it may precede a
             // refused response. Only a successful outcome moves its baseline.
             this.rendered.set(name, value);
+            const input = this.inputs.get(name);
+            const latest = this.modelValues.get(name);
+            // A model update may arrive before the response, while the draft
+            // still prevents a redraw. Do not replace text typed since submission
+            // or restore a snapshot from before the write began.
+            if (input?.value === value && this.modelValues !== modelValues && latest !== undefined) {
+               input.value = latest;
+               this.rendered.set(name, latest);
+            }
             this.markPending(name);
             return true;
          }
