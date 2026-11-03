@@ -106,7 +106,7 @@ export class DefaultHydraniumLangiumDocuments extends DefaultLangiumDocuments im
     * into, and a directory URI has no extension for the routing ladder to end
     * on — so omitting the id there fails inside the parse, on an empty
     * extension rather than on the URI. A caller in that position always knows
-    * its language: {@link HydraniumScopeProvider} is bound per grammar, and a
+    * its language: `HydraniumScopeProvider` is bound per grammar, and a
     * request that names no document at all still carries the AST type
     * `HydraniumServiceRegistry.soleServicesByType` routes on.
     *

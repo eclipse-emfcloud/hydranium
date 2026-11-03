@@ -180,8 +180,8 @@ export interface SyncedWaitOptions {
  * Coordinating the primitives per-head drifts between heads — different
  * superseded-version handling, different settled-phase choices, different
  * content-change paths. The facade collapses that duplication and gives
- * adopters one extension surface — {@link rewriteModel},
- * {@link serialize} — to customise the in-process behaviour without
+ * adopters one extension surface — `rewriteModel`,
+ * `serialize` — to customise the in-process behaviour without
  * re-implementing the plumbing.
  *
  * **Read-latest supersession**
@@ -1493,7 +1493,7 @@ export class DefaultModelService<
 
    /**
     * Run the per-language transfer-model rewrite chain. Resolves the
-    * `UpdateRewriteService` per-URI (like {@link serialize}) and threads
+    * `UpdateRewriteService` per-URI (like `serialize`) and threads
     * in the previous AST root — `document.parseResult.value`, or `undefined`
     * for a not-yet-built document — so diff-based rewrites can distinguish a
     * real user change from a stale echo.

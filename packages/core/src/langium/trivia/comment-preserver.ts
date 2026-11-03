@@ -106,7 +106,7 @@ export interface CommentPreserverOptions extends LogNameOptions {
    readonly id?: string;
    /**
     * How many comments spliced into shared lines are worth blaming one at a
-    * time when the result will not parse. Default {@link DEFAULT_ISOLATED_EDITS}.
+    * time when the result will not parse. Default `DEFAULT_ISOLATED_EDITS`.
     *
     * Isolating means re-splicing and re-parsing the whole document once per
     * candidate, so the search costs the document's length times their number.

@@ -163,11 +163,11 @@ export class DataConnection<
     * {@link restoreDirty}.
     */
    protected readonly dirtyStates = new Map<string, boolean>();
-   /** Backs each session's {@link DataSessionHost.onDidChangeDirty}. */
+   /** Backs each session's `DataSessionHost.onDidChangeDirty`. */
    protected readonly dirtyChangedEmitter = new Emitter<TransferDocumentDirtyChangedEvent>();
-   /** Backs each session's {@link DataSessionHost.onDidUpdateDocument}. */
+   /** Backs each session's `DataSessionHost.onDidUpdateDocument`. */
    protected readonly documentUpdatedEmitter = new Emitter<TransferDocumentUpdatedEvent<TTransfer, DiagnosticOf<TServer>>>();
-   /** Backs each session's {@link DataSessionHost.onDidDeleteDocument}. */
+   /** Backs each session's `DataSessionHost.onDidDeleteDocument`. */
    protected readonly documentDeletedEmitter = new Emitter<TransferDocumentDeletedEvent>();
    /**
     * Per id {@link watchDocument} watches under, the watch, which
