@@ -684,28 +684,10 @@ async function saveWorkspace(client: MonacoLspClient, editors: EditorArea, only?
             draftFailure = describeError(error);
          }
       }
-      const saveOthers = async () => {
-         const results = await Promise.allSettled(
-            client
-               .dirtyDocuments()
-               .filter(document => document.uri !== excluded)
-               .map(document => client.save(document.uri))
-         );
-         const failures = results.filter(result => result.status === 'rejected');
-         if (failures.length > 0) {
-            throw new AggregateError(
-               failures.map(result => result.reason),
-               `${failures.length} document(s) could not be saved`
-            );
-         }
-         return results.flatMap(result => (result.status === 'fulfilled' && result.value ? [result.value] : []));
-      };
       const saved =
          only !== undefined
             ? [await client.save(only)].filter(document => document !== undefined)
-            : excluded === undefined
-              ? await client.saveAll()
-              : await saveOthers();
+            : await client.saveAll(excluded === undefined ? [] : [excluded]);
       editors.refreshDirtyMarks();
       setWorkspaceReport(
          excluded === undefined

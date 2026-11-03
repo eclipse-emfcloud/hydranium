@@ -1235,11 +1235,16 @@ export class MonacoLspClient {
     * {@link save} every dirty document, all at once, each marked saved on its
     * own answer. Rejects with the first failure once every answer is in, so a
     * refusal of one does not leave the others' outcome unknown; the documents
-    * that saved stay marked, and a second call retries the rest.
+    * that saved stay marked, and a second call retries the rest. URIs in
+    * `exclude` stay dirty and send no save request during this call.
     */
-   async saveAll(): Promise<EditorDocument[]> {
+   async saveAll(exclude: readonly string[] = []): Promise<EditorDocument[]> {
       this.assertSaveAdvertised();
-      const results = await Promise.allSettled(this.dirtyDocuments().map(document => this.save(document.uri)));
+      const results = await Promise.allSettled(
+         this.dirtyDocuments()
+            .filter(document => !exclude.includes(document.uri))
+            .map(document => this.save(document.uri))
+      );
       const failure = results.find(result => result.status === 'rejected');
       if (failure !== undefined) {
          throw failure.reason;
