@@ -715,13 +715,15 @@ export function runInit(options: InitCommandOptions): void {
             `Could not read npm global configuration (${reason}). Scaffold kept at ${targetDir}; installation was not started.`
          );
       }
+      const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'npm_config_globalconfig'));
+      env.npm_config_globalconfig = globalconfig;
       // An explicit prefix keeps npm from selecting an enclosing workspace instead of this standalone root.
       // Windows resolves npm through a command shim; only fixed arguments reach the shell.
       const result = spawnSync(npm, ['--prefix', '.', 'install'], {
          cwd: targetDir,
          stdio: 'inherit',
          shell: process.platform === 'win32',
-         env: { ...process.env, npm_config_globalconfig: globalconfig }
+         env
       });
       if (result.error || result.signal || result.status !== 0) {
          const reason = result.error?.message ?? (result.signal ? `signal ${result.signal}` : `exit code ${result.status}`);

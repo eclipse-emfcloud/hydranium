@@ -40,6 +40,8 @@ Two examples, for two different questions:
 
 ### Build your language
 
+- [Work with coding-agent skills](guides/coding-agent-skills.md) for
+  framework profiling and upstream Langium guidance.
 - [Add a validation check](guides/add-validation-check.md) for a
   language-owned invariant.
 - [Ship a standard library](guides/ship-a-standard-library.md) of built-ins

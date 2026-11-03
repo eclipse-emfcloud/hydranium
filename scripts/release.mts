@@ -41,6 +41,7 @@ interface Manifest extends Partial<Record<DependencyBlock, Record<string, string
    name: string;
    version: string;
    private?: boolean;
+   hydranium?: { skillContracts?: Record<string, string> };
 }
 interface WorkspacePackage {
    file: string;
@@ -404,6 +405,7 @@ function selfTest(): void {
       const manifest: Manifest = {
          name: '@hydranium/one',
          version: '1.0.0-next',
+         hydranium: { skillContracts: { profiling: '1' } },
          dependencies: { '@hydranium/two': '^1.0.0-next', external: '^2.0.0' },
          devDependencies: { '@hydranium/two': '^1.0.0-next' },
          peerDependencies: { '@hydranium/two': '^1.0.0-next' }
@@ -424,6 +426,7 @@ function selfTest(): void {
          stamp(copy, version, false);
          const stamped = readManifest(copy.packages[0].file);
          assert.equal(stamped.version, version);
+         assert.deepEqual(stamped.hydranium?.skillContracts, { profiling: '1' });
          for (const block of ['dependencies', 'devDependencies', 'peerDependencies'] as const) {
             assert.equal(stamped[block]?.['@hydranium/two'], version);
          }

@@ -49,6 +49,7 @@ import { DELETE_FLAGS, DELETE_HELP, parseDeleteArgs } from '../src/commands/dele
 import { SAVE_FLAGS, SAVE_HELP, SAVE_VALUE_FLAGS, parseSaveArgs } from '../src/commands/save-args.js';
 import { VALIDATE_FLAGS, VALIDATE_HELP, parseValidateArgs } from '../src/commands/validate-args.js';
 import { WATCH_FLAGS, WATCH_HELP, parseWatchArgs } from '../src/commands/watch-args.js';
+import { CHECK_SKILLS_HELP } from '../src/commands/check-skills-args.js';
 
 /** Report usage problems as throws, so a failure is visible instead of ending the worker. */
 function onError(message: string): never {
@@ -140,7 +141,8 @@ function describedFlags(help: readonly string[]): string[] {
  */
 const HELP_BY_NAME: ReadonlyArray<readonly [string, readonly string[]]> = [
    ...COMMANDS.map(command => [command.name, command.help] as const),
-   ['init', INIT_HELP]
+   ['init', INIT_HELP],
+   ['check-skills', CHECK_SKILLS_HELP]
 ];
 
 function runBinary(args: string[]): Promise<{ stdout: string }> {

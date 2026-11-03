@@ -26,12 +26,14 @@
  * association is gone.
  */
 
+import * as path from 'node:path';
 import { assertRequired, exitWithUsage, helpRequested, printHelp, type UsageError } from './harness-args.js';
 import { isNonEmptyDir, runInit, validateInitInstallation, type InitHead } from './init.js';
 import type { InitHost } from './init-hosts.js';
 import { createClackPrompt } from './init-prompt.js';
 import { runInitWizard } from './init-wizard.js';
 import { createNodeWorkspaceProbe, detectWorkspace } from './init-workspace.js';
+import { installSkills, offerSkills, parseSkillInstallation, SKILLS_INSTALLER } from './init-skills.js';
 
 /** One grammar as the command line collected it, before any derivation. */
 export interface ParsedInitGrammar {
@@ -47,6 +49,8 @@ export interface ParsedInitArgs {
    name?: string;
    force: boolean;
    install: boolean;
+   skills?: string;
+   agents?: string;
    heads?: InitHead[];
    hosts?: InitHost[];
    monorepo: boolean;
@@ -68,6 +72,8 @@ export const INIT_FLAGS: readonly string[] = [
    '--hosts',
    '--force',
    '--install',
+   '--skills',
+   '--agents',
    '--monorepo',
    '--scope',
    '--public',
@@ -82,6 +88,8 @@ export const INIT_FLAGS: readonly string[] = [
  * The rest are presence-only.
  */
 export const INIT_VALUE_FLAGS: readonly string[] = [
+   '--skills',
+   '--agents',
    '--name',
    '--heads',
    '--hosts',
@@ -107,6 +115,8 @@ export function parseInitArgs(args: string[], onError: UsageError = exitWithUsag
    let name: string | undefined;
    let force = false;
    let install = false;
+   let skills: string | undefined;
+   let agents: string | undefined;
    let heads: InitHead[] | undefined;
    let hosts: InitHost[] | undefined;
    let monorepo = false;
@@ -134,6 +144,12 @@ export function parseInitArgs(args: string[], onError: UsageError = exitWithUsag
          return current;
       };
       switch (flag) {
+         case '--skills':
+            skills = next();
+            break;
+         case '--agents':
+            agents = next();
+            break;
          case '--name':
             name = next();
             break;
@@ -190,7 +206,7 @@ export function parseInitArgs(args: string[], onError: UsageError = exitWithUsag
             }
       }
    }
-   return { targetDir, name, force, install, heads, hosts, monorepo, scope, public: isPublic, grammars };
+   return { targetDir, name, force, install, skills, agents, heads, hosts, monorepo, scope, public: isPublic, grammars };
 }
 
 /**
@@ -216,8 +232,9 @@ export const INIT_HELP: readonly string[] = [
    'launch of the VS Code and Theia ones, and theia/ the Theia extension;',
    'workspace/ holds two starter model files per grammar. A standalone project',
    'also gets a root manifest naming the packages as npm workspaces.',
-   'Stays offline by default. With --install, runs `npm install` after writing',
-   'the scaffold. Building remains a next step. Refuses a non-empty directory',
+   'Stays offline unless --install or --skills is requested. With --install,',
+   'runs `npm install` after writing the scaffold. Building remains a next step.',
+   'Refuses a non-empty directory',
    'without --force.',
    '',
    'Run it with no --name on a terminal to be prompted instead. The wizard echoes',
@@ -225,6 +242,8 @@ export const INIT_HELP: readonly string[] = [
    'flags. Without a terminal a missing --name stays an error, so CI never hangs.',
    'For a standalone project, the wizard ends by offering npm install unless',
    '--install already requested it.',
+   'After a successful scaffold, the wizard offers coding-agent skills separately.',
+   'Skipping or cancelling that offer leaves the scaffold intact.',
    '',
    'Project options (position-free):',
    '  <target-dir>          The project directory to scaffold into (required).',
@@ -249,6 +268,12 @@ export const INIT_HELP: readonly string[] = [
    '                        --hosts, the server with its Node entry points, and',
    '                        with glsp the client/ package a host mounts.',
    '  --force               Scaffold into a non-empty directory anyway.',
+   '  --skills <names>      After scaffolding, install named skills: hydranium-profiling,',
+   `                        langium. Requires --agents. Downloads with npx ${SKILLS_INSTALLER} add`,
+   '                        --copy, preserving unrelated skills and lock entries.',
+   '                        With --monorepo, skills are written at the workspace root.',
+   '  --agents <names>      Comma-separated agents for --skills: codex, claude-code,',
+   '                        cursor, github-copilot, opencode.',
    '  --install             Run npm install in the scaffold, with lifecycle scripts',
    '                        and network access. Cannot be combined with --monorepo:',
    '                        its parent manifest needs manual edits first.',
@@ -257,7 +282,8 @@ export const INIT_HELP: readonly string[] = [
    '                        extends the root config that actually carries',
    '                        compilerOptions, and the scripts address the server by',
    '                        --prefix. Errors when no ancestor declares `workspaces`.',
-   '                        Never writes outside the target — the root `workspaces`',
+   '                        Scaffold files stay inside the target; optional skills',
+   '                        go at the workspace root. The root `workspaces`',
    '                        entries and dependency pins are printed, not added.',
    '  --scope <@scope>      npm scope for the package names, e.g. @acme. Not inferred:',
    '                        a root manifest is usually named for the repo, not the',
@@ -303,20 +329,24 @@ export async function runInitCommand(args: string[]): Promise<void> {
       printHelp(INIT_HELP);
       return;
    }
-   const parsed = parseInitArgs(args);
+   let parsed = parseInitArgs(args);
    validateInitInstallation(parsed);
+   let selection = parseSkillInstallation(parsed.skills, parsed.agents);
+   let prompt: Awaited<ReturnType<typeof createClackPrompt>> | undefined;
    // The wizard's entry point: no `--name` on an interactive terminal. Safe
    // because that combination has no non-wizard meaning, and gated on a TTY
    // because a non-interactive caller must keep failing fast — a prompt in CI
    // hangs the job instead of reporting the missing flag.
    if (parsed.name === undefined && process.stdin.isTTY && process.stdout.isTTY) {
-      const prompt = await createClackPrompt();
+      prompt = await createClackPrompt();
       const argv = await runInitWizard(prompt, targetDir => detectWorkspace(targetDir, createNodeWorkspaceProbe()), {
          targetDir: parsed.targetDir,
          install: parsed.install,
+         skills: parsed.skills,
+         agents: parsed.agents,
          isOccupied: isNonEmptyDir
       });
-      return runInitCommand(argv);
+      parsed = parseInitArgs(argv);
    }
    runInit({
       targetDir: assertRequired(parsed.targetDir, '<target-dir>', 'init'),
@@ -330,4 +360,14 @@ export async function runInitCommand(args: string[]): Promise<void> {
       scope: parsed.scope,
       public: parsed.public
    });
+   const target = path.resolve(parsed.targetDir!);
+   const project = parsed.monorepo ? detectWorkspace(target, createNodeWorkspaceProbe())!.rootDir : target;
+   if (selection === undefined && prompt !== undefined) {
+      selection = await offerSkills(prompt, project);
+   }
+   if (selection !== undefined) {
+      installSkills(project, path.join(target, 'server'), selection);
+   } else {
+      process.stdout.write('\nOptional agent skills: see the Work with coding-agent skills guide.\n');
+   }
 }

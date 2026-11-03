@@ -96,6 +96,8 @@ export interface InitAnswers {
    readonly public: boolean;
    /** Run npm install after writing the scaffold. */
    readonly install: boolean;
+   readonly skills?: string;
+   readonly agents?: string;
 }
 
 /** PascalCase a directory name, splitting on any non-alphanumeric run. */
@@ -160,6 +162,9 @@ export function composeInitArgv(answers: InitAnswers): string[] {
    }
    if (answers.install) {
       argv.push('--install');
+   }
+   if (answers.skills !== undefined && answers.agents !== undefined) {
+      argv.push('--skills', answers.skills, '--agents', answers.agents);
    }
    return argv;
 }
@@ -358,7 +363,13 @@ async function askPackaging(
 export async function runInitWizard(
    prompt: PromptPort,
    detect: (targetDir: string) => WorkspaceDetection | undefined,
-   options: { readonly targetDir?: string; readonly isOccupied?: (targetDir: string) => boolean; readonly install?: boolean } = {}
+   options: {
+      readonly targetDir?: string;
+      readonly isOccupied?: (targetDir: string) => boolean;
+      readonly install?: boolean;
+      readonly skills?: string;
+      readonly agents?: string;
+   } = {}
 ): Promise<string[]> {
    prompt.intro('Scaffold a Hydranium language project');
 
@@ -413,7 +424,18 @@ export async function runInitWizard(
             initialValue: false
          })));
 
-   const argv = composeInitArgv({ targetDir, name, heads, hosts, grammars: withDiagram, force, install, ...packaging });
+   const argv = composeInitArgv({
+      targetDir,
+      name,
+      heads,
+      hosts,
+      grammars: withDiagram,
+      force,
+      install,
+      skills: options.skills,
+      agents: options.agents,
+      ...packaging
+   });
    // Echoed as the LAST thing before the scaffold runs, because it is the
    // artefact the session produces: everything above is how it was reached.
    prompt.outro(formatCommand(argv));

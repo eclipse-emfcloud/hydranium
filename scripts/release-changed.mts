@@ -81,6 +81,11 @@ const INERT: InertRule[] = [
    },
    { name: '.vscode/**', why: 'editor configuration', test: path => path.startsWith('.vscode/') },
    {
+      name: 'skills/**',
+      why: 'adopter guidance installed from Git independently of npm packages',
+      test: path => path.startsWith('skills/')
+   },
+   {
       name: '.claude/**',
       why: 'agent guidance, read by a coding agent and packed by no manifest',
       test: path => path.startsWith('.claude/')
@@ -187,6 +192,7 @@ const FIXTURES = [
    { name: "a package's README is packed and publishes", paths: ['packages/core/README.md'], publishable: true },
    { name: "the root's README is packed nowhere", paths: ['README.md'], publishable: false },
    { name: 'a doc page publishes nothing', paths: ['docs/concepts/how-it-works.md'], publishable: false },
+   { name: 'adopter skills update without an npm release', paths: ['skills/hydranium-profiling/SKILL.md'], publishable: false },
    { name: 'a changeset publishes nothing', paths: ['.changeset/reject-non-file-writes.md'], publishable: false },
    { name: 'an example source publishes nothing', paths: ['examples/order-flow/server/src/main.ts'], publishable: false },
    {

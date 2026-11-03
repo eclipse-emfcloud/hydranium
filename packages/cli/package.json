@@ -69,7 +69,8 @@
     "commander": "^14.0.3",
     "import-meta-resolve": "^4.2.0",
     "oxfmt": "0.71.0",
-    "ts-morph": "^25.0.0"
+    "ts-morph": "^25.0.0",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@eclipse-glsp/client": "2.8.0",
@@ -154,5 +155,10 @@
   "//memlab": "@memlab/core and @memlab/heap-analysis are OPTIONAL PEER dependencies, not optionalDependencies, and the distinction is the whole point: npm installs optionalDependencies BY DEFAULT, both memlab packages pin puppeteer exactly, and puppeteer's postinstall downloads a Chrome binary — so every adopter of this CLI paid ~86 MB and a browser download for the one subcommand almost none of them run, and the download can fail and be walked past as a warning. An optional peer is not auto-installed, so `analyze-heap` documents `npm install @memlab/core @memlab/heap-analysis` as the opt-in and every other subcommand is unaffected. Taken pre-publish deliberately: after publish the install shape is what adopters already have.",
   "//peerDependencies": "`vscode-jsonrpc` takes a caret, so the framework shares the transport the LSP connection resolves, which an `init` scaffold pins: each `vscode-languageserver-protocol` release pins its transport exactly, so an exact peer would name a copy a fresh install rarely holds. The caret starts at 9.0.3, the transport protocol 3.18.4 pins, since an earlier one leaves an unhandled rejection for a request written to a destroyed stream, and no protocol this framework accepts pins it. The caret excludes 8.x, so a tree whose top holds GLSP's copy fails the peer with a named ERESOLVE warning, an error under `--strict-peer-deps`, rather than resolving silently. No peer reaches a NESTED copy, such as GLSP's or one the LSP packages nest. The wire compares message types and `ResponseError`s by copy identity, so the framework sends typed messages by method name and recognises errors with `isResponseError` rather than `instanceof`.",
   "//prepack": "The publish guard, a `prepack` rather than a `prepare`: `prepack` runs only when a tarball is made (`npm pack`, `npm publish`) and never on install, so it cannot break the install it has no business touching. What it defends against: `files` lists `lib`, `lib` is gitignored, and a `files` entry matching nothing is skipped SILENTLY — so `npm publish` from an unbuilt tree emits a tarball of `src` and nothing else, with no error.",
-  "//sideEffects": "The listed modules RUN on load rather than exporting anything: `cli.js` is the `bin`, each `*-driver.js` is spawned as its own process and calls `main(process.argv)` at top level, and `echo-server.js` starts a server. Their whole purpose is the effect, so a bundler must never treat them as prunable. Everything else here is library code with no module-level state beyond `new URL(..., import.meta.url)` constants."
+  "//sideEffects": "The listed modules RUN on load rather than exporting anything: `cli.js` is the `bin`, each `*-driver.js` is spawned as its own process and calls `main(process.argv)` at top level, and `echo-server.js` starts a server. Their whole purpose is the effect, so a bundler must never treat them as prunable. Everything else here is library code with no module-level state beyond `new URL(..., import.meta.url)` constants.",
+  "hydranium": {
+    "skillContracts": {
+      "profiling": "1"
+    }
+  }
 }

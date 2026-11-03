@@ -93,7 +93,7 @@ function main(): void {
    });
    const connection = new DataConnectionWithEvents<OrderFlowTransferRoot>(port);
    const session = connection.createSession(PROPERTIES_WEBVIEW_SESSION_LABEL);
-   const form = new PropertiesForm(root, {
+   const form: PropertiesForm = new PropertiesForm(root, {
       setField: (name, value) => documents.setField(name, value),
       reportError
    });

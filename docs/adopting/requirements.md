@@ -252,6 +252,16 @@ compiles it with `node-gyp`, which needs Python and a C++ compiler. On Linux it
 also needs the X11 and xkbfile development headers, `libx11-dev` and
 `libxkbfile-dev` on Debian and Ubuntu.
 
+## Coding-agent skill installer
+
+The scaffold uses `skills@1.7.6`. For the manual installation and update
+commands in [Work with coding-agent skills](../guides/coding-agent-skills.md),
+set the same exact installer version:
+
+```bash
+export SKILLS_INSTALLER=skills@1.7.6
+```
+
 ## Related
 
 - [Status and limitations](status.md): what the exact pin costs you.
