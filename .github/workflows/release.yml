@@ -123,10 +123,10 @@ jobs:
   # reads the workflow file from the default branch rather than the pushed
   # commit, and a skipped or cancelled CI run would then block every release.
   #
-  # `os:` and the gate command are ci.yml's verbatim, and ci.yml reddens if
-  # either differs.
+  # The platform and runtime matrix and the gate command match CI, which
+  # rejects divergence before a change can reach publishing.
   gate:
-    name: Gate (${{ matrix.os }})
+    name: Gate (${{ matrix.os }})${{ matrix.node && format(' Node {0}', matrix.node) || '' }}
     needs: [changes]
     if: needs.changes.outputs.publishable == 'true'
     runs-on: ${{ matrix.os }}
@@ -135,6 +135,12 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-22.04, windows-2025, macos-26]
+        node: ['']
+        # Empty uses the contributor pin. A fixed second major makes runtime
+        # regressions reproducible without multiplying the platform matrix.
+        include:
+          - os: ubuntu-22.04
+            node: '24.22.1'
 
     env:
       NODE_OPTIONS: --report-on-fatalerror
@@ -156,6 +162,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
+          node-version: ${{ matrix.node }}
           cache: npm
 
       # Identical to the twin steps below and in ci.yml, so every leg gates on
@@ -196,7 +203,11 @@ jobs:
         run: npm run build:all
 
       - name: Full gate
-        run: npm run ${{ matrix.os == 'ubuntu-22.04' && 'check' || 'check:platform' }}
+        run: npm run ${{ matrix.os == 'ubuntu-22.04' && matrix.node == '' && 'check' || 'check:platform' }}
+
+      - name: Rehearse the release
+        if: matrix.os == 'ubuntu-22.04' && matrix.node == ''
+        run: node scripts/release.mts next --rehearse
 
   # Builds and publishes, and gates nothing itself: it rebuilds the commit the
   # `gate` legs passed, from the same lockfile, so dropping `gate` from

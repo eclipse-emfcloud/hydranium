@@ -10,8 +10,8 @@
 // The release driver: stamps a version across the publishable packages and
 // publishes them in lockstep.
 //
-//   node scripts/release.mts next   [--dry-run]
-//   node scripts/release.mts latest [--dry-run]
+//   node scripts/release.mts next   [--dry-run | --rehearse]
+//   node scripts/release.mts latest [--dry-run | --rehearse]
 //
 // `next` derives a rolling prerelease from the committed base — `1.0.0-next`
 // plus the number of commits since the last release tag — and is what every
@@ -26,10 +26,14 @@
 // in a script also makes the whole sequence runnable with `--dry-run` before
 // any of it touches a registry.
 
+import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { cpSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+type ReleaseMode = 'publish' | 'dry-run' | 'rehearse';
 
 type DependencyBlock = 'dependencies' | 'devDependencies' | 'peerDependencies';
 /** The fields of a `package.json` this script reads or rewrites. */
@@ -334,7 +338,7 @@ function reportPublished(packages: WorkspacePackage[], version: string, distTag:
    );
 }
 
-function releaseNext(workspace: Workspace, dryRun: boolean): void {
+function releaseNext(workspace: Workspace, mode: ReleaseMode): void {
    const base = readBaseVersion(workspace.packages);
    if (!isNextVersion(base)) {
       throw new Error(
@@ -349,16 +353,16 @@ function releaseNext(workspace: Workspace, dryRun: boolean): void {
    const distTag = packages.some(pkg => hasStableRelease(pkg.manifest.name)) ? 'next' : 'latest';
    console.log(`Publishing ${packages.length} packages under '${distTag}'`);
 
-   stamp(workspace, version, dryRun);
+   stamp(workspace, version, mode === 'dry-run');
    for (const pkg of packages) {
-      publish(pkg, distTag, dryRun);
+      publish(pkg, distTag, mode !== 'publish');
    }
-   if (!dryRun) {
+   if (mode === 'publish') {
       reportPublished(packages, version, distTag);
    }
 }
 
-function releaseLatest(workspace: Workspace, dryRun: boolean): void {
+function releaseLatest(workspace: Workspace, mode: ReleaseMode): void {
    const base = readBaseVersion(workspace.packages);
    if (isNextVersion(base)) {
       throw new Error(
@@ -371,29 +375,95 @@ function releaseLatest(workspace: Workspace, dryRun: boolean): void {
 
    // Pin the intra-framework ranges the same way the rolling line does; the
    // committed ranges are a base, not the published set.
-   stamp(workspace, base, dryRun);
+   stamp(workspace, base, mode === 'dry-run');
    for (const pkg of packages) {
-      publish(pkg, 'latest', dryRun);
+      publish(pkg, 'latest', mode !== 'publish');
    }
-   if (!dryRun) {
+   if (mode === 'publish') {
       reportPublished(packages, base, 'latest');
+   }
+}
+
+/** Copy built packages so stamping and lifecycle scripts cannot rewrite the checkout. */
+function copyWorkspace(workspace: Workspace, directory: string): Workspace {
+   const packages = workspace.packages.map(pkg => {
+      const dir = join(directory, basename(pkg.dir));
+      cpSync(pkg.dir, dir, { recursive: true, filter: source => basename(source) !== 'node_modules' });
+      const file = join(dir, 'package.json');
+      return { dir, file, manifest: readManifest(file) };
+   });
+   return { packages, names: new Set(workspace.names) };
+}
+
+function selfTest(): void {
+   const directory = mkdtempSync(join(tmpdir(), 'hydranium-release-test-'));
+   try {
+      const dir = join(directory, 'source', 'one');
+      mkdirSync(dir, { recursive: true });
+      const file = join(dir, 'package.json');
+      const manifest: Manifest = {
+         name: '@hydranium/one',
+         version: '1.0.0-next',
+         dependencies: { '@hydranium/two': '^1.0.0-next', external: '^2.0.0' },
+         devDependencies: { '@hydranium/two': '^1.0.0-next' },
+         peerDependencies: { '@hydranium/two': '^1.0.0-next' }
+      };
+      const original = JSON.stringify(manifest);
+      writeFileSync(file, original);
+      writeFileSync(join(dir, 'built.js'), 'export {};');
+      const workspace: Workspace = {
+         packages: [{ dir, file, manifest }],
+         names: new Set(['@hydranium/one', '@hydranium/two'])
+      };
+      stamp(workspace, '1.0.0-next.7', true);
+      assert.equal(readFileSync(file, 'utf8'), original);
+      assert.equal(manifest.version, '1.0.0-next');
+      const copy = copyWorkspace(workspace, join(directory, 'rehearsal'));
+      assert.equal(readFileSync(join(copy.packages[0].dir, 'built.js'), 'utf8'), 'export {};');
+      for (const version of ['1.0.0-next.7', '1.0.0']) {
+         stamp(copy, version, false);
+         const stamped = readManifest(copy.packages[0].file);
+         assert.equal(stamped.version, version);
+         for (const block of ['dependencies', 'devDependencies', 'peerDependencies'] as const) {
+            assert.equal(stamped[block]?.['@hydranium/two'], version);
+         }
+         assert.equal(stamped.dependencies?.external, '^2.0.0');
+         assert.equal(readFileSync(file, 'utf8'), original);
+         assert.equal(manifest.version, '1.0.0-next');
+      }
+      console.log('✓ release stamping and rehearsal isolation');
+   } finally {
+      rmSync(directory, { recursive: true, force: true });
    }
 }
 
 function main() {
    const args = process.argv.slice(2);
-   const dryRun = args.includes('--dry-run');
-   const mode = args.find(arg => !arg.startsWith('--'));
-   if (mode !== 'next' && mode !== 'latest') {
-      console.error('Usage: node scripts/release.mts <next|latest> [--dry-run]');
+   if (args.length === 1 && args[0] === '--self-test') {
+      selfTest();
+      return;
+   }
+   const [line, flag] = args;
+   if ((line !== 'next' && line !== 'latest') || args.length > 2 || (flag !== undefined && flag !== '--dry-run' && flag !== '--rehearse')) {
+      console.error('Usage: node scripts/release.mts <next|latest> [--dry-run | --rehearse]');
       process.exit(1);
    }
-
-   const workspace = loadWorkspace();
-   if (mode === 'next') {
-      releaseNext(workspace, dryRun);
-   } else {
-      releaseLatest(workspace, dryRun);
+   const mode: ReleaseMode = flag === '--rehearse' ? 'rehearse' : flag === '--dry-run' ? 'dry-run' : 'publish';
+   let workspace = loadWorkspace();
+   const directory = mode === 'rehearse' ? mkdtempSync(join(tmpdir(), 'hydranium-release-')) : undefined;
+   try {
+      if (directory) {
+         workspace = copyWorkspace(workspace, directory);
+      }
+      if (line === 'next') {
+         releaseNext(workspace, mode);
+      } else {
+         releaseLatest(workspace, mode);
+      }
+   } finally {
+      if (directory) {
+         rmSync(directory, { recursive: true, force: true });
+      }
    }
 }
 
