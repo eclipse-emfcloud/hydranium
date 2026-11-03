@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import * as fs from 'fs';
+import * as fs from 'node:fs';
 import * as path from 'path';
 import { emitAstBuilder } from './generate-ast-builder.js';
 import { emitLanguages } from './generate-languages.js';
