@@ -93,7 +93,9 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript-api';
@@ -132,16 +134,19 @@ function unresolvedLinks(sourceFile: ts.SourceFile, checker: ts.TypeChecker): { 
 }
 
 /** Each build tier supplies its own globals; dependencies are resolved but only package source is inspected. */
-function checkResolvedLinks(files: string[]): { offences: number; checked: number } {
+function checkResolvedLinks(
+   files: string[],
+   root = REPO_ROOT,
+   report: (message: string) => void = console.error
+): { offences: number; checked: number } {
    const sources = files.filter(
-      file =>
-         /^packages\/[^/]+\/src\//.test(file) && SOURCE_EXTENSIONS.some(ext => file.endsWith(ext)) && existsSync(resolve(REPO_ROOT, file))
+      file => /^packages\/[^/]+\/src\//.test(file) && SOURCE_EXTENSIONS.some(ext => file.endsWith(ext)) && existsSync(resolve(root, file))
    );
    const remaining = new Set(sources);
    let offences = 0;
    for (const directory of new Set(sources.map(file => file.split('/').slice(0, 2).join('/')))) {
       for (const config of ['tsconfig.json', 'tsconfig.browser.json']) {
-         const configPath = resolve(REPO_ROOT, directory, config);
+         const configPath = resolve(root, directory, config);
          if (!existsSync(configPath)) continue;
          const parsed = ts.getParsedCommandLineOfConfigFile(
             configPath,
@@ -161,14 +166,14 @@ function checkResolvedLinks(files: string[]): { offences: number; checked: numbe
          const checker = program.getTypeChecker();
          const roots = new Set(parsed.fileNames.map(file => resolve(file)));
          for (const file of sources.filter(file => file.startsWith(`${directory}/`) && remaining.has(file))) {
-            const absolute = resolve(REPO_ROOT, file);
+            const absolute = resolve(root, file);
             if (!roots.has(absolute)) continue;
             const source = program.getSourceFile(absolute);
             if (!source) continue;
             remaining.delete(file);
             for (const hit of unresolvedLinks(source, checker)) {
                offences++;
-               console.error(`✗ ${file}:${hit.line}: unresolved JSDoc link ${hit.target} — use a resolvable symbol or backticks`);
+               report(`✗ ${file}:${hit.line}: unresolved JSDoc link ${hit.target} — use a resolvable symbol or backticks`);
             }
          }
       }
@@ -176,6 +181,56 @@ function checkResolvedLinks(files: string[]): { offences: number; checked: numbe
    if (sources.length === 0 || remaining.size > 0)
       throw new Error(`Link resolution did not cover package source: ${[...remaining].join(', ') || 'no sources found'}`);
    return { offences, checked: sources.length };
+}
+
+/** Real configs and untracked files keep discovery and tier selection on the same path as the repository scan. */
+function resolutionCoverageSelfTest(): boolean {
+   const root = mkdtempSync(resolve(tmpdir(), 'hydranium-link-coverage-'));
+   const write = (file: string, text: string): void => {
+      const path = resolve(root, file);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, text);
+   };
+   try {
+      execFileSync('git', ['init', '--quiet', root]);
+      const config = { compilerOptions: { lib: ['es2022'], types: [] }, include: ['src'], exclude: ['src/browser', 'src/excluded.ts'] };
+      for (const name of ['one', 'two']) {
+         write(`packages/${name}/tsconfig.json`, JSON.stringify(config));
+         write(`packages/${name}/src/index.ts`, '/** {@link Missing} */\nexport const value = 1;');
+      }
+      write(
+         'packages/two/tsconfig.browser.json',
+         JSON.stringify({
+            compilerOptions: { lib: ['es2022', 'dom'], types: [] },
+            include: ['src/browser']
+         })
+      );
+      write('packages/two/src/browser/index.ts', '/** {@link Window} {@link MissingBrowser} */\nexport const value = 1;');
+      const messages: string[] = [];
+      const result = checkResolvedLinks(listFiles(root), root, message => messages.push(message));
+      assert.deepEqual(result, { offences: 3, checked: 3 });
+      assert.deepEqual(
+         messages.sort(),
+         [
+            '✗ packages/one/src/index.ts:1: unresolved JSDoc link Missing — use a resolvable symbol or backticks',
+            '✗ packages/two/src/index.ts:1: unresolved JSDoc link Missing — use a resolvable symbol or backticks',
+            '✗ packages/two/src/browser/index.ts:1: unresolved JSDoc link MissingBrowser — use a resolvable symbol or backticks'
+         ].sort()
+      );
+      console.log('✓ self-test: all packages and browser sources are checked with their own build configuration');
+
+      write('packages/two/src/excluded.ts', 'export const value = 1;');
+      assert.throws(() => checkResolvedLinks(listFiles(root), root, () => {}), {
+         message: 'Link resolution did not cover package source: packages/two/src/excluded.ts'
+      });
+      console.log('✓ self-test: a source excluded from both build configurations fails coverage');
+      return false;
+   } catch (error) {
+      console.error('✗ SELF-TEST FAILED: JSDoc resolution coverage', error);
+      return true;
+   } finally {
+      rmSync(root, { recursive: true, force: true });
+   }
 }
 
 /** Synthetic modules exercise resolution, including imports, without adding exempt fixture files to the scan. */
@@ -662,6 +717,7 @@ const TEMPLATE_SELF_TESTS = [
 
 function runSelfTests() {
    let broken = resolutionSelfTest();
+   broken = resolutionCoverageSelfTest() || broken;
    for (const probe of SELF_TESTS) {
       const hits = linkTagsInLineComments('self-test.ts', probe.source);
       if (hits.length > 0 === probe.flagged) {
@@ -708,9 +764,9 @@ function runSelfTests() {
 }
 
 /** Tracked and new-but-untracked files, so a bad comment is caught before it is committed. */
-function listFiles() {
+function listFiles(root = REPO_ROOT) {
    const stdout = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
-      cwd: REPO_ROOT,
+      cwd: root,
       encoding: 'utf-8',
       maxBuffer: 64 * 1024 * 1024
    });
