@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { isPromiseLike, Logger, type ProfileSession, type Tracer } from '@hydranium/protocol';
+import { ProfileCollector, isPromiseLike, type Logger, type ProfileSession, type Tracer } from '@hydranium/protocol';
 import {
    type AstNode,
    AstUtils,
@@ -326,10 +326,10 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       let mutatedCount = 0;
       let afterThrow: Set<LangiumDocument> | undefined;
       let passesBefore: Set<LangiumDocument> | undefined;
-      // Per-rule self-time profiling is opt-in: only spin up a session when the
-      // debug threshold is active, so the production `info` path allocates
-      // nothing and the hot rule loop stays a single const-branch off `session`.
-      const session = Logger.isLevelEnabled('debug') ? this.tracer.profile(`integrity ${DocumentState[phase]}`) : undefined;
+      // Allocate timing state only for a capture or debug logging.
+      const session = ProfileCollector.isProfilingEnabled()
+         ? this.tracer.profile(`integrity ${this.services.LanguageMetaData.languageId} ${DocumentState[phase]}`)
+         : undefined;
       const deferred = deferredRelinks.get(run) ?? { depth: 0, dependents: new Map() };
       deferredRelinks.set(run, deferred);
       deferred.depth++;

@@ -8,10 +8,10 @@
  ********************************************************************************/
 
 import {
+   ProfileCollector,
    type BaseVersion,
    ConflictError,
    isModelVersion,
-   Logger,
    type MaybeObservableValue,
    type MaybePromise,
    ObservableValue,
@@ -473,7 +473,7 @@ export class DefaultClientSession<
       const inCallerRead = captureReadLockScope();
       const slowWarn = this.slowUpdateWarn && { threshold: this.slowUpdateWarn, stopwatch: this.services.Clock.stopwatch() };
       const uri = this.canonicalKey(args.uri);
-      const profile = Logger.isLevelEnabled('debug') ? this.tracer.profile(`model-update ${uri}`) : undefined;
+      const profile = ProfileCollector.isProfilingEnabled() ? this.tracer.profile('model-update') : undefined;
       const run = async <T>(stage: string, fn: () => MaybePromise<T>): Promise<T> => (profile ? profile.scope(stage, fn) : fn());
       const textDocuments = this.services.workspace.TextDocuments;
       const check = (): void => {

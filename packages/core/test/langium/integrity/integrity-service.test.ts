@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { asMutable, Disposable, Logger } from '@hydranium/protocol';
+import { asMutable, Disposable, Logger, ProfileCollector } from '@hydranium/protocol';
 import { makeFakeClock } from '@hydranium/protocol/testing';
 import {
    AbstractAstReflection,
@@ -1044,9 +1044,53 @@ describe('IntegrityService.enforceBatch', () => {
       expect(result).toBe(false);
    });
 
+   it.each([
+      ['Parsed', DocumentState.Parsed],
+      ['Linked', DocumentState.Linked]
+   ] as const)('keeps captured rule timings separate across languages at %s', async (phaseName, phase) => {
+      Logger.setLevel('off');
+      const clock = makeFakeClock();
+      const { tracer } = makeCapturingTracer(clock);
+      const collector = new ProfileCollector();
+      collector.start();
+      try {
+         for (const { languageId, duration, count } of [
+            { languageId: 'first', duration: 2, count: 2 },
+            { languageId: 'second', duration: 3, count: 1 }
+         ]) {
+            const service = new DefaultIntegrityService<FakeNode>(
+               makeIntegrityServices({ shared: { Tracer: tracer }, LanguageMetaData: { languageId } })
+            );
+            service.register({
+               id: 'shared-rule',
+               nodeType: 'Foo',
+               phase,
+               enforce: () => {
+                  clock.advance(duration);
+                  return false;
+               }
+            });
+            const document = batchDocument(
+               `file:///${languageId}.fake`,
+               Array.from({ length: count }, () => makeFakeAstNode<FakeNode>({ $type: 'Foo' }))
+            );
+            await service.enforceBatch([document], phase, CancellationToken.None);
+         }
+      } finally {
+         collector.stop();
+      }
+
+      expect(collector.records(10)).toEqual([
+         { session: `integrity first ${phaseName}`, id: 'shared-rule', count: 2, selfMs: 4, selfPct: 40 },
+         { session: `integrity second ${phaseName}`, id: 'shared-rule', count: 1, selfMs: 3, selfPct: 30 }
+      ]);
+   });
+
    it('profiles per-rule self-time and reports it line-based at debug level', async () => {
       const { tracer, lines } = makeCapturingTracer(makeFakeClock());
-      const service = new DefaultIntegrityService<FakeNode>(makeIntegrityServices({ shared: { Tracer: tracer } }));
+      const service = new DefaultIntegrityService<FakeNode>(
+         makeIntegrityServices({ shared: { Tracer: tracer }, LanguageMetaData: { languageId: 'test' } })
+      );
       service.register({ id: 'ruleA', nodeType: 'Foo', phase: DocumentState.Parsed, enforce: () => false });
       service.register({ id: 'ruleB', nodeType: 'Foo', phase: DocumentState.Parsed, enforce: () => false });
       Logger.setLevel('debug');

@@ -352,7 +352,7 @@ describe('the headless-harness subcommands', () => {
       // after a process had been spawned and a whole head imported. Validating
       // here puts it with the numeric flags beside it, as a usage error.
       expect(() => parseMeasureMemoryArgs(['--services', 'M', EXISTING_DIR, '--profile', 'cpu,bogus'], onError)).toThrow(
-         'Option --profile: Unknown profile dimension: bogus (expected cpu, alloc, gc, eld, heap)'
+         'Option --profile: Unknown profile dimension: bogus (expected cpu, alloc, gc, eld, heap, framework)'
       );
       // The raw string still crosses to the child unchanged: this validates, it
       // does not take over the parsing.

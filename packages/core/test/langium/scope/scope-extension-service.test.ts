@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { type AstNode, DocumentState, type LangiumDocument, URI } from '@hydranium/langium';
-import { Logger } from '@hydranium/protocol';
+import { Logger, ProfileCollector } from '@hydranium/protocol';
 import { makeFakeClock } from '@hydranium/protocol/testing';
 import { type HydraniumAstNodeDescriptionProvider } from '../../../src/langium/scope/ast-node-description-provider.js';
 import { type ServerLanguageServices } from '../../../src/langium/language-module.js';
@@ -351,7 +351,10 @@ describe('ScopeExtensionService contribution group consumption', () => {
 
 describe('ScopeExtensionService profiling', () => {
    const level = Logger.getLevel();
-   afterEach(() => Logger.setLevel(level));
+   afterEach(() => {
+      ProfileCollector.current?.stop();
+      Logger.setLevel(level);
+   });
 
    /** A service over a stub builder, so the test starts and ends the builds. */
    function makeProfiledService(create = (services: ServerLanguageServices) => new DefaultScopeExtensionService(services)) {
@@ -368,6 +371,38 @@ describe('ScopeExtensionService profiling', () => {
       const profileLines = () => lines.map(line => line.message).filter(message => message.includes('[profile scope-extension '));
       return { service, builder, profileLines };
    }
+
+   it('keeps captured timings separate when two languages share an extension id', () => {
+      Logger.setLevel('off');
+      const clock = makeFakeClock();
+      const { tracer } = makeCapturingTracer(clock);
+      const services = [
+         { languageId: 'first', duration: 2 },
+         { languageId: 'second', duration: 3 }
+      ].map(({ languageId, duration }) => {
+         const service = new DefaultScopeExtensionService(
+            makeNoopLanguageServices({
+               shared: { Tracer: tracer },
+               workspace: { AstNodeDescriptionProvider: descriptions },
+               LanguageMetaData: { languageId }
+            })
+         );
+         service.register({ id: 'shared-id', referenceTypes: ['TypeOne'], addDescriptions: () => clock.advance(duration) });
+         return service;
+      });
+      const collector = new ProfileCollector();
+      collector.start();
+
+      services[0].getDescriptions('TypeOne', contextWithDocument());
+      services[1].getDescriptions('TypeOne', contextWithDocument());
+      services[0].getDescriptions('TypeOne', contextWithDocument());
+      collector.stop();
+
+      expect(collector.records(10)).toEqual([
+         { session: 'scope-extension first', id: 'shared-id', count: 2, selfMs: 4, selfPct: 40 },
+         { session: 'scope-extension second', id: 'shared-id', count: 1, selfMs: 3, selfPct: 30 }
+      ]);
+   });
 
    it('reports each extension when a build ends, counting every call', () => {
       const { service, builder, profileLines } = makeProfiledService();

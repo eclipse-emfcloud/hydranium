@@ -26,6 +26,72 @@ export interface ProfileRecord {
    selfPct: number;
 }
 
+/** A pass total across a capture window, grouped by session identifier and scope id. */
+export interface CapturedProfileRecord extends ProfileRecord {
+   session: string;
+   /** Self-time as a percentage of the capture duration, including time outside scopes. */
+   selfPct: number;
+}
+
+/**
+ * Process-wide capture of completed scopes. Each instance serves one run; scopes
+ * crossing either boundary are omitted. Percentages use the capture duration,
+ * and separate sessions can overlap, so their totals need not add up to 100%.
+ */
+export class ProfileCollector {
+   protected started = false;
+   protected static active: ProfileCollector | undefined;
+   protected readonly entries = new Map<string, Map<string, CapturedProfileRecord>>();
+
+   static get current(): ProfileCollector | undefined {
+      return this.active;
+   }
+
+   /** Whether to measure scopes for an active capture or debug logging. */
+   static isProfilingEnabled(): boolean {
+      return this.active !== undefined || Logger.isLevelEnabled('debug');
+   }
+
+   start(): void {
+      if (this.started) {
+         throw new Error('A ProfileCollector cannot be restarted.');
+      }
+      if (ProfileCollector.active) {
+         throw new Error('A ProfileCollector is already active.');
+      }
+      this.started = true;
+      ProfileCollector.active = this;
+   }
+
+   stop(): void {
+      if (ProfileCollector.active === this) {
+         ProfileCollector.active = undefined;
+      }
+   }
+
+   record(session: string, id: string, selfMs: number): void {
+      if (ProfileCollector.active !== this) {
+         return;
+      }
+      let scopes = this.entries.get(session);
+      if (!scopes) {
+         scopes = new Map();
+         this.entries.set(session, scopes);
+      }
+      const record = scopes.get(id) ?? { session, id, count: 0, selfMs: 0, selfPct: 0 };
+      record.count++;
+      record.selfMs += selfMs;
+      scopes.set(id, record);
+   }
+
+   records(durationMs: number): CapturedProfileRecord[] {
+      return [...this.entries.values()]
+         .flatMap(scopes => [...scopes.values()])
+         .map(record => ({ ...record, selfPct: durationMs > 0 ? (100 * record.selfMs) / durationMs : 0 }))
+         .sort((left, right) => right.selfMs - left.selfMs);
+   }
+}
+
 /**
  * An aggregating, parent-exclusive self-time profiler scoped to one operation.
  *
@@ -77,6 +143,8 @@ export interface ProfileScopeFrame {
    readonly id: string;
    /** Session-stopwatch reading when this scope began. */
    readonly start: number;
+   /** Capture owning this scope at entry; a later capture must never receive it. */
+   readonly collector?: ProfileCollector;
    /** Wall-time consumed by nested scopes, excluded from this scope's self-time. */
    childMs: number;
 }
@@ -84,7 +152,8 @@ export interface ProfileScopeFrame {
 /**
  * Default {@link ProfileSession}. Times against an injected {@link Clock} (so
  * it is fake-clock deterministic in tests, unlike a raw `performance.now`) and
- * dumps through an injected {@link Logger}.
+ * dumps through an injected {@link Logger}. Completed scopes also feed the active
+ * {@link ProfileCollector}, independently of reporting and the log threshold.
  */
 export class DefaultProfileSession implements ProfileSession {
    /** Single monotonic timeline for the whole session; per-scope readings are deltas off it. */
@@ -105,7 +174,7 @@ export class DefaultProfileSession implements ProfileSession {
    scope<T>(id: string, fn: () => Promise<T>): Promise<T>;
    scope<T>(id: string, fn: () => T): T;
    scope<T>(id: string, fn: () => T | Promise<T>): T | Promise<T> {
-      const frame: ProfileScopeFrame = { id, start: this.sessionStopwatch.elapsedMs, childMs: 0 };
+      const frame: ProfileScopeFrame = { id, start: this.sessionStopwatch.elapsedMs, childMs: 0, collector: ProfileCollector.current };
       this.stack.push(frame);
       let result: T | Promise<T>;
       try {
@@ -146,6 +215,7 @@ export class DefaultProfileSession implements ProfileSession {
          parent.childMs += duration;
       }
       const selfMs = Math.max(0, duration - frame.childMs);
+      frame.collector?.record(this.identifier, frame.id, selfMs);
       const samples = this.entries.get(frame.id);
       if (samples) {
          samples.push(selfMs);

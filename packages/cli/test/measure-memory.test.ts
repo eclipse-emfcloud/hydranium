@@ -11,6 +11,12 @@ import { describe, expect, it } from 'vitest';
 import { buildDriverArgs, parseProfileDimensions } from '../src/commands/measure-memory.js';
 
 describe('parseProfileDimensions', () => {
+   it('enables framework instrumentation only when requested', () => {
+      expect(parseProfileDimensions('cpu,framework')).toEqual({ cpu: true, frameworkPasses: true });
+      expect(parseProfileDimensions('framework')).toEqual({ frameworkPasses: true });
+      expect(parseProfileDimensions('cpu')).toEqual({ cpu: true });
+   });
+
    it('maps the documented dimension tokens', () => {
       expect(parseProfileDimensions('cpu,alloc,gc,eld')).toEqual({ cpu: true, allocation: true, gc: true, eventLoopDelay: true });
    });

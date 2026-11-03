@@ -19,7 +19,7 @@ import {
    MultiMap,
    URI
 } from '@hydranium/langium';
-import { Logger } from '@hydranium/protocol';
+import { ProfileCollector, Logger } from '@hydranium/protocol';
 import { makeFakeClock } from '@hydranium/protocol/testing';
 import type { NameProvider } from '../../../src/langium/naming/name-provider.js';
 import { HydraniumAstNodeDescriptionProvider } from '../../../src/langium/scope/ast-node-description-provider.js';
@@ -75,9 +75,10 @@ const noopLogger: { for: () => typeof noopLogger; trace: () => void } = {
    trace: () => undefined
 };
 
-function makeLocalSymbolServices(nameProvider: NameProvider, tracer: unknown = noopLogger): LangiumCoreServices {
+function makeLocalSymbolServices(nameProvider: NameProvider, tracer: unknown = noopLogger, languageId = 'test'): LangiumCoreServices {
    const astNodeLocator: AstNodeLocator = { getAstNodePath: () => '/', getAstNode: () => undefined };
    const services = {
+      LanguageMetaData: { languageId },
       references: { NameProvider: nameProvider },
       workspace: { AstNodeLocator: astNodeLocator, AstNodeDescriptionProvider: undefined },
       shared: { Logger: noopLogger, Tracer: tracer }
@@ -320,6 +321,33 @@ describe('HydraniumScopeComputation.collectLocalSymbols profiling', () => {
       root.members = [memberA, memberB];
       return makeFakeDocument('file:///p/foo.fake', root);
    }
+
+   it('aggregates local symbols by language across document names and folders', async () => {
+      Logger.setLevel('off');
+      const { tracer } = makeCapturingTracer(makeFakeClock());
+      const collector = new ProfileCollector();
+      collector.start();
+      try {
+         for (const languageId of ['first', 'second']) {
+            const services = makeLocalSymbolServices(
+               makeNameProviderStub(node => (node as FakeNode).name),
+               tracer,
+               languageId
+            );
+            const computation = new HydraniumScopeComputation(services as never);
+            for (const uri of ['file:///a/foo.fake', 'file:///b/foo.fake', 'file:///b/bar.fake']) {
+               const document = makeContainerDocument();
+               await computation.collectLocalSymbols(makeFakeDocument(uri, document.parseResult.value));
+            }
+         }
+      } finally {
+         collector.stop();
+      }
+      expect(collector.records(1).map(({ session, id, count }) => ({ session, id, count }))).toEqual([
+         { session: 'scope-local first', id: 'TypeOne', count: 6 },
+         { session: 'scope-local second', id: 'TypeOne', count: 6 }
+      ]);
+   });
 
    it('aggregates per-$type self-time and reports it line-based at debug level', async () => {
       const { tracer, lines } = makeCapturingTracer(makeFakeClock());

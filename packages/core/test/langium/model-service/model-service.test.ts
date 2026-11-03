@@ -16,6 +16,7 @@ import {
    DefaultTracer,
    isConflictError,
    Logger,
+   ProfileCollector,
    type TransferElement,
    UNRECORDED_VERSION
 } from '@hydranium/protocol';
@@ -285,6 +286,24 @@ describe('ModelService update profiling', () => {
    afterEach(() => {
       Logger.setLevel('info');
       vi.restoreAllMocks();
+   });
+
+   it('aggregates model update stages across documents', async () => {
+      Logger.setLevel('off');
+      const bundle = makeTestServices<FakeRoot>({ modelService: services => new DelayedModelService<FakeRoot>(services) });
+      const collector = new ProfileCollector();
+      collector.start();
+      try {
+         for (const uri of ['file:///first.fake', 'file:///second.fake']) {
+            const session = openSession(bundle.modelService, bundle.textDocuments, uri, undefined, uri);
+            await session.update({ ...updateArgs, uri });
+         }
+      } finally {
+         collector.stop();
+      }
+      const records = collector.records(1);
+      expect([...new Set(records.map(record => record.session))]).toEqual(['model-update']);
+      expect(records.find(record => record.id === 'rebuild')?.count).toBe(2);
    });
 
    it('emits a per-stage profile breakdown of the update chain at debug level', async () => {

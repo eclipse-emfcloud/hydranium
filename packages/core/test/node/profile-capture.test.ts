@@ -7,6 +7,12 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { DefaultTracer, Logger, ProfileCollector } from '@hydranium/protocol';
+import { DocumentState } from '@hydranium/langium';
+import { CancellationToken } from 'vscode-languageserver';
+import { DefaultBuildPhasePassService } from '../../src/langium/build-phase-pass/build-phase-pass-service.js';
+import { makeNoopSharedServices } from '../../src/testing/index.js';
+import { recordServerSummaryEntry } from '../../src/node/profiling-run.js';
 import * as fs from 'node:fs';
 import { Session } from 'node:inspector';
 import * as os from 'node:os';
@@ -115,6 +121,18 @@ describe('formatProfileReport', () => {
       expect(text).toContain('/tmp/alloc-build.heapprofile');
    });
 
+   it('renders framework scope totals without an output directory', () => {
+      const text = formatProfileReport({
+         ...fullReport,
+         frameworkPasses: [{ session: 'integrity orders Linked', id: 'repair', count: 2, selfMs: 12, selfPct: 25 }]
+      });
+      expect(text).toContain('integrity orders Linked / repair ×2');
+      expect(text).toContain('12ms');
+      expect(text).toContain('25.0%');
+      expect(formatProfileReport({ ...fullReport, frameworkPasses: [] })).toContain('no completed scopes');
+      expect(formatProfileReport(fullReport)).not.toContain('framework');
+   });
+
    it('signs a negative memory delta with a minus', () => {
       const text = formatProfileReport({ ...fullReport, memoryDelta: { rssBytes: -5 * 1024 * 1024, heapUsedBytes: 0 } });
       expect(text).toContain('rss -5.00MB');
@@ -139,6 +157,46 @@ describe('ProfileCapture and profileWorkload in a real inspector session', () =>
    });
    afterAll(() => {
       fs.rmSync(dir, { recursive: true, force: true });
+   });
+
+   it('saves framework pass totals with logging off and releases the collector', async () => {
+      Logger.setLevel('off');
+      try {
+         const service = new DefaultBuildPhasePassService(makeNoopSharedServices());
+         service.register({ id: 'test-pass', phase: DocumentState.Linked, run: () => undefined });
+         const { report } = await profileWorkload({ frameworkPasses: true, directory: dir }, async () => {
+            await service.runPasses([], DocumentState.Linked, CancellationToken.None, undefined);
+            await service.runPasses([], DocumentState.Linked, CancellationToken.None, undefined);
+         });
+         recordServerSummaryEntry(dir, 'passes', report);
+         const saved = JSON.parse(fs.readFileSync(path.join(dir, 'server-summary.json'), 'utf8'));
+         expect(saved.passes.frameworkPasses).toEqual([
+            { session: 'build-phase-pass Linked', id: 'test-pass', count: 2, selfMs: expect.any(Number), selfPct: expect.any(Number) }
+         ]);
+         expect(ProfileCollector.current).toBeUndefined();
+         const next = await profileWorkload({ frameworkPasses: true }, async () => undefined);
+         expect(next.report.frameworkPasses).toEqual([]);
+      } finally {
+         Logger.setLevel('info');
+      }
+   });
+
+   it('does not enable framework instrumentation for a CPU-only capture', async () => {
+      Logger.setLevel('off');
+      const profile = vi.spyOn(DefaultTracer.prototype, 'profile');
+      try {
+         const service = new DefaultBuildPhasePassService(makeNoopSharedServices());
+         service.register({ id: 'unmeasured', phase: DocumentState.Linked, run: () => undefined });
+         const { report } = await profileWorkload({ cpu: true, directory: dir }, async () => {
+            expect(ProfileCollector.current).toBeUndefined();
+            await service.runPasses([], DocumentState.Linked, CancellationToken.None, undefined);
+         });
+         expect(profile).not.toHaveBeenCalled();
+         expect(report.frameworkPasses).toBeUndefined();
+      } finally {
+         profile.mockRestore();
+         Logger.setLevel('info');
+      }
    });
 
    it('captures a well-formed cpu profile and allocation profile', async () => {
@@ -213,27 +271,30 @@ describe('ProfileCapture and profileWorkload in a real inspector session', () =>
    });
 
    it('rejects a second concurrent capture and tracks isActive', async () => {
-      const first = await ProfileCapture.start({ cpu: true });
+      const first = await ProfileCapture.start({ cpu: true, frameworkPasses: true });
       expect(ProfileCapture.isActive()).toBe(true);
       // The singleton guard's own message: `start` can reject for inspector
       // reasons that have nothing to do with a second concurrent capture.
-      await expect(ProfileCapture.start({ cpu: true })).rejects.toThrow(/ProfileCapture is already active/);
+      await expect(ProfileCapture.start({ cpu: true, frameworkPasses: true })).rejects.toThrow(/ProfileCapture is already active/);
       await first.stop(dir, 'cleanup');
       expect(ProfileCapture.isActive()).toBe(false);
+      expect(ProfileCollector.current).toBeUndefined();
    });
 
    it('releases the singleton after a successful workload', async () => {
-      await profileWorkload({ cpu: true, directory: dir, label: 'release' }, async () => 1);
+      await profileWorkload({ cpu: true, frameworkPasses: true, directory: dir, label: 'release' }, async () => 1);
       expect(ProfileCapture.isActive()).toBe(false);
+      expect(ProfileCollector.current).toBeUndefined();
    });
 
    it('releases the singleton even when the workload throws', async () => {
       await expect(
-         profileWorkload({ cpu: true, directory: dir, label: 'boom' }, async () => {
+         profileWorkload({ cpu: true, frameworkPasses: true, directory: dir, label: 'boom' }, async () => {
             throw new Error('boom');
          })
       ).rejects.toThrow('boom');
       expect(ProfileCapture.isActive()).toBe(false);
+      expect(ProfileCollector.current).toBeUndefined();
    });
 
    it('disconnects the session and releases the singleton when stop() fails to write', async () => {
@@ -241,19 +302,21 @@ describe('ProfileCapture and profileWorkload in a real inspector session', () =>
       // path that must still disconnect the session and clear the active singleton.
       const blocker = path.join(dir, 'blocker-file');
       fs.writeFileSync(blocker, 'not a directory');
-      const capture = await ProfileCapture.start({ cpu: true });
+      const capture = await ProfileCapture.start({ cpu: true, frameworkPasses: true });
       const disconnectSpy = vi.spyOn(Session.prototype, 'disconnect');
       try {
          await expect(capture.stop(path.join(blocker, 'nested'), 'fail')).rejects.toThrow();
          expect(disconnectSpy, 'a failed stop() must disconnect the session').toHaveBeenCalled();
          expect(ProfileCapture.isActive()).toBe(false);
+         expect(ProfileCollector.current).toBeUndefined();
       } finally {
          disconnectSpy.mockRestore();
       }
       // The singleton is free: a subsequent capture starts and stops cleanly.
-      const next = await ProfileCapture.start({ cpu: true });
+      const next = await ProfileCapture.start({ cpu: true, frameworkPasses: true });
       await next.stop(dir, 'after-stop-fail');
       expect(ProfileCapture.isActive()).toBe(false);
+      expect(ProfileCollector.current).toBeUndefined();
    });
 
    it('disconnects the session and releases the singleton when begin() fails', async () => {
@@ -264,16 +327,18 @@ describe('ProfileCapture and profileWorkload in a real inspector session', () =>
       const postSpy = vi.spyOn(Session.prototype, 'post').mockImplementation(failingPost);
       const disconnectSpy = vi.spyOn(Session.prototype, 'disconnect');
       try {
-         await expect(ProfileCapture.start({ cpu: true })).rejects.toThrow('inspector down');
+         await expect(ProfileCapture.start({ cpu: true, frameworkPasses: true })).rejects.toThrow('inspector down');
          expect(disconnectSpy, 'a failed begin() must disconnect the connected session').toHaveBeenCalled();
          expect(ProfileCapture.isActive()).toBe(false);
+         expect(ProfileCollector.current).toBeUndefined();
       } finally {
          postSpy.mockRestore();
          disconnectSpy.mockRestore();
       }
       // With the inspector healthy again, a real capture starts and stops cleanly.
-      const next = await ProfileCapture.start({ cpu: true });
+      const next = await ProfileCapture.start({ cpu: true, frameworkPasses: true });
       await next.stop(dir, 'after-begin-fail');
       expect(ProfileCapture.isActive()).toBe(false);
+      expect(ProfileCollector.current).toBeUndefined();
    });
 });
