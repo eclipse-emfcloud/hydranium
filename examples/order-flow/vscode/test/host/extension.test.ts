@@ -16,6 +16,7 @@ import { ORDER_FLOW_HOST_PORT_COMMANDS } from '@hydranium/example-order-flow-vsc
 import * as assert from 'node:assert/strict';
 import { connect } from 'node:net';
 import * as vscode from 'vscode';
+import { ORDER_FLOW_LAYOUT_DIAGRAM_VIEW_TYPE } from '../../src/layout-diagram-editor';
 import { ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE } from '../../src/process-diagram-editor';
 import { OrderFlowPropertiesPanel } from '../../src/properties-panel';
 
@@ -101,6 +102,29 @@ describe('order-flow extension in a VS Code host', () => {
       const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
       assert.ok(input instanceof vscode.TabInputCustom, `a custom editor opened, got ${describeTabInput(input)}`);
       assert.equal(input.viewType, ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE);
+   });
+
+   it('redirects a layout to the existing process diagram through Open With', async () => {
+      const processUri = workspaceUri('orders/fulfillment.process');
+      await vscode.commands.executeCommand('vscode.open', processUri);
+      await vscode.commands.executeCommand(
+         'vscode.openWith',
+         workspaceUri('orders/fulfillment.layout'),
+         ORDER_FLOW_LAYOUT_DIAGRAM_VIEW_TYPE
+      );
+      const input = await when(
+         vscode.window.tabGroups.onDidChangeTabs,
+         () => {
+            const active = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+            return active instanceof vscode.TabInputCustom && active.uri.toString() === processUri.toString() ? active : undefined;
+         },
+         'the process diagram after a layout redirect'
+      );
+      assert.equal(input.viewType, ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE);
+      const diagrams = vscode.window.tabGroups.all
+         .flatMap(group => group.tabs)
+         .filter(tab => tab.input instanceof vscode.TabInputCustom && tab.input.viewType === ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE);
+      assert.equal(diagrams.length, 1);
    });
 
    it('opens a .process as text through Open With', async () => {

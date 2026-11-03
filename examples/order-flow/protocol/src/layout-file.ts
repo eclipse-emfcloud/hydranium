@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { LAYOUT_LANGUAGE, PROCESS_LANGUAGE } from '@hydranium/example-order-flow-protocol';
+import { LAYOUT_LANGUAGE, PROCESS_LANGUAGE } from './generated-hydranium/languages';
 
 /**
  * The one rule binding a layout to its process: the same path, with `.layout`
