@@ -281,14 +281,7 @@ Markdown.
 
 ### Agent guidance evidence
 
-For repository contributors, `check:docs` also checks names in `AGENTS.md`,
-`CLAUDE.md`, and our rules and skills. Recognizable identifiers and dotted
-members in code spans must occur as identifiers in repository or pinned
-Langium source; comments, string literals and test fixtures do not count.
-File names must exist, package names must be declared, and script names
-must occur in a manifest. Plain words and commands other than `npm run` are
-skipped. This detects removals, not whether a member belongs to a particular
-class or whether a claim is true.
+`check:docs` checks guidance names and reciprocal claim/test links.
 
 A behavior claim with a test carries an HTML comment immediately before its
 paragraph, in this form:
@@ -303,19 +296,8 @@ Inside the test that asserts it, put a line comment with the same id:
 // guidance-claim: unique-claim-id
 ```
 
-The gate requires one matching backlink inside a runnable test, and rejects
-orphan backlinks and duplicate claim ids. It follows test and suite modifier
-chains, including concurrent and sequential tests. A conditional modifier or
-Node skip/todo option must be statically known to enable the test;
-unknown conditions cannot establish that the test runs on the gate's platform.
-This checks the declaration, not whether the runner selected or executed it.
-Search the id to reach the prose when changing the assertion. The marker is
-checked metadata; it is the
-exception to the ban on pointers in comments. A marker cannot prove that
-the test asserts the paragraph, and unmarked prose is not interpreted by
-the gate. Add a marker when a rule relies on behavior covered by a test;
-otherwise state the evidence and its limits. Cheap upstream behavior probes
-run with the docs gate; expensive host traces remain manual evidence.
+Search the id when changing the assertion so the prose stays in step. This
+checked metadata is the exception to the ban on pointers in comments.
 
 Use the [guidance audit skill](../../.claude/skills/auditing-guidance/SKILL.md)
 for a periodic review outside the gate, particularly after dependency or

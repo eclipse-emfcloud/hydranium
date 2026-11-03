@@ -7,9 +7,29 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+/**
+ * The guidance half of check:docs. Recognizable names in owned agent guidance
+ * must occur as identifiers in repository or pinned Langium source, as file
+ * names, or as declared packages and scripts. Comments, string literals and
+ * test fixtures cannot keep a removed identifier alive. Plain words and
+ * commands other than npm run are outside the classifier.
+ *
+ * Explicit guidance-claim markers require reciprocal comments in statically
+ * enabled test bodies. Callee traversal is shared with the title gate; evidence
+ * additionally checks skip conditions and options, rejects disabled ranges,
+ * and distinguishes suite and step callbacks from actual tests. Unknown
+ * conditions cannot establish that evidence runs on the gate's platform.
+ *
+ * These checks establish occurrence and declaration, not member ownership,
+ * runner selection or agreement between the prose and the assertion. Unmarked
+ * prose and expensive upstream traces remain subjects of a manual audit. The
+ * console probe runs with the docs gate to detect upstream behavior changes.
+ */
+
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript-api';
+import { readCalleeChain, TEST_MODIFIERS, TEST_ROOTS } from './test-callees.mts';
 
 export function isGuidance(file: string): boolean {
    return file === 'AGENTS.md' || file === 'CLAUDE.md' || file.startsWith('.claude/rules/') || file.startsWith('.claude/skills/');
@@ -62,34 +82,42 @@ function literalBoolean(node: ts.Expression | undefined): boolean | undefined {
 }
 
 /** Unknown conditions cannot establish that the evidence runs on the gate's platform. */
-function testChain(expression: ts.Expression): { root: string; runnable: boolean } | undefined {
-   if (ts.isIdentifier(expression)) {
-      return ['it', 'test', 'describe', 'suite'].includes(expression.text) ? { root: expression.text, runnable: true } : undefined;
-   }
-   if (ts.isPropertyAccessExpression(expression)) {
-      const chain = testChain(expression.expression);
-      if (!chain) return undefined;
-      return { ...chain, runnable: chain.runnable && ['concurrent', 'sequential', 'only', 'fails'].includes(expression.name.text) };
-   }
-   if (ts.isCallExpression(expression) && ts.isPropertyAccessExpression(expression.expression)) {
-      const chain = testChain(expression.expression.expression);
-      if (!chain) return undefined;
-      const modifier = expression.expression.name.text;
-      const condition = literalBoolean(expression.arguments[0]);
-      return {
-         ...chain,
-         runnable:
-            chain.runnable &&
-            (['each', 'for'].includes(modifier) ||
-               (modifier === 'skipIf' && condition === false) ||
-               (modifier === 'runIf' && condition === true))
-      };
-   }
-   if (ts.isTaggedTemplateExpression(expression) && ts.isPropertyAccessExpression(expression.tag)) {
-      const chain = testChain(expression.tag.expression);
-      if (chain) return { ...chain, runnable: chain.runnable && ['each', 'for'].includes(expression.tag.name.text) };
-   }
-   return undefined;
+function testChain(expression: ts.Expression): { kind: 'test' | 'suite' | 'step'; runnable: boolean } | undefined {
+   const parts = readCalleeChain(expression, node => {
+      if (ts.isIdentifier(node)) return { kind: 'identifier', name: node.text };
+      if (ts.isPropertyAccessExpression(node)) return { kind: 'member', name: node.name.text, object: node.expression };
+      if (ts.isCallExpression(node)) return { kind: 'call', callee: node.expression, arguments: node.arguments };
+      if (ts.isTaggedTemplateExpression(node)) return { kind: 'tag', tag: node.tag };
+      if (
+         ts.isParenthesizedExpression(node) ||
+         ts.isAsExpression(node) ||
+         ts.isTypeAssertionExpression(node) ||
+         ts.isSatisfiesExpression(node) ||
+         ts.isNonNullExpression(node)
+      )
+         return { kind: 'wrapper', expression: node.expression };
+      return undefined;
+   });
+   if (!parts || !TEST_ROOTS.has(parts[0].name)) return undefined;
+   const kind =
+      parts[0].name === 'describe' || parts[0].name === 'suite' || parts.some(part => part.name === 'describe')
+         ? 'suite'
+         : parts[0].name === 'test' && parts[1]?.name === 'step'
+           ? 'step'
+           : 'test';
+   const runnable =
+      !parts[0].arguments &&
+      !parts[0].tagged &&
+      parts.slice(1).every(part => {
+         if (part.arguments || part.tagged) {
+            if (part.name === 'each' || part.name === 'for') return true;
+            const condition = literalBoolean(part.arguments?.[0]);
+            return (part.name === 'skipIf' && condition === false) || (part.name === 'runIf' && condition === true);
+         }
+         if (['skip', 'todo', 'fixme', 'each', 'for', 'skipIf', 'runIf'].includes(part.name)) return false;
+         return TEST_MODIFIERS.has(part.name) || (kind === 'step' && part.name === 'step');
+      });
+   return { kind, runnable };
 }
 
 function optionsAllowRun(options: ts.Expression | undefined): boolean {
@@ -133,7 +161,7 @@ function testClaims(file: string, text: string): string[] {
                disabled.push(node);
                return;
             }
-            if (chain.root === 'it' || chain.root === 'test') {
+            if (chain.kind === 'test') {
                for (const argument of node.arguments)
                   if (ts.isArrowFunction(argument) || ts.isFunctionExpression(argument)) bodies.push(argument.body);
             }
@@ -232,15 +260,50 @@ function addSourceNames(file: string, text: string, tokens: Set<string>): void {
    visit(source);
 }
 
-export function guidanceSelfTests(): void {
+export function guidanceSelfTests(): { name: string; passed: boolean }[] {
+   const probes: { name: string; passed: boolean }[] = [];
    const page = '<!-- guidance-claim: one test=a.test.ts -->';
    const test = "it('works', () => {\n// guidance-claim: one\nexpect(true).toBe(true);\n});";
    const pages = new Map([['AGENTS.md', page]]);
    const tests = new Map([['a.test.ts', test]]);
    const assert = (condition: boolean, name: string): void => {
-      if (!condition) throw new Error(`guidance self-test: ${name}`);
+      probes.push({ name: `guidance: ${name}`, passed: condition });
    };
    assert(claimErrors(pages, tests).length === 0, 'reciprocal claim');
+   for (const suite of [
+      'test.describe',
+      'test.describe.serial',
+      'test.describe.parallel',
+      '(test.describe)',
+      '(test.describe as typeof test.describe)',
+      'test.describe!'
+   ]) {
+      assert(
+         claimErrors(pages, new Map([['a.test.ts', `${suite}('suite', () => { ${test} });`]])).length === 0,
+         `runnable Playwright suite ${suite}`
+      );
+   }
+   assert(
+      claimErrors(
+         pages,
+         new Map([
+            [
+               'a.test.ts',
+               "test('works', async () => { await test.step('step', async () => {\n// guidance-claim: one\nexpect(true).toBe(true);\n}); });"
+            ]
+         ])
+      ).length === 0,
+      'backlink inside a Playwright step'
+   );
+   for (const suite of ['test.describe.skip', 'test.describe.fixme', 'test.describe.serial.skip']) {
+      assert(
+         claimErrors(pages, new Map([['a.test.ts', `${suite}('suite', () => { ${test} });`]])).length > 0,
+         `disabled Playwright suite ${suite}`
+      );
+   }
+   for (const callee of ['test.describe', 'test.step']) {
+      assert(claimErrors(pages, new Map([['a.test.ts', test.replace('it(', `${callee}(`)]])).length > 0, `${callee} alone is not a test`);
+   }
    const finalComment = "it('works', () => {\nexpect(true).toBe(true);\n// guidance-claim: one\n});";
    assert(claimErrors(pages, new Map([['a.test.ts', finalComment]])).length === 0, 'backlink after the final statement');
    assert(
@@ -385,4 +448,5 @@ export function guidanceSelfTests(): void {
       ).length === 0,
       'existing names'
    );
+   return probes;
 }

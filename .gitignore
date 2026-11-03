@@ -56,6 +56,7 @@ examples/*/*/playwright-report/
 .nx
 
 # Test artefacts
+scripts/fixtures/guidance-console/.probe-*
 coverage
 unit-test-results
 **/*test-results

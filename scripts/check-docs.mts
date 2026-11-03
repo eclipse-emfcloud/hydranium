@@ -20,8 +20,7 @@
  * Usage: node scripts/check-docs.mts [--write]
  */
 
-import { execFileSync } from 'node:child_process';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, normalize, resolve } from 'node:path';
@@ -292,6 +291,7 @@ function peersOf(page: string): string[] {
 /** Fabricated pages that must be classified one way, so a gate that stopped detecting cannot read as a clean tree. */
 function runSelfTests(): boolean {
    const probes: { name: string; passed: boolean }[] = [
+      ...guidanceSelfTests(),
       { name: 'a repeated heading gets a numbered anchor', passed: anchorsOf('# A\n## A\n').has('a-1') },
       { name: 'an em dash leaves a double hyphen', passed: anchorsOf('## Adopting — I build\n').has('adopting--i-build') },
       { name: 'a link inside a code span is not a link', passed: linksOf('see `[x](missing.md)`\n').length === 0 },
@@ -406,7 +406,6 @@ if (!INDEXES.every(index => pages.includes(index))) {
 }
 
 const texts = new Map(pages.map(page => [page, readFileSync(join(REPO_ROOT, page), 'utf-8')]));
-guidanceSelfTests();
 const treeFiles = [
    ...new Set(
       execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
