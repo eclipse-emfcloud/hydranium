@@ -11,7 +11,11 @@ import { fileURLToPath } from 'node:url';
 import { mergeConfig } from 'vitest/config';
 import { definePackageVitestConfig } from '../../../vitest.shared.ts';
 
-export default mergeConfig(definePackageVitestConfig('guidance-console'), {
+const config = mergeConfig(definePackageVitestConfig('guidance-console'), {
    root: fileURLToPath(new URL('.', import.meta.url)),
-   test: { include: ['console.fixture.ts'], reporters: ['default'] }
+   test: { include: ['console.fixture.ts'] }
 });
+
+// mergeConfig concatenates arrays; this deliberate failure must never publish
+// the shared configuration's JUnit results into a successful CI run.
+export default { ...config, test: { ...config.test, reporters: ['default'] } };
