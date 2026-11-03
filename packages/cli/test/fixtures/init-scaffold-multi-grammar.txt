@@ -433,10 +433,13 @@ npx hydranium-cli query --server "node ./lib/data-server-main.js ../workspace" -
 - `src/grammar/common.langium` — shared terminals, imported by each grammar (not a language)
 - `src/language-server/order-flow-module.ts` — `createOrderFlowServices` DI wiring
 - `src/language-server/domain-serializer.ts` — emits `Domain` back to text (the framework defaults this to a throw)
+- `src/language-server/domain-semantic-tokens.ts` — colours declarations and references; the browser enables keywords and comments too
 - `src/language-server/domain-validation.ts` — the `Domain` checks: a warning on a repeated name
 - `src/language-server/process-serializer.ts` — emits `Process` back to text (the framework defaults this to a throw)
+- `src/language-server/process-semantic-tokens.ts` — colours declarations and references; the browser enables keywords and comments too
 - `src/language-server/process-validation.ts` — the `Process` checks: a warning on a repeated name
 - `src/language-server/layout-serializer.ts` — emits `Layout` back to text (the framework defaults this to a throw)
+- `src/language-server/layout-semantic-tokens.ts` — colours declarations and references; the browser enables keywords and comments too
 - `src/language-server/layout-validation.ts` — the `Layout` checks: a warning on a repeated name
 - `src/node/services.ts` — zero-arg `createServices()` for the headless CLI, the package's `./node` entry
 - `src/index.ts` — the package root, loadable in a browser worker: DI factory + generated AST
@@ -613,8 +616,8 @@ server/src/language-server/order-flow-module.ts
 // overrides via Langium's `inject()` (through the framework's
 // `createIntegrationServices`). Each adopter module binds its language's
 // `Serializer`, which the framework cannot default because a concrete syntax
-// is grammar knowledge, and its validation checks. Everything else (scope,
-// naming, project management, build pipeline) boots on the framework defaults;
+// is grammar knowledge, its semantic tokens and its validation checks. Scope,
+// naming, project management and the build pipeline use the framework defaults;
 // scope computation and AST extensions go in these same modules.
 //
 // Note which generated symbol comes from which name: the SHARED module is
@@ -629,6 +632,7 @@ server/src/language-server/order-flow-module.ts
 import {
    createLspServerLanguageModule,
    createLspServerSharedModule,
+   type HydraniumSemanticTokenProviderOptions,
    type LspServerAddedServices,
    type LspServerAddedSharedServices
 } from '@hydranium/core/lsp';
@@ -641,10 +645,13 @@ import {
    LayoutGeneratedModule,
    OrderFlowGeneratedSharedModule
 } from './generated/module.js';
+import { DomainSemanticTokenProvider } from './domain-semantic-tokens.js';
 import { DomainSerializer } from './domain-serializer.js';
 import { DomainValidationContribution } from './domain-validation.js';
+import { ProcessSemanticTokenProvider } from './process-semantic-tokens.js';
 import { ProcessSerializer } from './process-serializer.js';
 import { ProcessValidationContribution } from './process-validation.js';
+import { LayoutSemanticTokenProvider } from './layout-semantic-tokens.js';
 import { LayoutSerializer } from './layout-serializer.js';
 import { LayoutValidationContribution } from './layout-validation.js';
 
@@ -656,7 +663,7 @@ export type OrderFlowServices = LangiumServices &
    };
 
 /** What a host or a test may vary about this composition. */
-export interface OrderFlowOptions {
+export interface OrderFlowOptions extends HydraniumSemanticTokenProviderOptions {
    /**
     * Shared modules layered in after the framework's own bindings.
     *
@@ -688,7 +695,12 @@ const OrderFlowSharedModule: Module<
    }
 };
 
-const DomainLanguageModule: Module<OrderFlowServices, PartialLangiumServices & DeepPartial<ServerAddedServices>> = {
+const DomainLanguageModule = (
+   options: OrderFlowOptions
+): Module<OrderFlowServices, PartialLangiumServices & DeepPartial<ServerAddedServices>> => ({
+   lsp: {
+      SemanticTokenProvider: services => new DomainSemanticTokenProvider(services, options)
+   },
    serializer: {
       Serializer: services => new DomainSerializer(services)
    },
@@ -697,9 +709,14 @@ const DomainLanguageModule: Module<OrderFlowServices, PartialLangiumServices & D
          names: () => new DomainValidationContribution()
       }
    }
-};
+});
 
-const ProcessLanguageModule: Module<OrderFlowServices, PartialLangiumServices & DeepPartial<ServerAddedServices>> = {
+const ProcessLanguageModule = (
+   options: OrderFlowOptions
+): Module<OrderFlowServices, PartialLangiumServices & DeepPartial<ServerAddedServices>> => ({
+   lsp: {
+      SemanticTokenProvider: services => new ProcessSemanticTokenProvider(services, options)
+   },
    serializer: {
       Serializer: services => new ProcessSerializer(services)
    },
@@ -708,9 +725,14 @@ const ProcessLanguageModule: Module<OrderFlowServices, PartialLangiumServices & 
          names: () => new ProcessValidationContribution()
       }
    }
-};
+});
 
-const LayoutLanguageModule: Module<OrderFlowServices, PartialLangiumServices & DeepPartial<ServerAddedServices>> = {
+const LayoutLanguageModule = (
+   options: OrderFlowOptions
+): Module<OrderFlowServices, PartialLangiumServices & DeepPartial<ServerAddedServices>> => ({
+   lsp: {
+      SemanticTokenProvider: services => new LayoutSemanticTokenProvider(services, options)
+   },
    serializer: {
       Serializer: services => new LayoutSerializer(services)
    },
@@ -719,7 +741,7 @@ const LayoutLanguageModule: Module<OrderFlowServices, PartialLangiumServices & D
          names: () => new LayoutValidationContribution()
       }
    }
-};
+});
 
 /** Compose the Langium DI tree for OrderFlow — returns the shared + language services. */
 export function createOrderFlowServices(
@@ -742,12 +764,12 @@ export function createOrderFlowServices(
       },
       languageModules: {
          generated: DomainGeneratedModule,
-         adopter: () => DomainLanguageModule,
+         adopter: () => DomainLanguageModule(options),
          extra: [createLspServerLanguageModule(fullContext)]
       },
       additionalLanguages: [
-         { generated: ProcessGeneratedModule, adopter: () => ProcessLanguageModule },
-         { generated: LayoutGeneratedModule, adopter: () => LayoutLanguageModule }
+         { generated: ProcessGeneratedModule, adopter: () => ProcessLanguageModule(options) },
+         { generated: LayoutGeneratedModule, adopter: () => LayoutLanguageModule(options) }
       ]
    });
    return { shared, Domain: languages[0], Process: languages[1], Layout: languages[2] };
@@ -836,6 +858,58 @@ export class DomainSerializer extends AbstractSerializer<DomainModel> {
       return target === undefined ? `node ${node.name}` : `node ${node.name} -> ${target}`;
    }
 }
+
+==============================================================================
+server/src/language-server/domain-semantic-tokens.ts
+==============================================================================
+import { AbstractHydraniumSemanticTokenProvider, type SemanticTokenKind } from '@hydranium/core/lsp';
+import { SemanticTokenTypes } from 'vscode-languageserver';
+import { DomainNode } from './ast.js';
+
+/** Declarations and references share the token kind of their target type. */
+export class DomainSemanticTokenProvider extends AbstractHydraniumSemanticTokenProvider {
+   protected override getTokenKind(type: string): SemanticTokenKind | undefined {
+      return type === DomainNode.$type ? SemanticTokenTypes.class : undefined;
+   }
+}
+
+==============================================================================
+server/test/domain-semantic-tokens.test.ts
+==============================================================================
+import { parseHelper } from '@hydranium/core/testing';
+import { SemanticTokensDecoder } from '@hydranium/langium/lsp';
+import { describe, expect, it } from 'vitest';
+import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
+
+describe('Domain semantic tokens', () => {
+   it.each([false, true])('colours declarations and references with lexical highlighting %s', async lexical => {
+      const { Domain } = createOrderFlowServices({}, { highlightKeywords: lexical, highlightComments: lexical });
+      const document = await parseHelper(Domain)('// comment\nnode first -> second\nnode second', {
+         documentUri: 'file:///tokens.domain',
+         validation: true
+      });
+      expect(document.diagnostics).toEqual([]);
+      const provider = Domain.lsp.SemanticTokenProvider!;
+      const tokens = await provider.semanticHighlight(document, { textDocument: { uri: document.uri.toString() } });
+      const decoded = SemanticTokensDecoder.decode(tokens, provider.tokenTypes, document).map(token => ({
+         text: token.text,
+         type: token.tokenType
+      }));
+      expect(decoded).toEqual([
+         ...(lexical
+            ? [
+                 { text: '// comment', type: 'comment' },
+                 { text: 'node', type: 'keyword' }
+              ]
+            : []),
+         { text: 'first', type: 'class' },
+         ...(lexical ? [{ text: '->', type: 'keyword' }] : []),
+         { text: 'second', type: 'class' },
+         ...(lexical ? [{ text: 'node', type: 'keyword' }] : []),
+         { text: 'second', type: 'class' }
+      ]);
+   });
+});
 
 ==============================================================================
 server/src/language-server/domain-validation.ts
@@ -929,6 +1003,58 @@ export class ProcessSerializer extends AbstractSerializer<ProcessModel> {
 }
 
 ==============================================================================
+server/src/language-server/process-semantic-tokens.ts
+==============================================================================
+import { AbstractHydraniumSemanticTokenProvider, type SemanticTokenKind } from '@hydranium/core/lsp';
+import { SemanticTokenTypes } from 'vscode-languageserver';
+import { ProcessNode } from './ast.js';
+
+/** Declarations and references share the token kind of their target type. */
+export class ProcessSemanticTokenProvider extends AbstractHydraniumSemanticTokenProvider {
+   protected override getTokenKind(type: string): SemanticTokenKind | undefined {
+      return type === ProcessNode.$type ? SemanticTokenTypes.class : undefined;
+   }
+}
+
+==============================================================================
+server/test/process-semantic-tokens.test.ts
+==============================================================================
+import { parseHelper } from '@hydranium/core/testing';
+import { SemanticTokensDecoder } from '@hydranium/langium/lsp';
+import { describe, expect, it } from 'vitest';
+import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
+
+describe('Process semantic tokens', () => {
+   it.each([false, true])('colours declarations and references with lexical highlighting %s', async lexical => {
+      const { Process } = createOrderFlowServices({}, { highlightKeywords: lexical, highlightComments: lexical });
+      const document = await parseHelper(Process)('// comment\nnode first -> second\nnode second', {
+         documentUri: 'file:///tokens.process',
+         validation: true
+      });
+      expect(document.diagnostics).toEqual([]);
+      const provider = Process.lsp.SemanticTokenProvider!;
+      const tokens = await provider.semanticHighlight(document, { textDocument: { uri: document.uri.toString() } });
+      const decoded = SemanticTokensDecoder.decode(tokens, provider.tokenTypes, document).map(token => ({
+         text: token.text,
+         type: token.tokenType
+      }));
+      expect(decoded).toEqual([
+         ...(lexical
+            ? [
+                 { text: '// comment', type: 'comment' },
+                 { text: 'node', type: 'keyword' }
+              ]
+            : []),
+         { text: 'first', type: 'class' },
+         ...(lexical ? [{ text: '->', type: 'keyword' }] : []),
+         { text: 'second', type: 'class' },
+         ...(lexical ? [{ text: 'node', type: 'keyword' }] : []),
+         { text: 'second', type: 'class' }
+      ]);
+   });
+});
+
+==============================================================================
 server/src/language-server/process-validation.ts
 ==============================================================================
 // Validation for Process: a check the parser and linker cannot make.
@@ -1018,6 +1144,58 @@ export class LayoutSerializer extends AbstractSerializer<LayoutModel> {
       return target === undefined ? `node ${node.name}` : `node ${node.name} -> ${target}`;
    }
 }
+
+==============================================================================
+server/src/language-server/layout-semantic-tokens.ts
+==============================================================================
+import { AbstractHydraniumSemanticTokenProvider, type SemanticTokenKind } from '@hydranium/core/lsp';
+import { SemanticTokenTypes } from 'vscode-languageserver';
+import { LayoutNode } from './ast.js';
+
+/** Declarations and references share the token kind of their target type. */
+export class LayoutSemanticTokenProvider extends AbstractHydraniumSemanticTokenProvider {
+   protected override getTokenKind(type: string): SemanticTokenKind | undefined {
+      return type === LayoutNode.$type ? SemanticTokenTypes.class : undefined;
+   }
+}
+
+==============================================================================
+server/test/layout-semantic-tokens.test.ts
+==============================================================================
+import { parseHelper } from '@hydranium/core/testing';
+import { SemanticTokensDecoder } from '@hydranium/langium/lsp';
+import { describe, expect, it } from 'vitest';
+import { createOrderFlowServices } from '../src/language-server/order-flow-module.js';
+
+describe('Layout semantic tokens', () => {
+   it.each([false, true])('colours declarations and references with lexical highlighting %s', async lexical => {
+      const { Layout } = createOrderFlowServices({}, { highlightKeywords: lexical, highlightComments: lexical });
+      const document = await parseHelper(Layout)('// comment\nnode first -> second\nnode second', {
+         documentUri: 'file:///tokens.diagram',
+         validation: true
+      });
+      expect(document.diagnostics).toEqual([]);
+      const provider = Layout.lsp.SemanticTokenProvider!;
+      const tokens = await provider.semanticHighlight(document, { textDocument: { uri: document.uri.toString() } });
+      const decoded = SemanticTokensDecoder.decode(tokens, provider.tokenTypes, document).map(token => ({
+         text: token.text,
+         type: token.tokenType
+      }));
+      expect(decoded).toEqual([
+         ...(lexical
+            ? [
+                 { text: '// comment', type: 'comment' },
+                 { text: 'node', type: 'keyword' }
+              ]
+            : []),
+         { text: 'first', type: 'class' },
+         ...(lexical ? [{ text: '->', type: 'keyword' }] : []),
+         { text: 'second', type: 'class' },
+         ...(lexical ? [{ text: 'node', type: 'keyword' }] : []),
+         { text: 'second', type: 'class' }
+      ]);
+   });
+});
 
 ==============================================================================
 server/src/language-server/layout-validation.ts

@@ -134,8 +134,14 @@ describe('order-flow completion over the LSP connection', () => {
          version: 1,
          text: 'process Handling for Crate {\n}\n'
       };
+      // A notification send only drains the stream. Diagnostics establish that
+      // the domain is indexed and the process is built before completion reads it.
+      const domainBuilt = composed.nextDiagnostics(domain.uri);
       await composed.client.sendNotification('textDocument/didOpen', { textDocument: domain });
+      await domainBuilt;
+      const processBuilt = composed.nextDiagnostics(processDocument.uri);
       await composed.client.sendNotification('textDocument/didOpen', { textDocument: processDocument });
+      await processBuilt;
       const start = processDocument.text.indexOf('Crate');
 
       const list = await composed.client.sendRequest<CompletionList>('textDocument/completion', {

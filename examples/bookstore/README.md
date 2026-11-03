@@ -100,13 +100,13 @@ published over the LSP connection.
 
 ## What a new adopter gets on day one
 
-This example overrides nothing the scaffold did not write for it. The two bound
+This example overrides nothing the scaffold did not write for it. The bound
 slots below are `init`'s, not an adopter's.
 
 | Seam | bookstore | what answers instead |
 | --- | --- | --- |
 | Hover | no `HoverProvider` | Langium's default, over the workspace's `/** … */` comments |
-| Semantic tokens | no provider | the client's own TextMate grammar |
+| Semantic tokens | the emitted `BookstoreSemanticTokenProvider` | declaration and reference colours; the browser also enables keywords and comments |
 | Validation | the emitted `BookstoreValidationContribution` | a warning on a repeated name, beside parser + linker diagnostics |
 | Integrity | no rules | the framework's build pipeline |
 | Scoping | no `project` header | the `universal` export tier |

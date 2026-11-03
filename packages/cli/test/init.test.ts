@@ -436,10 +436,12 @@ describe('planInitFiles', () => {
             'server/src/index.ts',
             'server/src/language-server/ast.ts',
             'server/src/language-server/bookstore-module.ts',
+            'server/src/language-server/bookstore-semantic-tokens.ts',
             'server/src/language-server/bookstore-serializer.ts',
             'server/src/language-server/bookstore-validation.ts',
             'server/src/main.ts',
             'server/src/node/services.ts',
+            'server/test/bookstore-semantic-tokens.test.ts',
             'server/test/linking.test.ts',
             'server/test/parsing.test.ts',
             'server/test/serialization.test.ts',
@@ -720,8 +722,8 @@ describe('planInitFiles with several grammars', () => {
       // Each further grammar carries its OWN adopter module. Without it
       // `additionalLanguages` falls back to the primary's, which would bind the
       // first grammar's serializer for every language.
-      expect(module).toContain('{ generated: ProcessGeneratedModule, adopter: () => ProcessLanguageModule }');
-      expect(module).toContain('{ generated: LayoutGeneratedModule, adopter: () => LayoutLanguageModule }');
+      expect(module).toContain('{ generated: ProcessGeneratedModule, adopter: () => ProcessLanguageModule(options) }');
+      expect(module).toContain('{ generated: LayoutGeneratedModule, adopter: () => LayoutLanguageModule(options) }');
       expect(module).toContain('return { shared, Domain: languages[0], Process: languages[1], Layout: languages[2] };');
    });
 
@@ -774,13 +776,13 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      expect(captured?.files).toHaveLength(35);
+      expect(captured?.files).toHaveLength(37);
       // `path.join`, not a literal: the target is produced by `path.resolve`,
       // which emits the platform separator, so a hardcoded `/` asserts nothing
       // on Windows beyond the separator itself.
       expect(captured?.targetDir.endsWith(path.join('out', 'bookstore'))).toBe(true);
       const output = lines.join('');
-      expect(output).toContain('Scaffolded Bookstore (35 files, heads: lsp,data, 1 grammar(s): Bookstore)');
+      expect(output).toContain('Scaffolded Bookstore (37 files, heads: lsp,data, 1 grammar(s): Bookstore)');
       expect(output).toContain('npm run build');
       expect(output).toContain('npm test');
       // `npx`, not a bare invocation: the scaffold installs `@hydranium/cli` as a
@@ -801,10 +803,9 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      // 35 single-grammar files + two further grammars, their serializers and checks,
-      // the shared fragment and two starter files each.
-      expect(captured?.files).toHaveLength(46);
-      expect(lines.join('')).toContain('Scaffolded OrderFlow (46 files, heads: lsp,data, 3 grammar(s): Domain, Process, Layout)');
+      // Each grammar adds its services, tests and starter files.
+      expect(captured?.files).toHaveLength(52);
+      expect(lines.join('')).toContain('Scaffolded OrderFlow (52 files, heads: lsp,data, 3 grammar(s): Domain, Process, Layout)');
    });
 
    it('names the diagram grammar and the head set for a three-head scaffold', () => {
@@ -820,11 +821,10 @@ describe('runInit', () => {
             captured = { targetDir, files };
          }
       });
-      // 46 multi-grammar files + the ten for the one diagram: eight in the
-      // server, its test, and its ids in protocol; + the client package's six.
-      expect(captured?.files).toHaveLength(62);
+      // The diagram adds server and client files to the multi-grammar shape.
+      expect(captured?.files).toHaveLength(68);
       expect(lines.join('')).toContain(
-         'Scaffolded OrderFlow (62 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
+         'Scaffolded OrderFlow (68 files, heads: lsp,data,glsp, 3 grammar(s): Domain, Process (diagram), Layout)'
       );
    });
 });
@@ -1682,7 +1682,7 @@ describe('runInit --monorepo', () => {
    it('writes the .gitignore a standalone project gets, whatever the root ignores', () => {
       const { files } = scaffold();
       // A standalone scaffold's files, less the root it has no use for here.
-      expect(files).toHaveLength(30);
+      expect(files).toHaveLength(32);
       expect(contentOf(files, 'package.json')).toBeUndefined();
       const standalone = planInitFiles(resolveInitComposition('Bookstore', undefined, ['lsp']));
       expect(contentOf(files, 'server/.gitignore')).toBe(contentOf(standalone, 'server/.gitignore'));

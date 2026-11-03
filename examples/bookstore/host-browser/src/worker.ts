@@ -37,7 +37,10 @@ hostHeadsInWorker(
    persistentFileSystem({ store, seed: __WORKSPACE_SEED__, rootUri: WORKSPACE_ROOT_URI }),
    (ports, fileSystem) => {
       // The LSP head composes the services, as the Node entry does around stdio.
-      const shared = startLanguageServerInWorker(ports.lsp, connection => createBookstoreServices({ connection, ...fileSystem }).shared);
+      const shared = startLanguageServerInWorker(
+         ports.lsp,
+         connection => createBookstoreServices({ connection, ...fileSystem }, { highlightKeywords: true, highlightComments: true }).shared
+      );
       // The data head serves from the LSP head's store, on its own port.
       startDataServerInWorker(ports.data, shared, connection => new DataServer<BookstoreModel>(connection, shared));
       const glsp = startGlspServerInWorker({

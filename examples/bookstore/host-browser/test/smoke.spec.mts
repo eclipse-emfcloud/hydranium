@@ -91,3 +91,27 @@ test('asks before a reload drops a diagram edit the server has not answered, and
    await page.locator('#file').selectOption('nodes.bookstore');
    await expect(nodes).toHaveCount(3);
 });
+
+test('colours declarations, references, keywords and comments', async ({ page }) => {
+   await page.goto('/');
+   await expect(page.locator('#status')).toHaveText('ready');
+   const editor = page.locator('#editor .view-lines');
+   const second = editor.locator('span').filter({ hasText: /^Second$/ });
+   const keyword = editor
+      .locator('span')
+      .filter({ hasText: /^node$/ })
+      .first();
+   for (const extension of ['bookstore']) {
+      await page.locator('#file').selectOption(`nodes.${extension}`);
+      await expect(editor.locator('span').filter({ hasText: /^First$/ })).toHaveCSS('color', 'rgb(36, 122, 147)');
+      await expect(second).toHaveCount(2);
+      for (const target of await second.all()) {
+         await expect(target).toHaveCSS('color', 'rgb(36, 122, 147)');
+      }
+      await expect(keyword).toHaveCSS('color', 'rgb(0, 0, 255)');
+      await expect(editor.locator('.view-line > span > span').filter({ hasText: /A.second.node/ })).toHaveCSS('color', 'rgb(0, 128, 0)');
+      await page.locator('#file').selectOption(`references.${extension}`);
+      await expect(editor.locator('span').filter({ hasText: /^Third$/ })).toHaveCSS('color', 'rgb(36, 122, 147)');
+      await expect(second).toHaveCSS('color', 'rgb(36, 122, 147)');
+   }
+});

@@ -295,6 +295,36 @@ const ORDER_FLOW_MANIFEST: Manifest = {
       verdict: 'adapted',
       reason: "emits the real grammar's syntax, not the starter one"
    },
+   'server/src/language-server/domain-semantic-tokens.ts': {
+      verdict: 'replaced',
+      by: 'server/src/language-server/order-flow-semantic-tokens.ts',
+      reason: 'one type map covers all three real grammars'
+   },
+   'server/test/domain-semantic-tokens.test.ts': {
+      verdict: 'replaced',
+      by: 'server/test/semantic-tokens-push.integration.test.ts',
+      reason: 'exercises highlighting over the real grammars and LSP transport'
+   },
+   'server/src/language-server/process-semantic-tokens.ts': {
+      verdict: 'replaced',
+      by: 'server/src/language-server/order-flow-semantic-tokens.ts',
+      reason: 'one type map covers all three real grammars'
+   },
+   'server/test/process-semantic-tokens.test.ts': {
+      verdict: 'replaced',
+      by: 'server/test/semantic-tokens-push.integration.test.ts',
+      reason: 'exercises highlighting over the real grammars and LSP transport'
+   },
+   'server/src/language-server/layout-semantic-tokens.ts': {
+      verdict: 'replaced',
+      by: 'server/src/language-server/order-flow-semantic-tokens.ts',
+      reason: 'one type map covers all three real grammars'
+   },
+   'server/test/layout-semantic-tokens.test.ts': {
+      verdict: 'replaced',
+      by: 'server/test/semantic-tokens-push.integration.test.ts',
+      reason: 'exercises highlighting over the real grammars and LSP transport'
+   },
    'server/src/language-server/domain-validation.ts': {
       verdict: 'dropped',
       reason: 'the name-uniqueness integrity rule repairs a repeated name rather than warning on it'
@@ -438,6 +468,11 @@ const BOOKSTORE_MANIFEST: Manifest = {
       verdict: 'identical',
       reason: 'the emitted concrete-syntax emitter for the starter grammar'
    },
+   'server/src/language-server/bookstore-semantic-tokens.ts': {
+      verdict: 'identical',
+      reason: 'the starter declaration and reference token map'
+   },
+   'server/test/bookstore-semantic-tokens.test.ts': { verdict: 'identical', reason: 'the starter highlighting contract' },
    'server/src/language-server/bookstore-validation.ts': { verdict: 'identical', reason: 'the emitted repeated-name warning' },
    'server/src/index.ts': { verdict: 'identical', reason: 'the scaffolded public surface' },
    'server/src/node/services.ts': { verdict: 'identical', reason: 'the contract is language-count-agnostic' },
