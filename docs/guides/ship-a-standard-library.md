@@ -90,9 +90,11 @@ export const mySharedModule = {
   example on go-to-definition, and an edit to it lives until the server
   restarts. Keeping it read-only is up to the client. VS Code keeps it
   read-only, and so does the Monaco client in `@hydranium/client-browser` for
-  a model `openContentDocument` returns. A client gets its text from the
-  server, a VS Code host through the content middleware and a page through the
-  Monaco client, as [Host in VS Code](host-in-vscode.md#steps) and
+  a model `openContentDocument` returns. In Theia, bind
+  `bindReadOnlyContentResources` as [Host in Theia](host-in-theia.md#steps)
+  describes. A client gets its text from the server, a VS Code host through
+  the content middleware and a page through the Monaco client, as
+  [Host in VS Code](host-in-vscode.md#steps) and
   [Host in a browser](host-in-a-browser.md#steps) describe.
 - **To recognise its content**, compare a document's URI with your exported
   constant, or check `isVirtualUri` for any document no file backs.

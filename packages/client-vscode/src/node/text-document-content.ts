@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import type { CancellationToken, Uri } from 'vscode';
+import type { CancellationToken, TextDocument, TextDocumentChangeEvent, TextDocumentWillSaveEvent, TextEdit, Uri } from 'vscode';
 
 const CONTENT_REQUEST = { method: 'workspace/textDocumentContent' };
 
@@ -37,5 +37,46 @@ export function textDocumentContentMiddleware(
             (error: unknown) => current.handleFailedRequest(CONTENT_REQUEST, token, error, undefined)
          );
       }
+   };
+}
+
+/**
+ * Keeps documents supplied by a content provider out of language-client sync.
+ * Include their schemes in the document selector to enable language features;
+ * the server owns their text, so none of their sync hooks may call through.
+ * A language change can close a document whose open was suppressed, and a
+ * content refresh changes its editor buffer. Forwarding these hooks would
+ * give the server a language-client holder or echo its own text back to it.
+ * Read the initialization result on each hook so a restarted client uses the
+ * content schemes advertised by its current server.
+ */
+export function textDocumentSyncMiddleware(
+   client: () => {
+      readonly initializeResult?: {
+         readonly capabilities: {
+            readonly workspace?: { readonly textDocumentContent?: { readonly schemes: readonly string[] } };
+         };
+      };
+   }
+): {
+   didOpen(document: TextDocument, next: (document: TextDocument) => Promise<void>): Promise<void>;
+   didChange(event: TextDocumentChangeEvent, next: (event: TextDocumentChangeEvent) => Promise<void>): Promise<void>;
+   didClose(document: TextDocument, next: (document: TextDocument) => Promise<void>): Promise<void>;
+   didSave(document: TextDocument, next: (document: TextDocument) => Promise<void>): Promise<void>;
+   willSave(event: TextDocumentWillSaveEvent, next: (event: TextDocumentWillSaveEvent) => Promise<void>): Promise<void>;
+   willSaveWaitUntil(
+      event: TextDocumentWillSaveEvent,
+      next: (event: TextDocumentWillSaveEvent) => Thenable<TextEdit[]>
+   ): Thenable<TextEdit[]>;
+} {
+   const skip = (document: TextDocument): boolean =>
+      client().initializeResult?.capabilities.workspace?.textDocumentContent?.schemes.includes(document.uri.scheme) ?? false;
+   return {
+      didOpen: (document, next) => (skip(document) ? Promise.resolve() : next(document)),
+      didChange: (event, next) => (skip(event.document) ? Promise.resolve() : next(event)),
+      didClose: (document, next) => (skip(document) ? Promise.resolve() : next(document)),
+      didSave: (document, next) => (skip(document) ? Promise.resolve() : next(document)),
+      willSave: (event, next) => (skip(event.document) ? Promise.resolve() : next(event)),
+      willSaveWaitUntil: (event, next) => (skip(event.document) ? Promise.resolve([]) : next(event))
    };
 }

@@ -2515,13 +2515,13 @@ vscode-servers/src/language-client.ts
 // Starts the Bookstore server for VS Code, and for a Theia app that sideloads
 // this extension: one launch, so both hand the server the same documents.
 
-import { textDocumentContentMiddleware } from '@hydranium/client-vscode/node';
+import { textDocumentContentMiddleware, textDocumentSyncMiddleware } from '@hydranium/client-vscode/node';
 import { ALL_LANGUAGES } from 'bookstore-protocol';
 import { type ExtensionContext, workspace } from 'vscode';
-import { LanguageClient, TransportKind } from 'vscode-languageclient/node';
+import { LanguageClient, type ServerOptions, TransportKind } from 'vscode-languageclient/node';
 
 /** Fork the server, start its language client and return it once started. */
-export async function startBookstoreLanguageClient(context: ExtensionContext): Promise<LanguageClient> {
+export async function startBookstoreLanguageClient(context: ExtensionContext, serverOptions?: ServerOptions): Promise<LanguageClient> {
    // Resolved through the package, so it works from the workspace and from an
    // installed extension alike. Over IPC, which keeps the server's stdout free.
    const serverModule = require.resolve('bookstore-server/lib/main.js');
@@ -2529,13 +2529,19 @@ export async function startBookstoreLanguageClient(context: ExtensionContext): P
    const client: LanguageClient = new LanguageClient(
       'bookstore',
       'Bookstore',
-      { module: serverModule, transport: TransportKind.ipc },
+      serverOptions ?? { module: serverModule, transport: TransportKind.ipc },
       {
-         documentSelector: ALL_LANGUAGES.map(({ languageId }) => ({ scheme: 'file', language: languageId })),
+         documentSelector: ALL_LANGUAGES.flatMap(({ languageId }) => [
+            { scheme: 'file', language: languageId },
+            { scheme: 'virtual', language: languageId }
+         ]),
          // Changes on disk the editor does not hold, such as a file another tool writes.
          synchronize: { fileEvents: workspace.createFileSystemWatcher(`**/*{${extensions}}`) },
          // The text of a document only the server holds, such as a built-in library.
-         middleware: textDocumentContentMiddleware(() => client)
+         middleware: {
+            ...textDocumentContentMiddleware(() => client),
+            ...textDocumentSyncMiddleware(() => client)
+         }
       }
    );
    context.subscriptions.push(client);
@@ -2701,7 +2707,12 @@ theia/src/browser/bookstore-frontend-module.ts
 // GLSP client the diagrams share.
 
 import { GLSPClientContribution } from '@eclipse-glsp/theia-integration';
-import { bindChannelLogger, bindConnectionDiagnostics, bindEditorDiskSync } from '@hydranium/client-theia/browser';
+import {
+   bindChannelLogger,
+   bindConnectionDiagnostics,
+   bindEditorDiskSync,
+   bindReadOnlyContentResources
+} from '@hydranium/client-theia/browser';
 import { bindDataConnection } from '@hydranium/data-client-theia/browser';
 import { CommandContribution } from '@theia/core';
 import { ContainerModule } from '@theia/core/shared/inversify';
@@ -2715,6 +2726,7 @@ export default new ContainerModule((bind, _unbind, isBound, rebind) => {
    bindConnectionDiagnostics(bind);
    // Keeps an editor from writing over a file a head saved while it held the same text unsaved.
    bindEditorDiskSync(bind, isBound, rebind);
+   bindReadOnlyContentResources(rebind);
 
    // The data head: one connection, opened when the command first runs.
    bind(BookstoreDataPort).toSelf().inSingletonScope();
@@ -4300,7 +4312,11 @@ npm run test:e2e           # the smoke test; under `xvfb-run -a` on Linux withou
 - `esbuild.mjs` — bundles each webview into `out/webview/`
 - `start.mjs` — `npm start`: VS Code with this extension, on `../workspace`
 - `test/smoke.spec.mts` — VS Code opens the workspace, Show Model names the model, the diagram draws, and the server reports a broken reference
-- `test/vscode-version.mts` — the VS Code release the smoke test runs
+- `test/virtual-documents.spec.mts` — the generated launcher serves a
+  content document in the extension host without sending its text back
+- `test/virtual-documents.cjs` and `test/content-server.cjs` — the host
+  assertions and the content-owning LSP fixture they drive
+- `test/vscode-version.mts` — the VS Code release the smoke tests run
 
 ==============================================================================
 host-vscode/tsconfig.json
@@ -4764,6 +4780,140 @@ for (let attempt = 1; ; attempt++) {
       await setTimeout(attempt * 5_000);
    }
 }
+
+==============================================================================
+host-vscode/test/virtual-documents.cjs
+==============================================================================
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
+const { TransportKind } = require('vscode-languageclient/node');
+const vscode = require('vscode');
+const { startBookstoreLanguageClient } = require('bookstore-vscode-servers/out/language-client.js');
+
+module.exports.run = async () => {
+   const subscriptions = [];
+   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'content-host-'));
+   const client = await startBookstoreLanguageClient(
+      { subscriptions },
+      {
+         module: path.join(__dirname, 'content-server.cjs'),
+         transport: TransportKind.ipc
+      }
+   );
+   try {
+      const file = path.join(scratch, 'file.bookstore');
+      fs.writeFileSync(file, 'node Local');
+      await vscode.window.showTextDocument(vscode.Uri.file(file));
+      const uri = vscode.Uri.parse('virtual:fixture/library.bookstore');
+      const editor = await vscode.window.showTextDocument(uri);
+      const position = new vscode.Position(0, 5);
+      const hover = await vscode.commands.executeCommand('vscode.executeHoverProvider', uri, position);
+      assert.ok(
+         hover.some(value => value.contents.some(content => content.value === 'fixture hover')),
+         'virtual hover'
+      );
+      const tokens = await vscode.commands.executeCommand('vscode.provideDocumentSemanticTokens', uri);
+      assert.ok(tokens?.data.length, 'virtual semantic tokens');
+      const definitions = await vscode.commands.executeCommand('vscode.executeDefinitionProvider', uri, position);
+      assert.ok(definitions.length, 'virtual definition');
+      const before = editor.document.getText();
+      await editor.edit(builder => builder.insert(position, 'changed'));
+      assert.equal(editor.document.getText(), before);
+      await vscode.languages.setTextDocumentLanguage(editor.document, 'plaintext');
+      const received = await client.sendRequest('fixture/sync');
+      assert.ok(
+         received.some(event => event.method === 'textDocument/didOpen' && event.uri.startsWith('file:')),
+         'file sync reaches the server'
+      );
+      assert.deepEqual(
+         received.filter(event => event.uri.startsWith('virtual:')),
+         [],
+         'no virtual document synchronization reaches the server'
+      );
+   } finally {
+      await client.stop();
+      for (const subscription of subscriptions) subscription.dispose();
+      fs.rmSync(scratch, { recursive: true, force: true });
+   }
+};
+
+==============================================================================
+host-vscode/test/content-server.cjs
+==============================================================================
+// A content-owning LSP fixture. The query answers after preceding sync messages.
+const received = [];
+const range = { start: { line: 0, character: 5 }, end: { line: 0, character: 10 } };
+process.on('message', message => {
+   const { id, method, params } = message;
+   if (method?.startsWith('textDocument/did') || method?.startsWith('textDocument/will')) {
+      received.push({ method, uri: params.textDocument.uri });
+   }
+   if (id === undefined) return;
+   let result = null;
+   switch (method) {
+      case 'initialize':
+         result = {
+            capabilities: {
+               textDocumentSync: { openClose: true, change: 2, save: true, willSave: true, willSaveWaitUntil: true },
+               hoverProvider: true,
+               definitionProvider: true,
+               semanticTokensProvider: { legend: { tokenTypes: ['type'], tokenModifiers: [] }, full: true },
+               workspace: { textDocumentContent: { schemes: ['virtual'] } }
+            }
+         };
+         break;
+      case 'workspace/textDocumentContent':
+         result = { text: 'node First' };
+         break;
+      case 'textDocument/hover':
+         result = { contents: { kind: 'markdown', value: 'fixture hover' } };
+         break;
+      case 'textDocument/semanticTokens/full':
+         result = { data: [0, 5, 5, 0, 0] };
+         break;
+      case 'textDocument/definition':
+         result = { uri: params.textDocument.uri, range };
+         break;
+      case 'fixture/sync':
+         result = received;
+         break;
+   }
+   process.send({ jsonrpc: '2.0', id, result });
+});
+
+==============================================================================
+host-vscode/test/virtual-documents.spec.mts
+==============================================================================
+import { test } from '@playwright/test';
+import { runTests } from '@vscode/test-electron';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { VSCODE_CACHE, VSCODE_VERSION } from './vscode-version.mts';
+
+test('serves virtual documents without synchronizing their text', async () => {
+   const scratch = mkdtempSync(join(tmpdir(), 'virtual-host-'));
+   try {
+      await runTests({
+         version: VSCODE_VERSION,
+         cachePath: VSCODE_CACHE,
+         extensionDevelopmentPath: fileURLToPath(new URL('..', import.meta.url)),
+         extensionTestsPath: fileURLToPath(new URL('./virtual-documents.cjs', import.meta.url)),
+         launchArgs: [
+            '--no-sandbox',
+            '--disable-extensions',
+            '--disable-workspace-trust',
+            `--user-data-dir=${join(scratch, 'profile')}`,
+            `--extensions-dir=${join(scratch, 'extensions')}`
+         ]
+      });
+   } finally {
+      rmSync(scratch, { recursive: true, force: true });
+   }
+});
 
 ==============================================================================
 host-theia-browser/package.json

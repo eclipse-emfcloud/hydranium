@@ -35,7 +35,9 @@ pins, whose client calls it.
 
 Give the language client the content middleware in its options. It reads the
 client on each request, so it can take the client the options build. A client
-with middleware of its own spreads this one in:
+with middleware of its own spreads these in. Include content schemes in the
+selector for language features. `textDocumentSyncMiddleware` reads the content
+schemes advertised by the server and keeps their text out of synchronization:
 
 <!-- snippet-preamble
 import { LanguageClient, type ServerOptions } from 'vscode-languageclient/node';
@@ -43,11 +45,17 @@ declare const serverOptions: ServerOptions;
 -->
 
 ```ts
-import { textDocumentContentMiddleware } from '@hydranium/client-vscode/node';
+import { textDocumentContentMiddleware, textDocumentSyncMiddleware } from '@hydranium/client-vscode/node';
 
 const client: LanguageClient = new LanguageClient('my-language', 'My Language', serverOptions, {
-   documentSelector: [{ scheme: 'file', language: 'my-language' }],
-   middleware: textDocumentContentMiddleware(() => client)
+   documentSelector: [
+      { scheme: 'file', language: 'my-language' },
+      { scheme: 'virtual', language: 'my-language' }
+   ],
+   middleware: {
+      ...textDocumentContentMiddleware(() => client),
+      ...textDocumentSyncMiddleware(() => client)
+   }
 });
 ```
 
@@ -83,7 +91,7 @@ Code* in
 | Subpath  | Use it for                                                    | Runs in                    |
 | -------- | ------------------------------------------------------------- | -------------------------- |
 | `.`      | Nothing yet                                                   | anywhere                   |
-| `./node` | The content middleware, the port lookup and the port commands | the VS Code extension host |
+| `./node` | Content and sync middleware, port lookup and port commands | the VS Code extension host |
 
 The subpaths need a TypeScript `moduleResolution` that reads `exports`
 (`NodeNext` or `Bundler`); see *Requirements* in
