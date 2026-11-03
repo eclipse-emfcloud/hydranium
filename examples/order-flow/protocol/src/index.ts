@@ -22,3 +22,4 @@ export * from './generated-hydranium/transfer-model';
 export * from './head-ports';
 export * from './process-diagram-types';
 export * from './layout-file';
+export * from './process-diagram-edit';

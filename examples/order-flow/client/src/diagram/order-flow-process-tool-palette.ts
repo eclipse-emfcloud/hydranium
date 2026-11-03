@@ -7,8 +7,10 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { ToolPalette } from '@eclipse-glsp/client';
-import { injectable } from 'inversify';
+import { ToolPalette, createIcon, type GModelRoot } from '@eclipse-glsp/client';
+import { inject, injectable } from 'inversify';
+import { PALETTE } from './order-flow-process-edit-messages';
+import { OrderFlowProcessEdit, OpenProcessEditAction } from './order-flow-process-edit';
 
 /**
  * The tool palette, with its collapse toggle withdrawn alongside it.
@@ -41,9 +43,44 @@ import { injectable } from 'inversify';
  */
 @injectable()
 export class OrderFlowProcessToolPalette extends ToolPalette {
+   @inject(OrderFlowProcessEdit) protected readonly processEdit!: OrderFlowProcessEdit;
+   protected editButton?: HTMLButtonElement;
+
+   protected override createHeaderTools(): HTMLElement {
+      const tools = super.createHeaderTools();
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.title = this.processEdit.text(PALETTE);
+      button.setAttribute('aria-label', button.title);
+      button.append(createIcon('edit'));
+      button.onclick = () => {
+         const element = this.processEdit.editableSelection();
+         if (element) {
+            void this.actionDispatcher.dispatch(OpenProcessEditAction.create(element.id));
+         }
+      };
+      this.editButton = button;
+      this.updateEditButton();
+      tools.append(button);
+      return tools;
+   }
+
+   protected override onBeforeShow(container: HTMLElement, root: Readonly<GModelRoot>): void {
+      super.onBeforeShow(container, root);
+      this.toDisposeOnHide.push(this.editorContext.onSelectionChanged(() => this.updateEditButton()));
+      this.updateEditButton();
+   }
+
+   protected updateEditButton(): void {
+      if (this.editButton) {
+         this.editButton.disabled = !this.processEdit.editableSelection();
+      }
+   }
+
    override editModeChanged(newValue: string, oldValue: string): void {
       super.editModeChanged(newValue, oldValue);
       this.syncToggleVisibility();
+      this.updateEditButton();
    }
 
    /**

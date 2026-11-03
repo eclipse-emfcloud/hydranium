@@ -73,6 +73,12 @@ dropped edit, whether an operation or a recording command executed outside one
 wrote it. An undo or redo that a foreign edit of the same field skips, wholly
 or in part, is told as skipped.
 
+A handler that declines an edit before execution throws
+`DiagramEditRejectedError` with a rendered, user-facing explanation. The failure
+path notifies the client and resynchronizes the model, and logs the expected
+refusal at warning level without a stack. Returning no command is a quiet
+no-op, so it cannot explain a rejected submission.
+
 A write the reconcile cannot settle fails instead, with nothing written, and is
 told with its own reason. Its writes can run out: each one conflicted, because
 another writer kept changing the document, and a retry may land. Or the current

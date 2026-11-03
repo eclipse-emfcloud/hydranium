@@ -12,6 +12,7 @@ extension manifests, which cannot import, still spell the ids out.
 | language ids and file extensions         | [`src/generated-hydranium/languages.ts`](src/generated-hydranium/languages.ts)           |
 | the socket heads' port commands          | [`src/head-ports.ts`](src/head-ports.ts)                                                 |
 | the `.process` diagram and element types | [`src/process-diagram-types.ts`](src/process-diagram-types.ts)                           |
+| structured diagram edit actions and candidates | [`src/process-diagram-edit.ts`](src/process-diagram-edit.ts) |
 | the layout/process filename rule | [`src/layout-file.ts`](src/layout-file.ts) |
 | the transfer model                       | [`src/generated-hydranium/transfer-model.ts`](src/generated-hydranium/transfer-model.ts) |
 

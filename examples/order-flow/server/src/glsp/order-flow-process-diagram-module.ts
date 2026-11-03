@@ -28,6 +28,7 @@ import {
    AbstractHydraniumGlspDiagramModule,
    HydraniumGlspModelValidator
 } from '@hydranium/glsp-server';
+import { OrderFlowEditProcessOperationHandler, OrderFlowRequestProcessEditHandler } from './handler/edit-process-operation-handler.js';
 import { OrderFlowApplyLabelEditOperationHandler } from './handler/apply-label-edit-operation-handler.js';
 import { OrderFlowChangeBoundsOperationHandler } from './handler/change-bounds-operation-handler.js';
 import { OrderFlowCreateEffectOperationHandler } from './handler/create-effect-operation-handler.js';
@@ -156,6 +157,7 @@ export class OrderFlowProcessDiagramModule extends AbstractHydraniumGlspDiagramM
     */
    protected override configureActionHandlers(binding: InstanceMultiBinding<ActionHandlerConstructor>): void {
       super.configureActionHandlers(binding);
+      binding.add(OrderFlowRequestProcessEditHandler);
       binding.rebind(ComputedBoundsActionHandler, HydraniumGlspComputedBoundsActionHandler);
    }
 
@@ -173,6 +175,7 @@ export class OrderFlowProcessDiagramModule extends AbstractHydraniumGlspDiagramM
     */
    protected override configureOperationHandlers(binding: InstanceMultiBinding<OperationHandlerConstructor>): void {
       super.configureOperationHandlers(binding);
+      binding.add(OrderFlowEditProcessOperationHandler);
       // One handler per flow-node kind, because the palette takes its label from
       // the handler: a single handler serving both element types renders as the
       // same entry twice.

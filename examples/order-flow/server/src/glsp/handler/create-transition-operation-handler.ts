@@ -28,10 +28,8 @@ import { appendChild } from '@hydranium/core';
  * operation cleanly instead of building a `Transition` whose reference cannot
  * be serialized.
  *
- * Gateway branches are deliberately **not** creatable here. A `Branch` is
- * nested in its gateway and carries a label that is part of its syntax
- * (`yes -> Restock`), so creating one from a plain edge tool would have to
- * invent that label; it stays a text-editing affordance.
+ * Gateway branches use a structured operation that collects their label and
+ * target together; an ordinary edge gesture cannot supply the label.
  */
 @injectable()
 export class OrderFlowCreateTransitionOperationHandler extends JsonCreateEdgeOperationHandler {

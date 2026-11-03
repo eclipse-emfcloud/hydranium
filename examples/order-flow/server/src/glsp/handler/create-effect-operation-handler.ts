@@ -19,15 +19,6 @@ import { appendChild } from '@hydranium/core';
 /**
  * Adds a `reads <subject>.<field>` effect to a task.
  *
- * **Add and remove, no in-place edit.** Changing an existing effect's target is
- * left to text editing on purpose. An effect is three chained references
- * (`entity` → `field` → `literal`), each scoped by the previous, and the only
- * ways to edit it from the canvas are to accept free text and re-parse it —
- * putting a second parser for the `.process` syntax in the adopter — or to add
- * a structured operation and a client contributor to fill it, which is client
- * work this example does not have. Add/remove exercises the write path and the
- * scope chain without either.
- *
  * **A `reads`, not a `writes`.** `Write` needs a third reference to an
  * `EnumLiteral` of the enumeration the field's type resolves to, and most
  * fields are not enum-typed, so a created `writes` would frequently be
@@ -35,7 +26,7 @@ import { appendChild } from '@hydranium/core';
  * which the process subject supplies.
  *
  * The field is the subject entity's first — an arbitrary but resolvable
- * starting point the user then edits in text. If the subject has no fields the
+ * starting point the user can retarget from the canvas. If the subject has no fields the
  * operation is rejected rather than creating a dangling effect: a blank
  * reference would serialize to `reads .` and fail to re-parse.
  */

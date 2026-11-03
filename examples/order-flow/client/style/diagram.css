@@ -419,3 +419,32 @@
 .sprotty-status .sprotty-status-message.error {
    visibility: visible;
 }
+
+.order-flow-process-edit {
+   color: var(--order-flow-panel-foreground);
+   background: var(--order-flow-panel-background);
+   border: 1px solid var(--order-flow-panel-border);
+   border-radius: 6px;
+   min-width: 280px;
+}
+.order-flow-process-edit label {
+   display: flex;
+   flex-direction: column;
+   gap: 4px;
+   margin-bottom: 12px;
+}
+.order-flow-process-edit button { margin-right: 8px; }
+
+.order-flow-process-edit fieldset {
+   border: 0;
+   padding: 0;
+   margin: 0;
+}
+
+.order-flow-process-edit input,
+.order-flow-process-edit select,
+.order-flow-process-edit button {
+   color: inherit;
+   background: var(--order-flow-panel-background);
+   border: 1px solid var(--order-flow-panel-border);
+}

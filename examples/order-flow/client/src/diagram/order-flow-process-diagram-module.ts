@@ -9,6 +9,8 @@
 
 import {
    type ContainerConfiguration,
+   TYPES,
+   configureActionHandler,
    DiamondNodeView,
    GCompartment,
    GLabel,
@@ -19,8 +21,11 @@ import {
    ToolPalette,
    configureModelElement,
    editLabelFeature,
+   selectFeature,
+   RankedSelectMouseListener,
    initializeDiagramContainer
 } from '@eclipse-glsp/client';
+import { renderFrameworkMessage } from '@hydranium/protocol';
 import { HydraniumGEdge, configureHydraniumModelElements } from '@hydranium/glsp-client';
 import { type Container, ContainerModule } from 'inversify';
 import {
@@ -33,7 +38,9 @@ import {
    PROCESS_TRANSITION_EDGE_TYPE,
    type ProcessElementType
 } from '@hydranium/example-order-flow-protocol';
+import { OrderFlowProcessEdit, OPEN_PROCESS_EDIT, ProcessEditMessageRenderer } from './order-flow-process-edit';
 import { ProcessGatewayNode } from './order-flow-process-model';
+import { OrderFlowProcessSelectMouseListener } from './order-flow-process-select';
 import { OrderFlowProcessToolPalette } from './order-flow-process-tool-palette';
 import { ProcessEdgeView } from './order-flow-process-views';
 
@@ -70,7 +77,7 @@ export const PROCESS_ELEMENT_REGISTRATIONS: Readonly<Record<ProcessElementType, 
    [PROCESS_GATEWAY_NODE_TYPE]: { model: ProcessGatewayNode, view: DiamondNodeView },
    [PROCESS_EFFECT_COMPARTMENT_TYPE]: { model: GCompartment, view: StructureCompartmentView },
    [PROCESS_EDITABLE_LABEL_TYPE]: { model: GLabel, view: GLabelView, options: { enable: [editLabelFeature] } },
-   [PROCESS_EFFECT_TYPE]: { model: GLabel, view: GLabelView },
+   [PROCESS_EFFECT_TYPE]: { model: GLabel, view: GLabelView, options: { enable: [selectFeature] } },
    // Both connection types are directed, so both are drawn with an arrowhead;
    // what tells them apart is the stylesheet, keyed on the `transition` /
    // `branch` subtype class. The framework's edge rather than `GEdge`, so a
@@ -105,9 +112,16 @@ export const PROCESS_ELEMENT_REGISTRATIONS: Readonly<Record<ProcessElementType, 
 export const orderFlowProcessDiagramModule = new ContainerModule((bind, unbind, isBound, rebind) => {
    const context = { bind, unbind, isBound, rebind };
    configureHydraniumModelElements(context);
+   if (!isBound(ProcessEditMessageRenderer)) {
+      bind<ProcessEditMessageRenderer>(ProcessEditMessageRenderer).toConstantValue(message => renderFrameworkMessage(message));
+   }
+   bind(OrderFlowProcessEdit).toSelf().inSingletonScope();
+   bind(TYPES.IContextMenuItemProvider).toService(OrderFlowProcessEdit);
+   configureActionHandler(context, OPEN_PROCESS_EDIT, OrderFlowProcessEdit);
    for (const [elementTypeId, registration] of Object.entries(PROCESS_ELEMENT_REGISTRATIONS)) {
       configureModelElement(context, elementTypeId, registration.model, registration.view, registration.options);
    }
+   rebind(RankedSelectMouseListener).to(OrderFlowProcessSelectMouseListener).inSingletonScope();
    rebind(ToolPalette).to(OrderFlowProcessToolPalette).inSingletonScope();
 });
 

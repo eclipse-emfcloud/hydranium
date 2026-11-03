@@ -95,8 +95,7 @@ export class OrderFlowProcessDiagramConfiguration implements DiagramConfiguratio
       },
       {
          // One `reads` / `writes` line. Deletable, and creatable into a task,
-         // but not in-place editable — changing an effect's target means
-         // rewriting three chained references, which stays a text affordance.
+         // with a structured editor for its chained references.
          elementTypeId: PROCESS_EFFECT_TYPE,
          deletable: true,
          reparentable: false,
@@ -123,10 +122,8 @@ export class OrderFlowProcessDiagramConfiguration implements DiagramConfiguratio
          dynamic: true
       },
       {
-         // Deletable but NOT creatable: a `Branch` carries a label that is part
-         // of its syntax (`yes -> Restock`), which an edge tool would have to
-         // invent. Creating one stays a text affordance; removing one does not
-         // need the label.
+         // Branch creation uses the structured editor to collect its label,
+         // so this type has no ordinary edge-creation handler.
          elementTypeId: PROCESS_BRANCH_EDGE_TYPE,
          deletable: true,
          repositionable: false,
