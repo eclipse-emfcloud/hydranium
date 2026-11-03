@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { type ActionHandler, type Command, JsonOperationHandler, ModelState } from '@eclipse-glsp/server';
+import { type ActionHandler, type Command, JsonOperationHandler, GLSPServerError, ModelState } from '@eclipse-glsp/server';
 import { appendChild, buildAstNode } from '@hydranium/core';
 import { type AstNode, type ReferenceInfo } from '@hydranium/langium';
 import { defineMessage, type MessageDefinition, type Mutable } from '@hydranium/protocol';
@@ -25,7 +25,7 @@ import type { OrderFlowGlspState } from '../order-flow-glsp-state.js';
 
 export const PROCESS_EDIT_STALE = defineMessage(
    'order-flow/process/edit-stale',
-   'The process changed while this editor was open. Close it and try again.'
+   'The process changed while this editor was open. Reopen the editor and try again.'
 );
 export const PROCESS_EDIT_UNAVAILABLE = defineMessage('order-flow/process/edit-unavailable', 'This element is no longer available.');
 export const PROCESS_EDIT_REFERENCE_INVALID = defineMessage(
@@ -174,18 +174,19 @@ export class OrderFlowEditProcessOperationHandler extends JsonOperationHandler {
    override createCommand(operation: EditProcessOperation): Command | undefined {
       // Unnamed effects have positional ids; a newer root can assign the id to another effect.
       if (operation.sourceVersion !== this.modelState.version) {
-         return undefined;
+         this.rejectEdit(PROCESS_EDIT_STALE);
       }
       const node = this.modelState.index.findSemanticElement(operation.elementId);
       const edit = processEdit(this.modelState, operation.elementId, operation.values);
-      if (processEditValidation(this.modelState, operation.elementId, operation.values, edit)) {
-         return undefined;
+      const validationError = processEditValidation(this.modelState, operation.elementId, operation.values, edit);
+      if (validationError) {
+         this.rejectEdit(validationError);
       }
       if (isGateway(node)) {
          const label = operation.values.label!;
          const target = this.modelState.sourceRoot.nodes.find(candidate => candidate.name === operation.values.target);
          if (!isFlowNode(target)) {
-            return undefined;
+            this.rejectEdit(PROCESS_EDIT_REFERENCE_INVALID);
          }
          return new OrderFlowCommand(this.modelState, 'Create branch', () => {
             appendChild(
@@ -214,5 +215,11 @@ export class OrderFlowEditProcessOperationHandler extends JsonOperationHandler {
          });
       }
       return undefined;
+   }
+
+   /** A rejected submitted edit must reach the client even when preflight accepted an earlier model. */
+   protected rejectEdit(message: MessageDefinition<string>): never {
+      const rendered = this.modelState.languageServicesFor(this.modelState.sourceRoot)?.shared.MessageRenderer.renderMessage(message);
+      throw new GLSPServerError(rendered ?? message.text, message.code);
    }
 }

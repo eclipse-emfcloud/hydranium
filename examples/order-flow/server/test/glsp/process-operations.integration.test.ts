@@ -36,6 +36,7 @@ import {
    CreateEdgeOperation,
    CreateNodeOperation,
    DeleteElementOperation,
+   MessageAction,
    UndoAction,
    RedoAction,
    ServerModule
@@ -85,6 +86,7 @@ interface OpenDiagram {
     * an `apply` of the valid equivalent.
     */
    readonly expectRejected: (action: Action) => Promise<void>;
+   readonly expectEditRejected: (operation: EditProcessOperation) => Promise<MessageAction>;
 }
 
 let open: OpenDiagram | undefined;
@@ -127,6 +129,16 @@ async function openDiagram(prepare?: (workspace: ScratchWorkspace) => void): Pro
       apply: async action => {
          harness.dispatch(action);
          await harness.nextModelSubmission();
+      },
+      expectEditRejected: async operation => {
+         const before = textDocumentOf();
+         harness.dispatch(operation);
+         const failure = await harness.nextAction<MessageAction>(MessageAction.KIND);
+         expect(failure.severity).toBe('ERROR');
+         expect(failure.message).not.toBe('');
+         await harness.nextModelSubmission();
+         expect(textDocumentOf()).toBe(before);
+         return failure;
       },
       expectRejected: async action => {
          harness.dispatch(action);
@@ -171,7 +183,7 @@ describe('order-flow .process operations', () => {
       scratch = undefined;
    });
 
-   it('refuses an edit after a different effect inherits its positional id', async () => {
+   it('reports an edit that becomes stale after preflight without changing the replacement effect', async () => {
       const diagram = await openDiagram(workspace =>
          workspace.write(
             PROCESS_FILE,
@@ -188,6 +200,19 @@ describe('order-flow .process operations', () => {
       const elementId = diagram.harness.state.index.createId(pick.effects[0]);
       const sourceVersion = processEdit(diagram.harness.state, elementId).sourceVersion;
       const values = { entity: 'LineItem', field: 'sku' };
+      const preflightRequest = {
+         kind: RequestProcessEditAction.KIND,
+         requestId: 'valid-edit',
+         elementId,
+         values,
+         sourceVersion,
+         validate: true
+      } satisfies RequestProcessEditAction;
+      diagram.harness.dispatch(preflightRequest);
+      const preflight = await diagram.harness.nextAction<SetProcessEditAction>(SetProcessEditAction.KIND);
+      expect(preflight.mode).toBe('read');
+      expect(preflight.validationError).toBeUndefined();
+      expect(preflight.sourceVersion).toBe(sourceVersion);
       await diagram.apply(DeleteElementOperation.create([elementId]));
       const remaining = diagram.root().nodes.find(node => node.name === 'Pick');
       if (!isTask(remaining)) {
@@ -195,7 +220,8 @@ describe('order-flow .process operations', () => {
       }
       expect(diagram.harness.state.index.createId(remaining.effects[0])).toBe(elementId);
       expect(remaining.effects[0].field.$refText).toBe('total');
-      await diagram.expectRejected({ ...EditProcessOperation.create(elementId, values, sourceVersion) });
+      const failure = await diagram.expectEditRejected(EditProcessOperation.create(elementId, values, sourceVersion));
+      expect(failure.message).toContain('The process changed');
       expect(code(diagram.text())).toContain('reads Order.total');
       const request = { kind: RequestProcessEditAction.KIND, requestId: 'stale-edit', elementId, values, sourceVersion, validate: true };
       diagram.harness.dispatch(request);
@@ -218,12 +244,12 @@ describe('order-flow .process operations', () => {
       expect(choices.candidates.field?.map(candidate => candidate.value)).toEqual(expect.arrayContaining(['sku', 'quantity']));
       expect(choices.candidates.field?.map(candidate => candidate.value)).not.toContain('status');
       expect(processEdit(diagram.harness.state, writeId, { entity: 'Order', field: 'id' }).candidates.literal).toEqual([]);
-      await diagram.expectRejected(
+      await diagram.expectEditRejected(
          EditProcessOperation.create(readId, { entity: 'LineItem', field: 'status' }, diagram.harness.state.version)
       );
       await diagram.apply(EditProcessOperation.create(readId, { entity: 'LineItem', field: 'sku' }, diagram.harness.state.version));
       expect(code(diagram.text())).toContain('reads LineItem.sku');
-      await diagram.expectRejected(
+      await diagram.expectEditRejected(
          EditProcessOperation.create(writeId, { entity: 'Order', field: 'id', literal: 'PAID' }, diagram.harness.state.version)
       );
       await diagram.apply(
@@ -245,9 +271,9 @@ describe('order-flow .process operations', () => {
             .sort()
       ).toEqual(flowNodeNames(diagram.root()).sort());
       for (const label of ['', 'two words', 'task', 'yes']) {
-         await diagram.expectRejected(EditProcessOperation.create(gatewayId, { label, target: 'Ship' }, diagram.harness.state.version));
+         await diagram.expectEditRejected(EditProcessOperation.create(gatewayId, { label, target: 'Ship' }, diagram.harness.state.version));
       }
-      await diagram.expectRejected(
+      await diagram.expectEditRejected(
          EditProcessOperation.create(gatewayId, { label: 'later', target: 'Missing' }, diagram.harness.state.version)
       );
       await diagram.apply(EditProcessOperation.create(gatewayId, { label: 'later', target: 'Ship' }, diagram.harness.state.version));

@@ -23,7 +23,8 @@
     "watch": "tsc --watch --preserveWatchOutput"
   },
   "dependencies": {
-    "@eclipse-glsp/protocol": "2.8.0"
+    "@eclipse-glsp/protocol": "2.8.0",
+    "@hydranium/protocol": "^1.0.0-next"
   },
   "devDependencies": {
     "rimraf": "^5.0.0",
