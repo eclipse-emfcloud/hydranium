@@ -107,14 +107,32 @@ function testClaims(file: string, text: string): string[] {
    if (!text.includes('guidance-claim:')) return [];
    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
    const bodies: ts.Node[] = [];
+   const disabled: ts.Node[] = [];
+   const jsxText: ts.Node[] = [];
    const comments = new Map<number, ts.CommentRange>();
-   function visit(node: ts.Node): void {
-      for (const comment of [...(ts.getLeadingCommentRanges(text, node.pos) ?? []), ...(ts.getTrailingCommentRanges(text, node.end) ?? [])])
+   // Token children include closing braces, whose leading trivia has no AST
+   // statement to attach to. The parser keeps literal contents out of the scan.
+   function collectComments(node: ts.Node): void {
+      if (ts.isJsxText(node)) {
+         jsxText.push(node);
+         return;
+      }
+      for (const comment of [
+         ...(ts.getLeadingCommentRanges(text, node.getFullStart()) ?? []),
+         ...(ts.getTrailingCommentRanges(text, node.end) ?? [])
+      ])
          comments.set(comment.pos, comment);
+      for (const child of node.getChildren(source)) collectComments(child);
+   }
+   collectComments(source);
+   function visit(node: ts.Node): void {
       if (ts.isCallExpression(node)) {
          const chain = testChain(node.expression);
          if (chain) {
-            if (!chain.runnable || !optionsAllowRun(node.arguments[1])) return;
+            if (!chain.runnable || !optionsAllowRun(node.arguments[1])) {
+               disabled.push(node);
+               return;
+            }
             if (chain.root === 'it' || chain.root === 'test') {
                for (const argument of node.arguments)
                   if (ts.isArrowFunction(argument) || ts.isFunctionExpression(argument)) bodies.push(argument.body);
@@ -126,8 +144,15 @@ function testClaims(file: string, text: string): string[] {
    visit(source);
    const claims: string[] = [];
    for (const comment of comments.values()) {
+      // An adjacent token's trivia scanner can reach into raw JSX text too.
+      if (jsxText.some(node => node.pos <= comment.pos && comment.pos < node.end)) continue;
       const match = /^\/\/ guidance-claim: ([a-z][a-z0-9-]*)\s*$/.exec(text.slice(comment.pos, comment.end));
-      if (match && bodies.some(body => body.pos <= comment.pos && body.end >= comment.end)) claims.push(match[1]);
+      if (
+         match &&
+         bodies.some(body => body.getStart(source) <= comment.pos && body.end >= comment.end) &&
+         !disabled.some(node => node.getStart(source) <= comment.pos && node.end >= comment.end)
+      )
+         claims.push(match[1]);
    }
    return claims;
 }
@@ -216,6 +241,35 @@ export function guidanceSelfTests(): void {
       if (!condition) throw new Error(`guidance self-test: ${name}`);
    };
    assert(claimErrors(pages, tests).length === 0, 'reciprocal claim');
+   const finalComment = "it('works', () => {\nexpect(true).toBe(true);\n// guidance-claim: one\n});";
+   assert(claimErrors(pages, new Map([['a.test.ts', finalComment]])).length === 0, 'backlink after the final statement');
+   assert(
+      claimErrors(pages, new Map([['a.test.ts', test.replace('\n});', '\n// guidance-claim: one\n});')]])).length > 0,
+      'duplicate backlink after the final statement'
+   );
+   assert(
+      claimErrors(pages, new Map([['a.test.ts', finalComment.replace('it(', 'it.skip(')]])).length > 0,
+      'final backlink in a skipped test'
+   );
+   assert(
+      claimErrors(pages, new Map([['a.test.ts', `it('parent', () => { ${finalComment.replace('it(', 'it.skip(')} });`]])).length > 0,
+      'disabled child cannot borrow a runnable parent range'
+   );
+   assert(
+      claimErrors(pages, new Map([['a.test.ts', "it('works', () => { const text = `\n// guidance-claim: one\n`; });"]])).length > 0,
+      'template text is not comment trivia'
+   );
+   const jsxPages = new Map([['AGENTS.md', page.replace('a.test.ts', 'a.test.tsx')]]);
+   assert(
+      claimErrors(jsxPages, new Map([['a.test.tsx', "it('works', () => { const text = <div>\n// guidance-claim: one\n</div>; });"]]))
+         .length > 0,
+      'JSX text is not comment trivia'
+   );
+   assert(
+      claimErrors(jsxPages, new Map([['a.test.tsx', "it('works', () => { const text = <div>{\n// guidance-claim: one\nnull}</div>; });"]]))
+         .length === 0,
+      'comments inside JSX expressions remain evidence'
+   );
    for (const table of ['for([1])', 'for`value\n${1}`']) {
       for (const prefix of ['', 'concurrent.', 'sequential.']) {
          const modifier = `${prefix}${table}`;
