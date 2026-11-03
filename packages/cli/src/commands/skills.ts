@@ -12,7 +12,6 @@ import * as path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { resolve } from 'import-meta-resolve';
-import { satisfies, valid, validRange } from 'semver';
 import { parse } from 'yaml';
 
 /** A compatibility result applies to one installed copy, not just its skill name. */
@@ -67,31 +66,22 @@ export function checkSkill(file: string, from: string): SkillCompatibility {
       const frontmatter = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
       const skill: unknown = frontmatter === undefined ? undefined : parse(frontmatter);
       const metadata = isRecord(skill) ? skill.metadata : undefined;
-      if (
-         !isRecord(metadata) ||
-         (metadata['hydranium-compatibility-schema'] !== '1' && metadata['hydranium-compatibility-schema'] !== '2')
-      ) {
+      if (!isRecord(metadata) || metadata['hydranium-compatibility-schema'] !== '1') {
          return result('unverified', 'No supported Hydranium compatibility metadata.');
       }
-      const encoded = metadata['hydranium-requires'];
-      const requirements: unknown = typeof encoded === 'string' ? JSON.parse(encoded) : undefined;
-      if (!isRecord(requirements) || Object.keys(requirements).length === 0) {
-         return result('unverified', 'Package requirements are missing or empty.');
-      }
-      const contractText = metadata['hydranium-contracts'];
-      if (metadata['hydranium-compatibility-schema'] === '2' && contractText !== undefined && typeof contractText !== 'string') {
-         return result('unverified', 'Contract requirements must be JSON-encoded metadata.');
-      }
-      const contracts: unknown =
-         metadata['hydranium-compatibility-schema'] === '2' && typeof contractText === 'string' ? JSON.parse(contractText) : {};
+      const encoded = metadata['hydranium-contracts'];
+      const contracts: unknown = typeof encoded === 'string' ? JSON.parse(encoded) : undefined;
       if (
          !isRecord(contracts) ||
+         Object.keys(contracts).length === 0 ||
          Object.entries(contracts).some(
             ([name, declarations]) =>
-               !Object.hasOwn(requirements, name) ||
+               !/^(@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*$/.test(name) ||
                !isRecord(declarations) ||
                Object.keys(declarations).length === 0 ||
-               Object.values(declarations).some(revision => typeof revision !== 'string' || revision.length === 0)
+               Object.entries(declarations).some(
+                  ([contract, revision]) => !contract.trim() || typeof revision !== 'string' || !revision.trim()
+               )
          )
       ) {
          return result('unverified', 'Invalid package contract requirements.');
@@ -99,25 +89,24 @@ export function checkSkill(file: string, from: string): SkillCompatibility {
       const problems: string[] = [];
       const versions: string[] = [];
       let mismatch = false;
-      for (const [name, range] of Object.entries(requirements)) {
-         if (!/^(@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*$/.test(name) || typeof range !== 'string' || !range.trim() || !validRange(range)) {
-            return result('unverified', `Invalid package requirement: ${name}.`);
-         }
+      for (const [name, requiredContracts] of Object.entries(contracts)) {
          const manifest = installedPackageManifest(name, from);
          const version = manifest?.version;
-         const requiredContracts = contracts[name];
-         const suppliedContracts = manifest?.hydraniumSkillContracts;
+         const configuration = manifest?.hydranium;
+         const suppliedContracts = isRecord(configuration) ? configuration.skillContracts : undefined;
          const contractMatches =
             isRecord(requiredContracts) &&
             isRecord(suppliedContracts) &&
-            Object.entries(requiredContracts).every(([contract, revision]) => suppliedContracts[contract] === revision);
-         if (typeof version !== 'string' || !valid(version)) {
-            problems.push(`${name} is not installed or has no valid version; install dependencies and retry.`);
-         } else if (!satisfies(version, range) && !contractMatches) {
+            Object.entries(requiredContracts).every(
+               ([contract, revision]) => Object.hasOwn(suppliedContracts, contract) && suppliedContracts[contract] === revision
+            );
+         if (manifest === undefined) {
+            problems.push(`${name} is not installed; install dependencies and retry.`);
+         } else if (!contractMatches) {
             mismatch = true;
-            problems.push(`${name}@${version} does not satisfy ${range}${requiredContracts ? ' or the declared skill contracts' : ''}.`);
+            problems.push(`${name} does not declare the required skill contracts.`);
          } else {
-            versions.push(`${name}@${version}${contractMatches ? ' (declared skill contract)' : ''}`);
+            versions.push(`${name}${typeof version === 'string' ? `@${version}` : ''} (declared skill contract)`);
          }
       }
       return problems.length > 0
@@ -138,7 +127,7 @@ export function checkSkills(project: string, from = project, names?: readonly st
          continue;
       }
       for (const name of fs.readdirSync(root)) {
-         if (!(names ? names.includes(name) : name.startsWith('hydranium-') || name === 'langium')) {
+         if (!(names ? names.includes(name) : name.startsWith('hydranium-'))) {
             continue;
          }
          found.add(name);
@@ -151,7 +140,7 @@ export function checkSkills(project: string, from = project, names?: readonly st
       }
    }
    if (results.length === 0) {
-      results.push({ file: project, status: 'unverified', detail: 'No Hydranium or Langium project skills found.' });
+      results.push({ file: project, status: 'unverified', detail: 'No Hydranium project skills found.' });
    }
    return results;
 }

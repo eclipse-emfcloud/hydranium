@@ -33,7 +33,7 @@ import type { InitHost } from './init-hosts.js';
 import { createClackPrompt } from './init-prompt.js';
 import { runInitWizard } from './init-wizard.js';
 import { createNodeWorkspaceProbe, detectWorkspace } from './init-workspace.js';
-import { installSkills, offerSkills, parseSkillInstallation } from './init-skills.js';
+import { installSkills, offerSkills, parseSkillInstallation, SKILLS_INSTALLER } from './init-skills.js';
 
 /** One grammar as the command line collected it, before any derivation. */
 export interface ParsedInitGrammar {
@@ -269,7 +269,7 @@ export const INIT_HELP: readonly string[] = [
    '                        with glsp the client/ package a host mounts.',
    '  --force               Scaffold into a non-empty directory anyway.',
    '  --skills <names>      After scaffolding, install named skills: hydranium-profiling,',
-   '                        langium. Requires --agents. Downloads with npx skills add',
+   `                        langium. Requires --agents. Downloads with npx ${SKILLS_INSTALLER} add`,
    '                        --copy, preserving unrelated skills and lock entries.',
    '                        With --monorepo, skills are written at the workspace root.',
    '  --agents <names>      Comma-separated agents for --skills: codex, claude-code,',
@@ -368,7 +368,6 @@ export async function runInitCommand(args: string[]): Promise<void> {
    if (selection !== undefined) {
       installSkills(project, path.join(target, 'server'), selection);
    } else {
-      process.stdout.write('\nOptional agent skills: see the Work with coding-agent skills guide, or run:\n');
-      process.stdout.write(`  In ${project}: npx skills add eclipse-emfcloud/hydranium --skill hydranium-profiling --agent codex --copy\n`);
+      process.stdout.write('\nOptional agent skills: see the Work with coding-agent skills guide.\n');
    }
 }

@@ -22,11 +22,19 @@ totals are not a promise that deleting one field releases the whole concept.
 
 ## Server
 
-Expect AST nodes to be co-owned by parse results, CST links, descriptions and
-resolved references, including references from other documents. A diagram can
-add its source root, semantic index and undo history. Verify holder edge names
-against the captured version's installed source before naming an owner; the
-adopter need not have the Hydranium repository checked out.
+Expect AST nodes to be co-owned by several holders:
+
+- the document's `ParseResult.value`;
+- the CST's `_astNode`;
+- each node description's `node`;
+- resolved references through `_ref` and `_nodeDescription`, including those
+  from other documents; multi-references hold targets through `_items`;
+- a GLSP model state's `_sourceRoot`, the index's `idToSemanticNode`, and undo
+  commands through `trace`, `operationRoots`, `sourceRootAtOpen` and
+  `writtenRoot`, until undo or redo replaces them.
+
+Verify holder edge names against the captured version's installed source before
+naming an owner; the adopter need not have the Hydranium repository checked out.
 
 The reference index's reference descriptions carry locations, not the target
 AST itself. Distinguish those from exported node descriptions with node links.

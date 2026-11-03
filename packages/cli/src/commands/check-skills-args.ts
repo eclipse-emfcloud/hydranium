@@ -23,9 +23,9 @@ export const CHECK_SKILLS_HELP = [
    '                       to the project. Default: the project directory.',
    '                       Use the server package for workspace-local dependencies.',
    '  --skill <names>      Check only these comma-separated skill names.',
-   '                       Default: hydranium-* and langium.',
+   '                       Default: hydranium-*. Use --skill langium to check upstream.',
    '',
-   'A compatible result checks package ranges or declared skill contracts,',
+   'A compatible result checks declared skill contracts,',
    'not the accuracy of prose.',
    'Upstream skills without Hydranium metadata are unverified.'
 ];

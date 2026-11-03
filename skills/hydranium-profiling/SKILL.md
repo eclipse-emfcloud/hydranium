@@ -6,9 +6,7 @@ description: >-
   Use when investigating a language application's performance or memory use.
 license: MIT
 metadata:
-  hydranium-compatibility-schema: '2'
-  hydranium-requires: >-
-    {"@hydranium/core":"1.0.0-next.411","@hydranium/cli":"1.0.0-next.411"}
+  hydranium-compatibility-schema: '1'
   hydranium-contracts: >-
     {"@hydranium/core":{"profiling":"1"},
     "@hydranium/cli":{"profiling":"1"}}
@@ -19,7 +17,7 @@ metadata:
 Start with the user's symptom and the capture they already have. Do not launch
 a workload, modify models, or collect a heap merely because this skill loaded.
 
-1. Check the installed framework and CLI versions against this skill's
+1. Check the installed framework and CLI contracts against this skill's
    metadata. Where available, run `hydranium-cli check-skills` from the project,
    selecting `--skill hydranium-profiling`; use `--from server` if dependencies
    resolve from that package. An older CLI may lack this command: read installed

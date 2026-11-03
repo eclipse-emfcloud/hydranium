@@ -32,12 +32,13 @@ function write(relative: string, content: string): string {
    return file;
 }
 
-function installed(version: string, local = '', exported = false): void {
+function installed(version: string, local = '', exported = false, revision = '1'): void {
    write(
       `${local}node_modules/@hydranium/core/package.json`,
       JSON.stringify({
          name: '@hydranium/core',
          version,
+         hydranium: { skillContracts: { profiling: revision } },
          type: 'module',
          ...(exported ? { exports: { '.': './lib/index.js' } } : {})
       })
@@ -47,7 +48,7 @@ function installed(version: string, local = '', exported = false): void {
    }
 }
 
-function skill(range: string, directory = '.agents/skills'): string {
+function skill(revision: string, directory = '.agents/skills'): string {
    return write(
       `${directory}/hydranium-profiling/SKILL.md`,
       `---\n${stringify({
@@ -55,7 +56,7 @@ function skill(range: string, directory = '.agents/skills'): string {
          description: 'Interpret a profile.',
          metadata: {
             'hydranium-compatibility-schema': '1',
-            'hydranium-requires': JSON.stringify({ '@hydranium/core': range })
+            'hydranium-contracts': JSON.stringify({ '@hydranium/core': { profiling: revision } })
          }
       })}---\nInstructions.\n`
    );
@@ -75,39 +76,39 @@ describe('checkSkills', () => {
       expect(checkSkill(file, project).status).toBe('compatible');
       for (const contract of [undefined, { profiling: '2' }]) {
          const manifest = JSON.parse(fs.readFileSync(new URL('../../core/package.json', import.meta.url), 'utf8'));
-         write('node_modules/@hydranium/core/package.json', JSON.stringify({ ...manifest, version, hydraniumSkillContracts: contract }));
+         write(
+            'node_modules/@hydranium/core/package.json',
+            JSON.stringify({ ...manifest, version, hydranium: { skillContracts: contract } })
+         );
          expect(checkSkill(file, project).status).toBe('incompatible');
       }
    });
 
    it('resolves the server package version through an export map without executing it', () => {
-      installed('2.0.0');
+      installed('2.0.0', '', false, '2');
       installed('1.0.0-next.411', 'server/', true);
-      skill('1.0.0-next.411');
+      skill('1');
       expect(checkSkills(project, path.join(project, 'server'))[0].status).toBe('compatible');
       expect(checkSkills(project)[0].status).toBe('incompatible');
    });
 
-   it.each([
-      ['1.0.0-next.410', 'incompatible'],
-      ['1.0.0-next.411', 'compatible'],
-      ['1.0.0-next.412', 'incompatible'],
-      ['1.0.0', 'incompatible']
-   ])('checks the declared prerelease boundary for %s', (version, status) => {
+   it.each(['1.0.0-next.410', '1.0.0-next.9999', '2.0.0'])('requires the contract independently of version %s', version => {
       installed(version);
-      skill('1.0.0-next.411');
-      expect(checkSkills(project)[0].status).toBe(status);
+      skill('1');
+      expect(checkSkills(project)[0].status).toBe('compatible');
+      installed(version, '', false, '2');
+      expect(checkSkills(project)[0].status).toBe('incompatible');
    });
 
    it('reports an outdated agent copy even when the shared copy is compatible', () => {
       installed('1.0.0');
-      skill('^1.0.0');
-      skill('^2.0.0', '.claude/skills');
+      skill('1');
+      skill('2', '.claude/skills');
       expect(checkSkills(project).map(result => result.status)).toEqual(['compatible', 'incompatible']);
    });
 
    it('does not substitute the CLI dependencies for an uninstalled adopter dependency', () => {
-      skill('1.0.0-next.411');
+      skill('1');
       expect(checkSkills(project)[0]).toMatchObject({ status: 'unverified', detail: expect.stringContaining('not installed') });
    });
 
@@ -118,19 +119,22 @@ describe('checkSkills', () => {
       expect(checkSkills(project, project, ['hydranium-profiling'])[0].detail).toContain('not installed');
    });
 
-   it.each(['{}', '{"@hydranium/core":""}', '{"@hydranium/core":"nonsense"}', '{broken'])('refuses malformed requirements %s', encoded => {
-      const file = write(
-         '.agents/skills/hydranium-profiling/SKILL.md',
-         `---\n${stringify({
-            metadata: { 'hydranium-compatibility-schema': '1', 'hydranium-requires': encoded }
-         })}---\n`
-      );
-      expect(checkSkill(file, project).status).toBe('unverified');
-   });
+   it.each(['{}', '{"@hydranium/core":{}}', '{"@hydranium/core":{"profiling":""}}', '{"@hydranium/core":"nonsense"}', '{broken'])(
+      'refuses malformed requirements %s',
+      encoded => {
+         const file = write(
+            '.agents/skills/hydranium-profiling/SKILL.md',
+            `---\n${stringify({
+               metadata: { 'hydranium-compatibility-schema': '1', 'hydranium-contracts': encoded }
+            })}---\n`
+         );
+         expect(checkSkill(file, project).status).toBe('unverified');
+      }
+   );
 
    it('ignores unrelated skills but checks a specifically requested missing skill', () => {
       installed('1.0.0');
-      skill('^1.0.0');
+      skill('1');
       write('.agents/skills/unrelated/SKILL.md', 'no metadata');
       expect(checkSkills(project)).toHaveLength(1);
       expect(checkSkills(project, project, ['missing'])[0].status).toBe('unverified');
@@ -141,13 +145,15 @@ describe('check-skills', () => {
    it('fails CI for incompatible or unverified skills and can select the framework skill alone', () => {
       vi.spyOn(console, 'log').mockImplementation(() => {});
       installed('1.0.0');
-      skill('^2.0.0');
+      skill('2');
       runCheckSkillsCommand([project]);
       expect(process.exitCode).toBe(1);
       process.exitCode = 0;
-      skill('^1.0.0');
+      skill('1');
       write('.agents/skills/langium/SKILL.md', '---\nname: langium\n---\n');
       runCheckSkillsCommand([project]);
+      expect(process.exitCode).toBe(0);
+      runCheckSkillsCommand([project, '--skill', 'langium']);
       expect(process.exitCode).toBe(1);
       process.exitCode = 0;
       runCheckSkillsCommand([project, '--skill', 'hydranium-profiling']);

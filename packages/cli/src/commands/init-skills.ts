@@ -12,6 +12,8 @@ import * as path from 'node:path';
 import { InitWizardCancelled, type PromptPort } from './init-prompt.js';
 import { checkSkills } from './skills.js';
 
+export const SKILLS_INSTALLER = 'skills@1.7.6';
+
 export const ADOPTER_SKILLS = {
    'hydranium-profiling': { source: 'eclipse-emfcloud/hydranium', label: 'Hydranium profiling' },
    langium: { source: 'eclipse-langium/langium-ai', label: 'Langium grammar and runtime' }
@@ -58,7 +60,7 @@ export function parseSkillInstallation(skills?: string, agents?: string): SkillI
 }
 
 export function skillInstallArgs(skill: AdopterSkill, agents: readonly SkillAgent[]): string[] {
-   return ['--yes', 'skills', 'add', ADOPTER_SKILLS[skill].source, '--skill', skill, '--agent', ...agents, '--copy', '--yes'];
+   return ['--yes', SKILLS_INSTALLER, 'add', ADOPTER_SKILLS[skill].source, '--skill', skill, '--agent', ...agents, '--copy', '--yes'];
 }
 
 /** A failed optional download leaves the scaffold usable and gives an independently runnable retry. */

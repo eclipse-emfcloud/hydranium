@@ -195,10 +195,18 @@ matching.
 
 ## Skill compatibility across releases
 
-Adopter skills are installed from Git independently of npm releases. Their
-version alternatives and named contracts are described in
-[Work with coding-agent skills](../guides/coding-agent-skills.md#compatibility-declarations).
-Release stamping preserves the packages' `hydraniumSkillContracts` fields.
+Adopter skills are installed from Git independently of npm releases. Schema
+`1` stores `hydranium-contracts` in the skill's metadata as a JSON-encoded map
+from package names to named contract revisions. Each installed package must
+advertise every requested revision in `hydranium.skillContracts`. Missing
+packages or malformed metadata are unverified; missing or different contracts
+on an installed package are incompatible. There is no version-range fallback.
+Release stamping preserves the package declarations.
+
+Keep the schema and contract mechanics here; the
+[adopter guide](../guides/coding-agent-skills.md) explains installing, checking
+and updating skills. The declarations are a maintainer's compatibility promise,
+not proof that every instruction is correct.
 
 The core and CLI profiling contract covers the capture schema, artifact names
 and interpretation, CLI capture and analyzer options, and the ownership

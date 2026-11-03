@@ -45,7 +45,7 @@ describe('init --skills', () => {
       expect(calls[0][2]?.cwd).toBe(project);
       expect(calls[0][1]).toEqual([
          '--yes',
-         'skills',
+         'skills@1.7.6',
          'add',
          'eclipse-langium/langium-ai',
          '--skill',
@@ -73,7 +73,9 @@ describe('init --skills', () => {
       vi.mocked(spawnSync).mockReturnValue({ pid: 1, output: [], stdout: '', stderr: '', status: 1, signal: null });
       await runInitCommand([project, '--name', 'Example', '--skills', 'hydranium-profiling', '--agents', 'codex']);
       expect(fs.existsSync(path.join(project, 'server/package.json'))).toBe(true);
-      expect(vi.mocked(process.stdout.write).mock.calls.flat().join('')).toContain('Retry in');
+      const output = vi.mocked(process.stdout.write).mock.calls.flat().join('');
+      expect(output).toContain('Retry in');
+      expect(output).toContain('npx --yes skills@1.7.6 add');
    });
 
    it('writes workspace skills at the root without changing its manifest', async () => {
