@@ -279,6 +279,42 @@ each concern to its files** and links the guide rather than repeating it.
 word may run longer. `check:docs` fails the rest, since oxfmt does not format
 Markdown.
 
+### Agent guidance evidence
+
+For repository contributors, `check:docs` also checks names in `AGENTS.md`,
+`CLAUDE.md`, and our rules and skills. Recognizable identifiers and dotted
+members in code spans must occur in repository or pinned Langium source;
+file names must exist, package names must be declared, and script names
+must occur in a manifest. Plain words and commands other than `npm run` are
+skipped. This detects removals, not whether a member belongs to a particular
+class or whether a claim is true.
+
+A behavior claim with a test carries an HTML comment immediately before its
+paragraph, in this form:
+
+```html
+<!-- guidance-claim: unique-claim-id test=path/from/repository/root.test.ts -->
+```
+
+Inside the test that asserts it, put a line comment with the same id:
+
+```text
+// guidance-claim: unique-claim-id
+```
+
+The gate requires one matching backlink inside a runnable test, and rejects
+orphan backlinks and duplicate claim ids. Search the id to reach the prose
+when changing the assertion. The marker is checked metadata; it is the
+exception to the ban on pointers in comments. A marker cannot prove that
+the test asserts the paragraph, and unmarked prose is not interpreted by
+the gate. Add a marker when a rule relies on behavior covered by a test;
+otherwise state the evidence and its limits. Cheap upstream behavior probes
+run with the docs gate; expensive host traces remain manual evidence.
+
+Use the [guidance audit skill](../../.claude/skills/auditing-guidance/SKILL.md)
+for a periodic review outside the gate, particularly after dependency or
+architecture changes. It checks the prose the deterministic checks cannot.
+
 ## User-facing messages
 
 **The framework externalizes user-facing strings, ships no catalogue and

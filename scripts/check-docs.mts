@@ -21,9 +21,12 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkGuidance, guidanceSelfTests } from './guidance.mts';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BASELINE_FILE = 'scripts/check-docs-baseline.json';
@@ -403,6 +406,27 @@ if (!INDEXES.every(index => pages.includes(index))) {
 }
 
 const texts = new Map(pages.map(page => [page, readFileSync(join(REPO_ROOT, page), 'utf-8')]));
+guidanceSelfTests();
+const treeFiles = [
+   ...new Set(
+      execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
+         cwd: REPO_ROOT,
+         encoding: 'utf8'
+      })
+         .split('\0')
+         .filter(file => file && existsSync(join(REPO_ROOT, file)))
+   )
+];
+for (const error of checkGuidance(texts, treeFiles, REPO_ROOT)) {
+   failed = true;
+   console.error(`✗ ${error}`);
+}
+try {
+   await promisify(execFile)(process.execPath, ['--test', 'scripts/guidance-console.test.mts'], { cwd: REPO_ROOT, timeout: 45_000 });
+} catch (error) {
+   failed = true;
+   console.error('✗ guidance console probe failed', error);
+}
 const anchorCache = new Map<string, Set<string>>();
 const linkGraph = new Map<string, string[]>();
 let checkedLinks = 0;

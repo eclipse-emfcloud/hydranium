@@ -165,6 +165,7 @@ describe('makeStubProjectManager differential against AbstractProjectManager', (
    });
 
    it('reports isSingleProject and isUnqualifiedProjectReference the way the real manager does', async () => {
+      // guidance-claim: scope-stub-threshold
       const real = await realManager();
       const stub = makeStubProjectManager(GRAPH);
       const single = makeStubProjectManager([GRAPH[0]]);
@@ -203,6 +204,7 @@ describe('makeStubProjectManager seams a test drives it through', () => {
    });
 
    it('answers getProject from the ownership map and abstains for an unowned URI', () => {
+      // guidance-claim: scope-stub-ownership
       const stub = makeStubProjectManager(GRAPH);
       stub.ownUri('file:///ws/p-mid/One.x', 'p-mid');
 
