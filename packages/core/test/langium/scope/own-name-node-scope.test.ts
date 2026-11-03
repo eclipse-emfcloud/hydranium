@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 /**
- * `HydraniumScopeProvider.createScopeForNodes` re-keys Langium's helper from
+ * `DefaultHydraniumScopeProvider.createScopeForNodes` re-keys Langium's helper from
  * `getName` (project-qualified in this framework) to `getOwnName`. Built
  * against the REAL `DefaultNameProvider` and
  * `HydraniumAstNodeDescriptionProvider`, because the whole point is which of
@@ -28,8 +28,8 @@ import {
 import { describe, expect, it } from 'vitest';
 import { type HydraniumLanguageServices } from '../../../src/langium/language-module.js';
 import { DefaultNameProvider } from '../../../src/langium/naming/name-provider.js';
-import { HydraniumAstNodeDescriptionProvider } from '../../../src/langium/scope/ast-node-description-provider.js';
-import { HydraniumScopeProvider } from '../../../src/langium/scope/hydranium-scope-provider.js';
+import { DefaultHydraniumAstNodeDescriptionProvider } from '../../../src/langium/scope/ast-node-description-provider.js';
+import { DefaultHydraniumScopeProvider } from '../../../src/langium/scope/hydranium-scope-provider.js';
 import { makeFakeAstNode, makeFakeDescription, makeFakeDocument, makeTestServices } from '../../../src/testing/index.js';
 
 const DOCUMENT_URI = 'file:///workspace/projA/a.x';
@@ -65,7 +65,7 @@ function makeContainer(): { container: FakeContainer; document: LangiumDocument<
 }
 
 /** Exposes the protected helper, plus the name the base helper would have keyed by. */
-class ProbeScopeProvider extends HydraniumScopeProvider {
+class ProbeScopeProvider extends DefaultHydraniumScopeProvider {
    scopeFor(nodes: Iterable<AstNode>, outerScope?: Scope): Scope {
       return this.createScopeForNodes(nodes, outerScope);
    }
@@ -75,7 +75,7 @@ class ProbeScopeProvider extends HydraniumScopeProvider {
    }
 }
 
-/** Counts the scopes {@link HydraniumScopeProvider.createNodeScope} builds, as an adopter's override would run. */
+/** Counts the scopes {@link DefaultHydraniumScopeProvider.createNodeScope} builds, as an adopter's override would run. */
 class CountingScopeProvider extends ProbeScopeProvider {
    built = 0;
 
@@ -109,11 +109,11 @@ function probe<TProvider extends ProbeScopeProvider>(Provider: new (services: Hy
       workspace: { AstNodeDescriptionProvider: unknown };
    };
    writable.references.NameProvider = new DefaultNameProvider(language);
-   writable.workspace.AstNodeDescriptionProvider = new HydraniumAstNodeDescriptionProvider(language);
+   writable.workspace.AstNodeDescriptionProvider = new DefaultHydraniumAstNodeDescriptionProvider(language);
    return new Provider(language);
 }
 
-describe('HydraniumScopeProvider.createScopeForNodes own-name keying', () => {
+describe('DefaultHydraniumScopeProvider.createScopeForNodes own-name keying', () => {
    it('keys entries by the bare own-name, which is the text a member reference carries', () => {
       const { container } = makeContainer();
       const scope = probe(ProbeScopeProvider).scopeFor(container.members);
@@ -175,7 +175,7 @@ describe('HydraniumScopeProvider.createScopeForNodes own-name keying', () => {
    });
 });
 
-describe('HydraniumScopeProvider.createScopeForNodes once per build', () => {
+describe('DefaultHydraniumScopeProvider.createScopeForNodes once per build', () => {
    /** Give `document` fresh local symbols, as a build that recomputes them does. */
    const rebuild = (document: LangiumDocument): void => {
       (document as { localSymbols?: object }).localSymbols = {};

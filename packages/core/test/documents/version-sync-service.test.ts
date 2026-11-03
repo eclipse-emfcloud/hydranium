@@ -14,10 +14,11 @@
 
 import { describe, expect, it } from 'vitest';
 import { DocumentState, OperationCancelled, URI } from '@hydranium/langium';
-import { STALE_VERSION, UNRECORDED_VERSION } from '@hydranium/protocol';
+import { Deferred, STALE_VERSION, UNRECORDED_VERSION } from '@hydranium/protocol';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments, type HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { type RecoveryBuildRequest, DefaultVersionSyncService } from '../../src/documents/version-sync-service.js';
+import { DefaultHydraniumWorkspaceLock } from '../../src/langium/workspace/hydranium-workspace-lock.js';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { makeCapturingLogger, makeFakeAstNode, makeTestServices } from '../../src/testing/index.js';
 
@@ -43,13 +44,32 @@ interface SyncRig {
    readonly errors: () => string[];
 }
 
-function makeRig(): SyncRig {
+function makeRig(delegating = false, independentLock = false): SyncRig {
    const { logger, lines } = makeCapturingLogger();
    const bundle = makeTestServices({ logger });
-   const textDocuments = new HydraniumTextDocuments(bundle.services);
+   const backing = new DefaultHydraniumTextDocuments(bundle.services);
+   const textDocuments = delegating
+      ? new Proxy({} as HydraniumTextDocuments, {
+           get: (_target, key) => {
+              const value = Reflect.get(backing, key);
+              return typeof value === 'function' ? value.bind(backing) : value;
+           }
+        })
+      : backing;
+   const lock = new DefaultHydraniumWorkspaceLock(bundle.services);
+   const workspaceLock = independentLock
+      ? {
+           read: lock.read.bind(lock),
+           write: lock.write.bind(lock),
+           cancelWrite: lock.cancelWrite.bind(lock),
+           get writeCancellations() {
+              return lock.writeCancellations;
+           }
+        }
+      : bundle.services.workspace.WorkspaceLock;
    const services = {
       ...bundle.services,
-      workspace: { ...bundle.services.workspace, TextDocuments: textDocuments }
+      workspace: { ...bundle.services.workspace, TextDocuments: textDocuments, WorkspaceLock: workspaceLock }
    } as ServerSharedServices;
    const sync = new DefaultVersionSyncService(services);
    services.workspace.VersionSyncService = sync;
@@ -94,9 +114,9 @@ function open(rig: SyncRig, uri: string, version: number, text: string): void {
    rig.textDocuments.notifyDidOpenTextDocument({ textDocument: { uri, languageId: 'plaintext', version, text } }, 'reader');
 }
 
-describe('DefaultVersionSyncService.modelProduced', () => {
+describe.each([false, true])('DefaultVersionSyncService.modelProduced with store delegation %s', delegating => {
    it('logs once that the sync build it requested failed, since nothing waits on that build', async () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       open(rig, URI_A, 2, 'newer');
       rig.outcomes.push('fail', 'fail');
       // Parsed from older text than the store holds, so the root is behind.
@@ -112,7 +132,7 @@ describe('DefaultVersionSyncService.modelProduced', () => {
    });
 
    it('re-stamps a rebuilt closed document with the stepped sequence version', () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       open(rig, URI_A, 1, '');
       rig.textDocuments.notifyDidChangeTextDocument(
          { textDocument: { uri: URI_A, version: 2 }, contentChanges: [{ text: 'edited\n' }] },
@@ -132,7 +152,7 @@ describe('DefaultVersionSyncService.modelProduced', () => {
    });
 
    it('re-stamps an unchanged rebuilt closed document without stepping the sequence', () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       open(rig, URI_A, 1, '');
       rig.textDocuments.notifyDidChangeTextDocument(
          { textDocument: { uri: URI_A, version: 2 }, contentChanges: [{ text: 'saved\n' }] },
@@ -147,7 +167,7 @@ describe('DefaultVersionSyncService.modelProduced', () => {
    });
 
    it('keeps the factory version of a never-tracked document', () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       const document = register(rig, URI_B, 'x\n');
 
       rig.sync.modelProduced(document);
@@ -156,7 +176,7 @@ describe('DefaultVersionSyncService.modelProduced', () => {
    });
 
    it('announces every reconciled root, and syncs each to the store’s version', () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       const asked: Array<{ uri: string; version: number }> = [];
       rig.sync.syncTo = (uri, version) => {
          asked.push({ uri: uri.toString(), version });
@@ -190,7 +210,7 @@ describe('DefaultVersionSyncService.modelProduced', () => {
    });
 
    it('records the origin’s version of a root not registered, and leaves the store alone', () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       const announced: string[] = [];
       rig.sync.onDidRecordModel(document => announced.push(document.uri.toString()));
       const probe = register(rig, URI_A, '');
@@ -206,7 +226,7 @@ describe('DefaultVersionSyncService.modelProduced', () => {
    });
 
    it('marks a root registered below Parsed as a placeholder, and announces nothing', () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       const announced: string[] = [];
       rig.sync.onDidRecordModel(document => announced.push(document.uri.toString()));
       const document = rig.documents.set(URI_A, makeFakeAstNode({ $type: 'Element' }), { state: DocumentState.Changed });
@@ -222,7 +242,7 @@ describe('DefaultVersionSyncService.modelProduced', () => {
    });
 
    it('reconciles and records the origin’s text in place of the parsed one', () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       const document = register(rig, URI_A, 'unrepaired\n');
       rig.sync.modelProduced(document);
 
@@ -511,6 +531,56 @@ describe('DefaultVersionSyncService.requestRecoveryBuild', () => {
          builds: 2,
          warnings: [],
          errors: []
+      });
+   });
+
+   it.each(['queued', 'running'])('retries a recovery cancelled while %s with an independent lock', async stage => {
+      const rig = makeRig(false, true);
+      const lock = rig.services.workspace.WorkspaceLock;
+      open(rig, URI_A, 2, 'newer');
+      const document = register(rig, URI_A, 'older', 1);
+      rig.services.workspace.ModelLedger.record(document.parseResult.value, 1);
+      const entered = new Deferred<void>();
+      const release = new Deferred<void>();
+      let completed = 0;
+      rig.outcomes.push(
+         () => {
+            const build = lock.write(async token => {
+               if (stage === 'running') {
+                  entered.resolve();
+                  await release.promise;
+               }
+               if (token.isCancellationRequested) {
+                  throw OperationCancelled;
+               }
+               completed++;
+            });
+            if (stage === 'queued') {
+               queueMicrotask(() => void lock.write(() => undefined));
+            }
+            return build;
+         },
+         () =>
+            lock.write(() => {
+               completed++;
+               rig.services.workspace.ModelLedger.record(document.parseResult.value, 2);
+            })
+      );
+
+      const recovery = rig.sync.syncTo(uri, 2);
+      if (stage === 'running') {
+         await entered.promise;
+         const superseding = lock.write(() => undefined);
+         release.resolve();
+         await superseding;
+      }
+      await recovery;
+
+      expect({ attempts: rig.builds.length, completed, synced: rig.sync.isSyncedTo(uri, 2), warnings: rig.warnings() }).toEqual({
+         attempts: 2,
+         completed: 1,
+         synced: true,
+         warnings: []
       });
    });
 

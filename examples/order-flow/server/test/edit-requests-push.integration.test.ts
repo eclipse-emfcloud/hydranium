@@ -16,7 +16,7 @@
  * written text would be applied to that old text.
  */
 
-import { serverSharedFactory } from '@hydranium/core';
+import { serverSharedFactory, DefaultHydraniumTextDocuments, type HydraniumTextDocuments } from '@hydranium/core';
 import { startLanguageServer } from '@hydranium/core/lsp';
 import { DefaultFileSystemProvider } from '@hydranium/core/node';
 import {
@@ -85,7 +85,8 @@ afterEach(async () => {
 
 async function composeServer(
    options?: OrderFlowOptions,
-   on?: { readonly workspace: ScratchWorkspace }
+   on?: { readonly workspace: ScratchWorkspace },
+   delegatingStore = false
 ): Promise<{
    composed: LspServerConnection;
    shared: OrderFlowSharedServices;
@@ -100,7 +101,27 @@ async function composeServer(
               fileSystemProvider: serverSharedFactory(shared => new DefaultFileSystemProvider(shared))
            }
          : { connection: composed.serverConnection },
-      options
+      delegatingStore
+         ? {
+              ...options,
+              extraSharedModules: [
+                 ...(options?.extraSharedModules ?? []),
+                 {
+                    workspace: {
+                       TextDocuments: shared => {
+                          const backing = new DefaultHydraniumTextDocuments(shared);
+                          return new Proxy({} as HydraniumTextDocuments, {
+                             get: (_target, key) => {
+                                const value = Reflect.get(backing, key);
+                                return typeof value === 'function' ? value.bind(backing) : value;
+                             }
+                          });
+                       }
+                    }
+                 }
+              ]
+           }
+         : options
    );
    transportShared = services.shared;
    startLanguageServer(services.shared);
@@ -190,72 +211,75 @@ const position = { line: 1, character: 9 };
 const options = { tabSize: 3, insertSpaces: true };
 
 describe('order-flow edit requests over the real transport', () => {
-   it('answer `ContentModified` until the editor echoes the push of a form write', async () => {
-      const { composed, shared } = await composeServer();
-      composed.openDocument(PROCESS_URI, OPENED, 'order-flow-process', 1);
-      const textDocument = { uri: PROCESS_URI };
-      const requests = (): Promise<Record<string, unknown>> =>
-         Promise.all([
-            outcome(request(composed, 'textDocument/formatting', { textDocument, options })),
-            outcome(
-               request(composed, 'textDocument/rangeFormatting', {
-                  textDocument,
-                  options,
-                  range: { start: { line: 0, character: 0 }, end: { line: 4, character: 0 } }
-               })
-            ),
-            outcome(request(composed, 'textDocument/rename', { textDocument, position, newName: 'Renamed' })),
-            outcome(request(composed, 'textDocument/completion', { textDocument, position })),
-            outcome(
-               request(composed, 'textDocument/codeAction', {
-                  textDocument,
-                  range: { start: position, end: position },
-                  context: { diagnostics: [] }
-               })
-            ),
-            outcome(request(composed, 'textDocument/onTypeFormatting', { textDocument, position, ch: '\n', options })),
-            outcome(request(composed, 'textDocument/hover', { textDocument, position }))
-         ]).then(([formatting, rangeFormatting, rename, completion, codeAction, onTypeFormatting, hover]) => ({
-            formatting,
-            rangeFormatting,
-            onTypeFormatting,
-            rename,
-            completion,
-            codeAction,
-            hover
-         }));
-      const opened = await requests();
+   it.each([false, true])(
+      'answer `ContentModified` until the editor echoes the push of a form write with store delegation %s',
+      async delegating => {
+         const { composed, shared } = await composeServer(undefined, undefined, delegating);
+         composed.openDocument(PROCESS_URI, OPENED, 'order-flow-process', 1);
+         const textDocument = { uri: PROCESS_URI };
+         const requests = (): Promise<Record<string, unknown>> =>
+            Promise.all([
+               outcome(request(composed, 'textDocument/formatting', { textDocument, options })),
+               outcome(
+                  request(composed, 'textDocument/rangeFormatting', {
+                     textDocument,
+                     options,
+                     range: { start: { line: 0, character: 0 }, end: { line: 4, character: 0 } }
+                  })
+               ),
+               outcome(request(composed, 'textDocument/rename', { textDocument, position, newName: 'Renamed' })),
+               outcome(request(composed, 'textDocument/completion', { textDocument, position })),
+               outcome(
+                  request(composed, 'textDocument/codeAction', {
+                     textDocument,
+                     range: { start: position, end: position },
+                     context: { diagnostics: [] }
+                  })
+               ),
+               outcome(request(composed, 'textDocument/onTypeFormatting', { textDocument, position, ch: '\n', options })),
+               outcome(request(composed, 'textDocument/hover', { textDocument, position }))
+            ]).then(([formatting, rangeFormatting, rename, completion, codeAction, onTypeFormatting, hover]) => ({
+               formatting,
+               rangeFormatting,
+               onTypeFormatting,
+               rename,
+               completion,
+               codeAction,
+               hover
+            }));
+         const opened = await requests();
 
-      await writeFromForm(composed, shared, PROCESS_URI, WRITTEN);
-      const inFlight = await requests();
+         await writeFromForm(composed, shared, PROCESS_URI, WRITTEN);
+         const inFlight = await requests();
 
-      composed.changeDocument(PROCESS_URI, WRITTEN, 2);
-      const echoed = await requests();
+         composed.changeDocument(PROCESS_URI, WRITTEN, 2);
+         const echoed = await requests();
 
-      const answered = {
-         formatting: 'answered',
-         rangeFormatting: 'answered',
-         onTypeFormatting: 'answered',
-         rename: 'answered',
-         completion: 'answered',
-         codeAction: 'answered',
-         hover: 'answered'
-      };
-      const refused = LSPErrorCodes.ContentModified;
-      expect({ opened, inFlight, echoed }).toEqual({
-         opened: answered,
-         inFlight: {
-            formatting: refused,
-            rangeFormatting: refused,
-            onTypeFormatting: refused,
-            rename: refused,
-            completion: refused,
-            codeAction: refused,
+         const answered = {
+            formatting: 'answered',
+            rangeFormatting: 'answered',
+            onTypeFormatting: 'answered',
+            rename: 'answered',
+            completion: 'answered',
+            codeAction: 'answered',
             hover: 'answered'
-         },
-         echoed: answered
-      });
-   });
+         };
+         const refused = LSPErrorCodes.ContentModified;
+         expect({ opened, inFlight, echoed }).toEqual({
+            opened: answered,
+            inFlight: {
+               formatting: refused,
+               rangeFormatting: refused,
+               onTypeFormatting: refused,
+               rename: refused,
+               completion: refused,
+               codeAction: refused,
+               hover: 'answered'
+            },
+            echoed: answered
+         });
+      }
+   );
 
    it('answer `ContentModified` to a rename that edits another document whose editor is behind', async () => {
       const { composed, shared } = await composeServer();

@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { type Clock, type Tracer } from '@hydranium/protocol';
-import { DefaultWorkspaceLock, type MaybePromise, ReadPriority } from '@hydranium/langium';
+import { DefaultWorkspaceLock, type MaybePromise, type WorkspaceLock, ReadPriority } from '@hydranium/langium';
 import { type CancellationToken, type Disposable } from 'vscode-languageserver-protocol';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
@@ -18,7 +18,7 @@ import { readLockOwners, readLockScopeState } from './read-lock-scope-state.js';
 import type { HydraniumDocumentBuilder } from '../document-builder/document-builder.js';
 import { runInWriteLockScope } from './write-lock-scope.js';
 
-/** Constructor options for {@link HydraniumWorkspaceLock}. */
+/** Constructor options for {@link DefaultHydraniumWorkspaceLock}. */
 export interface HydraniumWorkspaceLockOptions extends LogNameOptions {
    /**
     * How long a write may keep running after a later write cancelled it before
@@ -43,9 +43,25 @@ export interface HydraniumWorkspaceLockOptions extends LogNameOptions {
 const DEFAULT_STALLED_WRITE_WARN_MS = 10_000;
 const DEFAULT_READ_WAIT_GRACE_MS = 1_000;
 
-/** The write action a {@link HydraniumWorkspaceLock} is running, with the timer its cancellation started. */
+/** The write action a {@link DefaultHydraniumWorkspaceLock} is running, with the timer its cancellation started. */
 export interface RunningWrite {
    stallTimer?: Disposable;
+}
+
+/**
+ * A workspace lock whose cancelled writes remain observable even when their
+ * promises resolve normally. Recovery uses this counter to retry work that a
+ * later write cancelled before it ran or while it was running.
+ */
+export interface HydraniumWorkspaceLock extends WorkspaceLock {
+   /**
+    * Monotonic count of calls to write or cancelWrite made while a write is
+    * queued or running. A completed write must not count as cancelled by the
+    * next write. Read immediately after queuing a write: an unchanged value
+    * after it settles proves it was not cancelled. A changed value may also
+    * describe a later write's cancellation, so retrying can do extra work.
+    */
+   readonly writeCancellations: number;
 }
 
 /**
@@ -68,7 +84,7 @@ export interface RunningWrite {
  * Without async context, as in a browser, a read is marked only until its
  * first `await`, so a later wait hangs instead.
  */
-export class HydraniumWorkspaceLock extends DefaultWorkspaceLock {
+export class DefaultHydraniumWorkspaceLock extends DefaultWorkspaceLock implements HydraniumWorkspaceLock {
    /** Backs {@link writeCancellations}. */
    protected cancelledWriteCount = 0;
    protected readonly clock: Clock;

@@ -31,7 +31,6 @@ import {
    createLspServerLanguageModule,
    createLspServerSharedModule,
    type HydraniumSemanticTokenProviderOptions,
-   type LspServerAddedServices,
    type LspServerAddedSharedServices
 } from '@hydranium/core/lsp';
 import { createIntegrationServices, type ServerAddedServices, type ServerModuleContext, type ServerSharedServices } from '@hydranium/core';
@@ -44,8 +43,7 @@ import { BookstoreValidationContribution } from './bookstore-validation.js';
 
 export type BookstoreSharedServices = ServerSharedServices & LspServerAddedSharedServices;
 export type BookstoreServices = LangiumServices &
-   ServerAddedServices &
-   LspServerAddedServices & {
+   ServerAddedServices & {
       shared: BookstoreSharedServices;
    };
 
@@ -55,7 +53,7 @@ export interface BookstoreOptions extends HydraniumSemanticTokenProviderOptions 
     * Shared modules layered in after the framework's own bindings.
     *
     * The framework constructs most shared services with no options —
-    * `DocumentBuilder: services => new HydraniumDocumentBuilder(services)` — so
+    * `DocumentBuilder: services => new DefaultHydraniumDocumentBuilder(services)` — so
     * rebinding the slot is the only way to boot one configured differently, and
     * a factory that hard-codes its composition leaves a test nowhere to do it.
     * That is what this is for: pass a module binding `workspace.DocumentBuilder`

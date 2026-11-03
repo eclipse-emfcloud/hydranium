@@ -11,7 +11,11 @@ import { describe, expect, it } from 'vitest';
 import type { Project } from '@hydranium/protocol';
 import { type AstNode, type AstNodeDescription, MapScope, MultiMapScope, type Scope, URI } from '@hydranium/langium';
 import { type HydraniumLanguageServices } from '../../../src/langium/language-module.js';
-import { HydraniumScopeProvider, type HydraniumScopeProviderOptions } from '../../../src/langium/scope/hydranium-scope-provider.js';
+import {
+   DefaultHydraniumScopeProvider,
+   type HydraniumScopeProvider,
+   type HydraniumScopeProviderOptions
+} from '../../../src/langium/scope/hydranium-scope-provider.js';
 import { type DescriptionTier, type TieredAstNodeDescription } from '../../../src/langium/scope/scoped-ast-node-description.js';
 import { makeFakeDescription, makeTestServices } from '../../../src/testing/index.js';
 
@@ -49,7 +53,7 @@ function makeLanguageServices(shared: unknown): HydraniumLanguageServices {
  * project-tier walk reads.
  */
 function makeTestScopeProvider(sharedServices: unknown, options: HydraniumScopeProviderOptions = {}): HydraniumScopeProvider {
-   return new HydraniumScopeProvider(makeLanguageServices(sharedServices), options);
+   return new DefaultHydraniumScopeProvider(makeLanguageServices(sharedServices), options);
 }
 
 // ============================================================
@@ -96,7 +100,7 @@ const REF_TYPE = 'FakeRoot';
  * untagged descriptions the filtered and unfiltered answers are identical and
  * the guard under test is invisible to the assertion.
  */
-describe('HydraniumScopeProvider tier walk early exits from the project filter', () => {
+describe('DefaultHydraniumScopeProvider tier walk early exits from the project filter', () => {
    it('returns the input scope unfiltered when no project owns the source URI', () => {
       // TWO projects, so the isSingleProject fast-path below cannot stand in for
       // the guard this test is about.
@@ -143,7 +147,7 @@ describe('HydraniumScopeProvider tier walk early exits from the project filter',
 // Multi-project workspaces
 // ============================================================
 
-describe('HydraniumScopeProvider tier walk over a multi-project workspace', () => {
+describe('DefaultHydraniumScopeProvider tier walk over a multi-project workspace', () => {
    const URI_A = 'file:///workspace/projA/Element.fake';
    const URI_B = 'file:///workspace/projB/Element.fake';
    const URI_C = 'file:///workspace/projC/Element.fake';
@@ -250,7 +254,7 @@ describe('HydraniumScopeProvider tier walk over a multi-project workspace', () =
 // Adopter hook: getProjectIdForDescription
 // ============================================================
 
-describe('HydraniumScopeProvider tier walk adopter hook', () => {
+describe('DefaultHydraniumScopeProvider tier walk adopter hook', () => {
    const URI_A = 'file:///workspace/projA/Element.fake';
    const URI_B = 'file:///workspace/projB/Element.fake';
 
@@ -259,7 +263,7 @@ describe('HydraniumScopeProvider tier walk adopter hook', () => {
     * the owning project id directly (no URI → project lookup needed on the
     * hot path).
     */
-   class FastPathProjectScopeProvider extends HydraniumScopeProvider {
+   class FastPathProjectScopeProvider extends DefaultHydraniumScopeProvider {
       readonly lookupCalls: string[] = [];
 
       protected override getProjectIdForDescription(description: AstNodeDescription): string | undefined {
@@ -318,7 +322,7 @@ describe('HydraniumScopeProvider tier walk adopter hook', () => {
 // Typed scope reading — TieredAstNodeDescription
 // ============================================================
 
-describe('HydraniumScopeProvider tier walk typed scope reading', () => {
+describe('DefaultHydraniumScopeProvider tier walk typed scope reading', () => {
    const URI_A = 'file:///workspace/projA/Element.fake';
    const URI_B = 'file:///workspace/projB/Element.fake';
 
@@ -465,7 +469,7 @@ describe('HydraniumScopeProvider tier walk typed scope reading', () => {
       });
 
       it('does NOT trigger the URI-lookup fallback (typed descriptions are the hot path)', () => {
-         class Spy extends HydraniumScopeProvider {
+         class Spy extends DefaultHydraniumScopeProvider {
             readonly lookupCalls: string[] = [];
             protected override getProjectIdForDescription(description: AstNodeDescription): string | undefined {
                this.lookupCalls.push(description.name);

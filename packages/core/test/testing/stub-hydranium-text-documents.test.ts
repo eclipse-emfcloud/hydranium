@@ -35,7 +35,11 @@
 import { describe, expect, it } from 'vitest';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
-import { HydraniumTextDocuments, type ClientTextDocumentChangeEvent } from '../../src/documents/hydranium-text-documents.js';
+import {
+   DefaultHydraniumTextDocuments,
+   type HydraniumTextDocuments,
+   type ClientTextDocumentChangeEvent
+} from '../../src/documents/hydranium-text-documents.js';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import {
    makeNoopSharedServices,
@@ -66,7 +70,7 @@ function realStore(): HydraniumTextDocuments<TextDocument> {
       }
    });
    services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);
-   return new HydraniumTextDocuments<TextDocument>(services);
+   return new DefaultHydraniumTextDocuments<TextDocument>(services);
 }
 
 /** Open `uri` in the real store the way a client does, so a write has a baseline. */
@@ -91,7 +95,7 @@ describe('makeStubHydraniumTextDocuments signature conformance for the hand-decl
    });
 });
 
-describe('makeStubHydraniumTextDocuments differential against HydraniumTextDocuments', () => {
+describe('makeStubHydraniumTextDocuments differential against DefaultHydraniumTextDocuments', () => {
    it('steps the shared version on an authored write iff the text changed', () => {
       const real = realStore();
       const stub = makeStubHydraniumTextDocuments();

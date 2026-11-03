@@ -8,11 +8,58 @@
  ********************************************************************************/
 
 import { type Tracer } from '@hydranium/protocol';
-import { type AstNode, type AstNodeDescription, DefaultIndexManager, type LangiumDocument, type URI } from '@hydranium/langium';
+import {
+   type IndexManager,
+   type AstNode,
+   type AstNodeDescription,
+   DefaultIndexManager,
+   type LangiumDocument,
+   type URI
+} from '@hydranium/langium';
 import type { CancellationToken } from 'vscode-languageserver-protocol';
 import type { LogNameOptions } from '../diagnostics/logger.js';
 import type { ProjectManager } from '../project/project-manager.js';
 import type { ServerSharedServicesMinimal } from '../shared-services.js';
+
+/**
+ * Workspace-wide name and project lookup over indexed descriptions. A name can
+ * have several descriptions for one node or for distinct documents; callers
+ * that require uniqueness inspect every match.
+ */
+export interface HydraniumIndexManager extends IndexManager {
+   /**
+    * Return every exact-name match, optionally filtered by AST subtype and
+    * owning language. Return an empty list on a miss.
+    */
+   getElementsByName(name: string, type?: string, languageId?: string): readonly AstNodeDescription[];
+   /**
+    * Return the first matching description, or undefined. Multiple visibility
+    * tiers can describe one node; this method does not establish uniqueness
+    * across documents.
+    */
+   getElementByName(name: string, type?: string, languageId?: string): AstNodeDescription | undefined;
+   /**
+    * Resolve the description through its registered document and language
+    * locator. Return undefined for an absent description, document or node.
+    */
+   resolveElement(description?: AstNodeDescription): AstNode | undefined;
+   /**
+    * Resolve the first result of getElementByName; return undefined when it
+    * cannot be resolved.
+    */
+   resolveElementByName(name: string, type?: string, languageId?: string): AstNode | undefined;
+   /**
+    * Return descriptions in the project’s direct member documents, optionally
+    * filtered by subtype. Do not include dependency visibility; an unknown
+    * project has no results.
+    */
+   getElementsInProject(projectId: string, type?: string): AstNodeDescription[];
+   /**
+    * Return the registered document’s semantic root, or undefined when it is
+    * absent. Wrapper grammars may select an inner semantic node.
+    */
+   resolveSemanticElement(uri: URI): AstNode | undefined;
+}
 
 /**
  * Default `IndexManager` for `@hydranium/core` consumers. Layers an
@@ -23,8 +70,8 @@ import type { ServerSharedServicesMinimal } from '../shared-services.js';
  *
  * - {@link getElementsByName} — O(1) name lookup returning every match,
  *   optionally narrowed by reference type and owning language.
- * - {@link getElementByName} — the single-answer form, abstaining when the
- *   name does not identify exactly one element.
+ * - {@link getElementByName} — the first-match form; callers that need
+ *   to distinguish documents inspect all matches.
  * - {@link resolveElement} — turn an `AstNodeDescription` into the
  *   actual `AstNode` via `LangiumDocuments` + `AstNodeLocator`.
  * - {@link resolveElementByName} — composition of the two.
@@ -39,7 +86,7 @@ import type { ServerSharedServicesMinimal } from '../shared-services.js';
  * member URIs for project-tier queries) override `updateContent` /
  * `removeContent` and chain `super`.
  */
-export class HydraniumIndexManager extends DefaultIndexManager {
+export class DefaultHydraniumIndexManager extends DefaultIndexManager implements HydraniumIndexManager {
    /** Maps `description.name` → list of descriptions with that name. Used for O(1) `getElementByName`. */
    protected elementsByName = new Map<string, AstNodeDescription[]>();
 
@@ -135,8 +182,8 @@ export class HydraniumIndexManager extends DefaultIndexManager {
     *
     * The name index spans every language in the workspace, so a name is
     * only as unique as the adopter's naming scheme makes it. Callers that
-    * need one answer go through {@link getElementByName}, which abstains
-    * when the name does not identify a single element; callers that can
+    * need one answer go through {@link getElementByName}, which returns
+    * the first matching description; callers that can
     * disambiguate from context (or want to report the ambiguity) use this.
     */
    getElementsByName(name: string, type?: string, languageId?: string): readonly AstNodeDescription[] {

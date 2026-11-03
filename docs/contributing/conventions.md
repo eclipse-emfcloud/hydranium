@@ -160,13 +160,17 @@ complete behaviour makes a class concrete. `Default*` is the concrete default
 of a bare-named framework interface, including a collaborator built through a
 protected `create…`, which is called on first use through a getter because a
 subclass's fields do not exist during the constructor. `Hydranium*`
-specialises an upstream class without colliding with its `Default*`; the GLSP
+specialises an upstream class without colliding with its `Default*`. When that
+specialisation needs a wider slot contract, `Hydranium*` names the interface
+and `DefaultHydranium*` its default class. The GLSP
 packages use `HydraniumGlsp*` for their own concepts. Values, errors, utilities,
 forwarders and multi-implementation families take bare descriptive names.
 
 **Slots are interfaces.** A DI slot is typed by a bare-named interface; the
 `Default*` class appears only at the binding, a `base:` entry and an
-`instanceof`. A class type carries its `protected` members into assignability,
+`instanceof`. Rebinding an upstream slot does not require redeclaring its type:
+keep the inherited interface when callers need no additional API.
+A class type carries its `protected` members into assignability,
 compared by declaration, so a subclass of a class from a second installed copy
 cannot fill the slot. Interfaces also let `WithServiceOverrides` replace a
 framework declaration, where an intersection keeps both as an order-dependent
@@ -321,10 +325,10 @@ configurable name.
 
 ### Diagnostics are rendered once, before they are published
 
-`HydraniumDocumentBuilder` renders every diagnostic at `Validated`, before
-Langium publishes, so every head receives the same sentence and an adopter
-binds one slot; it is also the only placement that covers lexer and parser
-errors. The framework claims Langium's and chevrotain's linker, lexer and
+`DefaultHydraniumDocumentBuilder` renders every diagnostic at `Validated`,
+before Langium publishes, so every head receives the same sentence and an
+adopter binds one slot; it is also the only placement that covers lexer and
+parser errors. The framework claims Langium's and chevrotain's linker, lexer and
 parser sentences under `hydranium/core/*` codes, attached only when the text is
 byte-identical, so a reworded or custom diagnostic keeps its prose. "Every"
 holds for serialised builds: under `ModelServiceOptions.allowReentrantBuilds` a

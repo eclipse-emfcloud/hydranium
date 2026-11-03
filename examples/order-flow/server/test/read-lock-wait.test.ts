@@ -18,7 +18,7 @@
 
 import {
    createSynchronousReadLockScope,
-   HydraniumWorkspaceLock,
+   DefaultHydraniumWorkspaceLock,
    IntegrityPhase,
    type IntegrityRule,
    ReadLockWaitError,
@@ -48,7 +48,7 @@ beforeAll(async () => {
    // A short grace, so a refused wait fails fast.
    const lockModule = {
       workspace: {
-         WorkspaceLock: (services: OrderFlowSharedServices) => new HydraniumWorkspaceLock(services, { readWaitGraceMs: GRACE_MS })
+         WorkspaceLock: (services: OrderFlowSharedServices) => new DefaultHydraniumWorkspaceLock(services, { readWaitGraceMs: GRACE_MS })
       }
    };
    scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, TEXT), {

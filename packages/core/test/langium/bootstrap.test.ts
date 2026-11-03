@@ -20,7 +20,7 @@ import {
    warnOnUnexpectedBindings
 } from '../../src/langium/bootstrap.js';
 import type { ServerSharedServices } from '../../src/langium/module.js';
-import { ExtendedServiceRegistry } from '../../src/langium/service-registry.js';
+import { DefaultHydraniumServiceRegistry } from '../../src/langium/service-registry.js';
 import {
    AbstractAstReflection,
    DefaultLangiumDocumentFactory,
@@ -246,7 +246,7 @@ describe('bootstrapLangiumLanguages shared-services back-fill', () => {
       (shared.workspace as unknown as Record<string, unknown>).TextDocuments = {
          get: (uri: string | URI) => (uri.toString() === 'untitled:Untitled-1' ? { languageId: 'only' } : undefined)
       };
-      const registry = new ExtendedServiceRegistry();
+      const registry = new DefaultHydraniumServiceRegistry();
       (shared as unknown as { ServiceRegistry: unknown }).ServiceRegistry = registry;
 
       bootstrapLangiumLanguages(shared, [language as unknown as LangiumServices], []);
@@ -490,7 +490,7 @@ describe('warnOnUnexpectedBindings', () => {
       withStrictEnv('1', () => warnOnUnexpectedBindings(shared, fullyBoundLanguage()));
       expect(warns.length).toBeGreaterThan(0);
       expect(warns.some(message => /references\.ScopeComputation.*HydraniumScopeComputation/.test(message))).toBe(true);
-      expect(warns.some(message => /workspace\.WorkspaceManager.*HydraniumWorkspaceManager/.test(message))).toBe(true);
+      expect(warns.some(message => /workspace\.WorkspaceManager.*DefaultHydraniumWorkspaceManager/.test(message))).toBe(true);
    });
 
    it('warns for a plain Langium document factory, which records no root version', () => {

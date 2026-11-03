@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 /**
- * `HydraniumDocumentBuilder.dedupeDiagnostics` over a real adopter boot, in
+ * `DefaultHydraniumDocumentBuilder.dedupeDiagnostics` over a real adopter boot, in
  * both build configurations.
  *
  * # What each configuration can and cannot establish

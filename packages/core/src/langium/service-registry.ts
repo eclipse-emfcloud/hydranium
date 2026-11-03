@@ -15,6 +15,7 @@ import {
    type LangiumCoreServices,
    type LangiumSharedCoreServices,
    type LanguageMetaData,
+   type ServiceRegistry,
    URI
 } from '@hydranium/langium';
 import { buildLanguageTypeIndex, type LanguageTypeIndex } from './language-types.js';
@@ -30,17 +31,114 @@ import { buildLanguageTypeIndex, type LanguageTypeIndex } from './language-types
  */
 export type LanguageTarget = AstNode | URI | string;
 
+declare const ServicesTypeBrand: unique symbol;
+
 /**
- * `DefaultServiceRegistry` whose `register` / `getServices` methods are typed
- * with a consumer-specific extended-services type.
+ * Phantom-branded subtype of {@link LanguageMetaData} that carries the
+ * extended-services type as a compile-time tag. Construct via
+ * {@link typedMetadata} from a generated `<Grammar>LanguageMetaData` constant,
+ * and pass instances to {@link HydraniumServiceRegistry.getServices} for a
+ * fully-inferred return type (no caller-side cast).
  *
- * Langium's stock `ServiceRegistry` returns the base `LangiumCoreServices`,
- * which forces consumers to cast every time they reach for an extended
- * service. By parameterising the registry with the consumer's full service
- * type, the type narrowing happens at the registry boundary instead of every
- * call site.
+ * The brand uses a `unique symbol` member so the type is invariant in
+ * `TServices` — `TypedLanguageMetaData<A>` is NOT assignable to
+ * `TypedLanguageMetaData<B>` even when `A` and `B` are structurally
+ * identical. The brand is optional (`?`) so a bare `LanguageMetaData`
+ * literal stays structurally assignable to the underlying interface; only
+ * the `TypedLanguageMetaData` view of it has phantom-type teeth.
  */
-export class HydraniumServiceRegistry<TServices extends LangiumCoreServices = LangiumCoreServices> extends DefaultServiceRegistry {
+export interface TypedLanguageMetaData<TServices extends LangiumCoreServices = LangiumCoreServices> extends LanguageMetaData {
+   readonly [ServicesTypeBrand]?: TServices;
+}
+
+/**
+ * Annotate a generated {@link LanguageMetaData} constant with the
+ * extended-services type it indexes. Use once per grammar at module
+ * scope; the resulting handle is a stable identity for typed
+ * `getServices(metadata)` lookups.
+ */
+export function typedMetadata<TServices extends LangiumCoreServices>(metadata: LanguageMetaData): TypedLanguageMetaData<TServices> {
+   return metadata as TypedLanguageMetaData<TServices>;
+}
+
+function isLanguageMetaData(arg: unknown): arg is TypedLanguageMetaData<LangiumCoreServices> {
+   return typeof arg === 'object' && arg !== null && 'languageId' in arg && 'fileExtensions' in arg;
+}
+
+/**
+ * Language routing shared by every head. Structural so a registry supplied by
+ * an adopter need not inherit the framework implementation.
+ */
+export interface HydraniumServiceRegistry<TServices extends LangiumCoreServices = LangiumCoreServices> extends ServiceRegistry {
+   /**
+    * Count successful registrations, including replacement of an already
+    * registered language. This is not the number of distinct languages.
+    */
+   readonly registrations: number;
+   /**
+    * The currently registered language services, with the same service type as
+    * URI lookups.
+    */
+   readonly all: readonly TServices[];
+   /**
+    * Register or replace a language and invalidate derived routing results so
+    * later lookups see it.
+    */
+   register(language: TServices): void;
+   /**
+    * Look up the metadata handle’s language id. Return undefined when that
+    * language is unregistered.
+    */
+   getServices<TMetaServices extends LangiumCoreServices>(metadata: TypedLanguageMetaData<TMetaServices>): TMetaServices | undefined;
+   /**
+    * Prefer an open document’s registered language id, then file-name and
+    * extension routing. Throw when no language answers.
+    */
+   getServices(uri: URI): TServices;
+   /**
+    * Route a URI, URI string or an AST node’s owning document. Return undefined
+    * for an unrouteable target or a node without a document.
+    */
+   getServicesFor(target: LanguageTarget | undefined): TServices | undefined;
+   /**
+    * Return services for the declared language id, or undefined when it is
+    * unregistered.
+    */
+   getServicesById(languageId: string): TServices | undefined;
+   /**
+    * Return services registered for the extension, or undefined when none
+    * match.
+    */
+   getServicesByExtension(extension: string): LangiumCoreServices | undefined;
+   /**
+    * Return every registered grammar that can produce the AST type from its
+    * entry rule, in registration order. A mentioned but unreachable type is not
+    * a match.
+    */
+   getServicesByType(type: string): readonly TServices[];
+   /**
+    * Return the only producer of the AST type, or undefined for no producers or
+    * an ambiguous result.
+    */
+   soleServicesByType(type: string): TServices | undefined;
+   /**
+    * Try the declared language id, then the target’s document, then the only
+    * registered language, then the sole producer of the type. Return undefined
+    * when no signal resolves.
+    */
+   getLanguageFor(hint: { readonly languageId?: string; readonly target?: LanguageTarget; readonly type?: string }): TServices | undefined;
+}
+
+/**
+ * Routes by typed metadata, document identity or producible AST type. URI
+ * lookup preserves an open document's declared language before falling back
+ * to Langium's file-name and extension routing. The type index is lazy and
+ * invalidated on every registration, including replacement of a language.
+ */
+export class DefaultHydraniumServiceRegistry<TServices extends LangiumCoreServices = LangiumCoreServices>
+   extends DefaultServiceRegistry
+   implements HydraniumServiceRegistry<TServices>
+{
    /**
     * Shared services, held only so `workspace.TextDocuments` can be resolved
     * per lookup instead of at construction.
@@ -92,110 +190,6 @@ export class HydraniumServiceRegistry<TServices extends LangiumCoreServices = La
       this.sharedServices ??= services;
    }
 
-   override register(language: TServices): void {
-      super.register(language);
-      this._registrations++;
-   }
-
-   /**
-    * Langium's lookup ladder: an open document's declared `languageId`, then
-    * its file name, then its extension, then a throw. Because `super` was
-    * never given the services it reads `textDocuments` from, its own
-    * languageId rung is inert — so this supplies that rung and delegates
-    * every rung below it (and the throw) to `super`, rather than restating
-    * the ladder.
-    *
-    * The declared-id rung is what lets an `untitled:` or extensionless
-    * document route at all, and what gives an OPEN buffer's declared id
-    * precedence over its file extension.
-    *
-    * It does NOT make two languages that share a file extension workable, and
-    * `assertDistinctFileRouting` fails the boot on that configuration: only an
-    * open buffer has a declared id, while indexing, scope computation and
-    * validation route every CLOSED file in the workspace by extension, where
-    * Langium's last-registered-wins would silently hand half the workspace to
-    * the wrong grammar.
-    */
-   override getServices(uri: URI): TServices {
-      const languageId = this.sharedServices?.workspace.TextDocuments?.get(uri)?.languageId;
-      if (languageId !== undefined) {
-         const byLanguageId = this.languageIdMap.get(languageId);
-         if (byLanguageId) {
-            return byLanguageId as TServices;
-         }
-         // A declared id nothing is registered for (a stale client
-         // contribution, a plain-text buffer) is not an error — fall through
-         // to the file-name and extension rungs.
-      }
-      return super.getServices(uri) as TServices;
-   }
-}
-
-declare const ServicesTypeBrand: unique symbol;
-
-/**
- * Phantom-branded subtype of {@link LanguageMetaData} that carries the
- * extended-services type as a compile-time tag. Construct via
- * {@link typedMetadata} from a generated `<Grammar>LanguageMetaData` constant,
- * and pass instances to {@link ExtendedServiceRegistry.getServices} for a
- * fully-inferred return type (no caller-side cast).
- *
- * The brand uses a `unique symbol` member so the type is invariant in
- * `TServices` — `TypedLanguageMetaData<A>` is NOT assignable to
- * `TypedLanguageMetaData<B>` even when `A` and `B` are structurally
- * identical. The brand is optional (`?`) so a bare `LanguageMetaData`
- * literal stays structurally assignable to the underlying interface; only
- * the `TypedLanguageMetaData` view of it has phantom-type teeth.
- */
-export interface TypedLanguageMetaData<TServices extends LangiumCoreServices = LangiumCoreServices> extends LanguageMetaData {
-   readonly [ServicesTypeBrand]?: TServices;
-}
-
-/**
- * Annotate a generated {@link LanguageMetaData} constant with the
- * extended-services type it indexes. Use once per grammar at module
- * scope; the resulting handle is a stable identity for typed
- * `getServices(metadata)` lookups.
- */
-export function typedMetadata<TServices extends LangiumCoreServices>(metadata: LanguageMetaData): TypedLanguageMetaData<TServices> {
-   return metadata as TypedLanguageMetaData<TServices>;
-}
-
-function isLanguageMetaData(arg: unknown): arg is TypedLanguageMetaData<LangiumCoreServices> {
-   return typeof arg === 'object' && arg !== null && 'languageId' in arg && 'fileExtensions' in arg;
-}
-
-/**
- * Extended {@link HydraniumServiceRegistry}, adding the lookups the inherited
- * URI-keyed `getServices(uri)` cannot answer:
- *
- * - **Typed metadata handle** — `getServices(metadata: TypedLanguageMetaData<T>)`
- *   returns the registered services typed as `T | undefined`. The primary
- *   path: callers hold a typed handle per grammar (constructed once via
- *   {@link typedMetadata}) and resolve services without any caller-side cast.
- * - **Anything that identifies a document** — {@link getServicesFor} takes an
- *   AST node, a `URI` or a URI string, and abstains instead of throwing.
- * - **String id escape hatch** — {@link getServicesById}, for a language id
- *   derived dynamically (from a wire envelope) where the typed handle isn't
- *   reachable at the call site.
- * - **File extension escape hatch** — {@link getServicesByExtension}, for
- *   file-routing logic that has no URI yet.
- * - **Producible AST type** — {@link getServicesByType} returns every language
- *   whose grammar can produce a `$type`, and {@link soleServicesByType}
- *   narrows that to the unambiguous case. It is the only routing signal a
- *   request that names no document carries at all.
- *
- * Two overload signatures on `getServices` discriminate at compile time
- * — passing a `URI` keeps the inherited `TServices` return shape; passing a
- * `TypedLanguageMetaData<T>` returns `T | undefined`.
- *
- * Langium's base `ServiceRegistry` type stays unchanged. The framework narrows
- * its own `ServiceRegistry` slot to this class instead, so the extended lookups
- * are reachable from the shared-services shapes without a cast.
- */
-export class ExtendedServiceRegistry<
-   TServices extends LangiumCoreServices = LangiumCoreServices
-> extends HydraniumServiceRegistry<TServices> {
    // Typed-handle overload: primary path, fully inferred.
    override getServices<TMetaServices extends LangiumCoreServices>(
       metadata: TypedLanguageMetaData<TMetaServices>
@@ -206,7 +200,17 @@ export class ExtendedServiceRegistry<
       if (isLanguageMetaData(arg)) {
          return this.languageIdMap.get(arg.languageId);
       }
-      return super.getServices(arg);
+      const languageId = this.sharedServices?.workspace.TextDocuments?.get(arg)?.languageId;
+      if (languageId !== undefined) {
+         const byLanguageId = this.languageIdMap.get(languageId);
+         if (byLanguageId) {
+            return byLanguageId as TServices;
+         }
+         // A declared id nothing is registered for (a stale client
+         // contribution, a plain-text buffer) is not an error — fall through
+         // to the file-name and extension rungs.
+      }
+      return super.getServices(arg) as TServices;
    }
 
    /**
@@ -346,6 +350,7 @@ export class ExtendedServiceRegistry<
     */
    override register(language: TServices): void {
       super.register(language);
+      this._registrations++;
       this._typeIndex = undefined;
    }
 

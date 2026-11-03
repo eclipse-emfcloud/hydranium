@@ -18,6 +18,7 @@ import {
    describeErrorWithStack
 } from '@hydranium/protocol';
 import {
+   type DocumentBuilder,
    type AstNode,
    type BuildOptions,
    DefaultDocumentBuilder,
@@ -28,7 +29,6 @@ import {
    OperationCancelled,
    URI,
    UriUtils,
-   type WorkspaceLock,
    interruptAndCheck,
    isOperationCancelled
 } from '@hydranium/langium';
@@ -43,10 +43,10 @@ import { type LogNameOptions } from '../diagnostics/logger.js';
 import { IntegrityService } from '../integrity/integrity-service.js';
 import type { MessageRenderer } from '../../messages/renderer.js';
 import { CST_REHYDRATION_RESET_STATE, type CstResidencyService, isCstShed } from '../residency/cst-residency-service.js';
-import { type ExtendedServiceRegistry } from '../service-registry.js';
+import { type HydraniumServiceRegistry } from '../service-registry.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
-import { HydraniumWorkspaceLock } from '../workspace/hydranium-workspace-lock.js';
+import { type HydraniumWorkspaceLock } from '../workspace/hydranium-workspace-lock.js';
 import { BuildSession, type BuildSessionContext } from './build-session.js';
 import { type LabeledPhaseListener, labelPhaseListener } from './labeled-phase-listener.js';
 import { refuseWaitInRead, runInReadLockScope } from '../workspace/read-lock-scope.js';
@@ -80,7 +80,7 @@ export const HYDRANIUM_BUILD_REASONS = Object.freeze({
 
 /**
  * Consecutive re-queued builds that leave a waited-on document at the same state
- * before {@link HydraniumDocumentBuilder.awaitDocumentState} stops re-queuing it.
+ * before {@link DefaultHydraniumDocumentBuilder.awaitDocumentState} stops re-queuing it.
  * A backstop against spinning builds for a document the builder will never carry
  * to the requested state, not a tuning knob — the first re-queue resolves the
  * case this exists for.
@@ -198,7 +198,7 @@ export type BuildEndedListener = (event: BuildEndedEvent) => void;
 /** Registered through {@link HydraniumDocumentBuilder.onDocumentPhaseDelivered}. */
 export type DocumentPhaseDeliveredListener = (document: LangiumDocument, version: number) => void;
 
-/** A wait {@link HydraniumDocumentBuilder.awaitBuilderState} holds until the builder reaches its state. */
+/** A wait {@link DefaultHydraniumDocumentBuilder.awaitBuilderState} holds until the builder reaches its state. */
 export interface BuilderStateWait {
    readonly state: DocumentState;
    /** Settles the wait and stops holding it. */
@@ -242,6 +242,98 @@ function sameClients(taken: readonly string[] | undefined, current: readonly str
 }
 
 /**
+ * Build coordination used by every server head. Replacements must preserve
+ * document-phase delivery, version-aware waits and locked updates; phase
+ * notification mechanics belong to the implementation.
+ */
+export interface HydraniumDocumentBuilder extends DocumentBuilder {
+   /**
+    * Stage a diagnostic reason for the next update; undefined clears a staged
+    * reason.
+    */
+   markNextReason(reason: string | undefined): void;
+   /**
+    * Notify only after every listener of the document phase has run without
+    * cancellation skipping one. Include the text version those listeners
+    * observed, even if a listener subsequently changed it.
+    */
+   onDocumentPhaseDelivered(state: DocumentState, listener: DocumentPhaseDeliveredListener): Disposable;
+   /**
+    * Notify after a completed build, or after the lock drains following failed
+    * builds. Failures before one drain may share a notification. Listeners run
+    * synchronously and must not await another build.
+    */
+   onBuildEnded(listener: BuildEndedListener): Disposable;
+   /**
+    * Whether an explicit build is synchronously invoking onUpdate listeners.
+    * Read before the listener’s first await to distinguish that path from
+    * update.
+    */
+   isInsideBuildUpdate(): boolean;
+   /**
+    * Resolves without rejection once every active build has ended; undefined
+    * between builds. Overlapping builds remain represented until the last ends.
+    */
+   readonly activeBuild: Promise<void> | undefined;
+   /** Describe the document and active build state for timeout diagnostics. */
+   formatBuildStatus(uri: URI): string;
+   /**
+    * The final phase reached by rebuilds under the current validation policy.
+    * Must not name a phase those rebuilds never reach, or callers waiting for
+    * settled writes cannot finish.
+    */
+   finalBuildState(): DocumentState;
+   /**
+    * Whether the build carrying this document validates it. Before a running
+    * build’s first phase, answer for the last build that carried it.
+    */
+   shouldValidateDocument(document: LangiumDocument): boolean;
+   /**
+    * Wait for the workspace, or the document at uri, to reach the phase.
+    * Requeue a document that no build carries; rejectWhenStuck allows document
+    * waits to reject when repeated builds cannot advance it.
+    */
+   waitUntil(state: DocumentState, cancelToken?: CancellationToken): Promise<void>;
+   /**
+    * Wait for the workspace, or the document at uri, to reach the phase.
+    * Requeue a document that no build carries; rejectWhenStuck allows document
+    * waits to reject when repeated builds cannot advance it.
+    */
+   waitUntil(state: DocumentState, uri?: URI, cancelToken?: CancellationToken, options?: WaitUntilOptions): Promise<URI>;
+   /**
+    * Schedule changed and deleted URIs under the workspace write lock. The
+    * promise settles when the carrying build ends, including cancellation.
+    * Coincident requests may share a build; when merged, the latest change or
+    * deletion of a URI and latest supplied reason win.
+    */
+   scheduleUpdate(changed: URI[], deleted: URI[], reason?: string): Promise<void>;
+   /**
+    * Return the owning build while its phase batch is being delivered,
+    * including across listener awaits; otherwise undefined.
+    */
+   buildForBatch(documents: readonly LangiumDocument[]): RunningBuild | undefined;
+   /**
+    * Refresh a dependent after cause changed during a Linked phase listener.
+    * Reuse the cause’s running build and its later indexing and validation.
+    * Return whether the document reached Linked; return false when no running
+    * build can carry it or it remains unlinked.
+    */
+   relinkInRunningBuild(document: LangiumDocument, cause: LangiumDocument, cancelToken: CancellationToken): Promise<boolean>;
+   /**
+    * Reparse from the current shared text, else disk, into the same document at
+    * Parsed. The caller holds the write lock and updates the authoritative text
+    * first.
+    */
+   reparse(document: LangiumDocument, cancelToken?: CancellationToken): Promise<void>;
+   /**
+    * Reparse and link in place through Linked, rerunning per-document
+    * derivations. The caller is inside the Linked build phase, which carries
+    * later phases, and must also relink dependents whose nodes became stale.
+    */
+   reparseAndRelink(document: LangiumDocument, cancelToken?: CancellationToken): Promise<void>;
+}
+
+/**
  * Extends Langium's {@link DefaultDocumentBuilder} with:
  *
  * - **Bug-fixes** (always on): an {@link awaitDocumentState} that waits where
@@ -279,7 +371,7 @@ function sameClients(taken: readonly string[] | undefined, current: readonly str
  * overrides {@link createBuildSession}, which puts that state under the same
  * preemption-correct teardown rather than a reimplementation of it.
  */
-export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
+export class DefaultHydraniumDocumentBuilder extends DefaultDocumentBuilder implements HydraniumDocumentBuilder {
    protected readonly tracer: Tracer;
    /** Plain — read once at construction to gate phase-listener registration. */
    protected readonly logLevel: LogThreshold;
@@ -297,13 +389,13 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected readonly clock: Clock;
    protected readonly messageRenderer: MessageRenderer;
    /** The lock {@link scheduleUpdate} builds under. */
-   protected readonly workspaceLock: WorkspaceLock;
+   protected readonly workspaceLock: HydraniumWorkspaceLock;
    /** The latest write {@link scheduleUpdate} queued, until it ends; see {@link ScheduledUpdate}. */
    protected scheduledUpdate?: ScheduledUpdate;
-   /** Narrower handle on the same registry as the inherited `serviceRegistry`, for {@link ExtendedServiceRegistry.registrations}. */
-   protected readonly languageRegistry: ExtendedServiceRegistry;
+   /** Narrower handle on the same registry as the inherited `serviceRegistry`, for {@link HydraniumServiceRegistry.registrations}. */
+   protected readonly languageRegistry: HydraniumServiceRegistry;
    protected languageFileExtensions: string[] = [];
-   /** {@link ExtendedServiceRegistry.registrations} {@link languageFileExtensions} was built at; `-1` until first built. */
+   /** {@link HydraniumServiceRegistry.registrations} {@link languageFileExtensions} was built at; `-1` until first built. */
    protected cachedRegistrations = -1;
    /** Running since the last phase was reached, or since the active build started. */
    protected sinceLastPhase?: Stopwatch;
@@ -570,7 +662,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * see {@link skipsValidation}. Waiting on would never end, and re-queuing
     * would skip it again.
     *
-    * A re-queued build takes the {@link WorkspaceLock} (see
+    * A re-queued build takes the {@link HydraniumWorkspaceLock} (see
     * {@link requeueOrphaned}), so a caller that awaits this wait while it holds
     * the lock, inside a read or write action, deadlocks on a document that needs
     * a re-queue: the build waits for that action to end. Await it outside the
@@ -863,7 +955,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
 
    /**
     * Schedule a build for a document no in-flight build will advance, through
-    * `VersionSyncService.requestRecoveryBuild`: from a {@link WorkspaceLock} read, so
+    * `VersionSyncService.requestRecoveryBuild`: from a {@link HydraniumWorkspaceLock} read, so
     * the build neither runs beside a locked one nor cancels the build a
     * re-queue is fired from, and skipped if a write that ran meanwhile carried
     * the document to `state`. The waiter resolves off the resulting phase
@@ -885,7 +977,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    // ============================================================
 
    /**
-    * Build `changed` and `deleted` under the {@link WorkspaceLock}, as
+    * Build `changed` and `deleted` under the {@link HydraniumWorkspaceLock}, as
     * `workspaceLock.write(token => update(changed, deleted, token))` would,
     * except where the build this method queued last already carries the
     * request. The promise settles when the build that carries the request
@@ -913,9 +1005,8 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
     * reason staged by the caller in place.
     *
     * A caller that must run code of its own inside the write action takes the
-    * lock itself, and forgoes the sharing. A lock that is not a
-    * {@link HydraniumWorkspaceLock} cannot report a cancelled queued write, so
-    * every request then takes its own write.
+    * lock itself, and forgoes the sharing. The lock's cancellation counter
+    * prevents a request from joining a write that can no longer complete.
     */
    scheduleUpdate(changed: URI[], deleted: URI[], reason?: string): Promise<void> {
       const uris = [...changed, ...deleted];
@@ -926,14 +1017,6 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    /** {@link scheduleUpdate} without the read check. */
    protected requestUpdate(changed: URI[], deleted: URI[], reason?: string): Promise<void> {
       const lock = this.workspaceLock;
-      if (!(lock instanceof HydraniumWorkspaceLock)) {
-         return lock.write(token => {
-            if (reason !== undefined) {
-               this.markNextReason(reason);
-            }
-            return this.update(changed, deleted, token);
-         });
-      }
       const scheduled = this.scheduledUpdate;
       if (scheduled && scheduled.cancellations === lock.writeCancellations) {
          if (!scheduled.takenVersions) {
@@ -1382,7 +1465,7 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
 
    /**
     * After a build that threw, tell the {@link buildEndedListeners}, with
-    * `completed` false, from a {@link WorkspaceLock} read: it runs once no write
+    * `completed` false, from a {@link HydraniumWorkspaceLock} read: it runs once no write
     * runs or is queued, so no locked build is left that could still carry a
     * waited-on document. A cancelled build is usually followed by its
     * canceller's, but a write that builds nothing, such as a release build

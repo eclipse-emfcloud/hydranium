@@ -10,7 +10,7 @@
 import type { Grammar, LangiumSharedCoreServices, URI } from '@hydranium/langium';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import type { ServerLanguageServices } from '../langium/language-module.js';
-import { ExtendedServiceRegistry } from '../langium/service-registry.js';
+import { DefaultHydraniumServiceRegistry, type HydraniumServiceRegistry } from '../langium/service-registry.js';
 import { makeNoopLanguageServices, type NoopLanguageServicesOverrides } from './make-noop-language-services.js';
 
 /**
@@ -29,7 +29,7 @@ export interface StubLanguageDescriptor {
     * AST `$type`s this language's grammar produces. Synthesised into a minimal
     * `Grammar` — one entry-less parser rule per type — which is exactly what
     * `collectProducibleTypes` reads, so type→language routing
-    * (`buildLanguageTypeIndex`, `ExtendedServiceRegistry.getLanguageFor`) resolves
+    * (`buildLanguageTypeIndex`, `HydraniumServiceRegistry.getLanguageFor`) resolves
     * against this stub the same way it does against generated grammars.
     *
     * Entry-less on purpose: `reachableParserRules` falls back to every parser
@@ -61,9 +61,9 @@ export interface MakeStubServiceRegistryOptions {
 
 /**
  * Test-facing view of a stub registry: the real
- * {@link ExtendedServiceRegistry} surface plus seeding/introspection helpers.
+ * {@link HydraniumServiceRegistry} surface plus seeding/introspection helpers.
  */
-export interface StubServiceRegistry extends ExtendedServiceRegistry<ServerLanguageServices> {
+export interface StubServiceRegistry extends HydraniumServiceRegistry<ServerLanguageServices> {
    /**
     * Narrows Langium's `readonly LangiumCoreServices[]` to the framework's
     * per-language type, so call sites reading a framework slot off a
@@ -111,14 +111,14 @@ function makeLanguageIdProvider(openLanguageIds: Map<string, string>): { get(uri
 }
 
 /**
- * The framework's own {@link ExtendedServiceRegistry}, carrying stub languages
+ * The framework's own {@link DefaultHydraniumServiceRegistry}, carrying stub languages
  * and the seeding hooks {@link StubServiceRegistry} adds.
  *
  * Private per the test-support convention for doubles that must subclass a real
  * production class (see `makeStubModelService`): the class is an implementation
  * detail, {@link makeStubServiceRegistry} is the entry point.
  */
-class StubServiceRegistryImpl extends ExtendedServiceRegistry<ServerLanguageServices> implements StubServiceRegistry {
+class StubServiceRegistryImpl extends DefaultHydraniumServiceRegistry<ServerLanguageServices> implements StubServiceRegistry {
    readonly languagesById = new Map<string, ServerLanguageServices>();
 
    override get all(): readonly ServerLanguageServices[] {
@@ -151,7 +151,7 @@ class StubServiceRegistryImpl extends ExtendedServiceRegistry<ServerLanguageServ
  *
  * **The registry is REAL.** This double stubs the *languages*, not the
  * registry: the returned object is the framework's own
- * {@link ExtendedServiceRegistry}, so `getServices` walks Langium's actual
+ * {@link HydraniumServiceRegistry}, so `getServices` walks Langium's actual
  * lookup ladder (declared languageId → file name → extension), throws
  * Langium's actual messages on a miss, and picks up `hasServices`,
  * `getServicesById` and `getServicesByExtension` for free. Hand-rolled

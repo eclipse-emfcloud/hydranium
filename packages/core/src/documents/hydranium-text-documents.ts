@@ -19,7 +19,7 @@
 // Moving it into lsp-server would force data-server / glsp-server to depend
 // on lsp-server, contradicting the peer architecture.
 // eslint-disable-next-line @typescript-eslint/no-restricted-imports
-import { NormalizedTextDocuments } from '@hydranium/langium/lsp';
+import { type TextDocuments, NormalizedTextDocuments } from '@hydranium/langium/lsp';
 import { type URI, UriUtils } from '@hydranium/langium';
 import { type ServerSharedServices } from '../langium/module.js';
 import {
@@ -174,6 +174,301 @@ interface ConnectionWithTextDocumentSync {
 }
 
 /**
+ * The shared text authority for every head. Key documents by canonical URI,
+ * keep server-owned versions monotonic across close and reopen, and advance
+ * them exactly when content changes. Client buffer versions are separate. Open,
+ * change, close and save transitions update their state before notifying
+ * listeners; events identify the client responsible. Optional client ids
+ * default to the language client.
+ */
+export interface HydraniumTextDocuments<T extends TextDocument = TextDocument> extends TextDocuments<T> {
+   /**
+    * Create a text document with the configured representation without
+    * registering or opening it.
+    */
+   create(uri: string, languageId: string, version: number, content: string): T;
+   /**
+    * Apply changes and stamp the supplied version using the configured text
+    * representation. Return the resulting instance, which need not be the
+    * input; this alone does not announce a store change.
+    */
+   update(document: T, changes: TextDocumentContentChangeEvent[], version: number): T;
+   /**
+    * Fires after shared content changes, or an explicit refresh, with the
+    * authoring client. A server push echoed unchanged must not cause another
+    * build.
+    */
+   readonly onDidChangeContent: Event<ClientTextDocumentChangeEvent<T>>;
+   /**
+    * Fires for the first open of held content, with its client; attaching
+    * another client uses the existing content.
+    */
+   readonly onDidOpen: Event<ClientTextDocumentChangeEvent<T>>;
+   /**
+    * Fires after removing the client’s hold but before releasing the last held
+    * text. Consult isOpenInAnyClient to detect the last close.
+    */
+   readonly onDidClose: Event<ClientTextDocumentChangeEvent<T>>;
+   /**
+    * Announces saved content and its client. An editor save is announced here
+    * only once disk holds the store’s text.
+    */
+   readonly onDidSave: Event<ClientTextDocumentChangeEvent<T>>;
+   /**
+    * Attach LSP synchronization handlers and track the editor buffer
+    * independently of the shared version sequence. Disposing detaches those
+    * handlers.
+    */
+   listen(connection: Connection): Disposable;
+   /**
+    * Apply a client change against that client’s declared version and buffer.
+    * Ignore stale changes and unchanged echoes; never treat a client version as
+    * the shared version.
+    */
+   notifyDidChangeTextDocument(event: DidChangeTextDocumentParams, clientId?: string): void;
+   /**
+    * Commit a server-authored replacement and announce the held content even
+    * when unchanged, so callers can request a rebuild. Advance the shared
+    * version only when text differs; throw when not open.
+    */
+   applyContentChange(uri: DocumentUri, text: string, clientId: string): TextVersion;
+   /**
+    * Remove this client’s hold and announce its close. Release the last hold
+    * immediately or defer it for a lost session according to the release
+    * policy.
+    */
+   notifyDidCloseTextDocument(event: DidCloseTextDocumentParams, clientId?: string, cause?: SessionEndCause): void;
+   /**
+    * Wait for every release already handed to the release handler, including
+    * arrivals while waiting. A document still in its grace period is not yet a
+    * pending release.
+    */
+   releasesSettled(): Promise<void>;
+   /**
+    * Deliver willSave for held content; ignore a URI the store does not hold.
+    */
+   notifyWillSaveTextDocument(event: WillSaveTextDocumentParams): void;
+   /**
+    * Ask the registered save participant for edits to held content. Return no
+    * edits when no document or participant is present.
+    */
+   notifyWillSaveTextDocumentWaitUntil(event: WillSaveTextDocumentParams, token: CancellationToken): HandlerResult<TextEdit[], void>;
+   /**
+    * Announce a server save. When supplied, event.text becomes the disk
+    * baseline before notification; it may differ from newer shared text and
+    * leave the document dirty.
+    */
+   notifyDidSaveTextDocument(event: DidSaveTextDocumentParams, clientId?: string): void;
+   /**
+    * Establish a client hold, or attach to the existing shared content. A first
+    * open consumes staged content; an attaching textual client refreshes the
+    * existing content instead of replacing it.
+    */
+   notifyDidOpenTextDocument(event: DidOpenTextDocumentParams, clientId?: string): void;
+   /**
+    * Add a hold without triggering a refresh. Return false when already held by
+    * that client or when no content remains to attach to, including after a
+    * deferred release is resolved.
+    */
+   attachClient(uri: DocumentUri, clientId: string): boolean;
+   /**
+    * Announce the current held content as a change from clientId without
+    * advancing its version, so consumers can rebuild it.
+    */
+   refreshContent(uri: DocumentUri, clientId: string): void;
+   /**
+    * Record the author of a shared version for later echo and edit-conflict
+    * checks.
+    */
+   setAuthor(uri: DocumentUri, version: number, author: string): void;
+   /**
+    * Find held content through canonical URI identity, accepting both
+    * client-facing and canonical spellings.
+    */
+   get(uri: DocumentUri): T | undefined;
+   /**
+    * Return the held version, else the last closed sequence version, else zero
+    * for an unseen URI. Closing and reopening must not reset this sequence.
+    */
+   version(uri: DocumentUri): TextVersion;
+   /**
+    * The identity of the version sequence’s lifetime; versions from different
+    * epochs cannot be compared.
+    */
+   readonly epoch: string;
+   /**
+    * Return the shared version at which the held document opened, or undefined
+    * when it is not held.
+    */
+   openedVersion(uri: DocumentUri): TextVersion | undefined;
+   /**
+    * Require the editor’s declared buffer version to hold the current shared
+    * text. Throw DocumentNotOpenError when absent or being deleted, or
+    * ConflictError when the buffer is stale or unknown.
+    */
+   assertLanguageClientHolds(uri: DocumentUri, version: number): void;
+   /**
+    * Whether the editor’s held text is older than the supplied shared version
+    * or unknown. False when the editor has no open for the URI.
+    */
+   isLanguageClientBehind(uri: DocumentUri, version: TextVersion): boolean;
+   /**
+    * Return held text or the last closed sequence text, including a deleted
+    * document’s last text. Undefined for a URI the store has never seen.
+    */
+   textState(uri: DocumentUri): TextState | undefined;
+   /**
+    * For closed content, advance the sequence only if text changed and return
+    * its version. For open content, return its version only when text matches;
+    * otherwise undefined requires a recovery build. Seed an unseen URI at zero.
+    */
+   reconcileExternalContent(uri: DocumentUri, text: string): number | undefined;
+   /**
+    * Commit only when held content still equals parsedFrom. Return not-open or
+    * stale otherwise. A changed repair advances the shared version with the
+    * integrity author but emits no change event, since the current build
+    * carries it.
+    */
+   commitRepair(uri: DocumentUri, parsedFrom: string, repaired: string): RepairCommit<T>;
+   /**
+    * Return the author recorded for the supplied shared version, or the current
+    * one when omitted; undefined when no author is recorded.
+    */
+   getAuthor(uri: DocumentUri, version?: number): string | undefined;
+   /**
+    * Whether content remains held, including during the last close notification
+    * and deferred release. Use isOpenInAnyClient to ask about client holds.
+    */
+   isOpen(uri: DocumentUri): boolean;
+   /**
+    * Whether any client currently holds the document. The last close removes
+    * that hold before notifying listeners.
+    */
+   isOpenInAnyClient(uri: DocumentUri): boolean;
+   /** Whether the named client currently holds the canonical document. */
+   isOpenInClient(uri: DocumentUri, client: string): boolean;
+   /**
+    * Whether the editor holds the document, accepting canonical and
+    * client-facing URI spellings.
+    */
+   isOpenInLanguageClient(uri: DocumentUri): boolean;
+   /** Return clients holding the document in the order they opened it. */
+   clientsOf(uri: DocumentUri): string[];
+   /** Whether the named client is the document’s sole holder. */
+   isOnlyOpenInClient(uri: DocumentUri, client: string): boolean;
+   /**
+    * Snapshot documents held by clients and their client ids. Reflect a
+    * last-client close immediately, even while content awaits release.
+    */
+   openDocuments(): OpenDocument[];
+   /**
+    * Fires after all documents in the ended client session have been closed.
+    */
+   readonly onDidCloseSession: Event<ClientSessionClosedEvent>;
+   /**
+    * Fires when the last held content is released, before the release handler
+    * processes it. A lost connection may defer this until its grace expires.
+    */
+   readonly onDidReleaseDocument: Event<DocumentReleasedEvent>;
+   /**
+    * Fires as soon as the editor reports saving an open document; onDidSave
+    * waits for disk verification.
+    */
+   readonly onDidSaveInLanguageClient: Event<LanguageClientSavedEvent>;
+   /**
+    * Whether content with no remaining client hold is retained during a lost
+    * connection’s grace. Writers must still treat that content as open.
+    */
+   isReleaseDeferred(uri: DocumentUri): boolean;
+   /**
+    * Whether held text differs from its last known disk baseline. False after
+    * release; the baseline can lag an external file change.
+    */
+   isDirty(uri: DocumentUri): boolean;
+   /**
+    * Fires when dirty state changes. A dirty release announces clean only after
+    * its release handler settles, though isDirty answers false from release
+    * onward.
+    */
+   readonly onDidChangeDirty: Event<DocumentDirtyChangedEvent>;
+   /**
+    * Record the file’s known text, or its absence for undefined. Ignore a URI
+    * whose content is not held.
+    */
+   setDiskBaseline(uri: DocumentUri, text: string | undefined): void;
+   /**
+    * Mark held content as created from a session without a file baseline. It
+    * remains dirty until saved; ignore a URI the store does not hold.
+    */
+   markCreated(uri: DocumentUri): void;
+   /**
+    * Whether held content was created by a session and its file has not since
+    * been observed. A missing file alone does not establish creation.
+    */
+   isUnsavedCreation(uri: DocumentUri): boolean;
+   /**
+    * Read the file through its disk queue and update the baseline. Confirm
+    * apparent absence through the provider’s settled-existence check when
+    * available before treating the file as gone.
+    */
+   reloadDiskBaseline(uri: DocumentUri): Promise<void>;
+   /**
+    * Register a client id before opening session documents; reject ids the
+    * session registry cannot accept.
+    */
+   registerSession(clientId: string): void;
+   /**
+    * Synchronously close every document held by the session, then free its id.
+    * Unknown sessions are ignored; cause controls whether last closes receive a
+    * release grace.
+    */
+   closeSession(clientId: string, cause?: SessionEndCause): void;
+   /**
+    * Wait for initialization to drain early opens, then close every editor
+    * hold. The language client is not a registered session and needs this
+    * separate teardown.
+    */
+   closeLanguageClientDocuments(): Promise<void>;
+   /**
+    * Close non-editor holds and release deferred content immediately. Keep an
+    * editor’s open buffer so its subsequent changes are still accepted.
+    */
+   notifyDocumentDeleted(uri: DocumentUri): void;
+   /**
+    * Remove held content and close every client hold, including the editor’s;
+    * no open may point to a removed document.
+    */
+   delete(uri: string | URI | T): void;
+   /**
+    * Keep repaired text for a URI no client holds. Its next first open consumes
+    * it instead of disk text; attaching to existing content does not consume a
+    * stage.
+    */
+   stagePendingContent(uri: DocumentUri, text: string): void;
+   /**
+    * Push text to an open editor using its tracked buffer and declared version.
+    * Return undefined when no push is needed or possible. An applied response
+    * alone is not an echo; do not advance shared content here.
+    */
+   applyEditToLanguageClient(
+      uri: DocumentUri,
+      newText: string,
+      options?: { label?: string }
+   ): Promise<ApplyWorkspaceEditResult | undefined>;
+   /**
+    * Baseline the editor shadow from independently known buffer text. Text
+    * differing from shared content must keep editor saves guarded until
+    * synchronization catches up.
+    */
+   setLanguageClientText(uri: DocumentUri, text: string): void;
+   /**
+    * Drop the editor shadow baseline so the next push uses a full replacement,
+    * or sends nothing if the last acknowledged text already matches.
+    */
+   invalidateLanguageClientText(uri: DocumentUri): void;
+}
+
+/**
  * The one text store every head writes to, on top of Langium's
  * `NormalizedTextDocuments`, and the LSP text-sync endpoint: every
  * `textDocument/*` notification and every `workspace/applyEdit` push goes
@@ -198,7 +493,10 @@ interface ConnectionWithTextDocumentSync {
  * discovery. Direct {@link notifyDidOpenTextDocument} calls (the non-LSP
  * heads) do not pass that gate — their caller owns the ordering.
  */
-export class HydraniumTextDocuments<T extends TextDocument = TextDocument> extends NormalizedTextDocuments<T> {
+export class DefaultHydraniumTextDocuments<T extends TextDocument = TextDocument>
+   extends NormalizedTextDocuments<T>
+   implements HydraniumTextDocuments<T>
+{
    /** Content staged by integrity rules for a document no client holds, consumed by its first open. */
    protected readonly __pendingContent = new Map<CanonicalUri, string>();
 

@@ -17,7 +17,7 @@ import type { ServerSharedServices } from '../../src/langium/module.js';
 import { type AstDocumentManagerOptions, DefaultAstDocumentManager } from '../../src/documents/ast-document-manager.js';
 import { LANGUAGE_CLIENT_ID, UNKNOWN_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { type FileSystemTaskQueue } from '../../src/documents/file-system-task-queue.js';
-import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments, type HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { DefaultVersionSyncService } from '../../src/documents/version-sync-service.js';
 import { DefaultModelService } from '../../src/langium/model-service/model-service.js';
 import { type DocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
@@ -67,7 +67,7 @@ function makeManagerHarness(
       logger: opts.logger
    });
    // Swap in a REAL HydraniumTextDocuments (constructs from services.Logger only):
-   const textDocuments = new HydraniumTextDocuments(bundle.services);
+   const textDocuments = new DefaultHydraniumTextDocuments(bundle.services);
    const services = {
       ...bundle.services,
       workspace: { ...bundle.services.workspace, TextDocuments: textDocuments }

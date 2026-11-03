@@ -17,12 +17,7 @@ import {
    Settings
 } from '@hydranium/core';
 import { type LogThreshold, parseLogLevel } from '@hydranium/protocol';
-import {
-   createLspServerLanguageModule,
-   createLspServerSharedModule,
-   type LspServerAddedServices,
-   type LspServerAddedSharedServices
-} from '@hydranium/core/lsp';
+import { createLspServerLanguageModule, createLspServerSharedModule, type LspServerAddedSharedServices } from '@hydranium/core/lsp';
 import { type DeepPartial, EmptyFileSystem, type Module } from '@hydranium/langium';
 import { type LangiumServices, type PartialLangiumServices, type PartialLangiumSharedServices } from '@hydranium/langium/lsp';
 import { DomainSerializer } from './domain-serializer.js';
@@ -113,8 +108,7 @@ export interface OrderFlowAddedSharedServices {
 export type OrderFlowSharedServices = ServerSharedServices & LspServerAddedSharedServices & OrderFlowAddedSharedServices;
 
 export type OrderFlowServices = LangiumServices &
-   ServerAddedServices &
-   LspServerAddedServices & {
+   ServerAddedServices & {
       /* override */ shared: OrderFlowSharedServices;
    };
 

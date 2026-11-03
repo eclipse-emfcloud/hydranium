@@ -77,7 +77,7 @@ protected override addExportedSymbol(node, exports, document): void {
   document-qualified one, that is, when the project qualifies its names.
 
 The two exports of one node are **tier siblings**. To create an export, use the
-factory for its tier on `HydraniumAstNodeDescriptionProvider`, such as
+factory for its tier on `DefaultHydraniumAstNodeDescriptionProvider`, such as
 `createPublic`. Each factory rejects the wrong project information at compile
 time.
 
@@ -132,10 +132,11 @@ Check which tier it was exported at, in Seam 1.
 
 ## Seam 3a: who can resolve a symbol
 
-`HydraniumScopeProvider` filters the global index for each reference by the
-tiers in the table above. You control which projects a project can see through
-the `dependencies` your `ProjectManager` declares. Dependencies of dependencies
-count too, unless you pass `visibility: 'direct'` to `AbstractProjectManager`.
+`DefaultHydraniumScopeProvider` filters the global index for each reference by
+the tiers in the table above. You control which projects a project can see
+through the `dependencies` your `ProjectManager` declares. Dependencies of
+dependencies count too, unless you pass `visibility: 'direct'` to
+`AbstractProjectManager`.
 
 The filter runs only once your `ProjectManager` reports more than one
 project. The default, `SingleProjectManager`, puts the whole workspace in one

@@ -19,7 +19,7 @@ import {
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { DefaultDocumentReleaseHandler } from '../../src/documents/document-release-handler.js';
-import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments, type HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { diffToEdits } from '../../src/documents/language-client-shadow.js';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
@@ -119,7 +119,7 @@ function makeStore(): {
       }
    } as unknown as ServerSharedServices;
    services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);
-   const docs = new HydraniumTextDocuments<TextDocument>(services);
+   const docs = new DefaultHydraniumTextDocuments<TextDocument>(services);
    const editor = new FakeEditor(docs);
    return { docs, editor, pushes, lines };
 }
@@ -152,7 +152,7 @@ async function writeBeforeOpen(docs: HydraniumTextDocuments<TextDocument>, holde
    await docs.applyEditToLanguageClient(URI, WRITTEN);
 }
 
-describe('HydraniumTextDocuments write while the editor has not opened the document', () => {
+describe('DefaultHydraniumTextDocuments write while the editor has not opened the document', () => {
    for (const [holderName, holder] of [
       ['another client holds the document', 'held'],
       ['the document was released', 'released']
@@ -191,7 +191,7 @@ describe('HydraniumTextDocuments write while the editor has not opened the docum
    });
 });
 
-describe('HydraniumTextDocuments with a seeded language-client text', () => {
+describe('DefaultHydraniumTextDocuments with a seeded language-client text', () => {
    for (const [name, otherHolder] of [
       ['the store opens the document with the editor', false],
       ['the editor joins another client', true]

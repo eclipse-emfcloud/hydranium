@@ -19,6 +19,7 @@ import {
    isSyntheticSource
 } from '@hydranium/protocol';
 import {
+   type ScopeProvider,
    type AstNode,
    type AstNodeDescription,
    type AstNodeLocator,
@@ -39,7 +40,7 @@ import { buildAstNode } from '../ast-extension/ast-node-builder.js';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type HydraniumLanguageServices } from '../language-module.js';
 import { type NameProvider } from '../naming/name-provider.js';
-import { type HydraniumDocumentRegistry } from '../workspace/langium-documents.js';
+import { type HydraniumLangiumDocuments } from '../workspace/langium-documents.js';
 import { builtLocalSymbols } from './built-local-symbols.js';
 import { FallbackScope } from './fallback-scope.js';
 import { type ScopeExtensionDescriptions, type ScopeExtensionService } from './scope-extension-service.js';
@@ -74,9 +75,9 @@ export interface HydraniumScopeProviderOptions extends LogNameOptions {
 /**
  * Per-query context shared across the three sub-scope factory hooks of
  * {@link HydraniumScopeProvider}. Built once per scope build by
- * {@link HydraniumScopeProvider.makeScopeContext}, which walks the global
+ * {@link DefaultHydraniumScopeProvider.makeScopeContext}, which walks the global
  * scope exactly once and partitions it into per-tier buckets via
- * {@link HydraniumScopeProvider.bucketFor}. The sub-scope hooks wrap their
+ * {@link DefaultHydraniumScopeProvider.bucketFor}. The sub-scope hooks wrap their
  * bucket (or re-read {@link descriptions} to widen) without re-walking
  * the index.
  */
@@ -93,6 +94,46 @@ export interface ScopeContext {
    readonly dependencyEntries: readonly AstNodeDescription[];
    /** Descriptions routed to the universal tier. */
    readonly universalEntries: readonly AstNodeDescription[];
+}
+
+/**
+ * Reference resolution shared by LSP and non-textual heads. Protocol contexts
+ * and Langium references must use the same visibility rules and ordering.
+ */
+export interface HydraniumScopeProvider extends ScopeProvider {
+   /**
+    * Invalidate both global and project-filtered scope results before a change
+    * to indexed visibility can be observed by another reference.
+    */
+   clearScopeCaches(): void;
+   /**
+    * Filter the supplied global scope by the source document’s project
+    * visibility and reference type, retaining own-project, dependency and
+    * universal tiers.
+    */
+   getProjectScope(sourceUri: URI, globalScope: Scope, referenceType: string): Scope;
+   /**
+    * Build reference information from a protocol context, including synthetic
+    * containment when requested. Throws for an unresolvable source; use
+    * resolveReferenceSource when the actual source node is needed.
+    */
+   referenceContextToInfo(ctx: ReferenceContext): ReferenceInfo;
+   /**
+    * Resolve the requested target through its context’s scope. Return undefined
+    * for a missing or unresolvable target; an invalid source context may throw.
+    */
+   resolveReference(reference: ReferenceRequest): AstNode | undefined;
+   /**
+    * Resolve the source and walk its containment path into the actual tree.
+    * Return undefined at a missing step; do not fabricate the synthetic nodes
+    * used for scope queries.
+    */
+   resolveReferenceSource(source: ReferenceSource | ReferenceContext): AstNode | undefined;
+   /**
+    * Return the ordering key shared by reference candidates and LSP completion,
+    * so both present descriptions in the same order.
+    */
+   sortText(description: AstNodeDescription): string;
 }
 
 /**
@@ -147,8 +188,8 @@ export interface ScopeContext {
  * on `ReferenceCandidateProvider` in the sibling
  * `reference-candidate-provider.ts` module.
  */
-export class HydraniumScopeProvider extends DefaultScopeProvider {
-   protected readonly langiumDocuments: HydraniumDocumentRegistry;
+export class DefaultHydraniumScopeProvider extends DefaultScopeProvider implements HydraniumScopeProvider {
+   protected readonly langiumDocuments: HydraniumLangiumDocuments;
    protected readonly astNodeLocator: AstNodeLocator;
    protected readonly scopeExtensionService: ScopeExtensionService;
    protected readonly options: HydraniumScopeProviderOptions;

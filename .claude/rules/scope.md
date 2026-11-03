@@ -7,8 +7,8 @@ paths:
 
 # Scope
 
-`HydraniumScopeProvider.getProjectScope` returns the global scope unfiltered
-when the source document has no owning project or
+`DefaultHydraniumScopeProvider.getProjectScope` returns the global scope
+unfiltered when the source document has no owning project or
 `ProjectManager.isSingleProject()` is true. The bound default,
 `SingleProjectManager`, always reports true, so on a default bundle the
 `project` and `public` tiers restrict nothing, and a tier-filter test written

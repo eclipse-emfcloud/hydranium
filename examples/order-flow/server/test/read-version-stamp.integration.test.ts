@@ -18,7 +18,7 @@
 
 import { rmSync } from 'node:fs';
 import { initializeWorkspaceProgrammatically, type ServerSharedServices } from '@hydranium/core';
-import { HydraniumDocumentUpdateHandler } from '@hydranium/core/lsp';
+import { DefaultHydraniumDocumentUpdateHandler } from '@hydranium/core/lsp';
 import { NodeFileSystem } from '@hydranium/core/node';
 import {
    disposeScratchWorkspace,
@@ -107,7 +107,7 @@ async function changeDuringDebounce(): Promise<{
             {
                lsp: {
                   DocumentUpdateHandler: (shared: ServerSharedServices) =>
-                     new HydraniumDocumentUpdateHandler(shared, { debounceMs: 60_000 })
+                     new DefaultHydraniumDocumentUpdateHandler(shared, { debounceMs: 60_000 })
                }
             }
          ]

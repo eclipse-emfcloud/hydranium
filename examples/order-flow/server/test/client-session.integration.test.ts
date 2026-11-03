@@ -1155,7 +1155,7 @@ describe("a file watcher's late report of a session's delete", () => {
             }
          });
       });
-      harness.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({
+      harness.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles!({
          changes: [...changes, { uri: otherUri, type: FileChangeType.Changed }]
       });
       return updated;

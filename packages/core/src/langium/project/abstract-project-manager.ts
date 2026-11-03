@@ -558,7 +558,7 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
       this.invalidateMembershipCache();
       // Note: we intentionally do NOT await `ready` here. In the production
       // flow `discoverProjects` completes (resolving `ready`) inside
-      // `HydraniumWorkspaceManager.performStartup` before `documentBuilder.build`
+      // `DefaultHydraniumWorkspaceManager.performStartup` before `documentBuilder.build`
       // runs, so the registry is already populated by the time `onUpdate`
       // fires. Awaiting would deadlock test scenarios that exercise
       // `parseDocument` directly without going through workspace startup.

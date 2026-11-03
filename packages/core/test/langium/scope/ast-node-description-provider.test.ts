@@ -19,7 +19,7 @@ import {
 import { URI } from '@hydranium/langium';
 import {
    DefaultTieredAstNodeDescription,
-   HydraniumAstNodeDescriptionProvider
+   DefaultHydraniumAstNodeDescriptionProvider
 } from '../../../src/langium/scope/ast-node-description-provider.js';
 import { isLocalTier, isTieredDescription } from '../../../src/langium/scope/scoped-ast-node-description.js';
 import { makeFakeAstNode, makeNoopTracer } from '../../../src/testing/index.js';
@@ -60,9 +60,9 @@ function makeServices(
    } as unknown as LangiumCoreServices;
 }
 
-describe('HydraniumAstNodeDescriptionProvider', () => {
+describe('DefaultHydraniumAstNodeDescriptionProvider', () => {
    const services = makeServices();
-   const provider = new HydraniumAstNodeDescriptionProvider(services as never);
+   const provider = new DefaultHydraniumAstNodeDescriptionProvider(services as never);
 
    describe('createLocal', () => {
       it('produces `tier: local`, no projectId, document URI preserved', () => {
@@ -123,9 +123,9 @@ describe('HydraniumAstNodeDescriptionProvider', () => {
 
       it('builds through newDescription, so a subclass that overrides only it gets its own description class', () => {
          class OwnDescription extends DefaultTieredAstNodeDescription {}
-         class OwnProvider extends HydraniumAstNodeDescriptionProvider {
+         class OwnProvider extends DefaultHydraniumAstNodeDescriptionProvider {
             protected override newDescription(
-               ...args: Parameters<HydraniumAstNodeDescriptionProvider['newDescription']>
+               ...args: Parameters<DefaultHydraniumAstNodeDescriptionProvider['newDescription']>
             ): DefaultTieredAstNodeDescription {
                return new OwnDescription(this, ...args);
             }
@@ -165,7 +165,7 @@ describe('DefaultTieredAstNodeDescription', () => {
          }
       }
    });
-   const provider = new HydraniumAstNodeDescriptionProvider(services as never);
+   const provider = new DefaultHydraniumAstNodeDescriptionProvider(services as never);
    const document = fakeDocument();
 
    it('builds the same own fields in the same order for every tier', () => {

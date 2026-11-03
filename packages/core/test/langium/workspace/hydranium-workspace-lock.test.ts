@@ -11,7 +11,7 @@ import { Deferred } from '@hydranium/protocol';
 import { makeFakeClock, tick } from '@hydranium/protocol/testing';
 import { ReadPriority } from '@hydranium/langium';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { HydraniumWorkspaceLock } from '../../../src/langium/workspace/hydranium-workspace-lock.js';
+import { DefaultHydraniumWorkspaceLock } from '../../../src/langium/workspace/hydranium-workspace-lock.js';
 import {
    createSynchronousReadLockScope,
    isInsideReadLock,
@@ -29,13 +29,13 @@ const GRACE_MS = 1_000;
 function makeLock(stalledWriteWarnMs = WARN_MS) {
    const clock = makeFakeClock();
    const { tracer, lines } = makeCapturingTracer(clock);
-   const lock = new HydraniumWorkspaceLock({ Clock: clock, Tracer: tracer }, { stalledWriteWarnMs });
+   const lock = new DefaultHydraniumWorkspaceLock({ Clock: clock, Tracer: tracer }, { stalledWriteWarnMs });
    const warnings = (): string[] => lines.filter(line => line.level === 'warn').map(line => line.message);
    return { lock, clock, warnings };
 }
 
 /** Start a write on `lock` that runs until `release` is called. */
-async function holdWrite(lock: HydraniumWorkspaceLock): Promise<{ release(): void; held: Promise<void> }> {
+async function holdWrite(lock: DefaultHydraniumWorkspaceLock): Promise<{ release(): void; held: Promise<void> }> {
    let release!: () => void;
    let started!: () => void;
    const running = new Promise<void>(resolve => (started = resolve));
@@ -47,7 +47,7 @@ async function holdWrite(lock: HydraniumWorkspaceLock): Promise<{ release(): voi
    return { release, held };
 }
 
-describe('HydraniumWorkspaceLock stalled-write diagnosis', () => {
+describe('DefaultHydraniumWorkspaceLock stalled-write diagnosis', () => {
    it('logs one warning for a write still running the configured time after it was cancelled', async () => {
       const { lock, clock, warnings } = makeLock();
       const { release, held } = await holdWrite(lock);
@@ -107,7 +107,7 @@ describe('HydraniumWorkspaceLock stalled-write diagnosis', () => {
    });
 });
 
-describe('HydraniumWorkspaceLock write cancellations', () => {
+describe('DefaultHydraniumWorkspaceLock write cancellations', () => {
    it('counts none for a write queued after the write before it ended', async () => {
       const { lock } = makeLock();
       await lock.write(() => undefined);
@@ -144,7 +144,7 @@ describe('HydraniumWorkspaceLock write cancellations', () => {
    });
 });
 
-describe('HydraniumWorkspaceLock reads', () => {
+describe('DefaultHydraniumWorkspaceLock reads', () => {
    beforeEach(() => setReadLockScope(nodeReadLockScope));
    afterEach(() => setReadLockScope(createSynchronousReadLockScope()));
 

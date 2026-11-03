@@ -12,7 +12,7 @@ import {
    type LangiumSharedServices,
    type ServiceRequirements
 } from '@hydranium/langium/lsp';
-import { HydraniumDocumentUpdateHandler } from './hydranium-document-update-handler.js';
+import { type HydraniumDocumentUpdateHandler } from './hydranium-document-update-handler.js';
 import { guardDiagnosticsConnection } from './diagnostics-connection.js';
 import { guardEditRequests } from './edit-requests-guard.js';
 import { refreshContentDocuments } from './content-refresh.js';
@@ -34,9 +34,8 @@ import { installConsoleTee } from '../langium/diagnostics/console-tee.js';
  * `LspServerAddedSharedServices` while omitting the module type-checks and
  * leaves the slot holding Langium's default.
  *
- * Checked with `instanceof`, so an adopter subclass of
- * {@link HydraniumDocumentUpdateHandler} — the documented way to extend the
- * handler — passes.
+ * Checks the extra {@link HydraniumDocumentUpdateHandler.flushPending}
+ * capability, so independent implementations of the public contract pass.
  *
  * Skips silently when no connection is bound: that is a more fundamental
  * misconfiguration, and Langium reports it immediately afterwards in its own
@@ -46,15 +45,16 @@ export function assertLspHeadComposed(services: LangiumSharedServices): void {
    if (!services.lsp?.Connection) {
       return;
    }
-   const handler = services.lsp.DocumentUpdateHandler;
-   if (!(handler instanceof HydraniumDocumentUpdateHandler)) {
+   const handler: Partial<HydraniumDocumentUpdateHandler> = services.lsp.DocumentUpdateHandler;
+   if (!handler || typeof handler.flushPending !== 'function') {
       throw new Error(
          '[hydranium] the LSP head is starting without its shared module: `lsp.DocumentUpdateHandler` holds ' +
-            `'${handler?.constructor?.name ?? 'nothing'}' rather than a HydraniumDocumentUpdateHandler. Echo suppression for ` +
-            "the server's own writes, the didChangeContent debounce, build-reason stamping and the last-client-close rebuild " +
-            'are all inert in that state. Add `createLspServerSharedModule(context)` to the shared tier — as ' +
+            `'${handler?.constructor?.name ?? 'nothing'}' without the required flushPending method. ` +
+            "Langium's default handler omits echo suppression for the server's own writes, the didChangeContent debounce, " +
+            'build-reason stamping and the last-client-close rebuild. ' +
+            'Add `createLspServerSharedModule(context)` to the shared tier — as ' +
             '`sharedModules.extra` when composing through `createIntegrationServices`, or as an `inject(...)` argument ' +
-            'after `createServerSharedModule(context)`.'
+            'after `createServerSharedModule(context)` — or supply a handler implementing `HydraniumDocumentUpdateHandler`.'
       );
    }
 }

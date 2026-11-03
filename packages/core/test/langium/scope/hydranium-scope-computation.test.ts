@@ -22,7 +22,7 @@ import {
 import { ProfileCollector, Logger } from '@hydranium/protocol';
 import { makeFakeClock } from '@hydranium/protocol/testing';
 import type { NameProvider } from '../../../src/langium/naming/name-provider.js';
-import { HydraniumAstNodeDescriptionProvider } from '../../../src/langium/scope/ast-node-description-provider.js';
+import { DefaultHydraniumAstNodeDescriptionProvider } from '../../../src/langium/scope/ast-node-description-provider.js';
 import { HydraniumScopeComputation } from '../../../src/langium/scope/hydranium-scope-computation.js';
 import { isLocalTier, isTieredDescription } from '../../../src/langium/scope/scoped-ast-node-description.js';
 import { makeCapturingTracer, makeFakeAstNode, makeFakeDocument } from '../../../src/testing/index.js';
@@ -83,7 +83,7 @@ function makeLocalSymbolServices(nameProvider: NameProvider, tracer: unknown = n
       workspace: { AstNodeLocator: astNodeLocator, AstNodeDescriptionProvider: undefined },
       shared: { Logger: noopLogger, Tracer: tracer }
    } as unknown as LangiumCoreServices;
-   (services.workspace as unknown as Record<string, unknown>).AstNodeDescriptionProvider = new HydraniumAstNodeDescriptionProvider(
+   (services.workspace as unknown as Record<string, unknown>).AstNodeDescriptionProvider = new DefaultHydraniumAstNodeDescriptionProvider(
       services as never
    );
    return services;
@@ -121,7 +121,7 @@ function makeExportTestServices(
       }
    } as unknown as LangiumCoreServices;
    (services as unknown as { workspace: { AstNodeDescriptionProvider: AstNodeDescriptionProvider } }).workspace.AstNodeDescriptionProvider =
-      new HydraniumAstNodeDescriptionProvider(services as never);
+      new DefaultHydraniumAstNodeDescriptionProvider(services as never);
    return services;
 }
 

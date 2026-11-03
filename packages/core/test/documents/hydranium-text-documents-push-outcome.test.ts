@@ -20,7 +20,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DocumentNotOpenError, isConflictError, STALE_VERSION } from '@hydranium/protocol';
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { DefaultDocumentReleaseHandler } from '../../src/documents/document-release-handler.js';
-import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments, type HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 import { makeCapturingTracer, makeStubDocumentBuilder, makeStubLangiumDocuments } from '../../src/testing/index.js';
@@ -189,7 +189,7 @@ function makeStore(uriPolicy: unknown = new DefaultDocumentUriPolicy()): {
       }
    } as unknown as ServerSharedServices;
    services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);
-   const docs = new HydraniumTextDocuments<TextDocument>(services);
+   const docs = new DefaultHydraniumTextDocuments<TextDocument>(services);
    const editorAt = (uri: string): Editor => {
       const editor = new Editor(docs, uri);
       editors.set(uri, editor);
@@ -349,7 +349,7 @@ const scenarios: Scenario[] = [
    }
 ];
 
-describe('HydraniumTextDocuments push outcome in every order its reply, echo and the editor can take', () => {
+describe('DefaultHydraniumTextDocuments push outcome in every order its reply, echo and the editor can take', () => {
    for (const scenario of scenarios) {
       for (const order of ['echo-first', 'reply-first'] as const) {
          it(`${scenario.name} (${order})`, async () => {
@@ -390,7 +390,7 @@ describe('HydraniumTextDocuments push outcome in every order its reply, echo and
    }
 });
 
-describe('HydraniumTextDocuments retry after a refusal', () => {
+describe('DefaultHydraniumTextDocuments retry after a refusal', () => {
    it('is a full replace, which lands even when the refusal was not about the version', async () => {
       const { docs, editorAt, pushes } = makeStore();
       const editor = editorAt(URI);
@@ -408,7 +408,7 @@ describe('HydraniumTextDocuments retry after a refusal', () => {
    });
 });
 
-describe('HydraniumTextDocuments with an answer arriving after the editor reopened the document', () => {
+describe('DefaultHydraniumTextDocuments with an answer arriving after the editor reopened the document', () => {
    it('leaves the reopened buffer a diff baseline', async () => {
       const { docs, editorAt, pushes } = makeStore();
       const editor = editorAt(URI);
@@ -433,7 +433,7 @@ describe('HydraniumTextDocuments with an answer arriving after the editor reopen
    });
 });
 
-describe('HydraniumTextDocuments push fanned out to a file open under two URIs', () => {
+describe('DefaultHydraniumTextDocuments push fanned out to a file open under two URIs', () => {
    const REAL = 'file:///real/a.x';
    const LINK = 'file:///link/a.x';
    const toText = (uri: string | { toString(): string }): string => (typeof uri === 'string' ? uri : uri.toString());
@@ -479,7 +479,7 @@ describe('HydraniumTextDocuments push fanned out to a file open under two URIs',
    }
 });
 
-describe('HydraniumTextDocuments save gate for the editor', () => {
+describe('DefaultHydraniumTextDocuments save gate for the editor', () => {
    /** The refusal `assertLanguageClientHolds` throws, as the fields a client reads. */
    function refusal(docs: HydraniumTextDocuments<TextDocument>, uri: string, version: number): unknown {
       try {
@@ -583,7 +583,7 @@ describe('HydraniumTextDocuments save gate for the editor', () => {
    });
 });
 
-describe('HydraniumTextDocuments.isLanguageClientBehind', () => {
+describe('DefaultHydraniumTextDocuments.isLanguageClientBehind', () => {
    it('is behind a write while its push is in flight, and not once its echo lands', async () => {
       const { docs, editorAt } = makeStore();
       const editor = editorAt(URI);

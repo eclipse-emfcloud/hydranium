@@ -28,10 +28,13 @@ import type { ProjectManager } from '../../../src/langium/project/project-manage
 import type { ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import type { AdditionalDocumentContribution } from '../../../src/langium/workspace/additional-document-contribution.js';
 import { getLogFilePath, setLogFilePath } from '../../../src/langium/diagnostics/logger.js';
-import { HydraniumWorkspaceManager } from '../../../src/langium/workspace/hydranium-workspace-manager.js';
+import {
+   DefaultHydraniumWorkspaceManager,
+   type HydraniumWorkspaceManager
+} from '../../../src/langium/workspace/hydranium-workspace-manager.js';
 import type * as WorkspaceManagerModule from '../../../src/langium/workspace/hydranium-workspace-manager.js';
 import { DefaultDocumentUriPolicy, RealpathDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
-import { HydraniumLangiumDocuments } from '../../../src/langium/workspace/langium-documents.js';
+import { DefaultHydraniumLangiumDocuments, type HydraniumLangiumDocuments } from '../../../src/langium/workspace/langium-documents.js';
 import { DefaultModelLedger } from '../../../src/documents/model-ledger.js';
 import { DefaultVersionSyncService } from '../../../src/documents/version-sync-service.js';
 import type { ServerSharedServices } from '../../../src/langium/module.js';
@@ -157,14 +160,14 @@ function makeStubs(projectManager: ProjectManager): Stubs {
    return { services, resetCalls, knownDocs };
 }
 
-describe('HydraniumWorkspaceManager phase-0 discovery', () => {
+describe('DefaultHydraniumWorkspaceManager phase-0 discovery', () => {
    /**
     * Exposes the REAL `performStartup`. A subclass that re-implemented it would
     * assert against its own body instead of the framework's: the ordering
     * contract lives in the override, so overriding it away is the one thing this
     * fixture must not do.
     */
-   class ExposingWorkspaceManager extends HydraniumWorkspaceManager {
+   class ExposingWorkspaceManager extends DefaultHydraniumWorkspaceManager {
       runPerformStartup(folders: WorkspaceFolder[]): Promise<LangiumDocument[]> {
          return this.performStartup(folders);
       }
@@ -218,13 +221,13 @@ describe('HydraniumWorkspaceManager phase-0 discovery', () => {
    });
 });
 
-describe('HydraniumWorkspaceManager path-divergence probe', () => {
+describe('DefaultHydraniumWorkspaceManager path-divergence probe', () => {
    const LINK = 'file:///link/ws';
    const REAL = 'file:///real/ws';
    // realpath: the symlinked root resolves elsewhere; everything else is unchanged.
    const realpath = (uri: URI): URI | undefined => (uri.toString() === LINK ? URI.parse(REAL) : uri);
 
-   class ExposingWorkspaceManager extends HydraniumWorkspaceManager {
+   class ExposingWorkspaceManager extends DefaultHydraniumWorkspaceManager {
       runProbe(folders: WorkspaceFolder[]): void {
          this.probePathDivergence(folders);
       }
@@ -270,8 +273,8 @@ describe('HydraniumWorkspaceManager path-divergence probe', () => {
    });
 });
 
-describe('HydraniumWorkspaceManager workspace log target', () => {
-   class ExposingWorkspaceManager extends HydraniumWorkspaceManager {
+describe('DefaultHydraniumWorkspaceManager workspace log target', () => {
+   class ExposingWorkspaceManager extends DefaultHydraniumWorkspaceManager {
       callResolveWorkspaceLogTarget(folders: WorkspaceFolder[]): void {
          this.resolveWorkspaceLogTarget(folders);
       }
@@ -315,14 +318,14 @@ describe('HydraniumWorkspaceManager workspace log target', () => {
  * `ServerLocale.accept` and this manager — for the reason `initialize`'s doc
  * gives. One of them passing says nothing about the other.
  */
-describe('HydraniumWorkspaceManager declared locale in the log', () => {
+describe('DefaultHydraniumWorkspaceManager declared locale in the log', () => {
    function initializeWith(locale: string | undefined): CapturedLine[] {
       const { tracer, lines } = makeCapturingTracer();
       const stubs = makeStubs(new FakeProjectManager());
       // Before the manager is constructed, so the lazily-built `ServerLocale`
       // takes this tracer too — it is the object that reports the declared case.
       (stubs.services as unknown as { Tracer: Tracer }).Tracer = tracer;
-      const mgr = new HydraniumWorkspaceManager(stubs.services);
+      const mgr = new DefaultHydraniumWorkspaceManager(stubs.services);
 
       mgr.initialize({ workspaceFolders: [], locale } as unknown as Parameters<HydraniumWorkspaceManager['initialize']>[0]);
 
@@ -357,7 +360,7 @@ describe('HydraniumWorkspaceManager declared locale in the log', () => {
    });
 });
 
-describe('HydraniumWorkspaceManager cascade rebuild', () => {
+describe('DefaultHydraniumWorkspaceManager cascade rebuild', () => {
    it('resets affected loaded documents to DocumentState.Changed on project change', () => {
       const projectManager = new FakeProjectManager();
       const stubs = makeStubs(projectManager);
@@ -365,7 +368,7 @@ describe('HydraniumWorkspaceManager cascade rebuild', () => {
       const docB = { uri: URI_B } as LangiumDocument;
       stubs.knownDocs.set(URI_A.toString(), docA);
       stubs.knownDocs.set(URI_B.toString(), docB);
-      new HydraniumWorkspaceManager(stubs.services);
+      new DefaultHydraniumWorkspaceManager(stubs.services);
 
       projectManager.fire({
          added: [],
@@ -382,7 +385,7 @@ describe('HydraniumWorkspaceManager cascade rebuild', () => {
    it('silently skips affected URIs whose documents are not loaded', () => {
       const projectManager = new FakeProjectManager();
       const stubs = makeStubs(projectManager);
-      new HydraniumWorkspaceManager(stubs.services);
+      new DefaultHydraniumWorkspaceManager(stubs.services);
 
       projectManager.fire({
          added: [],
@@ -397,7 +400,7 @@ describe('HydraniumWorkspaceManager cascade rebuild', () => {
    it('no-op on event with empty affectedDocuments', () => {
       const projectManager = new FakeProjectManager();
       const stubs = makeStubs(projectManager);
-      new HydraniumWorkspaceManager(stubs.services);
+      new DefaultHydraniumWorkspaceManager(stubs.services);
       projectManager.fire({ added: ['x'], updated: [], removed: [], affectedDocuments: [] });
       expect(stubs.resetCalls).toEqual([]);
    });
@@ -407,8 +410,8 @@ describe('HydraniumWorkspaceManager cascade rebuild', () => {
 // Additional documents
 // ============================================================
 
-describe('HydraniumWorkspaceManager additional documents', () => {
-   class ExposingWorkspaceManager extends HydraniumWorkspaceManager {
+describe('DefaultHydraniumWorkspaceManager additional documents', () => {
+   class ExposingWorkspaceManager extends DefaultHydraniumWorkspaceManager {
       runLoadAdditionalDocuments(folders: WorkspaceFolder[], collector: (document: LangiumDocument) => void): Promise<void> {
          return this.loadAdditionalDocuments(folders, collector);
       }
@@ -532,16 +535,16 @@ describe('HydraniumWorkspaceManager additional documents', () => {
    });
 });
 
-describe('HydraniumWorkspaceManager.wsRelativePath', () => {
+describe('DefaultHydraniumWorkspaceManager.wsRelativePath', () => {
    it('returns the path relative to the provided workspace', () => {
       const stubs = makeStubs(new FakeProjectManager());
-      const mgr = new HydraniumWorkspaceManager(stubs.services);
+      const mgr = new DefaultHydraniumWorkspaceManager(stubs.services);
       expect(mgr.wsRelativePath('file:///workspace/sub/A.a', 'file:///workspace')).toBe('sub/A.a');
    });
 
    it('falls back to the raw string when no workspace folder is known and the uri is a string', () => {
       const stubs = makeStubs(new FakeProjectManager());
-      const mgr = new HydraniumWorkspaceManager(stubs.services);
+      const mgr = new DefaultHydraniumWorkspaceManager(stubs.services);
       // No workspaceFolders configured -> default workspace is undefined ->
       // `typeof uri === 'string' ? uri : ...` returns the string unchanged.
       expect(mgr.wsRelativePath('file:///workspace/A.a')).toBe('file:///workspace/A.a');
@@ -549,14 +552,14 @@ describe('HydraniumWorkspaceManager.wsRelativePath', () => {
 
    it('falls back to uri.path.toString() when no workspace folder is known and the uri is a URI', () => {
       const stubs = makeStubs(new FakeProjectManager());
-      const mgr = new HydraniumWorkspaceManager(stubs.services);
+      const mgr = new DefaultHydraniumWorkspaceManager(stubs.services);
       // `typeof uri === 'string'` is false here -> `uri.path.toString()` branch.
       expect(mgr.wsRelativePath(URI.parse('file:///workspace/A.a'))).toBe('/workspace/A.a');
    });
 });
 
-describe('HydraniumWorkspaceManager after a failed initial build', () => {
-   class FailingWorkspaceManager extends HydraniumWorkspaceManager {
+describe('DefaultHydraniumWorkspaceManager after a failed initial build', () => {
+   class FailingWorkspaceManager extends DefaultHydraniumWorkspaceManager {
       startupError: unknown;
 
       protected override async performStartup(): Promise<LangiumDocument[]> {
@@ -655,14 +658,14 @@ describe('installOperationCancelledSuppression', () => {
       });
    });
 
-   it('is invoked as a side effect of constructing HydraniumWorkspaceManager', async () => {
+   it('is invoked as a side effect of constructing DefaultHydraniumWorkspaceManager', async () => {
       await withFreshModule(fresh => {
          const before = process.listenerCount('unhandledRejection');
-         new fresh.HydraniumWorkspaceManager(makeStubs(new FakeProjectManager()).services);
+         new fresh.DefaultHydraniumWorkspaceManager(makeStubs(new FakeProjectManager()).services);
          // The positive half: the constructor really does install.
          expect(process.listenerCount('unhandledRejection') - before).toBe(1);
          // The negative half: a second instance does not add a second listener.
-         new fresh.HydraniumWorkspaceManager(makeStubs(new FakeProjectManager()).services);
+         new fresh.DefaultHydraniumWorkspaceManager(makeStubs(new FakeProjectManager()).services);
          expect(process.listenerCount('unhandledRejection') - before).toBe(1);
       });
    });
@@ -672,7 +675,7 @@ describe('installOperationCancelledSuppression', () => {
 // Descriptor documents in the initial build
 // ============================================================
 
-describe('HydraniumWorkspaceManager descriptor documents in the initial build', () => {
+describe('DefaultHydraniumWorkspaceManager descriptor documents in the initial build', () => {
    const DESCRIPTOR = URI.parse('file:///workspace/project.test');
    const MEMBER = URI.parse('file:///workspace/member.test');
 
@@ -694,7 +697,7 @@ describe('HydraniumWorkspaceManager descriptor documents in the initial build', 
       }
    }
 
-   class ExposingWorkspaceManager extends HydraniumWorkspaceManager {
+   class ExposingWorkspaceManager extends DefaultHydraniumWorkspaceManager {
       runPerformStartup(folders: WorkspaceFolder[]): Promise<LangiumDocument[]> {
          return this.performStartup(folders);
       }
@@ -773,11 +776,11 @@ describe('HydraniumWorkspaceManager descriptor documents in the initial build', 
 // Loading the workspace documents
 // ============================================================
 
-describe('HydraniumWorkspaceManager loading the workspace documents', () => {
+describe('DefaultHydraniumWorkspaceManager loading the workspace documents', () => {
    const FOLDERS: WorkspaceFolder[] = [{ uri: 'file:///workspace', name: 'workspace' }];
    const FILES = Array.from({ length: 11 }, (_, i) => URI.parse(`file:///workspace/file${i}.test`));
 
-   class ExposingWorkspaceManager extends HydraniumWorkspaceManager {
+   class ExposingWorkspaceManager extends DefaultHydraniumWorkspaceManager {
       runPerformStartup(folders: WorkspaceFolder[]): Promise<LangiumDocument[]> {
          return this.performStartup(folders);
       }
@@ -912,7 +915,7 @@ describe('HydraniumWorkspaceManager loading the workspace documents', () => {
             return makeFakeDocument(uri, makeFakeAstNode<AstNode>({ $type: 'Loaded' }));
          },
          documents: services => {
-            const documents = new HydraniumLangiumDocuments(services);
+            const documents = new DefaultHydraniumLangiumDocuments(services);
             wired.documents = documents;
             services.workspace.ModelLedger = new DefaultModelLedger();
             services.workspace.VersionSyncService = new DefaultVersionSyncService(services as unknown as ServerSharedServices);

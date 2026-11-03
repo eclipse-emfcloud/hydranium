@@ -37,13 +37,17 @@ export const NO_LANGUAGE_FOR_STAND_IN = defineMessage(
 );
 
 /**
- * The registry surface the framework adds on top of Langium's
- * {@link LangiumDocuments}. Declared separately from the implementing class so
- * the shared-services slot can narrow to it: the class takes the services tree
- * as its constructor parameter, so naming the CLASS there would make that type
- * depend on itself.
+ * The registry surface the framework adds on top of Langium's {@link
+ * LangiumDocuments}. A structural slot contract keeps a replacement registry
+ * independent of the default implementation's protected state.
  */
-export interface HydraniumDocumentRegistry extends LangiumDocuments {
+export interface HydraniumLangiumDocuments extends LangiumDocuments {
+   /**
+    * Parse empty text into an unregistered probe. An explicit languageId
+    * selects the grammar independently of the URI; without it the URI must
+    * route to a registered language. Keep parse errors from mandatory syntax.
+    * The result is not persistent content and a later update may read its URI.
+    */
    createEmptyDocument(uri: URI, languageId?: string): LangiumDocument<AstNode>;
 }
 
@@ -68,7 +72,7 @@ export interface HydraniumDocumentRegistry extends LangiumDocuments {
  *    lives outside the filesystem belongs in a virtual document, which carries
  *    real source text.
  */
-export class HydraniumLangiumDocuments extends DefaultLangiumDocuments implements HydraniumDocumentRegistry {
+export class DefaultHydraniumLangiumDocuments extends DefaultLangiumDocuments implements HydraniumLangiumDocuments {
    /** Document-identity seam, shared with the text store, event filters, and builder. */
    protected readonly uriPolicy: DocumentUriPolicy;
 
@@ -104,7 +108,7 @@ export class HydraniumLangiumDocuments extends DefaultLangiumDocuments implement
     * extension rather than on the URI. A caller in that position always knows
     * its language: {@link HydraniumScopeProvider} is bound per grammar, and a
     * request that names no document at all still carries the AST type
-    * `ExtendedServiceRegistry.soleServicesByType` routes on.
+    * `HydraniumServiceRegistry.soleServicesByType` routes on.
     *
     * The result is not registered, so nothing downstream can see it, and
     * `LangiumDocumentFactory.update` would read from disk. It is a probe, not a

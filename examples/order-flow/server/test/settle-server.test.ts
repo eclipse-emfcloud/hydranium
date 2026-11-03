@@ -13,7 +13,7 @@ import {
    type RecoveryBuildRequest,
    type ServerSharedServices
 } from '@hydranium/core';
-import { HydraniumDocumentUpdateHandler } from '@hydranium/core/lsp';
+import { DefaultHydraniumDocumentUpdateHandler } from '@hydranium/core/lsp';
 import { disposeScratchWorkspace, makeScratchWorkspace, settleServer } from '@hydranium/core/testing/node';
 import { Deferred, DocumentState, URI } from '@hydranium/langium';
 import { tick } from '@hydranium/protocol/testing';
@@ -28,7 +28,7 @@ import { WORKSPACE_FILES, WORKSPACE_ROOT, makeServices } from './order-flow-harn
 const HELD_CHANGES = {
    lsp: {
       DocumentUpdateHandler: (shared: ServerSharedServices) =>
-         new HydraniumDocumentUpdateHandler(shared, { debounceMs: 60_000, bypassNonLanguageClientChanges: false })
+         new DefaultHydraniumDocumentUpdateHandler(shared, { debounceMs: 60_000, bypassNonLanguageClientChanges: false })
    }
 };
 
@@ -46,7 +46,7 @@ function recordSettle(settling: Promise<void>, order: string[]): Promise<void> {
 /** Stage a change of `uri` in the update handler, as an editor's keystroke would. */
 function stageChange(shared: ServerSharedServices, uri: URI): void {
    const handler = shared.lsp.DocumentUpdateHandler;
-   if (!(handler instanceof HydraniumDocumentUpdateHandler)) {
+   if (!(handler instanceof DefaultHydraniumDocumentUpdateHandler)) {
       throw new Error('the update handler is not the one HELD_CHANGES binds');
    }
    handler.didChangeContent({ document: TextDocument.create(uri.toString(), 'domain', 2, '') });

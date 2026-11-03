@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { HydraniumScopeProvider } from '@hydranium/core';
+import { DefaultHydraniumScopeProvider } from '@hydranium/core';
 import { AstUtils, EMPTY_SCOPE, type ReferenceInfo, type Scope, URI } from '@hydranium/langium';
 import { type DiagramNode, isDiagramNode, isProcessModel } from './ast.js';
 import { processUriFor } from './layout-file.js';
@@ -43,7 +43,7 @@ import { processUriFor } from './layout-file.js';
  * `outerScope` is passed, which is what makes a layout entry naming a node of
  * some *other* process fail to link rather than quietly find it.
  */
-export class OrderFlowLayoutScopeProvider extends HydraniumScopeProvider {
+export class OrderFlowLayoutScopeProvider extends DefaultHydraniumScopeProvider {
    override getScope(context: ReferenceInfo): Scope {
       if (context.property === 'flowNode' && isDiagramNode(context.container)) {
          return this.createFlowNodeScope(context.container);

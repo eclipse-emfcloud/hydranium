@@ -58,8 +58,8 @@ against a base the document never contained.
 
 ## Text authority during a build
 
-The shared text store is `HydraniumTextDocuments`, keyed by canonical URI. Its
-server-owned content version
+The shared text store is `DefaultHydraniumTextDocuments`, keyed by canonical
+URI. Its server-owned content version
 ([Versions](../../concepts/document-layers.md#versions)) is distinct from the
 version an LSP client declares for its own buffer. A language-client shadow
 records the client-facing URI and the buffer an outbound edit is calculated
@@ -211,10 +211,10 @@ registers, with no `origin`. A residency service that sheds a CST produces no
 model: it records the root's text with `ModelLedger.record` before shedding,
 since reconciling would step a closed document's sequence.
 
-A factory that does not extend `HydraniumLangiumDocumentFactory` must also
-graft in `update`. A shed document the builder resets to `Changed` reaches
-only the factory, and a re-parse there gives its dependents' references
-nodes the document no longer holds.
+A factory that does not extend `DefaultHydraniumLangiumDocumentFactory` must
+also graft in `update`. A shed document the builder resets to `Changed` reaches
+only the factory, and a re-parse there gives its dependents' references nodes
+the document no longer holds.
 
 A model nobody reported reads `UNRECORDED_VERSION`. Waits count it as synced,
 so a read of it loses its freshness guarantee, and every write gated on its

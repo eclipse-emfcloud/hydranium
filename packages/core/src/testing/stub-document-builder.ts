@@ -23,7 +23,8 @@ import {
    type BuildEndedEvent,
    type BuildEndedListener,
    type DocumentPhaseDeliveredListener,
-   HydraniumDocumentBuilder
+   DefaultHydraniumDocumentBuilder,
+   type HydraniumDocumentBuilder
 } from '../langium/document-builder/document-builder.js';
 import { refuseWaitInRead } from '../langium/workspace/read-lock-scope.js';
 
@@ -190,7 +191,7 @@ export function makeStubDocumentBuilder(workspaceLock?: WorkspaceLock): StubDocu
       // as it does against the real builder.
       updateBuildOptions: { validation: { categories: ['built-in', 'fast'] } },
       // The real rule, read off this stub's options, so the two cannot drift.
-      finalBuildState: () => HydraniumDocumentBuilder.prototype.finalBuildState.call(stub),
+      finalBuildState: () => DefaultHydraniumDocumentBuilder.prototype.finalBuildState.call(stub),
       // Langium's default for an update, read off this stub's options rather
       // than each document's own build options, as the real builder does.
       shouldValidateDocument: () => Boolean(stub.updateBuildOptions.validation),

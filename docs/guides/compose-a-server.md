@@ -27,7 +27,7 @@ on the same shared services, so every head works on the same workspace.
 
 <!-- snippet-preamble
 import type { ServerAddedServices, ServerSharedServices } from '@hydranium/core';
-import type { LspServerAddedServices, LspServerAddedSharedServices } from '@hydranium/core/lsp';
+import type { LspServerAddedSharedServices } from '@hydranium/core/lsp';
 import type { DeepPartial, Module } from '@hydranium/langium';
 import type { LangiumServices, PartialLangiumServices, PartialLangiumSharedServices } from '@hydranium/langium/lsp';
 declare const MySerializer: new (services: MyServices) => ServerAddedServices['serializer']['Serializer'];
@@ -40,7 +40,7 @@ import { EmptyFileSystem } from '@hydranium/langium';
 import { DomainGeneratedModule, OrderFlowGeneratedSharedModule } from './generated/module.js';
 
 export type MySharedServices = ServerSharedServices & LspServerAddedSharedServices;
-export type MyServices = LangiumServices & ServerAddedServices & LspServerAddedServices & { shared: MySharedServices };
+export type MyServices = LangiumServices & ServerAddedServices & { shared: MySharedServices };
 
 const MySharedModule: Module<MySharedServices, PartialLangiumSharedServices> = {};
 

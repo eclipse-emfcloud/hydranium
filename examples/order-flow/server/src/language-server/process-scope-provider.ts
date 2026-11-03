@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { HydraniumScopeProvider } from '@hydranium/core';
+import { DefaultHydraniumScopeProvider } from '@hydranium/core';
 import { EMPTY_SCOPE, type ReferenceInfo, type Scope } from '@hydranium/langium';
 import { type Field, type Read, type Write, isEnumeration, isRead, isWrite } from './ast.js';
 
@@ -47,7 +47,7 @@ import { type Field, type Read, type Write, isEnumeration, isRead, isWrite } fro
  * `outerScope` is passed, which is what makes `Order.nosuchfield` fail rather
  * than find a same-named field on some unrelated type.
  */
-export class OrderFlowProcessScopeProvider extends HydraniumScopeProvider {
+export class OrderFlowProcessScopeProvider extends DefaultHydraniumScopeProvider {
    override getScope(context: ReferenceInfo): Scope {
       const container = context.container;
       if (context.property === 'field' && (isWrite(container) || isRead(container))) {

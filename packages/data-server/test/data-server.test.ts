@@ -434,7 +434,7 @@ describe('DataServer', () => {
          }
       });
 
-      it('propagates the clientId to authorship via HydraniumTextDocuments', async () => {
+      it('propagates the clientId to authorship via DefaultHydraniumTextDocuments', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
          const { proxy, pair } = makeHarness(bundle.services);
@@ -2813,7 +2813,7 @@ interface MultiLanguageStub {
  * the id-based path is exercised.
  *
  * Routing runs through the framework's own {@link makeStubServiceRegistry} —
- * a real `ExtendedServiceRegistry` — rather than a hand-rolled lookup, so
+ * a real `HydraniumServiceRegistry` — rather than a hand-rolled lookup, so
  * `getServices` / `hasServices` behave here exactly as they do in a booted
  * server.
  */

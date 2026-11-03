@@ -17,7 +17,7 @@ import {
    describeErrorWithStack
 } from '@hydranium/protocol';
 import { URI, UriUtils } from '@hydranium/langium';
-import { DefaultDocumentUpdateHandler } from '@hydranium/langium/lsp';
+import { type DocumentUpdateHandler, DefaultDocumentUpdateHandler } from '@hydranium/langium/lsp';
 import { HYDRANIUM_BUILD_REASONS, type HydraniumDocumentBuilder } from '../langium/document-builder/document-builder.js';
 import { type ServerSharedServices } from '../langium/module.js';
 import { LANGUAGE_CLIENT_ID } from '../documents/client-ids.js';
@@ -78,6 +78,20 @@ export interface HydraniumDocumentUpdateHandlerOptions {
 }
 
 /**
+ * LSP document events with a drain for deferred updates. Server settling calls
+ * the drain before waiting for builds, so a handler must not leave changes held
+ * only by a timer after it returns.
+ */
+export interface HydraniumDocumentUpdateHandler extends DocumentUpdateHandler {
+   /**
+    * Cancel any pending debounce and dispatch the accumulated changes and
+    * deletions. Does not wait for the resulting build; callers settle the
+    * builder separately.
+    */
+   flushPending(): void;
+}
+
+/**
  * Framework `DocumentUpdateHandler` adding these behaviours over Langium's
  * default:
  *
@@ -118,7 +132,7 @@ export interface HydraniumDocumentUpdateHandlerOptions {
  * preserved. The {@link dispatch} hook is the canonical override
  * point for adopters that need to stamp additional per-build metadata.
  */
-export class HydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler {
+export class DefaultHydraniumDocumentUpdateHandler extends DefaultDocumentUpdateHandler implements HydraniumDocumentUpdateHandler {
    /**
     * Narrow Langium's `DefaultDocumentUpdateHandler.documentBuilder` typing to
     * the framework subclass: `scheduleUpdate` is the only method this handler

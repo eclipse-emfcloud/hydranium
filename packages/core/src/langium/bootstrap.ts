@@ -14,17 +14,17 @@ import type { ServerSharedServices } from './module.js';
 import { collectProducibleTypes } from './language-types.js';
 import { assertSingleLangiumCopy } from './single-langium-copy.js';
 import { DefaultAstDocumentManager } from '../documents/ast-document-manager.js';
-import { HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
 import { DefaultBuildPipelineIntegration } from './document-builder/build-pipeline-integration.js';
-import { HydraniumDocumentBuilder } from './document-builder/document-builder.js';
+import { DefaultHydraniumDocumentBuilder } from './document-builder/document-builder.js';
 import { DefaultModelService } from './model-service/model-service.js';
 import { HydraniumScopeComputation } from './scope/hydranium-scope-computation.js';
-import { HydraniumScopeProvider } from './scope/hydranium-scope-provider.js';
+import { DefaultHydraniumScopeProvider } from './scope/hydranium-scope-provider.js';
 import { processEnv } from '../util/environment.js';
 import { DefaultTransferEncoder } from './transfer/transfer-encoder.js';
-import { HydraniumLangiumDocumentFactory } from './workspace/hydranium-langium-document-factory.js';
-import { HydraniumLangiumDocuments } from './workspace/langium-documents.js';
-import { HydraniumWorkspaceManager } from './workspace/hydranium-workspace-manager.js';
+import { DefaultHydraniumLangiumDocumentFactory } from './workspace/hydranium-langium-document-factory.js';
+import { DefaultHydraniumLangiumDocuments } from './workspace/langium-documents.js';
+import { DefaultHydraniumWorkspaceManager } from './workspace/hydranium-workspace-manager.js';
 
 /**
  * Side: which side of the DI tree a missing slot lives on. Drives the
@@ -193,31 +193,36 @@ interface StrictSlot {
 }
 
 const STRICT_SHARED_SLOTS: readonly StrictSlot[] = [
-   { side: 'shared', path: 'workspace.TextDocuments', base: HydraniumTextDocuments, get: s => nested(s, 'workspace', 'TextDocuments') },
+   {
+      side: 'shared',
+      path: 'workspace.TextDocuments',
+      base: DefaultHydraniumTextDocuments,
+      get: s => nested(s, 'workspace', 'TextDocuments')
+   },
    // Every root it builds records no version, so every write gated on one conflicts.
    {
       side: 'shared',
       path: 'workspace.LangiumDocumentFactory',
-      base: HydraniumLangiumDocumentFactory,
+      base: DefaultHydraniumLangiumDocumentFactory,
       get: s => nested(s, 'workspace', 'LangiumDocumentFactory')
    },
    // It reports no registered root, so none is reconciled with the text store or announced.
    {
       side: 'shared',
       path: 'workspace.LangiumDocuments',
-      base: HydraniumLangiumDocuments,
+      base: DefaultHydraniumLangiumDocuments,
       get: s => nested(s, 'workspace', 'LangiumDocuments')
    },
    {
       side: 'shared',
       path: 'workspace.WorkspaceManager',
-      base: HydraniumWorkspaceManager,
+      base: DefaultHydraniumWorkspaceManager,
       get: s => nested(s, 'workspace', 'WorkspaceManager')
    },
    {
       side: 'shared',
       path: 'workspace.DocumentBuilder',
-      base: HydraniumDocumentBuilder,
+      base: DefaultHydraniumDocumentBuilder,
       get: s => nested(s, 'workspace', 'DocumentBuilder')
    },
    {
@@ -243,7 +248,12 @@ const STRICT_LANGUAGE_SLOTS: readonly StrictSlot[] = [
       base: HydraniumScopeComputation,
       get: s => nested(s, 'references', 'ScopeComputation')
    },
-   { side: 'services', path: 'references.ScopeProvider', base: HydraniumScopeProvider, get: s => nested(s, 'references', 'ScopeProvider') }
+   {
+      side: 'services',
+      path: 'references.ScopeProvider',
+      base: DefaultHydraniumScopeProvider,
+      get: s => nested(s, 'references', 'ScopeProvider')
+   }
 ];
 
 function strictBindingsEnabled(): boolean {
@@ -484,7 +494,7 @@ export function bootstrapLangiumLanguages<TShared extends LangiumSharedServices 
 
 /**
  * A registry that can take its shared services after construction. Structural
- * rather than an `instanceof HydraniumServiceRegistry` check so an adopter
+ * rather than an `instanceof DefaultHydraniumServiceRegistry` check so an adopter
  * registry that implements the method without extending the framework base
  * still gets the languageId rung.
  */

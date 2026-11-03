@@ -9,6 +9,7 @@
 
 import { Deferred, type Logger, type Tracer, describeError, describeErrorWithStack } from '@hydranium/protocol';
 import {
+   type WorkspaceManager,
    DefaultWorkspaceManager,
    DocumentState,
    interruptAndCheck,
@@ -123,11 +124,29 @@ export interface HydraniumWorkspaceManagerOptions extends LogNameOptions {
    /**
     * Whether startup warns about seeded documents the bound
     * `FileSystemProvider` cannot serve (see
-    * {@link HydraniumWorkspaceManager.warnIfDocumentsUnserved}). Defaults to
+    * {@link DefaultHydraniumWorkspaceManager.warnIfDocumentsUnserved}). Defaults to
     * `true`; turn it off for a host that drops such documents at their last
     * close on purpose.
     */
    warnUnservedDocuments?: boolean;
+}
+
+/**
+ * Workspace startup and URI presentation shared by the server heads. Project
+ * discovery must precede indexing so documents are assigned to their projects
+ * during the first build.
+ */
+export interface HydraniumWorkspaceManager extends WorkspaceManager {
+   /**
+    * Settles when workspace initialization has finished; consumers await it
+    * before handling document opens.
+    */
+   readonly workspaceInitialized: Promise<unknown>;
+   /**
+    * Format relative to the supplied workspace URI, or the first workspace
+    * folder. Return the URI string when no workspace folder is known.
+    */
+   wsRelativePath(uri: URI | string, workspace?: string): string;
 }
 
 /**
@@ -170,7 +189,7 @@ export interface HydraniumWorkspaceManagerOptions extends LogNameOptions {
  * from the affected set by `AbstractProjectManager.onBuildUpdate` —
  * re-adding them would loop.
  */
-export class HydraniumWorkspaceManager extends DefaultWorkspaceManager {
+export class DefaultHydraniumWorkspaceManager extends DefaultWorkspaceManager implements HydraniumWorkspaceManager {
    protected readonly projectManager: ProjectManager;
    protected readonly tracer: Tracer;
 

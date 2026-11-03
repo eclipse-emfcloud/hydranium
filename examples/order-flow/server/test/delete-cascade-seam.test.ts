@@ -29,7 +29,7 @@
  * array, which is why the seam had no coverage at all.
  */
 
-import { HydraniumDocumentBuilder, initializeWorkspaceProgrammatically } from '@hydranium/core';
+import { DefaultHydraniumDocumentBuilder, initializeWorkspaceProgrammatically } from '@hydranium/core';
 import { NodeFileSystem } from '@hydranium/core/node';
 import { disposeScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/testing/node';
 import { URI } from '@hydranium/langium';
@@ -47,7 +47,7 @@ const DELETED_DIRECTORY = 'orders';
  * Builder whose cascade adds URIs from outside the deleted path, the way an
  * adopter's domain-aware override does.
  */
-class OutOfTreeCascadeBuilder extends HydraniumDocumentBuilder {
+class OutOfTreeCascadeBuilder extends DefaultHydraniumDocumentBuilder {
    /**
     * Set after construction rather than passed in: the framework constructs the
     * builder from the services tree alone, so a factory has nowhere to thread an

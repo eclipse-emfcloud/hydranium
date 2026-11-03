@@ -20,10 +20,13 @@ import { type ElementKeyProvider } from './keys/element-key-provider.js';
 import { DefaultLabelProvider, type LabelProvider } from './labeling/label-provider.js';
 import { DefaultNameProvider, type NameProvider } from './naming/name-provider.js';
 import { NameSeparatorCheckContribution } from './naming/name-separator-validation.js';
-import { HydraniumAstNodeDescriptionProvider } from './scope/ast-node-description-provider.js';
+import {
+   DefaultHydraniumAstNodeDescriptionProvider,
+   type HydraniumAstNodeDescriptionProvider
+} from './scope/ast-node-description-provider.js';
 import { type ReferenceCandidateProvider, DefaultReferenceCandidateProvider } from './scope/reference-candidate-provider.js';
 import { HydraniumScopeComputation } from './scope/hydranium-scope-computation.js';
-import { HydraniumScopeProvider } from './scope/hydranium-scope-provider.js';
+import { DefaultHydraniumScopeProvider, type HydraniumScopeProvider } from './scope/hydranium-scope-provider.js';
 import { DefaultReferenceBuilder, type ReferenceBuilder } from './scope/reference-builder.js';
 import { type ScopeExtensionContribution } from './scope/scope-extension-contribution.js';
 import { DefaultScopeExtensionService, type ScopeExtensionService } from './scope/scope-extension-service.js';
@@ -56,7 +59,6 @@ import { type ServerModuleContext, type ServerSharedServices } from './module.js
  */
 export interface ServerAddedServices {
    references: {
-      ScopeComputation: HydraniumScopeComputation;
       ScopeProvider: HydraniumScopeProvider;
       /**
        * Cross-reference candidate provider — owns the candidate-side
@@ -310,7 +312,7 @@ export type HydraniumLanguageServices = LangiumCoreServices &
  * Extends {@link HydraniumLanguageServices} with the LSP-enabled
  * `LangiumServices` surface. The narrowed `.shared: ServerSharedServices` flows through from
  * `HydraniumLanguageServices` so framework-bound classes constructed at
- * the binding site (e.g. `services => new HydraniumScopeProvider(services)`)
+ * the binding site (e.g. `services => new DefaultHydraniumScopeProvider(services)`)
  * see the framework-extended shared tree without a cast.
  *
  * Adopters whose per-language type intersects `LangiumServices &
@@ -340,7 +342,7 @@ export function createServerLanguageModule(
    return {
       references: {
          ScopeComputation: services => new HydraniumScopeComputation(services),
-         ScopeProvider: services => new HydraniumScopeProvider(services),
+         ScopeProvider: services => new DefaultHydraniumScopeProvider(services),
          CandidateProvider: services => new DefaultReferenceCandidateProvider(services),
          NameProvider: services => new DefaultNameProvider(services),
          ElementKeyProvider: services => new DefaultElementKeyProvider(services),
@@ -356,7 +358,7 @@ export function createServerLanguageModule(
          CommentProvider: services => new HydraniumCommentProvider(services)
       },
       workspace: {
-         AstNodeDescriptionProvider: services => new HydraniumAstNodeDescriptionProvider(services),
+         AstNodeDescriptionProvider: services => new DefaultHydraniumAstNodeDescriptionProvider(services),
          AstNodeLocator: () => new HydraniumAstNodeLocator()
       },
       ast: {

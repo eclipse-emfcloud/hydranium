@@ -15,14 +15,16 @@ import type { SelfSaveRegistry } from './workspace/self-save-registry.js';
 import type { ModelLedger } from '../documents/model-ledger.js';
 import type { VersionSyncService } from '../documents/version-sync-service.js';
 import type { WritableFileSystemProvider } from './workspace/file-system-provider.js';
-import type { HydraniumDocumentRegistry } from './workspace/langium-documents.js';
+import type { HydraniumLangiumDocumentFactory } from './workspace/hydranium-langium-document-factory.js';
+import type { HydraniumLangiumDocuments } from './workspace/langium-documents.js';
 import type { BuildPhasePassService } from './build-phase-pass/build-phase-pass-service.js';
 import type { CstResidencyService } from './residency/cst-residency-service.js';
 import type { BuildPipelineIntegration } from './document-builder/build-pipeline-integration.js';
 import type { ProjectManager } from './project/project-manager.js';
-import type { ExtendedServiceRegistry } from './service-registry.js';
+import type { HydraniumServiceRegistry } from './service-registry.js';
 import type { DocumentUriPolicy } from './workspace/document-uri-policy.js';
 import type { HydraniumWorkspaceManager } from './workspace/hydranium-workspace-manager.js';
+import type { HydraniumWorkspaceLock } from './workspace/hydranium-workspace-lock.js';
 import type { HydraniumDocumentBuilder } from './document-builder/document-builder.js';
 import type { AdditionalDocumentContribution } from './workspace/additional-document-contribution.js';
 
@@ -35,7 +37,7 @@ import type { AdditionalDocumentContribution } from './workspace/additional-docu
  * time source, emission-only logger, and the measure-and-emit tracer composed
  * from the other two), the {@link AdditionalDocumentContribution} group, the
  * {@link MessageRenderer} and the {@link ServerLocale} it renders in,
- * an {@link ExtendedServiceRegistry}, and on `workspace` a writable file-system
+ * an {@link HydraniumServiceRegistry}, and on `workspace` a writable file-system
  * provider plus {@link HydraniumWorkspaceManager}, {@link ProjectManager},
  * {@link SelfSaveRegistry}, {@link BuildPipelineIntegration},
  * {@link BuildPhasePassService}, {@link CstResidencyService},
@@ -73,32 +75,35 @@ export interface ServerSharedServicesMinimal<TProject extends Project = Project>
    /** The locale an init handed the server, for whoever renders in it. */
    ServerLocale: ServerLocale;
    /**
-    * Narrows Langium's base `ServiceRegistry` slot to the framework impl the
-    * framework always binds, so the abstaining lookups — `getServicesFor`
+    * Narrows Langium's base `ServiceRegistry` slot to the framework contract,
+    * so the abstaining lookups — `getServicesFor`
     * above all — are reachable from the minimal surface without a cast. The
     * generic stays at its `LangiumCoreServices` default: this shape is what a
     * component reads when it needs core services only, and the LSP-bound
     * surface re-narrows the same slot to
-    * `ExtendedServiceRegistry<ServerLanguageServices>`.
+    * `HydraniumServiceRegistry<ServerLanguageServices>`.
     */
-   ServiceRegistry: ExtendedServiceRegistry;
+   ServiceRegistry: HydraniumServiceRegistry;
    workspace: LangiumSharedCoreServices['workspace'] & {
       // Writable (`realpath`/`mtimeMs`/`writeFile`) — the framework always binds
       // a writable provider; `RealpathDocumentUriPolicy` reads `realpath` here.
       FileSystemProvider: WritableFileSystemProvider;
-      // Narrows Langium's base `WorkspaceManager` slot to the framework impl the
-      // framework always binds, so `wsRelativePath` and the folder-walk are
+      // Narrows Langium's base `WorkspaceManager` slot to the framework contract, so `wsRelativePath` and the folder-walk are
       // reachable from the minimal surface without a cast.
       WorkspaceManager: HydraniumWorkspaceManager;
       // Same, for the registry: the framework always binds
-      // `HydraniumLangiumDocuments`, and `createEmptyDocument` is reachable
+      // `DefaultHydraniumLangiumDocuments`, and `createEmptyDocument` is reachable
       // only through this narrowing — a scope provider querying a URI before
       // the file exists is the caller that needs it.
-      /* override */ LangiumDocuments: HydraniumDocumentRegistry;
+      /* override */ LangiumDocuments: HydraniumLangiumDocuments;
+      /** Empty-document probes can select a grammar independently of the URI. */
+      /* override */ LangiumDocumentFactory: HydraniumLangiumDocumentFactory;
       // Same, for the builder: only the framework's has `onBuildEnded`, which a
       // per-build report needs because Langium's phases stay silent for a
       // build that validates nothing.
       /* override */ DocumentBuilder: HydraniumDocumentBuilder;
+      /** Recovery must distinguish cancelled writes from completed builds. */
+      /* override */ WorkspaceLock: HydraniumWorkspaceLock;
       ProjectManager: ProjectManager<TProject>;
       SelfSaveRegistry: SelfSaveRegistry;
       BuildPipelineIntegration: BuildPipelineIntegration;

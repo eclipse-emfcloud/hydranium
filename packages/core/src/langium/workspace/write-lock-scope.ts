@@ -29,7 +29,7 @@
  * implementation at entry load. A browser bundle therefore gets NO detection
  * rather than a broken approximation, which is the right degradation — the
  * reentrant shape is a server-side build concern, and a false negative costs
- * the stall, which `HydraniumWorkspaceLock` reports once the stalled write
+ * the stall, which `DefaultHydraniumWorkspaceLock` reports once the stalled write
  * outlives its cancellation, while a false positive would reject a legitimate
  * write. Detection without a tracker is tracked in
  * https://github.com/eclipse-emfcloud/hydranium/issues/245.

@@ -6,7 +6,7 @@ adopter's view, the tiers and the four seams, is in
 
 ## Two services, one direction
 
-Both live in `core/src/langium/scope/`. **`HydraniumScopeProvider`** owns
+Both live in `core/src/langium/scope/`. **`DefaultHydraniumScopeProvider`** owns
 scope and reference resolution, including the bridge from protocol-level
 sources to Langium's `ReferenceInfo`. **`ReferenceCandidateProvider`** owns
 the candidate pipeline that turns a scope into the candidates dropdowns, GLSP
