@@ -122,7 +122,8 @@ describe('composeInitArgv', () => {
          grammars: [{ name: 'Bookstore', extension: 'bookstore', diagram: false }],
          force: false,
          monorepo: false,
-         public: false
+         public: false,
+         install: false
       });
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore']);
    });
@@ -141,7 +142,8 @@ describe('composeInitArgv', () => {
          grammars: [{ name: 'OrderFlow', extension: 'order', diagram: false }],
          force: false,
          monorepo: false,
-         public: false
+         public: false,
+         install: false
       });
       expect(argv).toEqual(['./order-flow', '--name', 'OrderFlow', '--grammar', 'OrderFlow', '--extensions', 'order']);
       // And the argv still means what it says: the grammar stays unqualified,
@@ -165,7 +167,8 @@ describe('composeInitArgv', () => {
          force: false,
          monorepo: true,
          scope: '@acme',
-         public: true
+         public: true,
+         install: false
       });
       expect(argv).toEqual([
          './order-flow',
@@ -201,8 +204,44 @@ describe('pascalCase', () => {
 });
 
 describe('runInitWizard', () => {
+   it('keeps an explicit install standalone when an enclosing workspace is detected', async () => {
+      const prompt = scriptedPrompt(['Example', ['data'], 'Example', 'example', false, false]);
+      const argv = await runInitWizard(prompt, () => DETECTION, { targetDir: './example', install: true, isOccupied: () => false });
+      expect(argv).toEqual(['./example', '--name', 'Example', '--heads', 'data', '--install']);
+      expect(prompt.asked).not.toContain('Scaffold as a member of that workspace?');
+      expect(prompt.notes.join('\n')).toContain('--install requires a standalone project');
+   });
+
+   it.each([true, false])('ends a standalone wizard with the installation choice %s', async install => {
+      const prompt = scriptedPrompt(['Example', ['data'], 'Example', 'example', false, false, install]);
+      const argv = await runInitWizard(prompt, () => undefined, { targetDir: './example', isOccupied: () => false });
+      expect(prompt.asked.at(-1)).toBe('Install dependencies now (npm install)?');
+      expect(argv.includes('--install')).toBe(install);
+      expect(prompt.echoed()).toBe(formatCommand(argv));
+   });
+
+   it('preserves an explicit install flag in the echoed command without another question', async () => {
+      const prompt = scriptedPrompt(['Example', ['lsp', 'data'], false, false, false, false, 'Example', 'example', false, false]);
+      const argv = await runInitWizard(prompt, () => undefined, { targetDir: './example', install: true, isOccupied: () => false });
+      expect(argv).toEqual(['./example', '--name', 'Example', '--install']);
+      expect(prompt.echoed()).toBe('hydranium-cli init ./example --name Example --install');
+      expect(prompt.asked.some(question => /install/i.test(question))).toBe(false);
+   });
+
    it('takes the derived defaults and asks nothing about a workspace when there is none', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, false, false, false, 'Bookstore', 'bookstore', false, false]);
+      const prompt = scriptedPrompt([
+         'Bookstore',
+         ['lsp', 'data'],
+         false,
+         false,
+         false,
+         false,
+         'Bookstore',
+         'bookstore',
+         false,
+         false,
+         false
+      ]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore']);
@@ -221,7 +260,19 @@ describe('runInitWizard', () => {
     * early, and neither of them can be allowed to skip the question with it.
     */
    it('asks about publishability when no workspace was detected at all', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, false, false, false, 'Bookstore', 'bookstore', false, true]);
+      const prompt = scriptedPrompt([
+         'Bookstore',
+         ['lsp', 'data'],
+         false,
+         false,
+         false,
+         false,
+         'Bookstore',
+         'bookstore',
+         false,
+         true,
+         false
+      ]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(prompt.asked).toContain(PUBLISHABLE);
@@ -240,7 +291,8 @@ describe('runInitWizard', () => {
          'bookstore',
          false,
          false,
-         true
+         true,
+         false
       ]);
       const argv = await runInitWizard(prompt, () => DETECTION, { targetDir: './bookstore', isOccupied: () => false });
 
@@ -265,7 +317,8 @@ describe('runInitWizard', () => {
          'bookstore',
          false,
          false,
-         true
+         true,
+         false
       ]);
       await runInitWizard(prompt, () => DETECTION, { targetDir: './bookstore', isOccupied: () => false });
 
@@ -321,7 +374,19 @@ describe('runInitWizard', () => {
     * would offer a choice whose "no" it would then overrule.
     */
    it('does not ask which grammar the diagram edits when there is only one', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'glsp'], false, false, false, false, 'Bookstore', 'bookstore', false, false]);
+      const prompt = scriptedPrompt([
+         'Bookstore',
+         ['lsp', 'glsp'],
+         false,
+         false,
+         false,
+         false,
+         'Bookstore',
+         'bookstore',
+         false,
+         false,
+         false
+      ]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(prompt.asked).not.toContain('Which grammar does the GLSP diagram edit?');
@@ -330,7 +395,7 @@ describe('runInitWizard', () => {
    });
 
    it('composes a head set without lsp in composition order, offering the browser host through the diagram', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['glsp', 'data'], false, 'Bookstore', 'bookstore', false, false]);
+      const prompt = scriptedPrompt(['Bookstore', ['glsp', 'data'], false, 'Bookstore', 'bookstore', false, false, false]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore', '--heads', 'data,glsp']);
@@ -341,7 +406,7 @@ describe('runInitWizard', () => {
    });
 
    it('does not offer a host without a head it saves through', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['data'], 'Bookstore', 'bookstore', false, false]);
+      const prompt = scriptedPrompt(['Bookstore', ['data'], 'Bookstore', 'bookstore', false, false, false]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore', '--heads', 'data']);
@@ -506,6 +571,7 @@ describe('runInitWizard', () => {
          'Shared',
          'process',
          false,
+         false,
          false
       ]);
       await runInitWizard(prompt, () => undefined, { targetDir: './order-flow', isOccupied: () => false });
@@ -527,6 +593,7 @@ describe('runInitWizard', () => {
          'Process',
          'shared',
          'process',
+         false,
          false,
          false
       ]);
@@ -563,6 +630,7 @@ describe('runInitWizard', () => {
          'Bookstore',
          'bookstore',
          false,
+         false,
          false
       ]);
       const argv = await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => true });
@@ -584,7 +652,19 @@ describe('runInitWizard', () => {
    });
 
    it('says nothing about emptiness when the target is empty', async () => {
-      const prompt = scriptedPrompt(['Bookstore', ['lsp', 'data'], false, false, false, false, 'Bookstore', 'bookstore', false, false]);
+      const prompt = scriptedPrompt([
+         'Bookstore',
+         ['lsp', 'data'],
+         false,
+         false,
+         false,
+         false,
+         'Bookstore',
+         'bookstore',
+         false,
+         false,
+         false
+      ]);
       await runInitWizard(prompt, () => undefined, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(prompt.asked.some(question => question.includes('not empty'))).toBe(false);
@@ -608,5 +688,6 @@ describe('runInitWizard', () => {
       const argv = await runInitWizard(prompt, () => DETECTION, { targetDir: './bookstore', isOccupied: () => false });
 
       expect(argv).toEqual(['./bookstore', '--name', 'Bookstore', '--monorepo']);
+      expect(prompt.asked.some(question => /install/i.test(question))).toBe(false);
    });
 });

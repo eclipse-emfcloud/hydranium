@@ -284,6 +284,8 @@ export interface InitCommandOptions {
    readonly hosts?: readonly InitHost[];
    /** Scaffold into a non-empty directory anyway. */
    readonly force?: boolean;
+   /** Install dependencies after scaffolding. Only supported for standalone projects. */
+   readonly install?: boolean;
    /**
     * Scaffold a member of the surrounding npm workspace: extend its base
     * tsconfig and address the package by `--prefix` in the scripts it prints
@@ -597,16 +599,21 @@ function formatScaffold(targetDir: string, files: readonly InitFile[], write: (l
    }
 }
 
+export function validateInitInstallation(options: Pick<InitCommandOptions, 'install' | 'monorepo'>): void {
+   if (options.install && options.monorepo) {
+      throw new Error('--install cannot be combined with --monorepo: update the parent workspace manifest before running npm install.');
+   }
+}
+
 /**
  * Scaffold a new Hydranium language project end-to-end: one starter grammar per
  * `--grammar`, `create<Name>Services` DI wiring, a launcher for each head in
- * `--heads`, `langium-config.json`, `package.json`, and scripts. Does NOT run `npm install`
- * or `langium generate` — those are printed as next steps, so the command stays
- * offline and changes nothing beyond the files it writes, which a standalone
- * scaffold's oxfmt then formats. Refuses a non-empty target directory unless
- * `force`.
+ * `--heads`, `langium-config.json`, `package.json`, and scripts. Stays offline
+ * unless `install` opts into npm and its lifecycle scripts. Building remains a
+ * next step. Refuses a non-empty target directory unless `force`.
  */
 export function runInit(options: InitCommandOptions): void {
+   validateInitInstallation(options);
    const write = options.write ?? ((line: string) => process.stdout.write(line));
    const targetDir = path.resolve(options.targetDir);
    const detection = options.monorepo ? detectWorkspace(targetDir, options.probe ?? createNodeWorkspaceProbe()) : undefined;
@@ -691,6 +698,39 @@ export function runInit(options: InitCommandOptions): void {
          write(`  Sibling packages all use the "${detection.scope}" scope; pass --scope ${detection.scope} to match them.\n`);
       }
    }
+   if (options.install) {
+      write('\nRunning npm install...\n');
+      const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+      // --prefix also changes npm's default globalconfig. Resolve it first without walking into an enclosing workspace.
+      const config = spawnSync(npm, ['config', 'get', 'globalconfig', '--workspaces=false'], {
+         cwd: targetDir,
+         encoding: 'utf8',
+         stdio: ['ignore', 'pipe', 'inherit'],
+         shell: process.platform === 'win32'
+      });
+      const globalconfig = config.stdout?.trim();
+      if (config.error || config.signal || config.status !== 0 || !globalconfig) {
+         const reason = config.error?.message ?? (config.signal ? `signal ${config.signal}` : `exit code ${config.status}`);
+         throw new Error(
+            `Could not read npm global configuration (${reason}). Scaffold kept at ${targetDir}; installation was not started.`
+         );
+      }
+      // An explicit prefix keeps npm from selecting an enclosing workspace instead of this standalone root.
+      // Windows resolves npm through a command shim; only fixed arguments reach the shell.
+      const result = spawnSync(npm, ['--prefix', '.', 'install'], {
+         cwd: targetDir,
+         stdio: 'inherit',
+         shell: process.platform === 'win32',
+         env: { ...process.env, npm_config_globalconfig: globalconfig }
+      });
+      if (result.error || result.signal || result.status !== 0) {
+         const reason = result.error?.message ?? (result.signal ? `signal ${result.signal}` : `exit code ${result.status}`);
+         throw new Error(
+            `npm install failed (${reason}). Scaffold kept at ${targetDir}. ` +
+               `Set npm_config_globalconfig to ${globalconfig} to preserve npm's global configuration. Run npm --prefix . install there to retry.`
+         );
+      }
+   }
    write('\n');
    write('Next steps:\n');
    // A workspace member's project has no manifest of its own, so its steps run
@@ -703,7 +743,9 @@ export function runInit(options: InitCommandOptions): void {
       if (spawnSync('git', ['check-ignore', '-q', targetDir], { cwd: targetDir }).status === 0) {
          write('  git init                 # an enclosing repository ignores this folder, so lint and format find no file until then\n');
       }
-      write('  npm install\n');
+      if (!options.install) {
+         write('  npm install\n');
+      }
       write('  npm run build            # langium generate + tsc, every package\n');
       write('  npm test                 # the server tests\n');
       write('  npm run watch            # rebuild the members on every change; watch:<host> adds a host\n');

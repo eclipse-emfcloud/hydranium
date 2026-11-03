@@ -39,6 +39,9 @@
  *   posture rather than a packaging detail: the emission withholds publication
  *   AND declares itself UNLICENSED, so a default nobody was shown would settle
  *   the licence question by silence.
+ * - **installation**, which opts into network access and lifecycle scripts.
+ *   Workspace members need parent-manifest edits first, so only standalone
+ *   projects offer it, unless the caller already supplied `--install`.
  *
  * The **language id is deliberately not asked**, though it is the third of the
  * three independent names: its derivation was settled and built separately
@@ -91,6 +94,8 @@ export interface InitAnswers {
    readonly scope?: string;
    /** Leave the package publishable, which the scaffold does not do by default. */
    readonly public: boolean;
+   /** Run npm install after writing the scaffold. */
+   readonly install: boolean;
 }
 
 /** PascalCase a directory name, splitting on any non-alphanumeric run. */
@@ -152,6 +157,9 @@ export function composeInitArgv(answers: InitAnswers): string[] {
    }
    if (answers.public) {
       argv.push('--public');
+   }
+   if (answers.install) {
+      argv.push('--install');
    }
    return argv;
 }
@@ -350,7 +358,7 @@ async function askPackaging(
 export async function runInitWizard(
    prompt: PromptPort,
    detect: (targetDir: string) => WorkspaceDetection | undefined,
-   options: { readonly targetDir?: string; readonly isOccupied?: (targetDir: string) => boolean } = {}
+   options: { readonly targetDir?: string; readonly isOccupied?: (targetDir: string) => boolean; readonly install?: boolean } = {}
 ): Promise<string[]> {
    prompt.intro('Scaffold a Hydranium language project');
 
@@ -392,9 +400,20 @@ export async function runInitWizard(
    } while (await prompt.confirm({ message: 'Add another grammar?', initialValue: false }));
 
    const withDiagram = await askDiagramGrammar(prompt, heads, grammars);
-   const packaging = await askPackaging(prompt, detect(targetDir), heads, hosts);
+   const detection = detect(targetDir);
+   if (options.install && detection !== undefined) {
+      prompt.note('--install requires a standalone project; workspace membership is skipped.', 'Installation');
+   }
+   const packaging = await askPackaging(prompt, options.install ? undefined : detection, heads, hosts);
+   const install =
+      (options.install ?? false) ||
+      (!packaging.monorepo &&
+         (await prompt.confirm({
+            message: 'Install dependencies now (npm install)?',
+            initialValue: false
+         })));
 
-   const argv = composeInitArgv({ targetDir, name, heads, hosts, grammars: withDiagram, force, ...packaging });
+   const argv = composeInitArgv({ targetDir, name, heads, hosts, grammars: withDiagram, force, install, ...packaging });
    // Echoed as the LAST thing before the scaffold runs, because it is the
    // artefact the session produces: everything above is how it was reached.
    prompt.outro(formatCommand(argv));

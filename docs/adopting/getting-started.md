@@ -62,6 +62,10 @@ Three flags shape it:
 
 ## Build and test
 
+By default, `init` stays offline. Add `--install`, or accept the standalone
+wizard's final installation prompt, to run `npm install` after scaffolding,
+including dependency lifecycle scripts, and skip that step below.
+
 ```bash
 cd my-lang
 npm install
