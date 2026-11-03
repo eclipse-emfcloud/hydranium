@@ -61,5 +61,10 @@
   "hydranium/glsp-server/diagram-loading": "Diagramm wird geladen...",
   "hydranium/glsp-server/diagram-request-failed": "Die Diagrammanfrage konnte nicht abgeschlossen werden.",
   "hydranium/glsp-server/diagram-settle-failed": "Die Diagrammänderungen konnten nicht mit dem Texteditor synchronisiert werden.",
-  "hydranium/glsp-server/diagram-validating": "Modell wird validiert..."
+  "hydranium/glsp-server/diagram-validating": "Modell wird validiert...",
+  "order-flow/process/edit-unavailable": "Dieses Element ist nicht mehr verfügbar.",
+  "order-flow/process/edit-reference-invalid": "Wählen Sie für jede Referenz ein gültiges Ziel.",
+  "order-flow/process/branch-label-invalid": "Geben Sie einen gültigen Bezeichner für die Verzweigung ein. Reservierte Wörter sind nicht erlaubt.",
+  "order-flow/process/branch-label-duplicate": "Eine Verzweigung mit dieser Bezeichnung existiert bereits.",
+  "order-flow/process/edit-stale": "Der Prozess wurde geändert, während dieser Editor geöffnet war. Schließen Sie ihn und versuchen Sie es erneut."
 }

@@ -36,6 +36,8 @@ import {
    CreateEdgeOperation,
    CreateNodeOperation,
    DeleteElementOperation,
+   UndoAction,
+   RedoAction,
    ServerModule
 } from '@eclipse-glsp/server';
 import { HydraniumGlspAppModule } from '@hydranium/glsp-server';
@@ -47,12 +49,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { OrderFlowProcessDiagramModule } from '../../src/glsp/order-flow-process-diagram-module.js';
 import { type OrderFlowGlspState } from '../../src/glsp/order-flow-glsp-state.js';
 import {
+   EditProcessOperation,
+   RequestProcessEditAction,
+   SetProcessEditAction,
    PROCESS_EFFECT_TYPE,
    PROCESS_GATEWAY_NODE_TYPE,
    PROCESS_TASK_NODE_TYPE,
    PROCESS_TRANSITION_EDGE_TYPE
 } from '@hydranium/example-order-flow-protocol';
 import { type Gateway, type ProcessModel, isGateway, isTask } from '../../src/language-server/ast.js';
+import { processEdit } from '../../src/glsp/handler/edit-process-operation-handler.js';
 import { makeScratchWorkspaceHarness, type ScratchOrderFlowHarness } from '../order-flow-harness.js';
 
 const DIAGRAM_TYPE = 'order-flow-process';
@@ -98,6 +104,7 @@ async function openDiagram(prepare?: (workspace: ScratchWorkspace) => void): Pro
    const harness = makeGlspHarness<OrderFlowGlspState>({
       serverModule: new ServerModule().configureDiagramModule(new OrderFlowProcessDiagramModule()),
       diagramType: DIAGRAM_TYPE,
+      additionalClientActionKinds: [SetProcessEditAction.KIND],
       appModules: [new HydraniumGlspAppModule({ shared: services.shared })]
    });
    await harness.start();
@@ -162,6 +169,93 @@ describe('order-flow .process operations', () => {
       open = undefined;
       await scratch?.dispose();
       scratch = undefined;
+   });
+
+   it('refuses an edit after a different effect inherits its positional id', async () => {
+      const diagram = await openDiagram(workspace =>
+         workspace.write(
+            PROCESS_FILE,
+            readFileSync(workspace.resolve(PROCESS_FILE), 'utf8').replace(
+               'task Pick reads Order.id',
+               'task Pick reads Order.id reads Order.total'
+            )
+         )
+      );
+      const pick = diagram.root().nodes.find(node => node.name === 'Pick');
+      if (!isTask(pick)) {
+         throw new Error('missing task');
+      }
+      const elementId = diagram.harness.state.index.createId(pick.effects[0]);
+      const sourceVersion = processEdit(diagram.harness.state, elementId).sourceVersion;
+      const values = { entity: 'LineItem', field: 'sku' };
+      await diagram.apply(DeleteElementOperation.create([elementId]));
+      const remaining = diagram.root().nodes.find(node => node.name === 'Pick');
+      if (!isTask(remaining)) {
+         throw new Error('missing task');
+      }
+      expect(diagram.harness.state.index.createId(remaining.effects[0])).toBe(elementId);
+      expect(remaining.effects[0].field.$refText).toBe('total');
+      await diagram.expectRejected({ ...EditProcessOperation.create(elementId, values, sourceVersion) });
+      expect(code(diagram.text())).toContain('reads Order.total');
+      const request = { kind: RequestProcessEditAction.KIND, requestId: 'stale-edit', elementId, values, sourceVersion, validate: true };
+      diagram.harness.dispatch(request);
+      const response = await diagram.harness.nextAction<SetProcessEditAction>(SetProcessEditAction.KIND);
+      expect(response.validationError).toContain('changed');
+      await diagram.apply(EditProcessOperation.create(elementId, values, diagram.harness.state.version));
+      expect(code(diagram.text())).toContain('reads LineItem.sku');
+   });
+
+   it('retargets reads and writes with scoped candidates and restores them on undo', async () => {
+      const diagram = await openDiagram();
+      const pick = diagram.root().nodes.find(node => node.name === 'Pick');
+      const pay = diagram.root().nodes.find(node => node.name === 'Pay');
+      if (!isTask(pick) || !isTask(pay)) {
+         throw new Error('missing task');
+      }
+      const readId = diagram.harness.state.index.createId(pick.effects[0]);
+      const writeId = diagram.harness.state.index.createId(pay.effects[0]);
+      const choices = processEdit(diagram.harness.state, readId, { entity: 'LineItem' });
+      expect(choices.candidates.field?.map(candidate => candidate.value)).toEqual(expect.arrayContaining(['sku', 'quantity']));
+      expect(choices.candidates.field?.map(candidate => candidate.value)).not.toContain('status');
+      expect(processEdit(diagram.harness.state, writeId, { entity: 'Order', field: 'id' }).candidates.literal).toEqual([]);
+      await diagram.expectRejected(
+         EditProcessOperation.create(readId, { entity: 'LineItem', field: 'status' }, diagram.harness.state.version)
+      );
+      await diagram.apply(EditProcessOperation.create(readId, { entity: 'LineItem', field: 'sku' }, diagram.harness.state.version));
+      expect(code(diagram.text())).toContain('reads LineItem.sku');
+      await diagram.expectRejected(
+         EditProcessOperation.create(writeId, { entity: 'Order', field: 'id', literal: 'PAID' }, diagram.harness.state.version)
+      );
+      await diagram.apply(
+         EditProcessOperation.create(writeId, { entity: 'Order', field: 'status', literal: 'NEW' }, diagram.harness.state.version)
+      );
+      expect(code(diagram.text())).toContain('writes Order.status = NEW');
+      await diagram.apply(UndoAction.create());
+      expect(code(diagram.text())).toContain('writes Order.status = PAID');
+      await diagram.apply(RedoAction.create());
+      expect(code(diagram.text())).toContain('writes Order.status = NEW');
+   });
+
+   it('creates a labelled branch and rejects invalid or duplicate labels without changing the document', async () => {
+      const diagram = await openDiagram();
+      const gatewayId = idOf(diagram, 'PaymentOk');
+      expect(
+         processEdit(diagram.harness.state, gatewayId)
+            .candidates.target?.map(candidate => candidate.value)
+            .sort()
+      ).toEqual(flowNodeNames(diagram.root()).sort());
+      for (const label of ['', 'two words', 'task', 'yes']) {
+         await diagram.expectRejected(EditProcessOperation.create(gatewayId, { label, target: 'Ship' }, diagram.harness.state.version));
+      }
+      await diagram.expectRejected(
+         EditProcessOperation.create(gatewayId, { label: 'later', target: 'Missing' }, diagram.harness.state.version)
+      );
+      await diagram.apply(EditProcessOperation.create(gatewayId, { label: 'later', target: 'Ship' }, diagram.harness.state.version));
+      expect(code(diagram.text())).toContain('later -> Ship');
+      await diagram.apply(UndoAction.create());
+      expect(code(diagram.text())).not.toContain('later -> Ship');
+      await diagram.apply(RedoAction.create());
+      expect(code(diagram.text())).toContain('later -> Ship');
    });
 
    it('creates a task with a name unique across both flow-node kinds', async () => {

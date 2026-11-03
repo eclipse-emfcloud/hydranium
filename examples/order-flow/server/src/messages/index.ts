@@ -24,3 +24,10 @@
 export { DUPLICATE_TRANSITION, SELF_TRANSITION } from '../language-server/process-validation.js';
 export { OVERRIDDEN_LAYOUT_ENTRY } from '../language-server/layout-validation.js';
 export { PALETTE_EFFECT, PALETTE_GATEWAY, PALETTE_TASK, PALETTE_TRANSITION } from '../glsp/order-flow-tool-palette-item-provider.js';
+export {
+   PROCESS_EDIT_STALE,
+   PROCESS_EDIT_UNAVAILABLE,
+   PROCESS_EDIT_REFERENCE_INVALID,
+   BRANCH_LABEL_INVALID,
+   BRANCH_LABEL_DUPLICATE
+} from '../glsp/handler/edit-process-operation-handler.js';
