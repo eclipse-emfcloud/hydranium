@@ -80,12 +80,14 @@ function testChain(expression: ts.Expression): { root: string; runnable: boolean
          ...chain,
          runnable:
             chain.runnable &&
-            (modifier === 'each' || (modifier === 'skipIf' && condition === false) || (modifier === 'runIf' && condition === true))
+            (['each', 'for'].includes(modifier) ||
+               (modifier === 'skipIf' && condition === false) ||
+               (modifier === 'runIf' && condition === true))
       };
    }
    if (ts.isTaggedTemplateExpression(expression) && ts.isPropertyAccessExpression(expression.tag)) {
       const chain = testChain(expression.tag.expression);
-      if (chain) return { ...chain, runnable: chain.runnable && expression.tag.name.text === 'each' };
+      if (chain) return { ...chain, runnable: chain.runnable && ['each', 'for'].includes(expression.tag.name.text) };
    }
    return undefined;
 }
@@ -214,6 +216,24 @@ export function guidanceSelfTests(): void {
       if (!condition) throw new Error(`guidance self-test: ${name}`);
    };
    assert(claimErrors(pages, tests).length === 0, 'reciprocal claim');
+   for (const table of ['for([1])', 'for`value\n${1}`']) {
+      for (const prefix of ['', 'concurrent.', 'sequential.']) {
+         const modifier = `${prefix}${table}`;
+         assert(claimErrors(pages, new Map([['a.test.ts', test.replace('it(', `it.${modifier}(`)]])).length === 0, `runnable ${modifier}`);
+         assert(
+            claimErrors(pages, new Map([['a.test.ts', `describe.${modifier}('suite', () => { ${test} });`]])).length === 0,
+            `runnable suite ${modifier}`
+         );
+      }
+      for (const prefix of ['skip.', 'skipIf(true).', 'runIf(false).']) {
+         const modifier = `${prefix}${table}`;
+         assert(claimErrors(pages, new Map([['a.test.ts', test.replace('it(', `it.${modifier}(`)]])).length > 0, `disabled ${modifier}`);
+         assert(
+            claimErrors(pages, new Map([['a.test.ts', `describe.${modifier}('suite', () => { ${test} });`]])).length > 0,
+            `disabled suite ${modifier}`
+         );
+      }
+   }
    for (const modifier of [
       'concurrent',
       'sequential',
