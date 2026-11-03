@@ -705,7 +705,7 @@ export function runInit(options: InitCommandOptions): void {
       });
       if (result.error || result.signal || result.status !== 0) {
          const reason = result.error?.message ?? (result.signal ? `signal ${result.signal}` : `exit code ${result.status}`);
-         throw new Error(`npm install failed (${reason}). Scaffold kept at ${targetDir}. Run npm install there to retry.`);
+         throw new Error(`npm install failed (${reason}). Scaffold kept at ${targetDir}. Run npm --prefix . install there to retry.`);
       }
    }
    write('\n');

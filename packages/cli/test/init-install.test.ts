@@ -74,7 +74,9 @@ describe('init --install', () => {
       ['SIGTERM', 0, undefined, 'SIGTERM']
    ] as const)('keeps the files and reports %s on installation failure', async (reason, status, error, signal) => {
       const { target, output } = setup(status, error, signal);
-      await expect(runInitCommand([target, '--name', 'Example', '--install'])).rejects.toThrow(reason);
+      const result = runInitCommand([target, '--name', 'Example', '--install']);
+      await expect(result).rejects.toThrow(reason);
+      await expect(result).rejects.toThrow('Run npm --prefix . install there to retry.');
       expect(fs.existsSync(path.join(target, 'package.json'))).toBe(true);
       expect(output.join('')).not.toContain('Next steps:');
    });
