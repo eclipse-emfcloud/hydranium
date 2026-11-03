@@ -106,6 +106,15 @@ test.describe.serial('order-flow diagram in Theia', () => {
       await expect(app.page.locator('.sprotty-status')).toHaveCount(1);
    });
 
+   test('opening a layout with the diagram editor reuses its process diagram', async () => {
+      const explorer = await app.openView(TheiaExplorerView);
+      await explorer.clickContextMenuItem('orders/fulfillment.layout', ['Open With...']);
+      await app.page.getByText('Order Flow Process Diagram Editor', { exact: true }).click();
+      await expect(app.page.locator('.sprotty:not(.sprotty-hidden)').getByText('Ship', { exact: true })).toBeVisible();
+      await expect(app.page.locator('#theia-main-content-panel .lm-TabBar-tab', { hasText: 'fulfillment.process' })).toHaveCount(1);
+      await expect(app.page.locator('#theia-main-content-panel .lm-TabBar-tab', { hasText: 'fulfillment.layout' })).toHaveCount(0);
+   });
+
    test('a diagram closed and reopened in the window edits and saves', async () => {
       const file = path.join(app.workspace.path, 'orders/fulfillment.process');
       const tab = app.page.locator('#theia-main-content-panel .lm-TabBar-tab', { hasText: 'fulfillment.process' });

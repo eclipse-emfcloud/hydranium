@@ -8,18 +8,29 @@
  ********************************************************************************/
 
 import { AbstractHydraniumGlspDiagramManager } from '@hydranium/glsp-client-theia/browser';
+import { processUriFor } from '@hydranium/example-order-flow-protocol';
+import type { GLSPDiagramWidget, GLSPWidgetOpenerOptions } from '@eclipse-glsp/theia-integration/lib/browser';
+import type { WidgetOpenerOptions } from '@theia/core/lib/browser';
+import URI from '@theia/core/lib/common/uri';
 import { injectable } from '@theia/core/shared/inversify';
 import { OrderFlowProcessDiagramLanguage } from '../common/order-flow-diagram-language';
 
-/** Opens `.process` files in the diagram editor. The framework base owns the
- *  widget factory and the Open-With registration; only the language and the
- *  editor label vary per adopter. */
+/** Opens process diagrams, redirecting layouts to their owning process. */
 @injectable()
 export class OrderFlowProcessDiagramManager extends AbstractHydraniumGlspDiagramManager {
    static readonly ID = 'order-flow-process-diagram-manager';
 
    override get id(): string {
       return OrderFlowProcessDiagramManager.ID;
+   }
+
+   override canHandle(uri: URI, options?: WidgetOpenerOptions): number {
+      const processUri = processUriFor(uri.toString());
+      return processUri !== uri.toString() ? 50 : super.canHandle(uri, options);
+   }
+
+   override open(uri: URI, options?: GLSPWidgetOpenerOptions): Promise<GLSPDiagramWidget> {
+      return super.open(new URI(processUriFor(uri.toString())), options);
    }
 
    protected readonly diagramLanguage = OrderFlowProcessDiagramLanguage;

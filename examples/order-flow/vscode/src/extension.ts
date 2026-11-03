@@ -18,6 +18,7 @@
  * language server is forked, so this cannot run in a web extension host.
  */
 
+import { ORDER_FLOW_LAYOUT_DIAGRAM_VIEW_TYPE, OrderFlowLayoutDiagramEditorProvider } from './layout-diagram-editor';
 import { OrderFlowPropertiesPanel } from './properties-panel';
 import { ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE, OrderFlowProcessDiagramEditorProvider } from './process-diagram-editor';
 import { findPort } from '@hydranium/client-vscode/node';
@@ -78,6 +79,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
       void window.showErrorMessage(`Order Flow diagram unavailable: ${describeError(error)}`);
    });
    context.subscriptions.push(
+      window.registerCustomEditorProvider(ORDER_FLOW_LAYOUT_DIAGRAM_VIEW_TYPE, new OrderFlowLayoutDiagramEditorProvider()),
       window.registerCustomEditorProvider(
          ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE,
          new OrderFlowProcessDiagramEditorProvider(glspConnector, context.extensionUri),

@@ -111,6 +111,16 @@
           }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "orderFlow.layoutDiagram",
+        "displayName": "Order Flow Process Diagram",
+        "selector": [
+          {
+            "filenamePattern": "*.layout"
+          }
+        ],
+        "priority": "option"
       }
     ],
     "grammars": [
@@ -169,6 +179,6 @@
   "engines": {
     "vscode": "^1.101.0"
   },
-  "//customEditors": "Note for contributes.customEditors, kept OUT of `contributes` because VS Code schema-validates that object and reports an unknown key there as an invalid contribution point. `viewType` must equal ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE in src/process-diagram-editor.ts, and `filenamePattern` must cover PROCESS_LANGUAGE.fileExtensions from the protocol package. VS Code reads `contributes` statically, so neither can be imported from the source and a mismatch compiles: Open With offers no diagram editor, and registerCustomEditorProvider binds a view type nothing opens. `test:host` opens a `.process` without an override and compares the editor's view type with the constant, which is what catches either mismatch or a changed priority. `priority: default` opens a `.process` as a diagram on double-click, with the text editor reached through Open With / Reopen Editor With — the same way round as the Theia app, where the GLSP diagram claims the file above any priority a manifest can declare.",
+  "//customEditors": "Note for contributes.customEditors, kept OUT of `contributes` because VS Code schema-validates that object and reports an unknown key there as an invalid contribution point. `viewType` must equal ORDER_FLOW_PROCESS_DIAGRAM_VIEW_TYPE in src/process-diagram-editor.ts, and `filenamePattern` must cover PROCESS_LANGUAGE.fileExtensions from the protocol package. VS Code reads `contributes` statically, so neither can be imported from the source and a mismatch compiles: Open With offers no diagram editor, and registerCustomEditorProvider binds a view type nothing opens. `test:host` opens a `.process` without an override and compares the editor's view type with the constant, which is what catches either mismatch or a changed priority. `priority: default` opens a `.process` as a diagram on double-click, with the text editor reached through Open With / Reopen Editor With — the same way round as the Theia app, where the GLSP diagram claims the file above any priority a manifest can declare. The optional layout editor matches ORDER_FLOW_LAYOUT_DIAGRAM_VIEW_TYPE and LAYOUT_LANGUAGE.fileExtensions; it redirects to the process editor and leaves layout files opening as text by default.",
   "//test:e2e": "`test:host` and `test:e2e` are not wired to `test`, so `npm run check` needs no downloaded VS Code. They are the only tiers that run the extension in a real host, and they read built code, so run `npm run build:all` first."
 }
