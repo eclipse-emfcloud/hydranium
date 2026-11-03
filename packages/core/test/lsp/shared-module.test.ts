@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
+import { Disposable } from 'vscode-languageserver';
 import { NoopLogger } from '@hydranium/protocol';
 import { EmptyFileSystem, inject, type Module, URI } from '@hydranium/langium';
 import { DefaultEmptyFileSystemProvider, DefaultFileSystemProviderRegistry } from '../../src/langium/workspace/file-system-provider.js';
@@ -21,7 +22,10 @@ import {
    type PartialLangiumSharedServices
 } from '@hydranium/langium/lsp';
 import { createServerSharedModule, type ServerModuleContext, type ServerSharedServices } from '../../src/langium/module.js';
-import { DefaultHydraniumDocumentUpdateHandler } from '../../src/lsp/hydranium-document-update-handler.js';
+import {
+   DefaultHydraniumDocumentUpdateHandler,
+   type HydraniumDocumentUpdateHandler
+} from '../../src/lsp/hydranium-document-update-handler.js';
 import { createLspServerLanguageModule } from '../../src/lsp/language-module.js';
 import { createLspServerSharedModule, type LspServerSharedServices } from '../../src/lsp/shared-module.js';
 import { assertLspHeadComposed } from '../../src/lsp/start-language-server.js';
@@ -176,6 +180,19 @@ describe('assertLspHeadComposed', () => {
       const shared = composeShared(connectionModule, {
          lsp: { DocumentUpdateHandler: (services: ServerSharedServices) => new AdopterHandler(services) }
       } as unknown as SharedModule);
+      expect(() => assertOn(shared)).not.toThrow();
+   });
+
+   it('passes for an independent handler implementing the public contract', () => {
+      const handler: HydraniumDocumentUpdateHandler = {
+         didChangeContent: () => undefined,
+         onWatchedFilesChange: () => Disposable.create(() => undefined),
+         flushPending: () => undefined
+      };
+      const shared = composeShared(connectionModule, {
+         lsp: { DocumentUpdateHandler: () => handler }
+      });
+      expect(shared.lsp.DocumentUpdateHandler).not.toBeInstanceOf(DefaultHydraniumDocumentUpdateHandler);
       expect(() => assertOn(shared)).not.toThrow();
    });
 

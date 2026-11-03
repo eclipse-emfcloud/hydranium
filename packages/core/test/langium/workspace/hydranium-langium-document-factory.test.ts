@@ -42,6 +42,7 @@ function factoryWith(serializeAst?: (node: AstNode) => string): HydraniumLangium
          })
       },
       workspace: {
+         LangiumDocuments: { getDocument: () => undefined },
          TextDocuments: undefined,
          FileSystemProvider: {},
          ModelLedger: new DefaultModelLedger(),

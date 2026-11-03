@@ -43,10 +43,18 @@ interface SyncRig {
    readonly errors: () => string[];
 }
 
-function makeRig(): SyncRig {
+function makeRig(delegating = false): SyncRig {
    const { logger, lines } = makeCapturingLogger();
    const bundle = makeTestServices({ logger });
-   const textDocuments = new DefaultHydraniumTextDocuments(bundle.services);
+   const backing = new DefaultHydraniumTextDocuments(bundle.services);
+   const textDocuments = delegating
+      ? new Proxy({} as HydraniumTextDocuments, {
+           get: (_target, key) => {
+              const value = Reflect.get(backing, key);
+              return typeof value === 'function' ? value.bind(backing) : value;
+           }
+        })
+      : backing;
    const services = {
       ...bundle.services,
       workspace: { ...bundle.services.workspace, TextDocuments: textDocuments }
@@ -94,9 +102,9 @@ function open(rig: SyncRig, uri: string, version: number, text: string): void {
    rig.textDocuments.notifyDidOpenTextDocument({ textDocument: { uri, languageId: 'plaintext', version, text } }, 'reader');
 }
 
-describe('DefaultVersionSyncService.modelProduced', () => {
+describe.each([false, true])('DefaultVersionSyncService.modelProduced with store delegation %s', delegating => {
    it('logs once that the sync build it requested failed, since nothing waits on that build', async () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       open(rig, URI_A, 2, 'newer');
       rig.outcomes.push('fail', 'fail');
       // Parsed from older text than the store holds, so the root is behind.
@@ -112,7 +120,7 @@ describe('DefaultVersionSyncService.modelProduced', () => {
    });
 
    it('re-stamps a rebuilt closed document with the stepped sequence version', () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       open(rig, URI_A, 1, '');
       rig.textDocuments.notifyDidChangeTextDocument(
          { textDocument: { uri: URI_A, version: 2 }, contentChanges: [{ text: 'edited\n' }] },
@@ -132,7 +140,7 @@ describe('DefaultVersionSyncService.modelProduced', () => {
    });
 
    it('re-stamps an unchanged rebuilt closed document without stepping the sequence', () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       open(rig, URI_A, 1, '');
       rig.textDocuments.notifyDidChangeTextDocument(
          { textDocument: { uri: URI_A, version: 2 }, contentChanges: [{ text: 'saved\n' }] },
@@ -147,7 +155,7 @@ describe('DefaultVersionSyncService.modelProduced', () => {
    });
 
    it('keeps the factory version of a never-tracked document', () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       const document = register(rig, URI_B, 'x\n');
 
       rig.sync.modelProduced(document);
@@ -156,7 +164,7 @@ describe('DefaultVersionSyncService.modelProduced', () => {
    });
 
    it('announces every reconciled root, and syncs each to the store’s version', () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       const asked: Array<{ uri: string; version: number }> = [];
       rig.sync.syncTo = (uri, version) => {
          asked.push({ uri: uri.toString(), version });
@@ -190,7 +198,7 @@ describe('DefaultVersionSyncService.modelProduced', () => {
    });
 
    it('records the origin’s version of a root not registered, and leaves the store alone', () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       const announced: string[] = [];
       rig.sync.onDidRecordModel(document => announced.push(document.uri.toString()));
       const probe = register(rig, URI_A, '');
@@ -206,7 +214,7 @@ describe('DefaultVersionSyncService.modelProduced', () => {
    });
 
    it('marks a root registered below Parsed as a placeholder, and announces nothing', () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       const announced: string[] = [];
       rig.sync.onDidRecordModel(document => announced.push(document.uri.toString()));
       const document = rig.documents.set(URI_A, makeFakeAstNode({ $type: 'Element' }), { state: DocumentState.Changed });
@@ -222,7 +230,7 @@ describe('DefaultVersionSyncService.modelProduced', () => {
    });
 
    it('reconciles and records the origin’s text in place of the parsed one', () => {
-      const rig = makeRig();
+      const rig = makeRig(delegating);
       const document = register(rig, URI_A, 'unrepaired\n');
       rig.sync.modelProduced(document);
 

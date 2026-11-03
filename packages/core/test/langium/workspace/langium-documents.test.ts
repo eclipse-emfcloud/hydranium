@@ -18,7 +18,13 @@ import type { ServerSharedServices } from '../../../src/langium/module.js';
 import type { ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
 import { DefaultHydraniumLangiumDocuments, type HydraniumLangiumDocuments } from '../../../src/langium/workspace/langium-documents.js';
-import { makeFakeAstNode, makeFakeDocument, makeNoopSharedServices, makeStubServiceRegistry } from '../../../src/testing/index.js';
+import {
+   makeFakeAstNode,
+   makeFakeDocument,
+   makeNoopSharedServices,
+   makeStubServiceRegistry,
+   makeTestServices
+} from '../../../src/testing/index.js';
 
 const TARGET = URI.parse('file:///ws/a.txt');
 
@@ -29,7 +35,7 @@ interface HarnessOptions {
    readonly loadable?: boolean;
    /** Register a document from inside the failing load, modelling a lost create race. */
    readonly raceInsert?: boolean;
-   /** The text store to bind. Defaults to none. */
+   /** The text store to bind. Defaults to an empty store. */
    readonly store?: HydraniumTextDocuments;
 }
 
@@ -72,7 +78,7 @@ function harness(options: HarnessOptions = {}): Harness {
       // without it cannot reach the extension ladder the class guards.
       ServiceRegistry: makeStubServiceRegistry([{ languageId: 'text', fileExtensions: ['.txt'], services: {} }]),
       workspace: {
-         TextDocuments: options.store,
+         TextDocuments: options.store ?? new DefaultHydraniumTextDocuments(makeTestServices().services),
          DocumentUriPolicy: options.loadable === false ? new UnloadableUriPolicy() : new DefaultDocumentUriPolicy(),
          CstResidencyService: { rehydrate: (document: LangiumDocument<AstNode>) => rehydrated.push(document) },
          LangiumDocumentFactory: {
@@ -140,7 +146,9 @@ describe('DefaultHydraniumLangiumDocuments.getOrCreateDocument on a failed load'
       // Asked by a spelling whose canonical form is TARGET, the key it is
       // registered under.
       const { documents, loads, rehydrated } = harness({ loadable: false });
-      const created = makeFakeDocument(TARGET, makeFakeAstNode<AstNode>({ $type: 'Created' }));
+      const created = makeFakeDocument(TARGET, makeFakeAstNode<AstNode>({ $type: 'Created' }), {
+         textDocument: TextDocument.create(TARGET.toString(), 'text', 0, '')
+      });
       documents.addDocument(created);
 
       await expect(documents.getOrCreateDocument(LINK)).resolves.toBe(created);

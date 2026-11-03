@@ -18,7 +18,7 @@ import {
    type WorkspaceEdit
 } from 'vscode-languageserver';
 import { LANGUAGE_CLIENT_ID } from '../documents/client-ids.js';
-import { DefaultHydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
+import { type HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
 import { type ServerSharedServicesMinimal } from '../langium/shared-services.js';
 
 const wrappedConnections = new WeakSet<object>();
@@ -46,7 +46,7 @@ type Register<P, A extends unknown[], R, E> = (handler: (params: P, ...rest: A) 
  */
 export function guardEditRequests(connection: Connection, services: LangiumSharedServices): void {
    const store = services.workspace.TextDocuments;
-   if (wrappedConnections.has(connection) || !(store instanceof DefaultHydraniumTextDocuments)) {
+   if (wrappedConnections.has(connection) || !supportsEditGuard(store)) {
       return;
    }
    wrappedConnections.add(connection);
@@ -139,6 +139,19 @@ export function guardEditRequests(connection: Connection, services: LangiumShare
    connection.onRenameRequest = guard(connection.onRenameRequest.bind(connection), editedUris);
    connection.onCodeAction = guard(connection.onCodeAction.bind(connection), actions =>
       (actions ?? []).flatMap(action => ('edit' in action && action.edit ? [...editedUris(action.edit)] : []))
+   );
+}
+
+type EditGuardStore = LangiumSharedServices['workspace']['TextDocuments'] &
+   Pick<HydraniumTextDocuments, 'onDidReleaseDocument' | 'getAuthor' | 'isLanguageClientBehind' | 'version'>;
+
+function supportsEditGuard(store: LangiumSharedServices['workspace']['TextDocuments']): store is EditGuardStore {
+   const candidate = store as Partial<EditGuardStore>;
+   return (
+      typeof candidate.onDidReleaseDocument === 'function' &&
+      typeof candidate.getAuthor === 'function' &&
+      typeof candidate.isLanguageClientBehind === 'function' &&
+      typeof candidate.version === 'function'
    );
 }
 

@@ -59,6 +59,7 @@ function makeRig(text: string, version: number): Rig {
          })
       },
       workspace: {
+         LangiumDocuments: { getDocument: () => undefined },
          TextDocuments: { get: (uri: string) => (uri === URI_STRING && !hooks.closed ? stored : undefined) },
          FileSystemProvider: { readFile: async () => 'a b c' },
          ModelLedger: ledger,
