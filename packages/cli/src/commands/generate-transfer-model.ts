@@ -135,6 +135,7 @@ const NAMESPACED_TERMINALS_NAME = 'Terminals';
 
 /** How often `--watch` polls its input files. */
 const WATCH_POLL_INTERVAL_MS = 250;
+const WATCH_DEBOUNCE_MS = 150;
 
 /**
  * Generate once, then re-generate whenever an input file changes (the AST, the
@@ -142,6 +143,7 @@ const WATCH_POLL_INTERVAL_MS = 250;
  * until `signal` aborts (the CLI wires this to SIGINT). Regeneration is debounced
  * so an editor's multi-event save fires a single run, and a generation error is
  * logged without tearing down the watch. Resolves when the signal aborts.
+ * An already-aborted signal resolves immediately without generating or watching.
  *
  * Polled by path rather than watched through OS events: langium-cli removes
  * its output directory and writes the files back, which an event watch, Node's
@@ -184,7 +186,7 @@ export function watchTransferModel(options: GenerateTransferModelOptions, contex
       if (timer) {
          clearTimeout(timer);
       }
-      timer = setTimeout(rerun, 150);
+      timer = setTimeout(rerun, WATCH_DEBOUNCE_MS);
    };
    for (const file of watched) {
       fs.watchFile(file, { interval: WATCH_POLL_INTERVAL_MS }, onPoll);

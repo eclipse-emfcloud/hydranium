@@ -7,14 +7,14 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import * as fs from 'fs';
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { watchTransferModel } from '../src/commands/generate-transfer-model.js';
 
-vi.mock('fs', async importOriginal => ({ ...(await importOriginal<typeof fs>()) }));
+// Native ESM namespaces cannot be spied on; copy the exports while keeping real file I/O.
+vi.mock('node:fs', async importOriginal => ({ ...(await importOriginal<typeof fs>()) }));
 
 function observeWatch() {
    return vi.spyOn(
@@ -35,15 +35,15 @@ describe('watchTransferModel', () => {
 
    afterEach(() => {
       controller?.abort();
-      vi.useRealTimers();
       vi.restoreAllMocks();
+      vi.useRealTimers();
       if (scratch !== undefined) {
-         rmSync(scratch, { recursive: true, force: true });
+         fs.rmSync(scratch, { recursive: true, force: true });
       }
    });
 
    function fixture() {
-      scratch = mkdtempSync(path.join(tmpdir(), 'hydranium-watch-transfer-'));
+      scratch = fs.mkdtempSync(path.join(tmpdir(), 'hydranium-watch-transfer-'));
       const options = {
          astFile: path.join(scratch, 'ast.ts'),
          augmentationFile: path.join(scratch, 'augmentation.ts'),
@@ -55,8 +55,8 @@ describe('watchTransferModel', () => {
             readonly types = { Element: { name: 'Element', superTypes: [], properties: {} } };
          }
       `;
-      writeFileSync(options.astFile, source('one'));
-      writeFileSync(options.augmentationFile, 'export {};');
+      fs.writeFileSync(options.astFile, source('one'));
+      fs.writeFileSync(options.augmentationFile, 'export {};');
       controller = new AbortController();
       const logs = vi.spyOn(console, 'log').mockImplementation(() => undefined);
       const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -80,26 +80,26 @@ describe('watchTransferModel', () => {
       const { options, source, signal, errors, runs } = fixture();
       const watch = observeWatch();
       const stopped = watchTransferModel(options, { signal });
-      expect(readFileSync(options.outFile, 'utf8')).toContain('one: string;');
-      // A missing file followed by its return also establishes the polling
-      // baseline before the subsequent edits on platforms with delayed stats.
+      expect(fs.readFileSync(options.outFile, 'utf8')).toContain('one: string;');
+      // An edit before the first poll can become its baseline and go unnoticed.
+      // Observe removal and return so the next edit follows an established baseline.
       const listener = watch.mock.calls[0][2]!;
       const missing = new Promise<void>(resolve => watch.mock.results[0].value.once('change', () => resolve()));
-      rmSync(options.astFile);
+      fs.rmSync(options.astFile);
       await missing;
       const returned = new Promise<number>(resolve => watch.mock.results[0].value.once('change', () => resolve(runs())));
-      writeFileSync(options.astFile, source('second'));
+      fs.writeFileSync(options.astFile, source('second'));
       const beforeReturn = await returned;
       await vi.waitFor(() => expect(runs()).toBeGreaterThan(beforeReturn), { timeout: 5000 });
-      await vi.waitFor(() => expect(readFileSync(options.outFile, 'utf8')).toContain('second: string;'), { timeout: 5000 });
-      writeFileSync(options.augmentationFile, "declare module './ast.js' { interface Element { extra: number; } }");
-      await vi.waitFor(() => expect(readFileSync(options.outFile, 'utf8')).toContain('extra: number;'), { timeout: 5000 });
-      writeFileSync(options.astFile, 'export {};');
+      await vi.waitFor(() => expect(fs.readFileSync(options.outFile, 'utf8')).toContain('second: string;'), { timeout: 5000 });
+      fs.writeFileSync(options.augmentationFile, "declare module './ast.js' { interface Element { extra: number; } }");
+      await vi.waitFor(() => expect(fs.readFileSync(options.outFile, 'utf8')).toContain('extra: number;'), { timeout: 5000 });
+      fs.writeFileSync(options.astFile, 'export {};');
       await vi.waitFor(() => expect(errors).toHaveBeenCalledWith(expect.stringContaining('Transfer-model generation failed:')), {
          timeout: 5000
       });
-      writeFileSync(options.astFile, source('recovered'));
-      await vi.waitFor(() => expect(readFileSync(options.outFile, 'utf8')).toContain('recovered: string;'), { timeout: 5000 });
+      fs.writeFileSync(options.astFile, source('recovered'));
+      await vi.waitFor(() => expect(fs.readFileSync(options.outFile, 'utf8')).toContain('recovered: string;'), { timeout: 5000 });
       const unwatch = vi.spyOn(fs, 'unwatchFile');
       controller!.abort();
       await stopped;
@@ -111,27 +111,32 @@ describe('watchTransferModel', () => {
 
    it('debounces successive changes and cancels a pending generation on abort', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const scheduled = vi.spyOn(globalThis, 'setTimeout');
       const { options, source, signal, runs } = fixture();
       const watch = observeWatch();
       const stopped = watchTransferModel(options, { signal });
       const poll = watch.mock.calls[0][2]!;
       const previous = fs.statSync(options.astFile);
-      writeFileSync(options.astFile, source('second'));
+      fs.writeFileSync(options.astFile, source('second'));
       poll(fs.statSync(options.astFile), previous);
-      vi.advanceTimersByTime(100);
-      writeFileSync(options.augmentationFile, "declare module './ast.js' { interface Element { extra: number; } }");
+      // Read the scheduled delay so timing changes need no public test-only constant.
+      const debounce = scheduled.mock.calls.at(-1)![1]!;
+      expect(debounce).toBeGreaterThan(1);
+      const step = Math.ceil((debounce * 2) / 3);
+      vi.advanceTimersByTime(step);
+      fs.writeFileSync(options.augmentationFile, "declare module './ast.js' { interface Element { extra: number; } }");
       poll(fs.statSync(options.augmentationFile), previous);
-      vi.advanceTimersByTime(100);
+      vi.advanceTimersByTime(step);
       expect(runs()).toBe(1);
-      vi.advanceTimersByTime(50);
+      vi.advanceTimersByTime(debounce - step);
       expect(runs()).toBe(2);
-      expect(readFileSync(options.outFile, 'utf8')).toContain('extra: number;');
-      vi.advanceTimersByTime(1000);
+      expect(fs.readFileSync(options.outFile, 'utf8')).toContain('extra: number;');
+      vi.advanceTimersByTime(debounce * 2);
       expect(runs()).toBe(2);
-      writeFileSync(options.astFile, source('cancelled'));
+      fs.writeFileSync(options.astFile, source('cancelled'));
       poll(fs.statSync(options.astFile), previous);
       controller!.abort();
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(debounce * 2);
       expect(runs()).toBe(2);
       await stopped;
    });
@@ -142,12 +147,12 @@ describe('watchTransferModel', () => {
     * counted.
     */
    async function startWatch(): Promise<{ generated: string; astFile: string; runs: () => number }> {
-      scratch = mkdtempSync(path.join(tmpdir(), 'hydranium-watch-transfer-'));
+      scratch = fs.mkdtempSync(path.join(tmpdir(), 'hydranium-watch-transfer-'));
       const generated = path.join(scratch, 'generated');
-      mkdirSync(generated);
+      fs.mkdirSync(generated);
       const astFile = path.join(generated, 'ast.ts');
-      writeFileSync(astFile, 'export {};\n');
-      writeFileSync(path.join(scratch, 'ast.ts'), 'export {};\n');
+      fs.writeFileSync(astFile, 'export {};\n');
+      fs.writeFileSync(path.join(scratch, 'ast.ts'), 'export {};\n');
       const failures = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       vi.spyOn(console, 'log').mockImplementation(() => undefined);
       controller = new AbortController();
@@ -166,8 +171,8 @@ describe('watchTransferModel', () => {
       // and a watch on either would hear only the first regeneration.
       const { generated, astFile, runs } = await startWatch();
       const replace = (content: string): void => {
-         writeFileSync(`${astFile}.next`, content);
-         renameSync(`${astFile}.next`, astFile);
+         fs.writeFileSync(`${astFile}.next`, content);
+         fs.renameSync(`${astFile}.next`, astFile);
       };
       expect(runs()).toBe(1);
 
@@ -177,10 +182,10 @@ describe('watchTransferModel', () => {
       await vi.waitFor(() => expect(runs()).toBe(3), { timeout: 2000 });
 
       const next = `${generated}.next`;
-      mkdirSync(next);
-      writeFileSync(path.join(next, 'ast.ts'), 'export const three = 3;\n');
-      rmSync(generated, { recursive: true });
-      renameSync(next, generated);
+      fs.mkdirSync(next);
+      fs.writeFileSync(path.join(next, 'ast.ts'), 'export const three = 3;\n');
+      fs.rmSync(generated, { recursive: true });
+      fs.renameSync(next, generated);
       await vi.waitFor(() => expect(runs()).toBe(4), { timeout: 2000 });
       replace('export const four = 4;\n');
       await vi.waitFor(() => expect(runs()).toBe(5), { timeout: 2000 });
@@ -194,9 +199,9 @@ describe('watchTransferModel', () => {
 
       for (const content of ['export const one = 1;\n', 'export const two = 2;\n', 'export const three = 3;\n']) {
          const before = runs();
-         rmSync(generated, { recursive: true });
-         mkdirSync(generated);
-         writeFileSync(astFile, content);
+         fs.rmSync(generated, { recursive: true });
+         fs.mkdirSync(generated);
+         fs.writeFileSync(astFile, content);
          await vi.waitFor(() => expect(runs()).toBe(before + 1), { timeout: 2000 });
       }
    }, 15_000);
@@ -207,14 +212,14 @@ describe('watchTransferModel', () => {
       const { generated, astFile, runs } = await startWatch();
       expect(runs()).toBe(1);
 
-      rmSync(generated, { recursive: true });
+      fs.rmSync(generated, { recursive: true });
       await new Promise(resolve => setTimeout(resolve, 400));
       // Nothing runs on a half-written output.
       expect(runs()).toBe(1);
-      mkdirSync(generated);
-      writeFileSync(astFile, 'export const one = 1;\n');
+      fs.mkdirSync(generated);
+      fs.writeFileSync(astFile, 'export const one = 1;\n');
       await vi.waitFor(() => expect(runs()).toBe(2), { timeout: 2000 });
-      writeFileSync(astFile, 'export const two = 2;\n');
+      fs.writeFileSync(astFile, 'export const two = 2;\n');
       await vi.waitFor(() => expect(runs()).toBe(3), { timeout: 2000 });
    }, 10_000);
 });
