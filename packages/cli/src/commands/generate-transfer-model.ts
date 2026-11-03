@@ -150,6 +150,9 @@ const WATCH_POLL_INTERVAL_MS = 250;
  * nothing generates from a half-written output.
  */
 export function watchTransferModel(options: GenerateTransferModelOptions, context: { signal: AbortSignal }): Promise<void> {
+   if (context.signal.aborted) {
+      return Promise.resolve();
+   }
    const runSafely = (): void => {
       try {
          generateTransferModel(options);
