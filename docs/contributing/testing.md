@@ -181,6 +181,14 @@ Others are the test's own:
   write's phase notification goes out during the build the write awaits, so it
   reaches the client before the response, and a delta taken after the `await`
   already holds it. Take the baseline before the call, or count absolutely.
+- **The absence was sampled before the excluded event could arrive.** GLSP
+  can send a save's dirty state before dispatching the answer of a second
+  handler of the same action, so seeing the dirty state does not prove that
+  no answer follows. Wait for a boundary after every path that can deliver
+  the excluded event, such as a later round trip on the same channel. A phase
+  notification or one macrotask is not that boundary by itself. Make a control
+  deliver the excluded event through its real path and require the absence
+  assertion itself to fail.
 - **The wait matched a different occurrence**, which shows as a test passing
   alone and failing in the full gate. An operation, undo, redo, save and
   external rebuild all send `SetDirtyStateAction`; wait on its `reason`, or on
