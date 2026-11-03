@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { type AstNode, DocumentState, type LangiumDocument } from '@hydranium/langium';
 import { CancellationToken } from 'vscode-languageserver';
-import { Logger } from '@hydranium/protocol';
+import { Logger, ProfileCollector } from '@hydranium/protocol';
 import { makeFakeClock } from '@hydranium/protocol/testing';
 import {
    type AstExtension,
@@ -357,9 +357,44 @@ describe('AstExtensionService.register', () => {
 describe('AstExtensionService.extendDocument profiling', () => {
    afterEach(() => Logger.setLevel('info'));
 
+   it('keeps captured timings separate when two languages share a registration id', () => {
+      Logger.setLevel('off');
+      const clock = makeFakeClock();
+      const { tracer } = makeCapturingTracer(clock);
+      const collector = new ProfileCollector();
+      collector.start();
+      try {
+         for (const { languageId, duration } of [
+            { languageId: 'first', duration: 2 },
+            { languageId: 'second', duration: 3 }
+         ]) {
+            const service = new DefaultAstExtensionService(
+               makeNoopLanguageServices({ shared: { Tracer: tracer }, LanguageMetaData: { languageId } })
+            );
+            service.register({
+               id: 'shared-extension',
+               nodeFilter: isType('Foo'),
+               phase: DocumentState.Linked,
+               compute: () => clock.advance(duration)
+            });
+            const document = buildDocument(makeFakeAstNode<FakeNode>({ $type: 'Root' }), [makeFakeAstNode<FakeNode>({ $type: 'Foo' })]);
+            service.extendDocument(document, DocumentState.Linked);
+         }
+      } finally {
+         collector.stop();
+      }
+
+      expect(collector.records(5)).toEqual([
+         { session: 'ast-extension second Linked', id: 'shared-extension', count: 1, selfMs: 3, selfPct: 60 },
+         { session: 'ast-extension first Linked', id: 'shared-extension', count: 1, selfMs: 2, selfPct: 40 }
+      ]);
+   });
+
    it('profiles per-registration self-time and reports it line-based at debug level', () => {
       const { tracer, lines } = makeCapturingTracer(makeFakeClock());
-      const service = new DefaultAstExtensionService(makeNoopLanguageServices({ shared: { Tracer: tracer } }));
+      const service = new DefaultAstExtensionService(
+         makeNoopLanguageServices({ shared: { Tracer: tracer }, LanguageMetaData: { languageId: 'test' } })
+      );
       service.register({ id: 'extA', nodeFilter: isType('Foo'), phase: DocumentState.Linked, compute: () => undefined });
       service.register({ id: 'extB', nodeFilter: isType('Foo'), phase: DocumentState.Linked, compute: () => undefined });
       Logger.setLevel('debug');

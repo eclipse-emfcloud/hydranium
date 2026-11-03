@@ -272,7 +272,9 @@ export class DefaultAstExtensionService implements AstExtensionService {
          return;
       }
       // Allocate timing state only for a capture or debug logging.
-      const session = ProfileCollector.isEnabled() ? this.tracer.profile(`ast-extension ${DocumentState[phase]}`) : undefined;
+      const session = ProfileCollector.isEnabled()
+         ? this.tracer.profile(`ast-extension ${this.services.LanguageMetaData.languageId} ${DocumentState[phase]}`)
+         : undefined;
       for (const node of AstUtils.streamAllContents(document.parseResult.value)) {
          for (const extension of applicable) {
             if (extension.nodeFilter(node)) {
