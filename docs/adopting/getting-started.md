@@ -170,7 +170,7 @@ The starter grammar declares nodes, each of which may point at another.
 `workspace/nodes.my-lang`:
 
 ```bash
-npx hydranium-cli validate --services ./server/lib/node/services.js ./workspace
+npx hydranium-cli validate ./workspace
 ```
 
 It reports no problems. Change `Second` in `references.my-lang` to `Missing`
@@ -180,13 +180,27 @@ position and exits non-zero, so you can use it as a check in CI.
 ## Look at the language with the CLI
 
 ```bash
-npx hydranium-cli reflect --services ./server/lib/node/services.js        # types, terminals, cross-references
-npx hydranium-cli lint-grammar --services ./server/lib/node/services.js   # grammar conventions, as a CI check
-npx hydranium-cli model-docs --services ./server/lib/node/services.js --out-file model-reference.md
+npx hydranium-cli reflect        # types, terminals, cross-references
+npx hydranium-cli lint-grammar   # grammar conventions, as a CI check
+npx hydranium-cli model-docs --out-file model-reference.md
 ```
 
-Each reads the built services. Edit the grammar, rebuild, and run them again to
-see the language as it is.
+The scaffold's `package.json` declares the built services file under
+`hydranium.services`. These commands use that setting; `--services <file>`
+overrides it when you want another composition. The CLI uses the nearest
+`package.json` above your current directory and resolves the configured path
+relative to that file. An existing project can add the setting as follows:
+
+```json
+{
+  "hydranium": {
+    "services": "./server/lib/node/services.js"
+  }
+}
+```
+
+Edit the grammar, rebuild, and run the commands again to see the language as
+it is.
 
 ## Where to go from here
 

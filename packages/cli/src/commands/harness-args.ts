@@ -32,7 +32,7 @@
  */
 
 import { describeError, type LogThreshold } from '@hydranium/protocol';
-import { statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,7 +57,7 @@ export function exitWithUsage(message: string): never {
    process.exit(2);
 }
 
-/** Names the head's services module; every harness subcommand requires it. */
+/** Overrides the services module configured by the project. */
 export const SERVICES_FLAG = '--services';
 
 /**
@@ -209,12 +209,13 @@ export interface HarnessArgsConfig {
 }
 
 /**
- * Shared parser for the headless-harness subcommands. Consumes the required
- * `--services <module>` value flag, the repeatable `--import <specifier>` and a
+ * Shared parser for the headless-harness subcommands. Consumes the
+ * `--services <module>` override, the repeatable `--import <specifier>` and a
  * single positional `<workspace>`, plus the `valueFlags` (each takes a value)
  * and `boolFlags` (presence-only, recorded as `'true'`) the subcommand
- * recognises. Unknown flags or a missing `--services`/`<workspace>` are usage
- * errors, and so is a `<workspace>` that reaches no directory — see
+ * recognises. Services default to the nearest package manifest. Unknown flags,
+ * missing services or a missing `<workspace>` are usage errors, and so is a
+ * `<workspace>` that reaches no directory — see
  * {@link resolveWorkspaceArgument} for why that cannot be left to the run.
  */
 export function parseHarnessArgs(
@@ -262,8 +263,14 @@ export function parseHarnessArgs(
          onError(`Unexpected argument: ${flag} (hydranium-cli ${commandName} --help)`);
       }
    }
+   servicesModule ??= configuredServicesModule(onError);
+   if (servicesModule === undefined) {
+      return onError(
+         `Missing required option: ${SERVICES_FLAG} (hydranium-cli ${commandName} --help). Pass --services or set hydranium.services in package.json.`
+      );
+   }
    return {
-      servicesModule: assertRequired(servicesModule, SERVICES_FLAG, commandName, onError),
+      servicesModule,
       imports,
       workspace: requireWorkspace
          ? resolveWorkspaceArgument(assertRequired(workspace, '<workspace>', commandName, onError), commandName, onError)
@@ -271,6 +278,61 @@ export function parseHarnessArgs(
       options,
       values
    };
+}
+
+/**
+ * Stop at the nearest manifest even when it has no setting: inheriting through
+ * a workspace member would silently select another package's composition.
+ * Read only after argv, so an explicit override needs no valid project config.
+ */
+function configuredServicesModule(onError: UsageError): string | undefined {
+   let directory = process.cwd();
+   for (;;) {
+      const manifestPath = path.join(directory, 'package.json');
+      if (statSync(manifestPath, { throwIfNoEntry: false }) !== undefined) {
+         let manifest: unknown;
+         try {
+            manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+         } catch (error: unknown) {
+            return onError(`Cannot read ${manifestPath}: ${describeError(error)}`);
+         }
+         if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)) {
+            return onError(`${manifestPath} must contain a JSON object.`);
+         }
+         if (!('hydranium' in manifest)) {
+            return undefined;
+         }
+         const configuration = manifest.hydranium;
+         if (typeof configuration !== 'object' || configuration === null || Array.isArray(configuration)) {
+            return onError(`hydranium in ${manifestPath} must be an object.`);
+         }
+         if (!('services' in configuration)) {
+            return undefined;
+         }
+         const services = configuration.services;
+         if (typeof services !== 'string' || services.trim() === '') {
+            return onError(`hydranium.services in ${manifestPath} must be a non-empty file path.`);
+         }
+         const modulePath = path.resolve(directory, services);
+         let stats;
+         try {
+            stats = statSync(modulePath, { throwIfNoEntry: false });
+         } catch (error: unknown) {
+            return onError(`Cannot read hydranium.services in ${manifestPath}: ${describeError(error)}`);
+         }
+         if (stats === undefined || !stats.isFile()) {
+            return onError(
+               `hydranium.services in ${manifestPath} points to '${services}' (${modulePath}), which is not an existing file. Build the project or correct the setting.`
+            );
+         }
+         return modulePath;
+      }
+      const parent = path.dirname(directory);
+      if (parent === directory) {
+         return undefined;
+      }
+      directory = parent;
+   }
 }
 
 /**

@@ -6,9 +6,10 @@ paths:
 # The CLI
 
 `hydranium-cli` is head-neutral: every command works on any language built on
-the framework, and reaches a head only through the module its `--services` or
-`--server` flag names. A command or a codegen step that knows one language's
-types belongs in that language's build, not here
+the framework, and reaches a head only through its configured services module,
+a `--services` override or the entry its `--server` flag names. A command or a
+codegen step that knows one language's types belongs in that language's build,
+not here
 ([commands](../../packages/cli/README.md#commands)).
 
 A harness subcommand drives a function in `@hydranium/core/node` and does not

@@ -72,11 +72,27 @@ lists each command's flags.
 - **Data server.** Spawn your data head and list projects, or query, create,
   save, delete or watch a document.
 
-The commands that boot your head take `--services <module>`. That is an ESM
-module exporting a zero-arg `createServices()` that returns `{ shared }`; in a
-scaffolded project, that is `./server/lib/node/services.js` from the project
-root. To run the head from its TypeScript source instead, register a loader
-with `--import`:
+Commands that boot your language need an ESM module exporting a zero-arg
+`createServices()` that returns `{ shared }`. Declare its file path once in
+`package.json`:
+
+```json
+{
+  "hydranium": {
+    "services": "./server/lib/node/services.js"
+  }
+}
+```
+
+The CLI reads the nearest `package.json` from your current directory upwards
+and resolves this path relative to that manifest. It stops at that package,
+even if it has no setting. A standalone scaffold configures its root and server
+package, so `npx hydranium-cli reflect` works from either after building. For a
+scaffold added to an existing workspace, run from its server package or pass
+`--services` from the workspace root.
+
+`--services <module>` overrides the setting and resolves relative to your
+current directory. To run TypeScript source, register a loader with `--import`:
 `npx hydranium-cli reflect --import tsx --services ./server/src/node/services.ts`.
 
 The data-server commands take `--server "<cmd> [args...]"`. Point it at the

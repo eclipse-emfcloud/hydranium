@@ -38,7 +38,7 @@ export const VALIDATE_VALUE_FLAGS: readonly string[] = [...HARNESS_VALUE_FLAGS, 
 
 /** The `--help` text, as data, held to {@link VALIDATE_FLAGS} by a test. */
 export const VALIDATE_HELP: readonly string[] = [
-   'Usage: hydranium-cli validate --services <module> [--import <specifier>]... <workspace> [--strict] [--json] [--out-file <file>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
+   'Usage: hydranium-cli validate [--services <module>] [--import <specifier>]... <workspace> [--strict] [--json] [--out-file <file>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    'Build a workspace headlessly and report its validation diagnostics — a CI gate:',
    'the process exits non-zero when any error is found. `<module>` is an ESM module',
@@ -46,7 +46,7 @@ export const VALIDATE_HELP: readonly string[] = [
    'filesystem inside). Needs @hydranium/core.',
    '',
    'Options:',
-   '  --services <module>   ESM module exporting `createServices(): { shared }` (required).',
+   '  --services <module>   ESM module exporting `createServices(): { shared }` (required) unless package.json sets hydranium.services.',
    ...importHelpLines(22),
    '  <workspace>           Workspace root (path or file URI) to validate (required).',
    '  --strict              Also fail (non-zero exit) on warnings, not only errors.',
