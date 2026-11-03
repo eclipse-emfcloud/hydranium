@@ -62,6 +62,13 @@ Three flags shape it:
 
 ## Build and test
 
+By default, `init` stays offline. Add `--install`, or accept the standalone
+wizard's final installation prompt, to run `npm install` after scaffolding,
+including dependency lifecycle scripts, and skip that step below.
+If installation fails, the scaffold remains so you can retry from its directory.
+`--install` cannot be combined with `--monorepo`: apply the printed workspace
+entries and dependency pins to the parent manifest before installing there.
+
 ```bash
 cd my-lang
 npm install

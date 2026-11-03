@@ -46,6 +46,7 @@ export interface ParsedInitArgs {
    targetDir?: string;
    name?: string;
    force: boolean;
+   install: boolean;
    heads?: InitHead[];
    hosts?: InitHost[];
    monorepo: boolean;
@@ -66,6 +67,7 @@ export const INIT_FLAGS: readonly string[] = [
    '--heads',
    '--hosts',
    '--force',
+   '--install',
    '--monorepo',
    '--scope',
    '--public',
@@ -104,6 +106,7 @@ export function parseInitArgs(args: string[], onError: UsageError = exitWithUsag
    let targetDir: string | undefined;
    let name: string | undefined;
    let force = false;
+   let install = false;
    let heads: InitHead[] | undefined;
    let hosts: InitHost[] | undefined;
    let monorepo = false;
@@ -160,6 +163,9 @@ export function parseInitArgs(args: string[], onError: UsageError = exitWithUsag
          case '--force':
             force = true;
             break;
+         case '--install':
+            install = true;
+            break;
          case '--monorepo':
             monorepo = true;
             break;
@@ -184,7 +190,7 @@ export function parseInitArgs(args: string[], onError: UsageError = exitWithUsag
             }
       }
    }
-   return { targetDir, name, force, heads, hosts, monorepo, scope, public: isPublic, grammars };
+   return { targetDir, name, force, install, heads, hosts, monorepo, scope, public: isPublic, grammars };
 }
 
 /**
@@ -197,7 +203,7 @@ export function parseInitArgs(args: string[], onError: UsageError = exitWithUsag
 export const INIT_HELP: readonly string[] = [
    'Usage: hydranium-cli init <target-dir> --name <Name> [--heads <list>]',
    '                            [--hosts <list>] [--force] [--monorepo]',
-   '                            [--scope <@scope>] [--public]',
+   '                            [--scope <@scope>] [--public] [--install]',
    '                            ( --grammar <Name> [--extensions <list>]',
    '                                              [--language-id <id>] [--diagram] )...',
    '',
@@ -210,12 +216,15 @@ export const INIT_HELP: readonly string[] = [
    'launch of the VS Code and Theia ones, and theia/ the Theia extension;',
    'workspace/ holds two starter model files per grammar. A standalone project',
    'also gets a root manifest naming the packages as npm workspaces.',
-   'Does NOT run `npm install` or `langium generate` — those are printed as next',
-   'steps. Refuses a non-empty directory without --force.',
+   'Stays offline by default. With --install, runs `npm install` after writing',
+   'the scaffold. Building remains a next step. Refuses a non-empty directory',
+   'without --force.',
    '',
    'Run it with no --name on a terminal to be prompted instead. The wizard echoes',
    'the command it composed before running it, so every answer is reproducible as',
    'flags. Without a terminal a missing --name stays an error, so CI never hangs.',
+   'For a standalone project, the wizard ends by offering npm install unless',
+   '--install already requested it.',
    '',
    'Project options (position-free):',
    '  <target-dir>          The project directory to scaffold into (required).',
@@ -240,6 +249,9 @@ export const INIT_HELP: readonly string[] = [
    '                        --hosts, the server with its Node entry points, and',
    '                        with glsp the client/ package a host mounts.',
    '  --force               Scaffold into a non-empty directory anyway.',
+   '  --install             Run npm install in the scaffold, with lifecycle scripts',
+   '                        and network access. Cannot be combined with --monorepo:',
+   '                        its parent manifest needs manual edits first.',
    '  --monorepo            Scaffold the packages as members of the surrounding npm',
    '                        workspace, with no root of their own: each tsconfig',
    '                        extends the root config that actually carries',
@@ -300,6 +312,7 @@ export async function runInitCommand(args: string[]): Promise<void> {
       const prompt = await createClackPrompt();
       const argv = await runInitWizard(prompt, targetDir => detectWorkspace(targetDir, createNodeWorkspaceProbe()), {
          targetDir: parsed.targetDir,
+         install: parsed.install,
          isOccupied: isNonEmptyDir
       });
       return runInitCommand(argv);
@@ -311,6 +324,7 @@ export async function runInitCommand(args: string[]): Promise<void> {
       heads: parsed.heads,
       hosts: parsed.hosts,
       force: parsed.force,
+      install: parsed.install,
       monorepo: parsed.monorepo,
       scope: parsed.scope,
       public: parsed.public
