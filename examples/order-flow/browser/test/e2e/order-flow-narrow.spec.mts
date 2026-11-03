@@ -177,6 +177,49 @@ test.describe('the workbench in one column', () => {
       // five unlabelled icons is what the cheap rule would have produced.
       await expect(page.locator('#save-workspace')).toHaveAccessibleName(/Save workspace/);
    });
+   test('reset in a narrow viewport forgets suspended desktop sizes', async ({ page }) => {
+      await page.setViewportSize({ width: 1600, height: 1000 });
+      await expect(page.locator('#properties-body #field-name')).toHaveValue('Fulfillment');
+      const sidebar = page.locator('#sidebar-column');
+      const original = (await sidebar.boundingBox())!.width;
+      const divider = await page.locator('[data-splitter="--sidebar-width"]').boundingBox();
+      await page.mouse.move(divider!.x + 2, divider!.y + 20);
+      await page.mouse.down();
+      await page.mouse.move(divider!.x + 100, divider!.y + 20);
+      await page.mouse.up();
+      const customized = (await sidebar.boundingBox())!.width;
+      expect(customized).toBeGreaterThan(original + 40);
+      await page.setViewportSize({ width: 800, height: 1000 });
+      await page.setViewportSize({ width: 1600, height: 1000 });
+      await expect.poll(async () => (await sidebar.boundingBox())!.width).toBe(customized);
+      await page.setViewportSize({ width: 800, height: 1000 });
+      await page.locator('#reset-layout').click();
+      await page.setViewportSize({ width: 1600, height: 1000 });
+      await expect.poll(async () => (await sidebar.boundingBox())!.width).toBe(original);
+   });
+
+   test('diagnostic navigation expands its collapsed target', async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      const pane = page.locator('#selected-pane');
+      const head = pane.locator('.pane-head');
+      await expect(head).toHaveAttribute('aria-expanded', 'true');
+      await head.click();
+      await expect(head).toHaveAttribute('aria-expanded', 'false');
+      await page.locator('#problem-list .problem-row').filter({ hasText: 'AuditStamp' }).click();
+      await expect(head).toHaveAttribute('aria-expanded', 'true');
+      await expect(pane).not.toHaveAttribute('data-collapsed');
+      await expect(page.locator('#selected-editor .view-line').filter({ hasText: 'stamp: AuditStamp' })).toBeVisible();
+   });
+
+   test('space clears the log without collapsing its panel', async ({ page }) => {
+      await page.setViewportSize({ width: 800, height: 1000 });
+      await expect(page.locator('#properties-body #field-name')).toHaveValue('Fulfillment');
+      const clear = page.getByRole('button', { name: 'Clear the lines held here', exact: true });
+      await clear.focus();
+      await clear.press('Space');
+      await expect(page.locator('#log-panel > .panel-head')).toHaveAttribute('aria-expanded', 'true');
+      await expect(page.locator('#log').locator(':scope > *')).toHaveCount(0);
+   });
 });
 
 const pageScroll = (page: Page): Promise<number> => page.evaluate(() => document.scrollingElement?.scrollTop ?? 0);

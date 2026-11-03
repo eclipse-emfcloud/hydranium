@@ -75,8 +75,8 @@ export const PROPERTIES_DISCONNECTED = defineMessage(
 
 /**
  * Each of these says what became of the write AND whose value the box now holds,
- * because the two come apart: a merge kept the edit, a conflict replaced it with
- * someone else's, and an unavailable document left text nothing has accepted. A
+ * because the two come apart: a merge kept the edit, while a conflict or an
+ * unavailable document leaves a draft nothing has accepted. A
  * translation that shortens one to "saved" or "not saved" leaves a reader unable
  * to tell whether what is in front of them is their own.
  */
@@ -87,7 +87,7 @@ export const PROPERTIES_WRITE_MERGED = defineMessage(
 
 export const PROPERTIES_WRITE_CONFLICT = defineMessage(
    'order-flow/properties/write-conflict',
-   'Not saved — someone else changed this field first. The value shown is theirs.'
+   'Not saved — someone else changed this field first. Your draft has been kept.'
 );
 
 export const PROPERTIES_WRITE_RAN_OUT = defineMessage(

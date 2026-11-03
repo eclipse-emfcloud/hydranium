@@ -12,6 +12,7 @@ import {
    DiagramLoader,
    GLSPActionDispatcher,
    GLSPHiddenBoundsUpdater,
+   GlspEditLabelUI,
    RankedSelectMouseListener,
    StatusOverlay,
    TYPES
@@ -20,6 +21,7 @@ import { type Clock, ConsoleLogger, DefaultTracer, type Logger, SystemClock } fr
 import { HydraniumGlspActionDispatcher } from './action-dispatcher';
 import { HydraniumDiagramLoader } from './diagram-loader';
 import { HydraniumHiddenBoundsUpdater } from './hidden-bounds-updater';
+import { HydraniumLabelEditUI } from './label-edit-ui';
 import { HydraniumSelectMouseListener } from './select-mouse-listener';
 import { SprottyLoggerAdapter } from './sprotty-logger-adapter';
 import { HydraniumStatusOverlay } from './status-overlay';
@@ -84,6 +86,7 @@ export function createGlspClientModule(context: BindingContext, options: GlspCli
    rebind(DiagramLoader).to(HydraniumDiagramLoader).inSingletonScope();
    rebind(GLSPHiddenBoundsUpdater).to(HydraniumHiddenBoundsUpdater).inSingletonScope();
    rebind(StatusOverlay).to(HydraniumStatusOverlay).inSingletonScope();
+   rebind(GlspEditLabelUI).to(HydraniumLabelEditUI).inSingletonScope();
    rebind(RankedSelectMouseListener).to(HydraniumSelectMouseListener).inSingletonScope();
    rebind(TYPES.ILogger).to(SprottyLoggerAdapter).inSingletonScope();
 }

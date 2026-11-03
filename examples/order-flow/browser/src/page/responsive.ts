@@ -83,6 +83,17 @@ export function wireResponsiveLayout(onLayoutChange: ResizeListener): void {
  */
 let draggedSizes: ReadonlyArray<readonly [string, string]> = [];
 
+/** Forget desktop dimensions when the reader explicitly resets the layout. */
+export function clearSavedSizes(): void {
+   draggedSizes = [];
+}
+
+/** Reveal a pane requested by navigation, including its accessible state. */
+export function expandRegion(region: HTMLElement | null): void {
+   region?.removeAttribute('data-collapsed');
+   headOf(region)?.setAttribute('aria-expanded', 'true');
+}
+
 function apply(isNarrow: boolean, onLayoutChange: ResizeListener): void {
    const root = document.documentElement;
    if (isNarrow) {
@@ -180,7 +191,12 @@ function wireCollapsibleRegions(): void {
          toggle();
       });
       head.addEventListener('keydown', event => {
-         if (!isNarrowViewport() || !(event instanceof KeyboardEvent) || (event.key !== 'Enter' && event.key !== ' ')) {
+         if (
+            event.target !== head ||
+            !isNarrowViewport() ||
+            !(event instanceof KeyboardEvent) ||
+            (event.key !== 'Enter' && event.key !== ' ')
+         ) {
             return;
          }
          event.preventDefault();

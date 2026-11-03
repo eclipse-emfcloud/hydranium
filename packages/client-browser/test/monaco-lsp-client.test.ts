@@ -2511,6 +2511,22 @@ describe('MonacoLspClient save over the LSP head', () => {
       expect(dirtyUris(client)).toEqual([]);
    });
 
+   it('leaves excluded documents dirty and saves them on a later unrestricted call', async () => {
+      const ends = makeEnds();
+      const server = makeSaveServer(ends);
+      const client = makeSavingClient(ends);
+      server.refusing.add('file:///a.one');
+
+      const saved = await client.saveAll(['file:///a.one']);
+
+      expect(saved.map(document => document.uri)).toEqual(['file:///b.two']);
+      expect(server.requests.map(request => request.save)).toEqual(['file:///b.two@2']);
+      expect(dirtyUris(client)).toEqual(['file:///a.one']);
+      server.refusing.clear();
+      expect((await client.saveAll()).map(document => document.uri)).toEqual(['file:///a.one']);
+      expect(dirtyUris(client)).toEqual([]);
+   });
+
    it('rejects a save of all with the first refusal once every answer is in, keeping the documents that saved', async () => {
       const ends = makeEnds();
       const server = makeSaveServer(ends);

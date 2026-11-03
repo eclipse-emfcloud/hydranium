@@ -2421,6 +2421,198 @@ test.describe('order-flow in a web worker', () => {
       await expect(diagram).not.toHaveClass(/is-dirty/);
    });
 
+   test('Ctrl+S applies the focused draft before saving it', async ({ page }) => {
+      await page.goto('/');
+      const name = page.locator('#properties-body #field-name');
+      await expect(name).toHaveValue('Fulfillment');
+      await name.fill('AppliedVersion');
+      await name.press('Enter');
+      await expect(page.locator('#process-editor-title')).toHaveClass(/is-dirty/);
+      await name.fill('TypedVersion');
+      await name.press('Control+s');
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /^saved 1 document/);
+      await expect(page.locator('#properties-body [data-pending]')).toHaveCount(0);
+      await page.reload();
+      await expect(name).toHaveValue('TypedVersion');
+   });
+
+   test('a draft submitted by saving times out while its response is held', async ({ page }) => {
+      await page.goto('/');
+      const name = page.locator('#properties-body #field-name');
+      await expect(name).toHaveValue('Fulfillment');
+      const worker = page.workers().find(candidate => candidate.url().includes('order-flow-worker'))!;
+      // Hold actual replies after the worker has applied the write. Requests
+      // and notifications still flow, including the edit sent to Monaco.
+      await worker.evaluate(() => {
+         const replies: Array<() => void> = [];
+         const post = MessagePort.prototype.postMessage;
+         MessagePort.prototype.postMessage = function (this: MessagePort, ...args: unknown[]) {
+            const message = args[0];
+            if (message && typeof message === 'object' && 'id' in message && ('result' in message || 'error' in message)) {
+               replies.push(() => Reflect.apply(post, this, args));
+            } else {
+               Reflect.apply(post, this, args);
+            }
+         };
+         Object.assign(globalThis, {
+            heldSaveReplies: replies,
+            releaseSaveReplies: () => {
+               MessagePort.prototype.postMessage = post;
+               replies.splice(0).forEach(reply => reply());
+            }
+         });
+      });
+      await page.clock.install();
+      await name.fill('DelayedDraft');
+      await name.press('Control+s');
+      await expect.poll(() => worker.evaluate(() => Reflect.get(globalThis, 'heldSaveReplies').length)).toBeGreaterThan(0);
+      const report = page.locator('[data-report="workspace"]');
+      await expect(report).toHaveAttribute('title', 'saving…');
+      await page.clock.fastForward(31_000);
+      await expect(report).toHaveAttribute('title', /save failed:.*not answered/);
+      expect(
+         await page.evaluate(() => {
+            const event = new Event('beforeunload', { cancelable: true });
+            window.dispatchEvent(event);
+            return event.defaultPrevented;
+         })
+      ).toBe(true);
+
+      await worker.evaluate(() => Reflect.get(globalThis, 'releaseSaveReplies')());
+      await expect(page.locator('#properties-body [data-pending]')).toHaveCount(0);
+      await name.press('Control+s');
+      await expect(report).toHaveAttribute('title', /^saved 1 document/);
+      await page.reload();
+      await expect(name).toHaveValue('DelayedDraft');
+   });
+
+   test('saving the workspace persists other documents when a Properties draft is refused', async ({ page }) => {
+      await page.goto('/');
+      const name = page.locator('#properties-body #field-name');
+      await expect(name).toHaveValue('Fulfillment');
+      await page.locator('#selected-editor .view-line').first().click();
+      await page.keyboard.press('Control+End');
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('// retained domain edit');
+      await expect(page.locator('#selected-editor-title')).toHaveClass(/is-dirty/);
+      await page.locator('#document-list .document-row').filter({ hasText: 'orders/fulfillment.process' }).click();
+      await expect(name).toHaveValue('Fulfillment');
+      // Refuse data writes at the transport, without changing server text.
+      // LSP edits and saves continue through their real worker connection.
+      await page.evaluate(() => {
+         const post = MessagePort.prototype.postMessage;
+         MessagePort.prototype.postMessage = function (this: MessagePort, ...args: unknown[]) {
+            const message = args[0];
+            if (
+               message &&
+               typeof message === 'object' &&
+               'method' in message &&
+               typeof message.method === 'string' &&
+               message.method.endsWith('updateModelDocument') &&
+               'id' in message
+            ) {
+               queueMicrotask(() =>
+                  this.dispatchEvent(
+                     new MessageEvent('message', {
+                        data: {
+                           jsonrpc: '2.0',
+                           id: message.id,
+                           error: { code: -32603, message: 'draft refused by test' }
+                        }
+                     })
+                  )
+               );
+               return;
+            }
+            Reflect.apply(post, this, args);
+         };
+      });
+      await name.fill('RefusedDraft');
+      await name.press('Enter');
+      await expect(page.locator('#properties-body .status')).toContainText('draft refused by test');
+      await expect(page.locator('#properties-body [data-pending]')).toHaveCount(1);
+      await page.locator('#save-workspace').click();
+      await expect(page.locator('[data-report="workspace"]')).toHaveAttribute('title', /saved 1 document.*fulfillment.process.*not saved/);
+      await expect(page.locator('#selected-editor-title')).not.toHaveClass(/is-dirty/);
+      await expect(page.locator('#properties-body [data-pending]')).toHaveCount(1);
+      expect(
+         await page.evaluate(() => {
+            const event = new Event('beforeunload', { cancelable: true });
+            window.dispatchEvent(event);
+            return event.defaultPrevented;
+         })
+      ).toBe(true);
+      page.once('dialog', dialog => dialog.accept());
+      await page.reload();
+      await expect(name).toHaveValue('Fulfillment');
+      await expect(page.locator('#selected-editor .view-line').filter({ hasText: '// retained domain edit' })).toHaveCount(1);
+   });
+
+   test('a draft without a submitted write prevents unloading', async ({ page }) => {
+      await page.goto('/');
+      const name = page.locator('#properties-body #field-name');
+      await expect(name).toHaveValue('Fulfillment');
+      await name.fill('UnsavedDraft');
+      await expect(page.locator('#process-editor-title')).not.toHaveClass(/is-dirty/);
+      const guarded = await page.evaluate(() => {
+         const event = new Event('beforeunload', { cancelable: true });
+         window.dispatchEvent(event);
+         return event.defaultPrevented;
+      });
+      expect(guarded).toBe(true);
+   });
+
+   test('task names and branch labels open inline editors', async ({ page }) => {
+      await page.goto('/');
+      const diagram = page.locator('#order-flow-process-diagram');
+      const pay = diagram.locator('text').filter({ hasText: /^Pay$/ });
+      await expect(pay).toBeVisible();
+      await pay.dblclick();
+      const input = page.locator('.label-edit input');
+      await expect(input).toBeVisible();
+      await input.fill('Charge');
+      await input.press('Enter');
+      await expect(diagram.locator('text').filter({ hasText: /^Charge$/ })).toBeVisible();
+      await diagram.locator('text').filter({ hasText: /^yes$/ }).dblclick();
+      await expect(input).toBeVisible();
+      await input.fill('approved');
+      await input.press('Enter');
+      await expect(diagram.locator('text').filter({ hasText: /^approved$/ })).toBeVisible();
+   });
+
+   test('creating a task starts its inline rename', async ({ page }) => {
+      await page.goto('/');
+      const diagram = page.locator('#order-flow-process-diagram');
+      await expect(diagram.locator('text').filter({ hasText: /^Pay$/ })).toBeVisible();
+      await diagram.locator('.tool-button', { hasText: 'Task' }).click();
+      const box = (await diagram.boundingBox())!;
+      await diagram.click({ position: { x: box.width * 0.4, y: box.height * 0.85 } });
+      const input = page.locator('.label-edit input');
+      await expect(input).toBeVisible();
+      await input.fill('CreatedTask');
+      await input.press('Enter');
+      await expect(diagram.locator('text').filter({ hasText: /^CreatedTask$/ })).toBeVisible();
+   });
+
+   test('rapid switching keeps the properties title and write target together', async ({ page }) => {
+      await page.goto('/');
+      const name = page.locator('#properties-body #field-name');
+      await expect(name).toHaveValue('Fulfillment');
+      await page.evaluate(() => {
+         const rows = [...document.querySelectorAll<HTMLElement>('#document-list .document-row')];
+         for (const path of ['orders/returns.process', 'orders/fulfillment.process']) {
+            rows.find(row => row.textContent?.includes(path))!.click();
+         }
+      });
+      await expect(name).toBeEnabled();
+      await expect(name).toHaveValue('Fulfillment');
+      await name.fill('RightFileEdit');
+      await name.press('Enter');
+      await expect(page.locator('#process-editor .view-line').filter({ hasText: 'process RightFileEdit' })).toHaveCount(1);
+      await page.locator('#document-list .document-row').filter({ hasText: 'orders/returns.process' }).click();
+      await expect(name).toHaveValue('Returns');
+   });
+
    test('Ctrl+S saves the focused document, and everything when focus is elsewhere', async ({ page }) => {
       await page.goto('/');
       const panel = page.locator('#properties-body');

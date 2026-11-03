@@ -122,7 +122,7 @@ interface Reported {
  * DOM seam is stubbed.
  */
 class TestableForm extends PropertiesForm {
-   override write(name: string, value: string): Promise<void> {
+   override write(name: string, value: string): Promise<boolean> {
       return super.write(name, value);
    }
 
@@ -506,5 +506,83 @@ describe('PropertiesForm pending marker', () => {
 
       expect(input.value).toBe('Ada');
       expect(form.fieldOf('customerName').attributes['data-pending']).toBeUndefined();
+   });
+});
+
+describe('PropertiesForm.applyDrafts', () => {
+   it('waits for the focused draft to be applied', async () => {
+      const answered = new Deferred<void>();
+      const writes: string[] = [];
+      const { form } = makeForm(async (_name, value) => {
+         writes.push(value);
+         await answered.promise;
+         return { status: 'applied' };
+      });
+      form.setFields([{ name: 'name', value: 'Before' }]);
+      form.inputOf('name').value = 'After';
+      expect(form.hasDrafts).toBe(true);
+      const applying = form.applyDrafts();
+      expect(writes).toEqual(['After']);
+      expect(form.hasDrafts).toBe(true);
+      answered.resolve();
+      expect(await applying).toBe(true);
+      expect(form.hasDrafts).toBe(false);
+   });
+
+   it('keeps a refused draft unsaved', async () => {
+      const { form } = makeForm(async () => ({ status: 'conflict' }));
+      form.setFields([{ name: 'name', value: 'Before' }]);
+      form.inputOf('name').value = 'After';
+      expect(await form.applyDrafts()).toBe(false);
+      expect(form.hasDrafts).toBe(true);
+   });
+
+   it.each(['conflict', 'failed'] as const)('retains an unfocused draft through a redraw when its write is %s', async status => {
+      const answered = new Deferred<void>();
+      const { form } = makeForm(async () => {
+         await answered.promise;
+         if (status === 'failed') {
+            throw new Error('write refused');
+         }
+         return { status };
+      });
+      documentStub.activeElement = null;
+      form.setFields([{ name: 'name', value: 'Before' }]);
+      form.inputOf('name').value = 'After';
+      const applying = form.applyDrafts();
+      form.setFields([{ name: 'name', value: 'Before' }]);
+      answered.resolve();
+      expect(await applying).toBe(false);
+      expect(form.inputOf('name').value).toBe('After');
+      expect(form.hasDrafts).toBe(true);
+   });
+
+   it('reports refusal even if the reader clears the draft while the write is pending', async () => {
+      const answered = new Deferred<void>();
+      const { form } = makeForm(async () => {
+         await answered.promise;
+         return { status: 'conflict' };
+      });
+      form.setFields([{ name: 'name', value: 'Before' }]);
+      form.inputOf('name').value = 'After';
+      const applying = form.applyDrafts();
+      form.inputOf('name').value = 'Before';
+      answered.resolve();
+      expect(await applying).toBe(false);
+   });
+
+   it('does not claim a newer draft was applied with the previous one', async () => {
+      const answered = new Deferred<void>();
+      const { form } = makeForm(async () => {
+         await answered.promise;
+         return { status: 'applied' };
+      });
+      form.setFields([{ name: 'name', value: 'Before' }]);
+      form.inputOf('name').value = 'First';
+      const applying = form.applyDrafts();
+      form.inputOf('name').value = 'Second';
+      answered.resolve();
+      expect(await applying).toBe(false);
+      expect(form.hasDrafts).toBe(true);
    });
 });

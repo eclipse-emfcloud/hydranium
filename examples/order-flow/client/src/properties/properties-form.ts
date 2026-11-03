@@ -187,6 +187,19 @@ export class PropertiesForm {
       this.heading.textContent = this.text(PROPERTIES_NO_DOCUMENT);
    }
 
+   /** Whether a field holds text that has not been applied. */
+   get hasDrafts(): boolean {
+      return [...this.inputs.keys()].some(name => this.isPending(name));
+   }
+
+   /** Submit the drafts present at the call, retaining the marker on a refused write. */
+   async applyDrafts(): Promise<boolean> {
+      const shown = this.shown;
+      const drafts = [...this.inputs].filter(([name]) => this.isPending(name)).map(([name, input]) => [name, input.value] as const);
+      const applied = await Promise.all(drafts.map(([name, value]) => this.write(name, value)));
+      return applied.every(Boolean) && shown === this.shown && !this.hasDrafts;
+   }
+
    /** This panel's own `message`, in the reader's language. */
    protected text(message: MessageDefinition<string>): string {
       return this.renderMessage(resolve(message));
@@ -283,20 +296,17 @@ export class PropertiesForm {
     * Draw `fields`.
     *
     * **Rebuilt only when the field NAMES change; otherwise values are written in
-    * place, and never into the input the user is typing in.** A properties view
+    * place, preserving focused inputs and unapplied drafts.** A properties view
     * that recreates its inputs on every model change loses the caret — and it
     * gets a model change on every foreign edit to the document, which is exactly
     * when the user is most likely to be mid-word. This is the same bug the
     * model's own echo filter exists to prevent on the write path; the filter
     * cannot help with a third party's write, so the fix has to be here too.
     *
-    * The consequence, stated rather than hidden: a foreign edit to the field the
-    * user is IN leaves that one input stale, because blurring fires no model
-    * change to redraw it from. The user's own next write then trips
-    * `baseVersion`, and the conflict branch adopts the server's value and fires a
-    * change — by which point the input is no longer focused, so it updates. The
-    * edit is never silently lost; it is only the display that lags, and only for
-    * the field being typed in.
+    * An unapplied draft stays in its input after blur too. A model refresh can
+    * precede a refused write's answer; replacing the draft then would erase the
+    * value and its unload protection. Only an accepted write moves that draft's
+    * baseline. Fields without drafts continue to follow the model when unfocused.
     */
    setFields(fields: readonly PropertyField[]): void {
       if (this.loading && fields.length === 0) {
@@ -310,12 +320,18 @@ export class PropertiesForm {
       }
       for (const field of fields) {
          const input = this.inputs.get(field.name);
-         if (input && document.activeElement !== input) {
+         if (input && document.activeElement !== input && !this.isPending(field.name)) {
             input.value = field.value;
             this.rendered.set(field.name, field.value);
             this.markPending(field.name);
          }
       }
+   }
+
+   /** Whether the field differs from the last value drawn or successfully applied. */
+   protected isPending(name: string): boolean {
+      const input = this.inputs.get(name);
+      return input !== undefined && input.value !== this.rendered.get(name);
    }
 
    /**
@@ -333,7 +349,7 @@ export class PropertiesForm {
       if (!input || !wrapper) {
          return;
       }
-      const pending = input.value !== this.rendered.get(name);
+      const pending = this.isPending(name);
       if (pending) {
          wrapper.setAttribute('data-pending', '');
       } else {
@@ -462,7 +478,7 @@ export class PropertiesForm {
       }
    }
 
-   protected async write(name: string, value: string): Promise<void> {
+   protected async write(name: string, value: string): Promise<boolean> {
       const shown = this.shown;
       const uri = this.documentUri;
       try {
@@ -473,17 +489,15 @@ export class PropertiesForm {
             if (lost) {
                this.handlers.reportError(undefined, lost(name, uri));
             }
-            return;
+            return false;
          }
          this.report(OUTCOME_MESSAGES[outcome.status] ?? '', OUTCOME_KINDS[outcome.status]);
          if (SETTLED_ON_THE_WRITTEN_VALUE.has(outcome.status)) {
-            // The server now holds what was typed, so it is no longer pending —
-            // and this is the only place that can say so when the write came
-            // from Enter: `setFields` refuses to touch a focused input, and
-            // Enter does not blur, so the redraw that normally moves the
-            // baseline never reaches this field.
+            // A model redraw cannot acknowledge a draft: it may precede a
+            // refused response. Only a successful outcome moves its baseline.
             this.rendered.set(name, value);
             this.markPending(name);
+            return true;
          }
       } catch (error: unknown) {
          const detail = describeFailure(error, this.renderMessage);
@@ -492,5 +506,6 @@ export class PropertiesForm {
             this.report(detail, 'error');
          }
       }
+      return false;
    }
 }

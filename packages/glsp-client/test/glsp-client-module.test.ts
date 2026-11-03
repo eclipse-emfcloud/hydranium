@@ -12,6 +12,7 @@ import {
    DiagramLoader,
    GLSPActionDispatcher,
    GLSPHiddenBoundsUpdater,
+   GlspEditLabelUI,
    RankedSelectMouseListener,
    StatusOverlay,
    TYPES
@@ -24,6 +25,7 @@ import { HydraniumGlspActionDispatcher } from '../src/action-dispatcher';
 import { HydraniumDiagramLoader } from '../src/diagram-loader';
 import { createGlspClientModule, type GlspClientModuleOptions } from '../src/glsp-client-module';
 import { HydraniumHiddenBoundsUpdater } from '../src/hidden-bounds-updater';
+import { HydraniumLabelEditUI } from '../src/label-edit-ui';
 import { HydraniumSelectMouseListener } from '../src/select-mouse-listener';
 import { SprottyLoggerAdapter } from '../src/sprotty-logger-adapter';
 import { HydraniumStatusOverlay } from '../src/status-overlay';
@@ -36,6 +38,7 @@ const GLSP_DEFAULT_TOKENS: interfaces.ServiceIdentifier<unknown>[] = [
    GLSPActionDispatcher,
    DiagramLoader,
    GLSPHiddenBoundsUpdater,
+   GlspEditLabelUI,
    StatusOverlay,
    RankedSelectMouseListener,
    TYPES.ILogger
@@ -95,6 +98,10 @@ describe('createGlspClientModule', () => {
 
    it('rebinds StatusOverlay to the one that keeps its element on the page', () => {
       expect(record().find('rebind', StatusOverlay)?.chain).toEqual([`to(<${HydraniumStatusOverlay.name}>)`, 'inSingletonScope()']);
+   });
+
+   it('rebinds GlspEditLabelUI to the editor that cancels a closed label’s blur timer', () => {
+      expect(record().find('rebind', GlspEditLabelUI)?.chain).toEqual([`to(<${HydraniumLabelEditUI.name}>)`, 'inSingletonScope()']);
    });
 
    it('rebinds RankedSelectMouseListener to the one whose plain click replaces a pending selection', () => {

@@ -78,7 +78,7 @@ import { rememberPreference, storedPreference } from './preferences.js';
 import { mountProcessDiagram, PROCESS_DIAGRAM_ELEMENT_ID } from './process-diagram.js';
 import { PROPERTIES_SESSION_LABEL, PropertiesPanel } from './properties-panel.js';
 import { publishReport, ReportDetail } from './report-detail.js';
-import { wireResponsiveLayout } from './responsive.js';
+import { clearSavedSizes, wireResponsiveLayout } from './responsive.js';
 import { wireLayoutReset, wireSplitters } from './splitters.js';
 import { WorkspacePanel } from './workspace-panel.js';
 
@@ -217,12 +217,16 @@ let processDiagram: GlspDiagramMount | undefined;
 let propertiesPanel: PropertiesPanel | undefined;
 
 /**
- * What a reload would drop: the unsaved documents, the diagram's document
- * while an edit to it is in flight, and each the panel has a write of out, one
- * shown before included, which no dirty set shows until the server answers.
+ * What a reload would drop: unsaved documents, unapplied Properties drafts,
+ * the diagram's document while an edit is in flight, and each document with
+ * an unanswered panel write, including documents shown before.
  */
 function unsavedWork(): readonly string[] {
    const unsaved = new Set(unsavedDocuments());
+   const draft = propertiesPanel?.documentWithDrafts;
+   if (draft) {
+      unsaved.add(draft);
+   }
    if ((processDiagram?.editsInFlight ?? 0) > 0) {
       unsaved.add(GLSP_HEAD_DOCUMENT);
    }
@@ -664,9 +668,34 @@ async function saveWorkspace(client: MonacoLspClient, editors: EditorArea, only?
       if (settled.includes(false)) {
          throw new Error('the server has not answered an edit yet, so nothing was saved');
       }
-      const saved = only === undefined ? await client.saveAll() : [await client.save(only)].filter(document => document !== undefined);
+      let excluded: string | undefined;
+      let draftFailure: string | undefined;
+      if (propertiesPanel && (only === undefined || only === propertiesPanel.documentUri)) {
+         const uri = propertiesPanel.documentUri;
+         try {
+            if (!(await propertiesPanel.applyDrafts())) {
+               throw new Error('a Properties field could not be applied');
+            }
+         } catch (error: unknown) {
+            if (only !== undefined || uri === undefined) {
+               throw error;
+            }
+            excluded = uri;
+            draftFailure = describeError(error);
+         }
+      }
+      const saved =
+         only !== undefined
+            ? [await client.save(only)].filter(document => document !== undefined)
+            : await client.saveAll(excluded === undefined ? [] : [excluded]);
       editors.refreshDirtyMarks();
-      setWorkspaceReport(saved.length === 0 ? 'nothing to save' : `saved ${saved.length} document(s) — a reload restores them`);
+      setWorkspaceReport(
+         excluded === undefined
+            ? saved.length === 0
+               ? 'nothing to save'
+               : `saved ${saved.length} document(s) — a reload restores them`
+            : `saved ${saved.length} document(s); ${excluded.slice(WORKSPACE_ROOT_URI.length + 1)} not saved: ${draftFailure}`
+      );
    } catch (error: unknown) {
       // Reported rather than swallowed, because the store can genuinely refuse:
       // a quota is finite and the origin's storage may have been evicted. A page
@@ -947,7 +976,10 @@ export async function main(locale: Locale | undefined): Promise<void> {
    // measures its container, and sprotty caches its canvas bounds.
    const relayout = (): void => editors.layout();
    wireSplitters(relayout);
-   wireLayoutReset(relayout);
+   wireLayoutReset(() => {
+      clearSavedSizes();
+      relayout();
+   });
    // The same listener, because crossing the breakpoint resizes every pane for
    // the same reason dragging a divider resizes two.
    wireResponsiveLayout(relayout);

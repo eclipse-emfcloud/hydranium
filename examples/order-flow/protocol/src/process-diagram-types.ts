@@ -51,6 +51,9 @@ export const PROCESS_EFFECT_COMPARTMENT_TYPE = `${DefaultTypes.COMPARTMENT}:effe
  */
 export const PROCESS_EFFECT_TYPE = `${DefaultTypes.LABEL}:effect`;
 
+/** A task or gateway name, or a branch label, editable on the canvas. */
+export const PROCESS_EDITABLE_LABEL_TYPE = `${DefaultTypes.LABEL}:editable`;
+
 /** An explicit `transition a -> b`. */
 export const PROCESS_TRANSITION_EDGE_TYPE = `${DefaultTypes.EDGE}:transition`;
 
@@ -76,6 +79,7 @@ export const PROCESS_ELEMENT_TYPES = [
    PROCESS_GATEWAY_NODE_TYPE,
    PROCESS_EFFECT_COMPARTMENT_TYPE,
    PROCESS_EFFECT_TYPE,
+   PROCESS_EDITABLE_LABEL_TYPE,
    PROCESS_TRANSITION_EDGE_TYPE,
    PROCESS_BRANCH_EDGE_TYPE
 ] as const;

@@ -19,6 +19,7 @@ import {
    FitToScreenAction,
    GLSPActionDispatcher,
    GLSPHiddenBoundsUpdater,
+   GlspEditLabelUI,
    initializeDiagramContainer as initializeGlspDiagramContainer,
    type IDiagramOptions,
    InitializeCanvasBoundsAction,
@@ -108,6 +109,7 @@ const GLSP_DEFAULT_TOKENS: interfaces.ServiceIdentifier<unknown>[] = [
    GLSPActionDispatcher,
    DiagramLoader,
    GLSPHiddenBoundsUpdater,
+   GlspEditLabelUI,
    StatusOverlay,
    RankedSelectMouseListener,
    TYPES.ILogger
