@@ -696,8 +696,9 @@ export function runInit(options: InitCommandOptions): void {
    }
    if (options.install) {
       write('\nRunning npm install...\n');
+      // An explicit prefix keeps npm from selecting an enclosing workspace instead of this standalone root.
       // Windows resolves npm through a command shim; only fixed arguments reach the shell.
-      const result = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install'], {
+      const result = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--prefix', '.', 'install'], {
          cwd: targetDir,
          stdio: 'inherit',
          shell: process.platform === 'win32'

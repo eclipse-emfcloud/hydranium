@@ -40,7 +40,7 @@ describe('init --install', () => {
       });
       vi.mocked(spawnSync).mockImplementation((command, args) => {
          if (command === 'npm' || command === 'npm.cmd') {
-            expect(args).toEqual(['install']);
+            expect(args).toEqual(['--prefix', '.', 'install']);
             expect(fs.existsSync(path.join(target, 'server/langium-config.json'))).toBe(true);
             return { pid: 1, output: [], stdout: '', stderr: '', status, signal, error };
          }
@@ -52,7 +52,7 @@ describe('init --install', () => {
    it('installs after writing the scaffold in its directory and prints only the remaining steps', async () => {
       const { target, output } = setup();
       await runInitCommand([target, '--name', 'Example', '--install']);
-      expect(spawnSync).toHaveBeenCalledWith(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['install'], {
+      expect(spawnSync).toHaveBeenCalledWith(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['--prefix', '.', 'install'], {
          cwd: target,
          stdio: 'inherit',
          shell: process.platform === 'win32'
