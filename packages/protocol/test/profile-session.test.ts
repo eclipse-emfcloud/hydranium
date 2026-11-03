@@ -172,11 +172,11 @@ describe('ProfileCollector', () => {
 
    it('collects repeated operations and nested self-time without logging or reporting', () => {
       Logger.setLevel('off');
-      expect(ProfileCollector.isEnabled()).toBe(false);
+      expect(ProfileCollector.isProfilingEnabled()).toBe(false);
       const clock = makeFakeClock();
       const collector = new ProfileCollector();
       collector.start();
-      expect(ProfileCollector.isEnabled()).toBe(true);
+      expect(ProfileCollector.isProfilingEnabled()).toBe(true);
       for (let index = 0; index < 2; index++) {
          const session = new DefaultProfileSession(new NoopLogger(), clock, 'integrity');
          session.scope('outer', () => {
@@ -194,7 +194,7 @@ describe('ProfileCollector', () => {
          })
       ).toThrow('failed');
       collector.stop();
-      expect(ProfileCollector.isEnabled()).toBe(false);
+      expect(ProfileCollector.isProfilingEnabled()).toBe(false);
       expect(collector.records(20)).toEqual([
          { session: 'integrity', id: 'inner', count: 2, selfMs: 6, selfPct: 30 },
          { session: 'integrity', id: 'outer', count: 2, selfMs: 4, selfPct: 20 },

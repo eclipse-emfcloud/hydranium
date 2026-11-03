@@ -47,7 +47,8 @@ export class ProfileCollector {
       return this.active;
    }
 
-   static isEnabled(): boolean {
+   /** Whether to measure scopes for an active capture or debug logging. */
+   static isProfilingEnabled(): boolean {
       return this.active !== undefined || Logger.isLevelEnabled('debug');
    }
 

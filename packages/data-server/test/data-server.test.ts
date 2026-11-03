@@ -2134,11 +2134,12 @@ describe('DataServer', () => {
             const diagnostics = createRpcProxy<DataServerDiagnosticsProtocol>(pair.right, {
                methodNamespace: DATA_SERVER_WIRE_PREFIX
             });
-            await diagnostics.startProfiling({ gc: true });
-            await new Promise(resolve => setTimeout(resolve, 5));
+            await diagnostics.startProfiling({ gc: true, frameworkPasses: true });
+            bundle.services.Tracer.profile('wire').scope('pass', () => undefined);
             const report = await diagnostics.stopProfiling({});
             expect(report).toContain('Profile report:');
             expect(report).toContain('duration');
+            expect(report).toContain('wire / pass ×1');
          } finally {
             pair.dispose();
          }

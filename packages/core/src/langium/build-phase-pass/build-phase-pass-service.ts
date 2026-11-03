@@ -122,7 +122,7 @@ export class DefaultBuildPhasePassService implements BuildPhasePassService {
          return;
       }
       // Allocate timing state only for a capture or debug logging.
-      const session = ProfileCollector.isEnabled() ? this.tracer.profile(`build-phase-pass ${DocumentState[phase]}`) : undefined;
+      const session = ProfileCollector.isProfilingEnabled() ? this.tracer.profile(`build-phase-pass ${DocumentState[phase]}`) : undefined;
       for (const pass of bucket) {
          if (cancelToken.isCancellationRequested) {
             break;

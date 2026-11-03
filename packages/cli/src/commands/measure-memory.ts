@@ -56,7 +56,7 @@ export interface MeasureMemoryCommandOptions extends DriverSpawnOptions {
 }
 
 /**
- * Parse a `--profile` dimension list (`cpu,alloc,gc,eld,heap`) into
+ * Parse a `--profile` dimension list (`cpu,alloc,gc,eld,heap,framework`) into
  * {@link ProfileCaptureOptions}. Case- and whitespace-tolerant; throws on an
  * unknown token so a typo fails loud rather than silently capturing nothing.
  */
@@ -68,6 +68,9 @@ export function parseProfileDimensions(csv: string): ProfileCaptureOptions {
          continue;
       }
       switch (token) {
+         case 'framework':
+            options.frameworkPasses = true;
+            break;
          case 'cpu':
             options.cpu = true;
             break;
@@ -88,7 +91,7 @@ export function parseProfileDimensions(csv: string): ProfileCaptureOptions {
             options.heapSnapshot = true;
             break;
          default:
-            throw new Error(`Unknown profile dimension: ${token} (expected cpu, alloc, gc, eld, heap)`);
+            throw new Error(`Unknown profile dimension: ${token} (expected cpu, alloc, gc, eld, heap, framework)`);
       }
    }
    return options;

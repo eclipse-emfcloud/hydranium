@@ -13,8 +13,7 @@ import {
    DefaultScopeComputation,
    type LangiumDocument,
    type LocalSymbols,
-   type MultiMap,
-   UriUtils
+   type MultiMap
 } from '@hydranium/langium';
 import { ProfileCollector, type ProfileSession, type Tracer } from '@hydranium/protocol';
 import type { CancellationToken } from 'vscode-languageserver-protocol';
@@ -83,10 +82,10 @@ export class HydraniumScopeComputation extends DefaultScopeComputation {
     * the session and blur each other's report.
     */
    override async collectLocalSymbols(document: LangiumDocument, cancelToken?: CancellationToken): Promise<LocalSymbols> {
-      if (!ProfileCollector.isEnabled()) {
+      if (!ProfileCollector.isProfilingEnabled()) {
          return super.collectLocalSymbols(document, cancelToken);
       }
-      const profile = this.tracer.profile(`scope-local ${UriUtils.basename(document.uri)}`);
+      const profile = this.tracer.profile(`scope-local ${this.services.LanguageMetaData.languageId}`);
       this.localSymbolsProfile = profile;
       let symbols: LocalSymbols;
       try {

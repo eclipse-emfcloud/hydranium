@@ -11,8 +11,8 @@
  * Node-only sampled-profile capture: CPU + allocation over a window (one
  * `node:inspector` session), plus GC and event-loop delay from
  * `node:perf_hooks`, and an optional retained heap snapshot. Everything is
- * singleton-guarded, with sampled dimensions default-off. Every capture also
- * collects completed framework scopes. The write returns one large JSON object
+ * singleton-guarded, with every dimension default-off, including framework
+ * scope instrumentation. The write returns one large JSON object
  * and briefly blocks the event loop, so nothing here is ever auto-triggered.
  * The mechanical, process-level counterpart to the protocol's in-code
  * `ProfileSession` (aggregate self-time spans).
@@ -65,7 +65,7 @@ export interface EventLoopDelayHistogram {
 /** The captured artefacts + a compact summary. Profile files are written to the session directory. */
 export interface ProfileReport {
    durationMs: number;
-   /** Completed framework scopes, with selfPct relative to this capture window. */
+   /** Present when framework instrumentation was requested; selfPct uses this capture duration. */
    frameworkPasses?: CapturedProfileRecord[];
    cpuProfilePath?: string;
    allocationProfilePath?: string;
@@ -139,6 +139,12 @@ export function formatProfileReport(report: ProfileReport, label = 'Profile repo
          `  event loop  mean ${meanMs.toFixed(1)}ms / p50 ${p50Ms.toFixed(1)}ms / p99 ${p99Ms.toFixed(1)}ms / max ${maxMs.toFixed(1)}ms`
       );
    }
+   if (report.frameworkPasses) {
+      lines.push(`  framework passes${report.frameworkPasses.length === 0 ? ': no completed scopes' : ':'}`);
+      for (const record of report.frameworkPasses) {
+         lines.push(`    ${record.session} / ${record.id} ×${record.count} ${Format.elapsed(record.selfMs)} ${record.selfPct.toFixed(1)}%`);
+      }
+   }
    if (report.cpuProfilePath) {
       lines.push(`  cpu profile ${report.cpuProfilePath}`);
    }
@@ -194,7 +200,7 @@ export class ProfileCapture {
    protected histogram?: IntervalHistogram;
    protected gcObserver?: PerformanceObserver;
    protected gcEntries: GcEntry[] = [];
-   protected readonly frameworkPasses = new ProfileCollector();
+   protected frameworkPasses?: ProfileCollector;
 
    protected constructor(protected readonly options: ProfileCaptureOptions) {}
 
@@ -221,7 +227,10 @@ export class ProfileCapture {
    }
 
    protected async begin(): Promise<void> {
-      this.frameworkPasses.start();
+      if (this.options.frameworkPasses) {
+         this.frameworkPasses = new ProfileCollector();
+         this.frameworkPasses.start();
+      }
       this.sinceStart = this.clock.stopwatch();
       this.startCpu = process.cpuUsage();
       this.startMem = process.memoryUsage();
@@ -263,7 +272,7 @@ export class ProfileCapture {
          throw new Error('ProfileCapture.stop called on an inactive capture.');
       }
       const durationMs = this.sinceStart.elapsedMs;
-      this.frameworkPasses.stop();
+      this.frameworkPasses?.stop();
       // Sample cpu + memory at the workload boundary (alongside durationMs), NOT
       // after teardown: the synchronous profile write inflates RSS and the heap
       // snapshot forces a full GC, so a post-teardown read would fold the
@@ -308,7 +317,7 @@ export class ProfileCapture {
          if (this.histogram) {
             eventLoopDelay = summarizeEventLoopDelay(this.histogram);
          }
-         const frameworkPasses = this.frameworkPasses.records(durationMs);
+         const frameworkPasses = this.frameworkPasses?.records(durationMs);
          // Serialize now that no sampler is running.
          const cpuProfilePath =
             cpuProfile !== undefined ? this.writeProfileFile(cpuProfile, directory, label, 'server-cpu', 'cpuprofile') : undefined;
@@ -340,7 +349,7 @@ export class ProfileCapture {
     * repeat teardown a no-op.
     */
    protected teardown(): void {
-      this.frameworkPasses.stop();
+      this.frameworkPasses?.stop();
       try {
          this.gcObserver?.disconnect();
       } catch {

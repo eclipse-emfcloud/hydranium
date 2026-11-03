@@ -17,6 +17,8 @@
 
 /** Which dimensions to capture, and the two sampling knobs. All off by default. */
 export interface ProfileCaptureOptions {
+   /** Instrument framework scopes; adds timing overhead to CPU and allocation samples. */
+   frameworkPasses?: boolean;
    /** Sample the CPU at {@link cpuIntervalMicros} into a `server-cpu` artefact. */
    cpu?: boolean;
    /** Sample allocations at {@link allocationIntervalBytes} into a `server-alloc` artefact. */

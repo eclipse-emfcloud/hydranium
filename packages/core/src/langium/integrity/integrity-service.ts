@@ -327,7 +327,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       let afterThrow: Set<LangiumDocument> | undefined;
       let passesBefore: Set<LangiumDocument> | undefined;
       // Allocate timing state only for a capture or debug logging.
-      const session = ProfileCollector.isEnabled()
+      const session = ProfileCollector.isProfilingEnabled()
          ? this.tracer.profile(`integrity ${this.services.LanguageMetaData.languageId} ${DocumentState[phase]}`)
          : undefined;
       const deferred = deferredRelinks.get(run) ?? { depth: 0, dependents: new Map() };

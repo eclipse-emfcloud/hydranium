@@ -256,7 +256,7 @@ export class DefaultScopeExtensionService implements ScopeExtensionService {
    ): ScopeExtensionDescriptions {
       const collected: TieredAstNodeDescription[] = [];
       const accept = createScopeDescriptionAcceptor(collected, this.services.workspace.AstNodeDescriptionProvider);
-      const session = ProfileCollector.isEnabled()
+      const session = ProfileCollector.isProfilingEnabled()
          ? (this.profileSession ??= this.tracer.profile(`scope-extension ${this.services.LanguageMetaData.languageId}`))
          : undefined;
       if (session) {
