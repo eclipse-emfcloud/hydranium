@@ -27,7 +27,7 @@
  */
 
 import { assertRequired, exitWithUsage, helpRequested, printHelp, type UsageError } from './harness-args.js';
-import { isNonEmptyDir, runInit, type InitHead } from './init.js';
+import { isNonEmptyDir, runInit, validateInitInstallation, type InitHead } from './init.js';
 import type { InitHost } from './init-hosts.js';
 import { createClackPrompt } from './init-prompt.js';
 import { runInitWizard } from './init-wizard.js';
@@ -304,6 +304,7 @@ export async function runInitCommand(args: string[]): Promise<void> {
       return;
    }
    const parsed = parseInitArgs(args);
+   validateInitInstallation(parsed);
    // The wizard's entry point: no `--name` on an interactive terminal. Safe
    // because that combination has no non-wizard meaning, and gated on a TTY
    // because a non-interactive caller must keep failing fast — a prompt in CI

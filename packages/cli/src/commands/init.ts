@@ -599,6 +599,12 @@ function formatScaffold(targetDir: string, files: readonly InitFile[], write: (l
    }
 }
 
+export function validateInitInstallation(options: Pick<InitCommandOptions, 'install' | 'monorepo'>): void {
+   if (options.install && options.monorepo) {
+      throw new Error('--install cannot be combined with --monorepo: update the parent workspace manifest before running npm install.');
+   }
+}
+
 /**
  * Scaffold a new Hydranium language project end-to-end: one starter grammar per
  * `--grammar`, `create<Name>Services` DI wiring, a launcher for each head in
@@ -607,9 +613,7 @@ function formatScaffold(targetDir: string, files: readonly InitFile[], write: (l
  * next step. Refuses a non-empty target directory unless `force`.
  */
 export function runInit(options: InitCommandOptions): void {
-   if (options.install && options.monorepo) {
-      throw new Error('--install cannot be combined with --monorepo: update the parent workspace manifest before running npm install.');
-   }
+   validateInitInstallation(options);
    const write = options.write ?? ((line: string) => process.stdout.write(line));
    const targetDir = path.resolve(options.targetDir);
    const detection = options.monorepo ? detectWorkspace(targetDir, options.probe ?? createNodeWorkspaceProbe()) : undefined;

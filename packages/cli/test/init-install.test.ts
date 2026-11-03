@@ -13,6 +13,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runInitCommand } from '../src/commands/init-args.js';
+import * as initPrompt from '../src/commands/init-prompt.js';
 
 vi.mock('node:child_process', () => ({ spawnSync: vi.fn() }));
 
@@ -94,6 +95,31 @@ describe('init --install', () => {
       );
       expect(fs.existsSync(target)).toBe(false);
       expect(spawnSync).not.toHaveBeenCalled();
+   });
+
+   it('rejects incompatible flags before opening the wizard on a terminal', async () => {
+      const { target } = setup();
+      const prompt = vi.spyOn(initPrompt, 'createClackPrompt').mockRejectedValue(new Error('Wizard started'));
+      const streams = [process.stdin, process.stdout];
+      const descriptors = streams.map(stream => Object.getOwnPropertyDescriptor(stream, 'isTTY'));
+      try {
+         for (const stream of streams) {
+            Object.defineProperty(stream, 'isTTY', { value: true, configurable: true });
+         }
+         await expect(runInitCommand([target, '--monorepo', '--install'])).rejects.toThrow('--install cannot be combined with --monorepo');
+         expect(prompt).not.toHaveBeenCalled();
+         expect(fs.existsSync(target)).toBe(false);
+         expect(spawnSync).not.toHaveBeenCalled();
+      } finally {
+         streams.forEach((stream, index) => {
+            const descriptor = descriptors[index];
+            if (descriptor) {
+               Object.defineProperty(stream, 'isTTY', descriptor);
+            } else {
+               Reflect.deleteProperty(stream, 'isTTY');
+            }
+         });
+      }
    });
 
    it('does not install when the target is occupied', async () => {
