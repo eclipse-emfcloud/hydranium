@@ -896,8 +896,9 @@ export const __CONFIG_ROOT_CONST___CONFIGURATION_ROOT = '__PROJECT_ID__';
 };`
       : `const __NAME__SharedModule: Module<__NAME__SharedServices, PartialLangiumSharedServices> = {};`;
 
-   const serializerImports = composition.grammars
+   const languageImports = composition.grammars
       .flatMap(grammar => [
+         `import { ${grammar.grammar}SemanticTokenProvider } from './${grammar.grammarId}-semantic-tokens.js';`,
          `import { ${grammar.grammar}Serializer } from './${grammar.grammarId}-serializer.js';`,
          `import { ${grammar.grammar}ValidationContribution } from './${grammar.grammarId}-validation.js';`
       ])
@@ -909,7 +910,12 @@ export const __CONFIG_ROOT_CONST___CONFIGURATION_ROOT = '__PROJECT_ID__';
    // serializer — and that one throws on a `$type` it has no emitter for.
    const languageModules = composition.grammars
       .map(
-         grammar => `const ${grammar.grammar}LanguageModule: Module<__NAME__Services, PartialLangiumServices & DeepPartial<ServerAddedServices>> = {
+         grammar => `const ${grammar.grammar}LanguageModule = (
+   options: __NAME__Options
+): Module<__NAME__Services, PartialLangiumServices & DeepPartial<ServerAddedServices>> => ({
+   lsp: {
+      SemanticTokenProvider: services => new ${grammar.grammar}SemanticTokenProvider(services, options)
+   },
    serializer: {
       Serializer: services => new ${grammar.grammar}Serializer(services)
    },
@@ -918,13 +924,15 @@ export const __CONFIG_ROOT_CONST___CONFIGURATION_ROOT = '__PROJECT_ID__';
          names: () => new ${grammar.grammar}ValidationContribution()
       }
    }
-};`
+});`
       )
       .join('\n\n');
 
    const additionalLanguages = multi
       ? `,\n      additionalLanguages: ${arrayLiteral(
-           additional.map(grammar => `{ generated: ${grammar.grammar}GeneratedModule, adopter: () => ${grammar.grammar}LanguageModule }`),
+           additional.map(
+              grammar => `{ generated: ${grammar.grammar}GeneratedModule, adopter: () => ${grammar.grammar}LanguageModule(options) }`
+           ),
            '      ',
            columns
         )}`
@@ -940,8 +948,8 @@ export const __CONFIG_ROOT_CONST___CONFIGURATION_ROOT = '__PROJECT_ID__';
 // overrides via Langium's \`inject()\` (through the framework's
 // \`createIntegrationServices\`). Each adopter module binds its language's
 // \`Serializer\`, which the framework cannot default because a concrete syntax
-// is grammar knowledge, and its validation checks. Everything else (scope,
-// naming, project management, build pipeline) boots on the framework defaults;
+// is grammar knowledge, its semantic tokens and its validation checks. Scope,
+// naming, project management and the build pipeline use the framework defaults;
 // scope computation and AST extensions go in these same modules.
 //
 // Note which generated symbol comes from which name: the SHARED module is
@@ -965,7 +973,13 @@ export const __CONFIG_ROOT_CONST___CONFIGURATION_ROOT = '__PROJECT_ID__';
    }
 
 ${importList(
-   ['createLspServerLanguageModule', 'createLspServerSharedModule', 'type LspServerAddedServices', 'type LspServerAddedSharedServices'],
+   [
+      'createLspServerLanguageModule',
+      'createLspServerSharedModule',
+      'type HydraniumSemanticTokenProviderOptions',
+      'type LspServerAddedServices',
+      'type LspServerAddedSharedServices'
+   ],
    '@hydranium/core/lsp',
    columns
 )}
@@ -973,7 +987,7 @@ import { createIntegrationServices, type ServerAddedServices, type ServerModuleC
 import { type DeepPartial, EmptyFileSystem, type Module } from '@hydranium/langium';
 import { type LangiumServices, type PartialLangiumServices, type PartialLangiumSharedServices } from '@hydranium/langium/lsp';
 ${importList(generatedImports, './generated/module.js', columns)}
-${serializerImports}
+${languageImports}
 
 export type __NAME__SharedServices = ServerSharedServices & LspServerAddedSharedServices;
 export type __NAME__Services = LangiumServices &
@@ -983,7 +997,7 @@ export type __NAME__Services = LangiumServices &
    };
 
 /** What a host or a test may vary about this composition. */
-export interface __NAME__Options {
+export interface __NAME__Options extends HydraniumSemanticTokenProviderOptions {
    /**
     * Shared modules layered in after the framework's own bindings.
     *
@@ -1024,7 +1038,7 @@ ${returnType}
       },
       languageModules: {
          generated: ${primary.grammar}GeneratedModule,
-         adopter: () => ${primary.grammar}LanguageModule,
+         adopter: () => ${primary.grammar}LanguageModule(options),
          extra: [createLspServerLanguageModule(fullContext)]
       }${additionalLanguages}
    });
@@ -1814,6 +1828,7 @@ function readme(composition: InitComposition): string {
       '- `src/language-server/__PROJECT_ID__-module.ts` — `create__NAME__Services` DI wiring',
       ...composition.grammars.flatMap(grammar => [
          `- \`src/language-server/${grammar.grammarId}-serializer.ts\` — emits \`${grammar.grammar}\` back to text (the framework defaults this to a throw)`,
+         `- \`src/language-server/${grammar.grammarId}-semantic-tokens.ts\` — colours declarations and references; the browser enables keywords and comments too`,
          `- \`src/language-server/${grammar.grammarId}-validation.ts\` — the \`${grammar.grammar}\` checks: a warning on a repeated name`
       ]),
       "- `src/node/services.ts` — zero-arg `createServices()` for the headless CLI, the package's `./node` entry",
@@ -2179,6 +2194,8 @@ function serverFiles(composition: InitComposition): InitFile[] {
       // binding to add, rather than guessing a syntax.
       ...composition.grammars.flatMap(grammar => [
          grammarTemplate('server/src/language-server/__GRAMMAR_ID__-serializer.ts', composition, grammar),
+         grammarTemplate('server/src/language-server/__GRAMMAR_ID__-semantic-tokens.ts', composition, grammar),
+         grammarTemplate('server/test/__GRAMMAR_ID__-semantic-tokens.test.ts', composition, grammar),
          grammarTemplate('server/src/language-server/__GRAMMAR_ID__-validation.ts', composition, grammar)
       ]),
       { path: 'server/src/index.ts', content: indexFile(composition) },
@@ -2549,14 +2566,14 @@ function hostWorkerFile(composition: InitComposition): string {
    ];
 
    const services = `const shared = create${composition.name}Services({ ...fileSystem }).shared;`;
-   const lspCall = `startLanguageServerInWorker(ports.lsp, connection => create${composition.name}Services({ connection, ...fileSystem }).shared);`;
+   const lspCall = `startLanguageServerInWorker(ports.lsp, connection => create${composition.name}Services({ connection, ...fileSystem }, { highlightKeywords: true, highlightComments: true }).shared);`;
    const startServices = !lsp
       ? services
       : `      const shared = ${lspCall}`.length <= columns
         ? `const shared = ${lspCall}`
         : `const shared = startLanguageServerInWorker(
          ports.lsp,
-         connection => create${composition.name}Services({ connection, ...fileSystem }).shared
+         connection => create${composition.name}Services({ connection, ...fileSystem }, { highlightKeywords: true, highlightComments: true }).shared
       );`;
    const dataServer = `connection => new DataServer<${roots.join(' | ')}>(connection, shared)`;
    const dataCall = `startDataServerInWorker(ports.data, shared, ${dataServer});`;
@@ -2844,7 +2861,35 @@ ${checks.join('\n')}
 ${edit}
    expect(errors).toEqual([]);
 });
-${guardTest}`;
+${guardTest}${
+      lsp
+         ? `
+test('colours declarations, references, keywords and comments', async ({ page }) => {
+   await page.goto('/');
+   await expect(page.locator('#status')).toHaveText('ready');
+   const editor = page.locator('#editor .view-lines');
+   const second = editor.locator('span').filter({ hasText: /^Second$/ });
+   const keyword = editor
+      .locator('span')
+      .filter({ hasText: /^node$/ })
+      .first();
+   for (const extension of [${composition.grammars.map(grammar => `'${grammar.extensions[0]}'`).join(', ')}]) {
+      await page.locator('#file').selectOption(\`nodes.\${extension}\`);
+      await expect(editor.locator('span').filter({ hasText: /^First$/ })).toHaveCSS('color', 'rgb(36, 122, 147)');
+      await expect(second).toHaveCount(2);
+      for (const target of await second.all()) {
+         await expect(target).toHaveCSS('color', 'rgb(36, 122, 147)');
+      }
+      await expect(keyword).toHaveCSS('color', 'rgb(0, 0, 255)');
+      await expect(editor.locator('.view-line > span > span').filter({ hasText: /A.second.node/ })).toHaveCSS('color', 'rgb(0, 128, 0)');
+      await page.locator('#file').selectOption(\`references.\${extension}\`);
+      await expect(editor.locator('span').filter({ hasText: /^Third$/ })).toHaveCSS('color', 'rgb(36, 122, 147)');
+      await expect(second).toHaveCSS('color', 'rgb(36, 122, 147)');
+   }
+});
+`
+         : ''
+   }`;
 }
 
 /** The browser host's README. */

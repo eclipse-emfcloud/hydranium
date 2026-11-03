@@ -28,6 +28,7 @@ import {
 } from '@hydranium/core/testing/node';
 import { URI } from '@hydranium/langium';
 import { Deferred } from '@hydranium/protocol';
+import { waitFor } from '@hydranium/protocol/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { LSPErrorCodes, type CodeAction, type WorkspaceEdit } from 'vscode-languageserver';
 import {
@@ -430,8 +431,20 @@ describe('order-flow edit requests over the real transport', () => {
       await bounded('the form save in the store', landed);
       await composed.closeDocument(editedUri);
       composed.openDocument(editedUri, WRITTEN, 'order-flow-process', 1);
-      // Answered after the reopen, which the server handles in order.
-      await request(composed, 'textDocument/hover', { textDocument: { uri: editedUri }, position });
+      // The reopen catches the shadow up without needing the save's build,
+      // which cannot finish while the code action's read is held.
+      const store = shared.workspace.TextDocuments;
+      await waitFor(
+         () => {
+            const document = store.get(editedUri);
+            return (
+               document !== undefined &&
+               store.isOpenInLanguageClient(editedUri) &&
+               !store.isLanguageClientBehind(editedUri, document.version)
+            );
+         },
+         { timeoutMs: ANSWER_TIMEOUT_MS, message: () => `the editor has not reopened the saved text; documents: ${describeDocuments()}` }
+      );
       gate.resolve();
 
       expect(await bounded('textDocument/codeAction', codeAction)).toBe(LSPErrorCodes.ContentModified);
@@ -458,8 +471,13 @@ describe('order-flow edit requests over the real transport', () => {
       [
          'answer a format computed before the editor typed',
          'answered',
-         async (composed: LspServerConnection) => {
-            composed.changeDocument(PROCESS_URI, `${WRITTEN}\n`, 2);
+         async (composed: LspServerConnection, shared: OrderFlowSharedServices) => {
+            const text = `${WRITTEN}\n`;
+            composed.changeDocument(PROCESS_URI, text, 2);
+            await waitFor(() => shared.workspace.TextDocuments.get(PROCESS_URI)?.getText() === text, {
+               timeoutMs: ANSWER_TIMEOUT_MS,
+               message: () => `the editor change has not reached the store; documents: ${describeDocuments()}`
+            });
             return { settled: Promise.resolve() };
          },
          undefined
@@ -482,8 +500,8 @@ describe('order-flow edit requests over the real transport', () => {
       await bounded('the provider call', computed.promise);
 
       const { settled } = await change(composed, shared);
-      // Answered after the change, which the server handles in order.
-      await request(composed, 'textDocument/hover', { textDocument: { uri: PROCESS_URI }, position });
+      // Both changes wait for the store, not a build: the format's read holds
+      // the write lock off, so a hover waiting for that build would deadlock.
       gate.resolve();
 
       expect(await bounded('textDocument/formatting', formatting)).toBe(expected);

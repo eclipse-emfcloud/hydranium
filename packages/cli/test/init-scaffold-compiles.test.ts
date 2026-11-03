@@ -241,6 +241,9 @@ describe('the emitted scaffold compiles', () => {
             for (const diagramTest of diagramTests) {
                expect(() => runTool(server, 'vitest', 'vitest', ['run', `test/${diagramTest}`])).not.toThrow();
             }
+            const semanticTests = fs.readdirSync(path.join(server, 'test')).filter(file => file.endsWith('-semantic-tokens.test.ts'));
+            expect(semanticTests).toHaveLength(grammars?.length ?? 1);
+            expect(() => runTool(server, 'vitest', 'vitest', ['run', ...semanticTests.map(file => `test/${file}`)])).not.toThrow();
 
             // The client compiles beside the server; it requires the ES protocol
             // member from CommonJS, which only `tsc` reading it can vouch for.

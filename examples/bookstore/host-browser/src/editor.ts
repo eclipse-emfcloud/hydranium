@@ -15,6 +15,7 @@ import { initializeLanguageClient, type WorkerHeads } from '@hydranium/client-br
 import { MONACO_CLIENT_CAPABILITIES, MonacoLspClient } from '@hydranium/client-browser/monaco';
 import { describeError } from '@hydranium/protocol';
 import { ALL_LANGUAGES } from '@hydranium/bookstore-protocol';
+import * as monaco from 'monaco-editor-core';
 import { PublishDiagnosticsNotification } from 'vscode-languageserver-protocol';
 import { appendLog, setStatus } from './log.js';
 import type { ShownFile } from './shown-file.js';
@@ -26,6 +27,18 @@ declare const __MONACO_WORKER_BUNDLE_URL__: string;
 // Before any editor exists: Monaco otherwise looks for a worker script no
 // bundle emits, and fails on the first edit.
 self.MonacoEnvironment = { getWorker: () => new Worker(__MONACO_WORKER_BUNDLE_URL__) };
+
+// Standalone Monaco has no TextMate scopes to map semantic types to colours.
+monaco.editor.defineTheme('bookstore', {
+   base: 'vs',
+   inherit: true,
+   rules: [
+      { token: 'class', foreground: '247a93' },
+      { token: 'keyword', foreground: '0000ff' },
+      { token: 'comment', foreground: '008000' }
+   ],
+   colors: {}
+});
 
 /** Each language as Monaco registers it, from the ids and extensions the server generates. */
 const LANGUAGES = ALL_LANGUAGES.map(language => ({
@@ -54,6 +67,7 @@ export async function startEditor(heads: WorkerHeads, shownFile: ShownFile): Pro
    const modelOf = (uri: string) => client.openDocument(uri, shownFile.files.get(uri) as string);
    const editor = client.createEditor(document.getElementById('editor') as HTMLElement, modelOf(shownFile.current()), {
       automaticLayout: true,
+      theme: 'bookstore',
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       wordWrap: 'on'

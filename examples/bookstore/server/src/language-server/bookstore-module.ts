@@ -11,8 +11,8 @@
 // overrides via Langium's `inject()` (through the framework's
 // `createIntegrationServices`). Each adopter module binds its language's
 // `Serializer`, which the framework cannot default because a concrete syntax
-// is grammar knowledge, and its validation checks. Everything else (scope,
-// naming, project management, build pipeline) boots on the framework defaults;
+// is grammar knowledge, its semantic tokens and its validation checks. Scope,
+// naming, project management and the build pipeline use the framework defaults;
 // scope computation and AST extensions go in these same modules.
 //
 // Note which generated symbol comes from which name: the SHARED module is
@@ -30,6 +30,7 @@
 import {
    createLspServerLanguageModule,
    createLspServerSharedModule,
+   type HydraniumSemanticTokenProviderOptions,
    type LspServerAddedServices,
    type LspServerAddedSharedServices
 } from '@hydranium/core/lsp';
@@ -37,6 +38,7 @@ import { createIntegrationServices, type ServerAddedServices, type ServerModuleC
 import { type DeepPartial, EmptyFileSystem, type Module } from '@hydranium/langium';
 import { type LangiumServices, type PartialLangiumServices, type PartialLangiumSharedServices } from '@hydranium/langium/lsp';
 import { BookstoreGeneratedModule, BookstoreGeneratedSharedModule } from './generated/module.js';
+import { BookstoreSemanticTokenProvider } from './bookstore-semantic-tokens.js';
 import { BookstoreSerializer } from './bookstore-serializer.js';
 import { BookstoreValidationContribution } from './bookstore-validation.js';
 
@@ -48,7 +50,7 @@ export type BookstoreServices = LangiumServices &
    };
 
 /** What a host or a test may vary about this composition. */
-export interface BookstoreOptions {
+export interface BookstoreOptions extends HydraniumSemanticTokenProviderOptions {
    /**
     * Shared modules layered in after the framework's own bindings.
     *
@@ -68,7 +70,12 @@ export interface BookstoreOptions {
 
 const BookstoreSharedModule: Module<BookstoreSharedServices, PartialLangiumSharedServices> = {};
 
-const BookstoreLanguageModule: Module<BookstoreServices, PartialLangiumServices & DeepPartial<ServerAddedServices>> = {
+const BookstoreLanguageModule = (
+   options: BookstoreOptions
+): Module<BookstoreServices, PartialLangiumServices & DeepPartial<ServerAddedServices>> => ({
+   lsp: {
+      SemanticTokenProvider: services => new BookstoreSemanticTokenProvider(services, options)
+   },
    serializer: {
       Serializer: services => new BookstoreSerializer(services)
    },
@@ -77,7 +84,7 @@ const BookstoreLanguageModule: Module<BookstoreServices, PartialLangiumServices 
          names: () => new BookstoreValidationContribution()
       }
    }
-};
+});
 
 /** Compose the Langium DI tree for Bookstore — returns the shared + language services. */
 export function createBookstoreServices(
@@ -98,7 +105,7 @@ export function createBookstoreServices(
       },
       languageModules: {
          generated: BookstoreGeneratedModule,
-         adopter: () => BookstoreLanguageModule,
+         adopter: () => BookstoreLanguageModule(options),
          extra: [createLspServerLanguageModule(fullContext)]
       }
    });

@@ -89,7 +89,7 @@ What happened to each file `init` emits, here and in the protocol package:
 | --- | --- |
 | identical | `langium-config.json`, `tsconfig.json`, `tsconfig.test.json`, and the protocol package's `tsconfig.json` |
 | adapted | `package.json`, `vitest.config.ts`, `test/tsconfig.json` (adds the comment), `README.md`, `src/index.ts`, `src/main.ts` (adds the GLSP head), `src/data-server-main.ts`, the four `src/grammar/*.langium`, `order-flow-module.ts`, `ast.ts` and the three serializers; in the protocol package, `package.json`, `README.md`, `src/index.ts` and `src/head-ports.ts` (adds the GLSP port command) |
-| replaced | `src/node/services.ts`, by `src/services.ts` (the path the example's tooling names); the scaffolded `services`, `serialization`, `linking` and `validating` tests, by `composition`, `serializer`, `project-visibility` and `process-transition-rules` |
+| replaced | `src/node/services.ts`, by `src/services.ts` (the path the example's tooling names); the scaffolded `services`, `serialization`, `linking` and `validating` tests, by `composition`, `serializer`, `project-visibility` and `process-transition-rules`; the per-grammar semantic providers and tests, by `order-flow-semantic-tokens.ts` and `semantic-tokens-push.integration.test.ts` |
 | dropped | `.gitignore` and the protocol package's (the repo root's rules cover `lib/` and `syntaxes/`), `test/parsing.test.ts`, the starter `workspace/` files (the workspace holds the real models) |
 | hand-written | everything else in `src/`, `scripts/` and `test/`, including the whole GLSP head |
 | generated, committed | `src/language-server/generated/**`, `src/language-server/generated-hydranium/**`, and the protocol package's `generated-hydranium/**` |
