@@ -510,6 +510,88 @@ describe('PropertiesForm pending marker', () => {
 });
 
 describe('PropertiesForm.applyDrafts', () => {
+   it.each(['added', 'removed'] as const)('keeps rebuilt inputs clean when another field is %s during a write', async change => {
+      const answered = new Deferred<void>();
+      const { form } = makeForm(async () => {
+         await answered.promise;
+         return { status: 'applied' };
+      });
+      const other = { name: 'other', value: 'Other' };
+      form.setFields([{ name: 'name', value: 'Before' }, ...(change === 'removed' ? [other] : [])]);
+      const original = form.inputOf('name');
+      original.value = 'Submitted';
+      const applying = form.applyDrafts();
+      form.setFields([{ name: 'name', value: 'Latest' }, ...(change === 'added' ? [other] : [])]);
+      expect(form.inputOf('name')).not.toBe(original);
+      answered.resolve();
+      expect(await applying).toBe(true);
+      expect(form.inputOf('name').value).toBe('Latest');
+      expect(form.hasDrafts).toBe(false);
+      expect(form.fieldOf('name').attributes['data-pending']).toBeUndefined();
+   });
+
+   it('preserves a rebuilt input draft even when it matches the old submission', async () => {
+      const answered = new Deferred<void>();
+      const { form } = makeForm(async () => {
+         await answered.promise;
+         return { status: 'applied' };
+      });
+      form.setFields([{ name: 'name', value: 'Before' }]);
+      form.inputOf('name').value = 'Submitted';
+      const applying = form.applyDrafts();
+      form.setFields([
+         { name: 'name', value: 'Latest' },
+         { name: 'other', value: 'Other' }
+      ]);
+      form.inputOf('name').value = 'Submitted';
+      form.inputOf('name').emit('input');
+      answered.resolve();
+      expect(await applying).toBe(false);
+      expect(form.inputOf('name').value).toBe('Submitted');
+      expect(form.hasDrafts).toBe(true);
+      expect(form.fieldOf('name').attributes['data-pending']).toBe('');
+   });
+
+   it('reconciles a submitted focused input after success', async () => {
+      const answered = new Deferred<void>();
+      const { form } = makeForm(async () => {
+         await answered.promise;
+         return { status: 'applied' };
+      });
+      form.setFields([{ name: 'name', value: 'Before' }]);
+      const input = form.inputOf('name');
+      documentStub.activeElement = input;
+      input.value = 'Submitted';
+      const writing = form.write('name', input.value);
+      form.setFields([{ name: 'name', value: 'Latest' }]);
+      expect(input.value).toBe('Submitted');
+      answered.resolve();
+      expect(await writing).toBe(true);
+      expect(input.value).toBe('Latest');
+      expect(documentStub.activeElement).toBe(input);
+      expect(form.hasDrafts).toBe(false);
+   });
+
+   it.each(['applied', 'unchanged', 'merged'] as const)('refreshes a retained model value after a write is %s', async status => {
+      const answered = new Deferred<void>();
+      const { form } = makeForm(async () => {
+         await answered.promise;
+         return { status };
+      });
+      documentStub.activeElement = null;
+      form.setFields([{ name: 'name', value: 'Before' }]);
+      form.inputOf('name').value = 'Submitted';
+      const applying = form.applyDrafts();
+      form.setFields([{ name: 'name', value: 'Submitted' }]);
+      form.setFields([{ name: 'name', value: 'Latest' }]);
+      expect(form.inputOf('name').value).toBe('Submitted');
+      answered.resolve();
+      expect(await applying).toBe(true);
+      expect(form.inputOf('name').value).toBe('Latest');
+      expect(form.hasDrafts).toBe(false);
+      expect(form.fieldOf('name').attributes['data-pending']).toBeUndefined();
+   });
+
    it('waits for the focused draft to be applied', async () => {
       const answered = new Deferred<void>();
       const writes: string[] = [];
@@ -527,6 +609,7 @@ describe('PropertiesForm.applyDrafts', () => {
       answered.resolve();
       expect(await applying).toBe(true);
       expect(form.hasDrafts).toBe(false);
+      expect(form.inputOf('name').value).toBe('After');
    });
 
    it('keeps a refused draft unsaved', async () => {
@@ -550,7 +633,7 @@ describe('PropertiesForm.applyDrafts', () => {
       form.setFields([{ name: 'name', value: 'Before' }]);
       form.inputOf('name').value = 'After';
       const applying = form.applyDrafts();
-      form.setFields([{ name: 'name', value: 'Before' }]);
+      form.setFields([{ name: 'name', value: 'Latest' }]);
       answered.resolve();
       expect(await applying).toBe(false);
       expect(form.inputOf('name').value).toBe('After');
@@ -579,10 +662,13 @@ describe('PropertiesForm.applyDrafts', () => {
       });
       form.setFields([{ name: 'name', value: 'Before' }]);
       form.inputOf('name').value = 'First';
+      documentStub.activeElement = form.inputOf('name');
       const applying = form.applyDrafts();
       form.inputOf('name').value = 'Second';
+      form.setFields([{ name: 'name', value: 'Latest' }]);
       answered.resolve();
       expect(await applying).toBe(false);
+      expect(form.inputOf('name').value).toBe('Second');
       expect(form.hasDrafts).toBe(true);
    });
 });
