@@ -47,6 +47,9 @@ describe('SocketDataPort', () => {
       let disposals = 0;
       port.onDispose(() => disposals++);
       await port.connect();
+      // The client's connect event can precede the server's acceptance.
+      // Dropping an empty socket list would leave this connection open.
+      await waitFor(() => server.accepted() === 1);
 
       server.dropConnections();
 
@@ -59,6 +62,7 @@ describe('SocketDataPort', () => {
       const ports = [first.port, second.port];
       const port = makePort(async () => ports.shift()!);
       await port.connect();
+      await waitFor(() => first.accepted() === 1);
       first.dropConnections();
 
       const connection = await port.connect();
