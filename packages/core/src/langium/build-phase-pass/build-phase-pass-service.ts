@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Logger, type Tracer } from '@hydranium/protocol';
+import { ProfileCollector, type Tracer } from '@hydranium/protocol';
 import { DocumentState, type LangiumDocument } from '@hydranium/langium';
 import { type CancellationToken, type Disposable } from 'vscode-languageserver';
 import { type LogNameOptions } from '../diagnostics/logger.js';
@@ -121,10 +121,8 @@ export class DefaultBuildPhasePassService implements BuildPhasePassService {
       if (bucket.length === 0) {
          return;
       }
-      // Per-pass self-time profiling is opt-in: only open a session when the
-      // debug threshold is active, so the production path allocates nothing and
-      // the dispatch loop stays a single const-branch off `session`.
-      const session = Logger.isLevelEnabled('debug') ? this.tracer.profile(`build-phase-pass ${DocumentState[phase]}`) : undefined;
+      // Allocate timing state only for a capture or debug logging.
+      const session = ProfileCollector.isEnabled() ? this.tracer.profile(`build-phase-pass ${DocumentState[phase]}`) : undefined;
       for (const pass of bucket) {
          if (cancelToken.isCancellationRequested) {
             break;

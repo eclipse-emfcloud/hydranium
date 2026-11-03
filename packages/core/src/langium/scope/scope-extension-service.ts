@@ -9,7 +9,7 @@
 
 import { type AstNode, AstUtils, DocumentCache, DocumentState, type LangiumDocument } from '@hydranium/langium';
 import { type Disposable } from 'vscode-languageserver';
-import { Format, Logger, type ProfileRecord, type ProfileSession, type Tracer } from '@hydranium/protocol';
+import { ProfileCollector, Format, type ProfileRecord, type ProfileSession, type Tracer } from '@hydranium/protocol';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type ServerLanguageServices } from '../language-module.js';
 import { Registry, type RegistryItem } from '../../util/registry.js';
@@ -141,8 +141,8 @@ const NO_DESCRIPTIONS: readonly ScopeExtensionDescriptions[] = [];
  * which consumes {@link getDescriptions}. Designed as a base class; adopters
  * extend it and call `register` in their constructor.
  *
- * At `debug`, each extension's calls and self-time go into one profile
- * session, reported when a build starts and when it ends. A report thus
+ * During a capture or at `debug`, each extension's calls and self-time go
+ * into one profile session, reported when a build starts and when it ends. A report thus
  * covers one build, validation included, or the calls made between two
  * builds, such as a reference picker's.
  */
@@ -247,7 +247,7 @@ export class DefaultScopeExtensionService implements ScopeExtensionService {
       return descriptions;
    }
 
-   /** Run `extension` against `context`, inside the profile session at `debug`. */
+   /** Run `extension` against `context`, profiling during a capture or at `debug`. */
    protected runExtension(
       extension: ScopeExtension,
       referenceType: string,
@@ -256,7 +256,7 @@ export class DefaultScopeExtensionService implements ScopeExtensionService {
    ): ScopeExtensionDescriptions {
       const collected: TieredAstNodeDescription[] = [];
       const accept = createScopeDescriptionAcceptor(collected, this.services.workspace.AstNodeDescriptionProvider);
-      const session = Logger.isLevelEnabled('debug') ? (this.profileSession ??= this.tracer.profile('scope-extension')) : undefined;
+      const session = ProfileCollector.isEnabled() ? (this.profileSession ??= this.tracer.profile('scope-extension')) : undefined;
       if (session) {
          session.scope(extension.id, () => extension.addDescriptions(context, referenceType, document, accept));
       } else {

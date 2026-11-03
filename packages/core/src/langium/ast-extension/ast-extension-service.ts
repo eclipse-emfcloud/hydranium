@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { Logger, type Mutable, type Tracer } from '@hydranium/protocol';
+import { ProfileCollector, type Mutable, type Tracer } from '@hydranium/protocol';
 import { type AstNode, AstUtils, DocumentState, type LangiumDocument } from '@hydranium/langium';
 import type { CancellationToken, Disposable } from 'vscode-languageserver';
 import { type LogNameOptions } from '../diagnostics/logger.js';
@@ -271,11 +271,8 @@ export class DefaultAstExtensionService implements AstExtensionService {
       if (applicable.length === 0) {
          return;
       }
-      // Per-registration self-time profiling is opt-in: only open a session when
-      // the debug threshold is active, so the production path allocates nothing
-      // and the per-(node×registration) loop stays a single const-branch off
-      // `session`. `ProfileSession.scope` is NOT itself level-gated.
-      const session = Logger.isLevelEnabled('debug') ? this.tracer.profile(`ast-extension ${DocumentState[phase]}`) : undefined;
+      // Allocate timing state only for a capture or debug logging.
+      const session = ProfileCollector.isEnabled() ? this.tracer.profile(`ast-extension ${DocumentState[phase]}`) : undefined;
       for (const node of AstUtils.streamAllContents(document.parseResult.value)) {
          for (const extension of applicable) {
             if (extension.nodeFilter(node)) {

@@ -16,7 +16,7 @@ import {
    type MultiMap,
    UriUtils
 } from '@hydranium/langium';
-import { Logger, type ProfileSession, type Tracer } from '@hydranium/protocol';
+import { ProfileCollector, type ProfileSession, type Tracer } from '@hydranium/protocol';
 import type { CancellationToken } from 'vscode-languageserver-protocol';
 import type { LogNameOptions } from '../diagnostics/logger.js';
 import type { HydraniumLanguageServices } from '../language-module.js';
@@ -73,17 +73,17 @@ export class HydraniumScopeComputation extends DefaultScopeComputation {
       this.tracer = services.shared.Tracer.for(options.logName ?? 'ScopeComputation').trace('instantiated');
    }
 
-   /** The session {@link addLocalSymbol} records into while a `debug`-level walk runs. */
+   /** The session {@link addLocalSymbol} records into while a profiled walk runs. */
    protected localSymbolsProfile: ProfileSession | undefined;
 
    /**
-    * Langium's local-symbol walk, with per-`$type` self-time profiling at
-    * `debug`. The walk is Langium's at every level: a copy run only at `debug`
+    * Langium's local-symbol walk, with per-`$type` self-time profiling during a
+    * capture or at `debug`. The walk is Langium's at every level: a copy run only at `debug`
     * would drift from the one every other level runs. Overlapping builds share
     * the session and blur each other's report.
     */
    override async collectLocalSymbols(document: LangiumDocument, cancelToken?: CancellationToken): Promise<LocalSymbols> {
-      if (!Logger.isLevelEnabled('debug')) {
+      if (!ProfileCollector.isEnabled()) {
          return super.collectLocalSymbols(document, cancelToken);
       }
       const profile = this.tracer.profile(`scope-local ${UriUtils.basename(document.uri)}`);

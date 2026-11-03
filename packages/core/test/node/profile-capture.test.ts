@@ -7,6 +7,12 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { Logger, ProfileCollector } from '@hydranium/protocol';
+import { DocumentState } from '@hydranium/langium';
+import { CancellationToken } from 'vscode-languageserver';
+import { DefaultBuildPhasePassService } from '../../src/langium/build-phase-pass/build-phase-pass-service.js';
+import { makeNoopSharedServices } from '../../src/testing/index.js';
+import { recordServerSummaryEntry } from '../../src/node/profiling-run.js';
 import * as fs from 'node:fs';
 import { Session } from 'node:inspector';
 import * as os from 'node:os';
@@ -141,6 +147,28 @@ describe('ProfileCapture and profileWorkload in a real inspector session', () =>
       fs.rmSync(dir, { recursive: true, force: true });
    });
 
+   it('saves framework pass totals with logging off and releases the collector', async () => {
+      Logger.setLevel('off');
+      try {
+         const service = new DefaultBuildPhasePassService(makeNoopSharedServices());
+         service.register({ id: 'test-pass', phase: DocumentState.Linked, run: () => undefined });
+         const { report } = await profileWorkload({ directory: dir }, async () => {
+            await service.runPasses([], DocumentState.Linked, CancellationToken.None, undefined);
+            await service.runPasses([], DocumentState.Linked, CancellationToken.None, undefined);
+         });
+         recordServerSummaryEntry(dir, 'passes', report);
+         const saved = JSON.parse(fs.readFileSync(path.join(dir, 'server-summary.json'), 'utf8'));
+         expect(saved.passes.frameworkPasses).toEqual([
+            { session: 'build-phase-pass Linked', id: 'test-pass', count: 2, selfMs: expect.any(Number), selfPct: expect.any(Number) }
+         ]);
+         expect(ProfileCollector.current).toBeUndefined();
+         const next = await profileWorkload({}, async () => undefined);
+         expect(next.report.frameworkPasses).toEqual([]);
+      } finally {
+         Logger.setLevel('info');
+      }
+   });
+
    it('captures a well-formed cpu profile and allocation profile', async () => {
       const { report } = await profileWorkload({ cpu: true, allocation: true, directory: dir, label: 'busy' }, busyWorkload);
       expect(report.cpuProfilePath).toBeDefined();
@@ -220,11 +248,13 @@ describe('ProfileCapture and profileWorkload in a real inspector session', () =>
       await expect(ProfileCapture.start({ cpu: true })).rejects.toThrow(/ProfileCapture is already active/);
       await first.stop(dir, 'cleanup');
       expect(ProfileCapture.isActive()).toBe(false);
+      expect(ProfileCollector.current).toBeUndefined();
    });
 
    it('releases the singleton after a successful workload', async () => {
       await profileWorkload({ cpu: true, directory: dir, label: 'release' }, async () => 1);
       expect(ProfileCapture.isActive()).toBe(false);
+      expect(ProfileCollector.current).toBeUndefined();
    });
 
    it('releases the singleton even when the workload throws', async () => {
@@ -234,6 +264,7 @@ describe('ProfileCapture and profileWorkload in a real inspector session', () =>
          })
       ).rejects.toThrow('boom');
       expect(ProfileCapture.isActive()).toBe(false);
+      expect(ProfileCollector.current).toBeUndefined();
    });
 
    it('disconnects the session and releases the singleton when stop() fails to write', async () => {
@@ -247,6 +278,7 @@ describe('ProfileCapture and profileWorkload in a real inspector session', () =>
          await expect(capture.stop(path.join(blocker, 'nested'), 'fail')).rejects.toThrow();
          expect(disconnectSpy, 'a failed stop() must disconnect the session').toHaveBeenCalled();
          expect(ProfileCapture.isActive()).toBe(false);
+         expect(ProfileCollector.current).toBeUndefined();
       } finally {
          disconnectSpy.mockRestore();
       }
@@ -254,6 +286,7 @@ describe('ProfileCapture and profileWorkload in a real inspector session', () =>
       const next = await ProfileCapture.start({ cpu: true });
       await next.stop(dir, 'after-stop-fail');
       expect(ProfileCapture.isActive()).toBe(false);
+      expect(ProfileCollector.current).toBeUndefined();
    });
 
    it('disconnects the session and releases the singleton when begin() fails', async () => {
@@ -267,6 +300,7 @@ describe('ProfileCapture and profileWorkload in a real inspector session', () =>
          await expect(ProfileCapture.start({ cpu: true })).rejects.toThrow('inspector down');
          expect(disconnectSpy, 'a failed begin() must disconnect the connected session').toHaveBeenCalled();
          expect(ProfileCapture.isActive()).toBe(false);
+         expect(ProfileCollector.current).toBeUndefined();
       } finally {
          postSpy.mockRestore();
          disconnectSpy.mockRestore();
@@ -275,5 +309,6 @@ describe('ProfileCapture and profileWorkload in a real inspector session', () =>
       const next = await ProfileCapture.start({ cpu: true });
       await next.stop(dir, 'after-begin-fail');
       expect(ProfileCapture.isActive()).toBe(false);
+      expect(ProfileCollector.current).toBeUndefined();
    });
 });

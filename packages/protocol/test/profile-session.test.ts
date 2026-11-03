@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DefaultProfileSession } from '../src/profile-session';
+import { DefaultProfileSession, ProfileCollector } from '../src/profile-session';
 import { Logger, type LogLevel } from '../src/logger';
 import { NoopLogger } from '../src/noop-logger';
 import { makeFakeClock } from '../src/testing/fake-clock';
@@ -161,5 +161,78 @@ describe('DefaultProfileSession.report', () => {
       // sort, and a template string per record) the guard exists to skip.
       expect(recordsSpy).not.toHaveBeenCalled();
       expect(logger.lines).toHaveLength(0);
+   });
+});
+
+describe('ProfileCollector', () => {
+   afterEach(() => {
+      ProfileCollector.current?.stop();
+      Logger.setLevel('info');
+   });
+
+   it('collects repeated operations and nested self-time without logging or reporting', () => {
+      Logger.setLevel('off');
+      expect(ProfileCollector.isEnabled()).toBe(false);
+      const clock = makeFakeClock();
+      const collector = new ProfileCollector();
+      collector.start();
+      expect(ProfileCollector.isEnabled()).toBe(true);
+      for (let index = 0; index < 2; index++) {
+         const session = new DefaultProfileSession(new NoopLogger(), clock, 'integrity');
+         session.scope('outer', () => {
+            clock.advance(2);
+            session.scope('inner', () => clock.advance(3));
+         });
+         session.report();
+         session.report();
+      }
+      const other = new DefaultProfileSession(new NoopLogger(), clock, 'extension');
+      expect(() =>
+         other.scope('inner', () => {
+            clock.advance(1);
+            throw new Error('failed');
+         })
+      ).toThrow('failed');
+      collector.stop();
+      expect(ProfileCollector.isEnabled()).toBe(false);
+      expect(collector.records(20)).toEqual([
+         { session: 'integrity', id: 'inner', count: 2, selfMs: 6, selfPct: 30 },
+         { session: 'integrity', id: 'outer', count: 2, selfMs: 4, selfPct: 20 },
+         { session: 'extension', id: 'inner', count: 1, selfMs: 1, selfPct: 5 }
+      ]);
+   });
+
+   it('excludes scopes crossing a capture boundary and keeps consecutive windows separate', async () => {
+      const clock = makeFakeClock();
+      const session = new DefaultProfileSession(new NoopLogger(), clock, 'shared');
+      let finish!: () => void;
+      const before = session.scope(
+         'before',
+         () =>
+            new Promise<void>(resolve => {
+               finish = resolve;
+            })
+      );
+      const first = new ProfileCollector();
+      first.start();
+      finish();
+      await before;
+      session.scope('inside', () => clock.advance(2));
+      const late = session.scope(
+         'late',
+         () =>
+            new Promise<void>(resolve => {
+               finish = resolve;
+            })
+      );
+      first.stop();
+      const second = new ProfileCollector();
+      second.start();
+      finish();
+      await late;
+      session.scope('next', () => clock.advance(3));
+      second.stop();
+      expect(first.records(2)).toEqual([{ session: 'shared', id: 'inside', count: 1, selfMs: 2, selfPct: 100 }]);
+      expect(second.records(3)).toEqual([{ session: 'shared', id: 'next', count: 1, selfMs: 3, selfPct: 100 }]);
    });
 });
