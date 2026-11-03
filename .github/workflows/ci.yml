@@ -195,7 +195,7 @@ jobs:
       - name: Prose-only change
         if: env.PROSE_ONLY_LEG == 'true'
         run: |
-          echo "- ${{ matrix.os }}: skipped, the change is prose only" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ${{ matrix.os }}${{ matrix.node && format(' Node {0}', matrix.node) || '' }}: skipped, the change is prose only" >> "$GITHUB_STEP_SUMMARY"
 
       # SHA-pinned, not tag-pinned: a major tag is mutable, so pinning to one is
       # a standing grant to run whatever it is later moved to. The trailing
@@ -219,6 +219,9 @@ jobs:
       # request, where it costs nothing. The same divergence discovered in
       # release.yml lands after the version PR has merged and the tags are cut,
       # and in the compat workflows it waits for a schedule nobody is watching.
+      #
+      # The comparison cannot express "equal except where we meant it", so a
+      # workflow joins a comparison's list only once its values match the others.
       #
       # This and the gate-ordering check below read the workflow FILES, so their
       # verdict cannot vary by runner. Pinned to one leg of the matrix so a
@@ -526,7 +529,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/AppData/Local/node-gyp/Cache
-          key: node-gyp-headers-${{ runner.os }}-${{ runner.arch }}-${{ matrix.node || hashFiles('.nvmrc') }}
+          key: node-gyp-headers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.nvmrc') }}
 
       # After the toolchain pin, which is what puts npm, and the node-gyp it
       # bundles, under `npm root -g`.

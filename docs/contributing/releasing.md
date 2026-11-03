@@ -67,7 +67,11 @@ remember to flip on the day it stops being true.
   one content-identical version, an under-trigger silently withholds a real
   release. `check:release-trigger` self-tests the list against real merges.
   Dispatch exists to re-run a release at the same commit.
-- **`gate`** runs the contributor gate on every platform CI covers, as CI does.
+- **`gate`** uses CI's platform and Node matrix, covering the contributor pin
+  and a fixed newer Node version. Like CI, it also
+  [rehearses the release](#rehearsing-a-release) on the contributor pin. The
+  gate needs the root `engines.node` floor, so this matrix does not test the
+  lower adopter floor in the published packages.
 - **`release`** needs both. It preflights the publish environment (see
   [Trusted publishing](#trusted-publishing)), rebuilds the commit and runs
   `node scripts/release.mts next`. The guarantee is that the commit passed, not
@@ -91,12 +95,6 @@ It copies the built packages into a temporary directory, stamps their versions
 and exact intra-framework pins, then runs each package's `npm publish
 --dry-run`. The temporary directory is removed even when a publish check
 fails. The checkout's manifests and lockfile stay unchanged.
-
-CI and the release gate run this on the contributor Node pin. Both also build
-and test on the fixed second Node version in their matrix; native dependency
-caches are separated by runtime. The contributor gate needs the root
-`engines.node` floor, so this matrix does not test the lower adopter floor in
-the published packages.
 
 `--dry-run` alone leaves stamping out and packs the committed versions. For
 `next`, both modes read the registry to choose a dist-tag but write nothing
