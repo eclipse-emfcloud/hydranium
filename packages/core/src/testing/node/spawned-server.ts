@@ -237,12 +237,12 @@ export interface SpawnedServer extends Harness {
  */
 const liveServers = new Set<SpawnedServer>();
 
-// Each worker owns an append-only file, so parallel boots cannot overwrite
-// one another and a suite does not create a file for every spawn.
+// Each module instance owns an append-only file, so isolated test files cannot
+// overwrite one another and a suite does not create a file for every spawn.
 const bootReportName = `spawn-boots-${randomUUID()}.jsonl`;
 
-function recordBoot(serverModule: string, elapsedMs: number, budgetMs: number, outcome: string): void {
-   const directory = process.env.HYDRANIUM_SPAWN_REPORT_DIR ?? (process.env.CI ? 'test-results' : undefined);
+function recordBoot(serverModule: string, elapsedMs: number, budgetMs: number, outcome: 'initialized' | 'failed'): void {
+   const directory = process.env.HYDRANIUM_SPAWN_REPORT_DIR;
    if (!directory) return;
    try {
       mkdirSync(directory, { recursive: true });
@@ -300,9 +300,8 @@ function bootDiagnosis(stdoutPrefix: string, stderr: string): string {
  * killed before the rejection propagates, since an orphan holding a socket
  * makes the next run's result meaningless.
  *
- * Under CI, records handshake durations and budgets in the working directory's
- * `test-results`. Set `HYDRANIUM_SPAWN_REPORT_DIR` to collect them elsewhere or
- * outside CI. An empty value disables recording; report failures only warn.
+ * Set `HYDRANIUM_SPAWN_REPORT_DIR` to record handshake durations and budgets.
+ * An absent or empty value disables recording; report failures only warn.
  */
 export async function startSpawnedServer(options: SpawnedServerOptions): Promise<SpawnedServer> {
    const serverModule = path.resolve(options.serverModule);

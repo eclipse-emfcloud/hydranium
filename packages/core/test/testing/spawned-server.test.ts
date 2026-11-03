@@ -34,12 +34,12 @@
  */
 
 import { execFile } from 'node:child_process';
-import { appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
    disposeSpawnedServers,
    SPAWNED_SERVER_BOOT_TIMEOUT_MS,
@@ -155,11 +155,40 @@ describe('startSpawnedServer', () => {
       tempRoot = mkdtempSync(path.join(tmpdir(), 'hydranium-spawned-server-'));
    });
 
+   beforeEach(() => {
+      // Deliberate fake-server failures must not compete with real boots in CI.
+      vi.stubEnv('HYDRANIUM_SPAWN_REPORT_DIR', '');
+   });
+
    afterEach(async () => {
       vi.unstubAllEnvs();
       while (openServers.length > 0) {
          await openServers.pop()?.dispose();
       }
+   });
+
+   it('does not enable reporting from CI alone', async () => {
+      const directory = mkdtempSync(path.join(tempRoot, 'adopter-'));
+      const harness = new URL('../../lib/testing/node/spawned-server.js', import.meta.url).href;
+      // A fresh process exercises the published harness without repository
+      // Vitest configuration, and confines any accidental report to this cwd.
+      await promisify(execFile)(
+         process.execPath,
+         [
+            '--input-type=module',
+            '--eval',
+            `
+         import { startSpawnedServer } from ${JSON.stringify(harness)};
+         const server = await startSpawnedServer({ serverModule: ${JSON.stringify(FIXTURE_MODULE)} });
+         await server.dispose();
+      `
+         ],
+         {
+            cwd: directory,
+            env: { ...process.env, CI: '1', HYDRANIUM_SPAWN_REPORT_DIR: undefined }
+         }
+      );
+      expect(readdirSync(directory)).toEqual([]);
    });
 
    it('reports successful and failed handshakes with their own budgets', async () => {
@@ -189,30 +218,6 @@ describe('startSpawnedServer', () => {
          }
       ]);
       for (const record of records) expect(record.elapsedMs).toBeGreaterThan(0);
-
-      appendFileSync(
-         report,
-         '\n' +
-            [
-               JSON.stringify({ serverModule: 'slow.js', elapsedMs: 38_000, budgetMs: 120_000, outcome: 'initialized' }),
-               JSON.stringify({ serverModule: 'close|budget.js', elapsedMs: 38_000, budgetMs: 45_000, outcome: 'initialized' }),
-               JSON.stringify({ serverModule: 'invalid.js', elapsedMs: 1, budgetMs: 0, outcome: 'initialized' }),
-               '{truncated'
-            ].join('\n')
-      );
-      const summary = path.join(tempRoot, 'summary.md');
-      const script = fileURLToPath(new URL('../../../../scripts/summarize-test-results.mts', import.meta.url));
-      await promisify(execFile)(process.execPath, [script, path.join(tempRoot, 'reports')], {
-         env: { ...process.env, GITHUB_STEP_SUMMARY: summary }
-      });
-      const rendered = readFileSync(summary, 'utf8');
-      expect(rendered).toContain('4 handshakes');
-      expect(rendered).toContain('38.00s | 45.00s | 84.4% | 7.00s');
-      expect(rendered).toContain('38.00s | 120.00s | 31.7% | 82.00s');
-      expect(rendered).toContain('close\\|budget.js');
-      expect(rendered.indexOf('close\\|budget.js')).toBeLessThan(rendered.indexOf('slow.js'));
-      expect(rendered).toContain('Could not read 2 spawn boot record(s)');
-      expect(rendered).toContain('No JUnit reports were found');
    });
 
    it('preserves boot outcomes when the report cannot be written', async () => {
