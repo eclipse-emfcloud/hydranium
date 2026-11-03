@@ -37,7 +37,7 @@ export const MODEL_DOCS_VALUE_FLAGS: readonly string[] = MODEL_DOCS_FLAGS;
 
 /** The `--help` text, as data, held to {@link MODEL_DOCS_FLAGS} by a test. */
 export const MODEL_DOCS_HELP: readonly string[] = [
-   'Usage: hydranium-cli model-docs --services <module> [--import <specifier>]... [--out-file <file>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
+   'Usage: hydranium-cli model-docs [--services <module>] [--import <specifier>]... [--out-file <file>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    'Generate a navigable Markdown reference of every AST node type — a type index,',
    'cross-linked super/sub types, a reverse "referenced by" index, and a per-language',
@@ -47,7 +47,7 @@ export const MODEL_DOCS_HELP: readonly string[] = [
    'zero-arg `createServices(): { shared }` thunk. Needs @hydranium/core.',
    '',
    'Options:',
-   '  --services <module>   ESM module exporting `createServices(): { shared }` (required).',
+   '  --services <module>   ESM module exporting `createServices(): { shared }` (required) unless package.json sets hydranium.services.',
    ...importHelpLines(22),
    '  --out-file <file>     Write the Markdown to this file instead of stdout. Written',
    '                        only once the report exists, unlike a shell redirection,',

@@ -76,5 +76,8 @@
   },
   "engines": {
     "node": ">=22.13"
+  },
+  "hydranium": {
+    "services": "./lib/node/services.js"
   }
 }

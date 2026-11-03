@@ -527,7 +527,8 @@ describe('planInitFiles', () => {
          'scripts',
          'dependencies',
          'devDependencies',
-         'engines'
+         'engines',
+         'hydranium'
       ]);
    });
 
@@ -787,7 +788,7 @@ describe('runInit', () => {
       expect(output).toContain('npm test');
       // `npx`, not a bare invocation: the scaffold installs `@hydranium/cli` as a
       // devDependency, so a bare command resolves only with a global install.
-      expect(output).toContain('  npx hydranium-cli reflect --services ./server/lib/node/services.js\n');
+      expect(output).toContain('  npx hydranium-cli reflect\n');
       expect(output).toContain('no license header');
    });
 

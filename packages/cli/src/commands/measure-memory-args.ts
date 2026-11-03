@@ -49,7 +49,7 @@ export const MEASURE_MEMORY_VALUE_FLAGS: readonly string[] = [...HARNESS_VALUE_F
 
 /** The `--help` text, as data, held to {@link MEASURE_MEMORY_FLAGS} by a test. */
 export const MEASURE_MEMORY_HELP: readonly string[] = [
-   'Usage: hydranium-cli measure-memory --services <module> [--import <specifier>]... <workspace> [options]',
+   'Usage: hydranium-cli measure-memory [--services <module>] [--import <specifier>]... <workspace> [options]',
    '',
    'Measure model-store memory for a workspace. `<module>` is an ESM module that',
    'exports a zero-arg `createServices(): { shared }` thunk (the head wires its own',
@@ -57,7 +57,7 @@ export const MEASURE_MEMORY_HELP: readonly string[] = [
    'baseline / after-build / churn lines print on stdout. Needs @hydranium/core.',
    '',
    'Options:',
-   '  --services <module>   ESM module exporting `createServices(): { shared }` (required).',
+   '  --services <module>   ESM module exporting `createServices(): { shared }` (required) unless package.json sets hydranium.services.',
    ...importHelpLines(22),
    '  <workspace>           Workspace root (path or file URI) to build (required).',
    '  --edits <N>           Rebuild-churn cycles to probe for retention. Default: 0 (skip).',

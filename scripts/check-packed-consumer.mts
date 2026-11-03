@@ -646,10 +646,13 @@ function checkScaffoldShape(shape: ScaffoldShape, index: number, cli: string, ca
    run(
       `${shape.label}: validate the starter workspace`,
       'npx',
-      ['hydranium-cli', 'validate', '--services', './lib/node/services.js', join(project, 'workspace')],
+      ['hydranium-cli', 'validate', join(project, 'workspace')],
       server,
       installEnv
    );
+   if (!shape.monorepo) {
+      run(`${shape.label}: reflect using root configuration`, 'npx', ['hydranium-cli', 'reflect', '--json'], project, installEnv);
+   }
    run(`${shape.label}: smoke`, 'node', ['scaffold-smoke.mjs', shape.heads], server, env, SMOKE_TIMEOUT_MS);
    if (shape.hosts?.split(',').includes('browser')) {
       // The scaffold's own Playwright, whose range resolves its own Chromium.

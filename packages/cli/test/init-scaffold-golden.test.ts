@@ -68,6 +68,15 @@ function emittedManifests(composition: InitComposition): Array<Record<string, Re
 }
 
 describe('init scaffold golden', () => {
+   it('configures the built services entry from the project root and server package', () => {
+      const files = planInitFiles(resolveInitComposition('Sample'));
+      const root = JSON.parse(files.find(file => file.path === 'package.json')!.content);
+      const server = JSON.parse(files.find(file => file.path === 'server/package.json')!.content);
+      expect(root.hydranium.services).toBe('./server/lib/node/services.js');
+      expect(server.hydranium.services).toBe('./lib/node/services.js');
+      expect(files.some(file => file.path === 'server/src/node/services.ts')).toBe(true);
+   });
+
    it('renders the pinned single-grammar scaffold', async () => {
       await expect(renderScaffold('Bookstore')).toMatchFileSnapshot('fixtures/init-scaffold.txt');
    });

@@ -38,7 +38,7 @@ export const LINT_GRAMMAR_VALUE_FLAGS: readonly string[] = [...HARNESS_VALUE_FLA
 
 /** The `--help` text, as data, held to {@link LINT_GRAMMAR_FLAGS} by a test. */
 export const LINT_GRAMMAR_HELP: readonly string[] = [
-   'Usage: hydranium-cli lint-grammar --services <module> [--import <specifier>]... [--name-property <p>]... [--strict] [--json] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
+   'Usage: hydranium-cli lint-grammar [--services <module>] [--import <specifier>]... [--name-property <p>]... [--strict] [--json] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    "Check a head's grammar against the framework's conventions — a CI gate: the",
    'process exits non-zero when a violation is found. Read-only: no workspace is',
@@ -49,7 +49,7 @@ export const LINT_GRAMMAR_HELP: readonly string[] = [
    'zero-arg `createServices(): { shared }` thunk. Needs @hydranium/core.',
    '',
    'Options:',
-   '  --services <module>    ESM module exporting `createServices(): { shared }` (required).',
+   '  --services <module>    ESM module exporting `createServices(): { shared }` (required) unless package.json sets hydranium.services.',
    ...importHelpLines(23),
    '  --name-property <p>    Property that satisfies the nameability convention',
    '                         (repeatable). Default: name.',

@@ -720,7 +720,11 @@ export function runInit(options: InitCommandOptions): void {
    }
    // `npx`, not a bare invocation: `@hydranium/cli` is a devDependency of the
    // scaffold, so the binary is on PATH inside an npm script and nowhere else.
-   write(`  npx hydranium-cli reflect --services ./${server}/lib/node/services.js\n`);
+   write(
+      detection === undefined
+         ? '  npx hydranium-cli reflect\n'
+         : `  npx hydranium-cli reflect --services ./${server}/lib/node/services.js\n`
+   );
    const hostDir = (host: InitHost): string => (detection === undefined ? `host-${host}` : `${detection.targetPath}/host-${host}`);
    // A standalone root runs a host as `start:<host>`. A surrounding workspace's root is not ours to add to.
    const start = (host: InitHost): string => (detection === undefined ? `npm run start:${host}` : `npm --prefix ${hostDir(host)} start`);

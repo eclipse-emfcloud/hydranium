@@ -16,13 +16,13 @@ npm test                   # typecheck the tests, then run them
 
 ```bash
 # Grammar / AST reflection
-npx hydranium-cli reflect --services ./lib/node/services.js
+npx hydranium-cli reflect
 
 # Grammar-convention lint (CI gate)
-npx hydranium-cli lint-grammar --services ./lib/node/services.js
+npx hydranium-cli lint-grammar
 
 # Validate a workspace of model files (non-zero exit on errors)
-npx hydranium-cli validate --services ./lib/node/services.js ../workspace
+npx hydranium-cli validate ../workspace
 
 # Data-head operations. `--server` is a command line the CLI spawns and then
 # drives the data protocol over the child's stdin/stdout, so it has to name

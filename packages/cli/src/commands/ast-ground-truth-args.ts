@@ -37,7 +37,7 @@ export const AST_GROUND_TRUTH_VALUE_FLAGS: readonly string[] = AST_GROUND_TRUTH_
 
 /** The `--help` text, as data, held to {@link AST_GROUND_TRUTH_FLAGS} by a test. */
 export const AST_GROUND_TRUTH_HELP: readonly string[] = [
-   'Usage: hydranium-cli ast-ground-truth --services <module> [--import <specifier>]... <workspace> [--out-file <file>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
+   'Usage: hydranium-cli ast-ground-truth [--services <module>] [--import <specifier>]... <workspace> [--out-file <file>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    "Tally a workspace's live-model AST nodes by `$type` — the ground truth that",
    '`analyze-heap --validate <gt.json>` checks a heap snapshot against. `<module>`',
@@ -45,7 +45,7 @@ export const AST_GROUND_TRUTH_HELP: readonly string[] = [
    '`{ documents, totalAstNodes, byType }` JSON on stdout (or `--out-file`).',
    '',
    'Options:',
-   '  --services <module>   ESM module exporting `createServices(): { shared }` (required).',
+   '  --services <module>   ESM module exporting `createServices(): { shared }` (required) unless package.json sets hydranium.services.',
    ...importHelpLines(22),
    '  <workspace>           Workspace root (path or file URI) to build (required).',
    '  --out-file <file>     Write the JSON to this file instead of stdout.',

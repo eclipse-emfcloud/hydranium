@@ -58,5 +58,8 @@
     "rimraf": "^5.0.0",
     "typescript": "^7.0.2",
     "vscode-languageserver-textdocument": "^1.0.12"
+  },
+  "hydranium": {
+    "services": "./lib/services.js"
   }
 }

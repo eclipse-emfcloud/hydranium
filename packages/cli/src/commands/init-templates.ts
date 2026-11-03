@@ -596,6 +596,9 @@ __DEPENDENCIES__
   },
   "engines": {
     "node": ">=22.13"
+  },
+  "hydranium": {
+    "services": "./lib/node/services.js"
   }
 }
 `;
@@ -1797,13 +1800,13 @@ function readme(composition: InitComposition): string {
       // nowhere else.
       '```bash',
       '# Grammar / AST reflection',
-      'npx hydranium-cli reflect --services ./lib/node/services.js',
+      'npx hydranium-cli reflect',
       '',
       '# Grammar-convention lint (CI gate)',
-      'npx hydranium-cli lint-grammar --services ./lib/node/services.js',
+      'npx hydranium-cli lint-grammar',
       '',
       '# Validate a workspace of model files (non-zero exit on errors)',
-      'npx hydranium-cli validate --services ./lib/node/services.js ../workspace',
+      'npx hydranium-cli validate ../workspace',
       ...(data
          ? [
               '',
@@ -4548,6 +4551,9 @@ ${sortedBlock(devDependencies, '    ')}
   },
   "engines": {
     "node": ">=22.13"
+  },
+  "hydranium": {
+    "services": "./server/lib/node/services.js"
   }
 }
 `;

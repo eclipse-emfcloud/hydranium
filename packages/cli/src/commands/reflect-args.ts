@@ -38,7 +38,7 @@ export const REFLECT_VALUE_FLAGS: readonly string[] = [...HARNESS_VALUE_FLAGS, .
 
 /** The `--help` text, as data, held to {@link REFLECT_FLAGS} by a test. */
 export const REFLECT_HELP: readonly string[] = [
-   'Usage: hydranium-cli reflect --services <module> [--import <specifier>]... [--json] [--out-file <file>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
+   'Usage: hydranium-cli reflect [--services <module>] [--import <specifier>]... [--json] [--out-file <file>] [--log-level <lvl>] [--log-file <file>] [--log-file-level <lvl>]',
    '',
    "Dump a head's grammar/AST reflection — the type hierarchy, each language's",
    'terminals and entry rule, and every cross-reference target. Read-only: no',
@@ -47,7 +47,7 @@ export const REFLECT_HELP: readonly string[] = [
    'exporting a zero-arg `createServices(): { shared }` thunk. Needs @hydranium/core.',
    '',
    'Options:',
-   '  --services <module>   ESM module exporting `createServices(): { shared }` (required).',
+   '  --services <module>   ESM module exporting `createServices(): { shared }` (required) unless package.json sets hydranium.services.',
    ...importHelpLines(22),
    '  --json                Emit the raw JSON reflection instead of the Markdown report.',
    '  --out-file <file>     Write the report to this file instead of stdout. Written',
