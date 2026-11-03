@@ -49,7 +49,9 @@
     },
     "test": {
       "dependsOn": ["build"],
+      "env": ["HYDRANIUM_SPAWN_REPORT_DIR"],
       "inputs": [
+        "$TURBO_ROOT$/scripts/summarize-test-results.mts",
         "src/**/*",
         "test/**/*",
         // The CLI's `init` templates, which its tests render.

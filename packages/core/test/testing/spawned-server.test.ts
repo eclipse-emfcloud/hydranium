@@ -33,11 +33,13 @@
  * weeks.
  */
 
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { execFile } from 'node:child_process';
+import { appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { promisify } from 'node:util';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
    disposeSpawnedServers,
    SPAWNED_SERVER_BOOT_TIMEOUT_MS,
@@ -154,9 +156,73 @@ describe('startSpawnedServer', () => {
    });
 
    afterEach(async () => {
+      vi.unstubAllEnvs();
       while (openServers.length > 0) {
          await openServers.pop()?.dispose();
       }
+   });
+
+   it('reports successful and failed handshakes with their own budgets', async () => {
+      const directory = path.join(tempRoot, 'reports', 'test-results', 'nested');
+      vi.stubEnv('HYDRANIUM_SPAWN_REPORT_DIR', directory);
+      await boot('reported', 'default', { bootTimeoutMs: 30_000 });
+      await bootFailure('reported-failure', 'die-on-initialize', { bootTimeoutMs: 40_000 });
+      const files = readdirSync(directory);
+      expect(files).toHaveLength(1);
+      const report = path.join(directory, files[0]);
+      const records = readFileSync(report, 'utf8')
+         .trim()
+         .split('\n')
+         .map(line => JSON.parse(line));
+      expect(records).toEqual([
+         {
+            serverModule: expect.stringContaining('fake-stdio-lsp-server.mjs'),
+            elapsedMs: expect.any(Number),
+            budgetMs: 30_000,
+            outcome: 'initialized'
+         },
+         {
+            serverModule: expect.stringContaining('fake-stdio-lsp-server.mjs'),
+            elapsedMs: expect.any(Number),
+            budgetMs: 40_000,
+            outcome: 'failed'
+         }
+      ]);
+      for (const record of records) expect(record.elapsedMs).toBeGreaterThan(0);
+
+      appendFileSync(
+         report,
+         '\n' +
+            [
+               JSON.stringify({ serverModule: 'slow.js', elapsedMs: 38_000, budgetMs: 120_000, outcome: 'initialized' }),
+               JSON.stringify({ serverModule: 'close|budget.js', elapsedMs: 38_000, budgetMs: 45_000, outcome: 'initialized' }),
+               JSON.stringify({ serverModule: 'invalid.js', elapsedMs: 1, budgetMs: 0, outcome: 'initialized' }),
+               '{truncated'
+            ].join('\n')
+      );
+      const summary = path.join(tempRoot, 'summary.md');
+      const script = fileURLToPath(new URL('../../../../scripts/summarize-test-results.mts', import.meta.url));
+      await promisify(execFile)(process.execPath, [script, path.join(tempRoot, 'reports')], {
+         env: { ...process.env, GITHUB_STEP_SUMMARY: summary }
+      });
+      const rendered = readFileSync(summary, 'utf8');
+      expect(rendered).toContain('4 handshakes');
+      expect(rendered).toContain('38.00s | 45.00s | 84.4% | 7.00s');
+      expect(rendered).toContain('38.00s | 120.00s | 31.7% | 82.00s');
+      expect(rendered).toContain('close\\|budget.js');
+      expect(rendered.indexOf('close\\|budget.js')).toBeLessThan(rendered.indexOf('slow.js'));
+      expect(rendered).toContain('Could not read 2 spawn boot record(s)');
+      expect(rendered).toContain('No JUnit reports were found');
+   });
+
+   it('preserves boot outcomes when the report cannot be written', async () => {
+      const blocked = path.join(tempRoot, 'blocked');
+      writeFileSync(blocked, 'not a directory');
+      vi.stubEnv('HYDRANIUM_SPAWN_REPORT_DIR', blocked);
+      const server = await boot('unreported', 'default');
+      expect(server.initializeResult.serverInfo?.name).toBe(FIXTURE_SERVER_NAME);
+      const error = await bootFailure('unreported-failure', 'die-on-initialize', { bootTimeoutMs: 30_000 });
+      expect(error.message).toContain('exited with code 3 during the handshake');
    });
 
    afterAll(async () => {

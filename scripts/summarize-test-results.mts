@@ -44,24 +44,23 @@ interface TestCase {
 }
 
 /**
- * Every `.xml` at or below `dir`, which is entered once a `test-results/` has
- * been found.
+ * JUnit and spawn boot reports at or below a `test-results/` directory.
  *
  * RECURSIVE, and not by preference: a tier whose config runs twice gives each
  * invocation its own subdirectory, because Playwright clears `outputDir` on
  * start and a shared one means the second run deletes the first's report. A
  * flat read of `test-results/` would then miss both.
  */
-function collectXml(dir: string, found: string[]): void {
+function collectReports(dir: string, found: string[]): void {
    for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name);
-      if (entry.isDirectory()) collectXml(full, found);
-      else if (entry.name.endsWith('.xml')) found.push(full);
+      if (entry.isDirectory()) collectReports(full, found);
+      else if (entry.name.endsWith('.xml') || /^spawn-boots-.*\.jsonl$/.test(entry.name)) found.push(full);
    }
 }
 
 /**
- * Every XML report under a `test-results/` directory, skipping trees that
+ * Every report under a `test-results/` directory, skipping trees that
  * cannot hold one.
  */
 function findReports(dir: string, found: string[] = []): string[] {
@@ -76,7 +75,7 @@ function findReports(dir: string, found: string[] = []): string[] {
       if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'lib' || entry.name === 'out') continue;
       const full = join(dir, entry.name);
       if (entry.name === 'test-results') {
-         collectXml(full, found);
+         collectReports(full, found);
          continue;
       }
       findReports(full, found);
@@ -150,7 +149,8 @@ function packageOf(reportPath: string): string {
    return parts.slice(0, parts.indexOf('test-results')).join('/') || '(root)';
 }
 
-const reports = findReports(searchRoot);
+const found = findReports(searchRoot);
+const reports = found.filter(report => report.endsWith('.xml'));
 const lines: string[] = [];
 
 if (reports.length === 0) {
@@ -210,6 +210,67 @@ if (reports.length === 0) {
    for (const one of slowest) lines.push(`| ${one.seconds.toFixed(2)}s | \`${one.pkg}\` | \`${one.file}\` | ${escapeMarkdown(one.name)} |`);
    lines.push('', '</details>');
 }
+
+interface BootRecord {
+   serverModule: string;
+   elapsedMs: number;
+   budgetMs: number;
+   outcome: 'initialized' | 'failed';
+}
+
+function isBootRecord(value: unknown): value is BootRecord {
+   if (typeof value !== 'object' || value === null) return false;
+   return (
+      'serverModule' in value &&
+      typeof value.serverModule === 'string' &&
+      'elapsedMs' in value &&
+      typeof value.elapsedMs === 'number' &&
+      Number.isFinite(value.elapsedMs) &&
+      value.elapsedMs >= 0 &&
+      'budgetMs' in value &&
+      typeof value.budgetMs === 'number' &&
+      Number.isFinite(value.budgetMs) &&
+      value.budgetMs > 0 &&
+      'outcome' in value &&
+      (value.outcome === 'initialized' || value.outcome === 'failed')
+   );
+}
+
+const boots: (BootRecord & { pkg: string })[] = [];
+let unreadableBootRecords = 0;
+for (const report of found.filter(report => report.endsWith('.jsonl'))) {
+   try {
+      for (const line of readFileSync(report, 'utf8')
+         .split('\n')
+         .filter(line => line.trim())) {
+         try {
+            const record: unknown = JSON.parse(line);
+            if (!isBootRecord(record)) throw new Error('Invalid boot record');
+            boots.push({ ...record, pkg: packageOf(report) });
+         } catch {
+            unreadableBootRecords++;
+         }
+      }
+   } catch {
+      unreadableBootRecords++;
+   }
+}
+if (boots.length > 0) {
+   lines.push(
+      '',
+      '### Spawn boot budgets',
+      '',
+      `${boots.length} handshakes; showing the ${Math.min(SLOWEST, boots.length)} closest to their budget. Failed handshakes exclude teardown time.`,
+      ''
+   );
+   lines.push('| Package | Module | Outcome | Elapsed | Budget | Used | Remaining |', '| --- | --- | --- | ---: | ---: | ---: | ---: |');
+   for (const boot of boots.sort((a, b) => b.elapsedMs / b.budgetMs - a.elapsedMs / a.budgetMs).slice(0, SLOWEST)) {
+      lines.push(
+         `| ${escapeMarkdown(boot.pkg)} | ${escapeMarkdown(boot.serverModule).replace(/[\r\n]/g, ' ')} | ${boot.outcome} | ${(boot.elapsedMs / 1000).toFixed(2)}s | ${(boot.budgetMs / 1000).toFixed(2)}s | ${((100 * boot.elapsedMs) / boot.budgetMs).toFixed(1)}% | ${((boot.budgetMs - boot.elapsedMs) / 1000).toFixed(2)}s |`
+      );
+   }
+}
+if (unreadableBootRecords) lines.push('', `> Could not read ${unreadableBootRecords} spawn boot record(s) or report(s).`);
 
 const rendered = lines.join('\n') + '\n';
 const target = process.env.GITHUB_STEP_SUMMARY;
