@@ -49,6 +49,7 @@
     },
     "test": {
       "dependsOn": ["build"],
+      "env": ["HYDRANIUM_SPAWN_REPORT_DIR"],
       "inputs": [
         "src/**/*",
         "test/**/*",

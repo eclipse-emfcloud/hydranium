@@ -23,14 +23,15 @@
 // Writes to `$GITHUB_STEP_SUMMARY` when set, stdout otherwise, so it is
 // runnable locally against a real CI artefact.
 //
-// Usage: node scripts/summarize-test-results.mts [rootDir]
+// Usage: node scripts/summarize-test-results.mts [rootDir | --self-test]
 
-import { appendFileSync, readdirSync, readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const searchRoot = process.argv[2] ? resolve(process.argv[2]) : repoRoot;
 
 /** How many of the slowest cases to name. */
 const SLOWEST = 10;
@@ -44,24 +45,23 @@ interface TestCase {
 }
 
 /**
- * Every `.xml` at or below `dir`, which is entered once a `test-results/` has
- * been found.
+ * JUnit and spawn boot reports at or below a `test-results/` directory.
  *
  * RECURSIVE, and not by preference: a tier whose config runs twice gives each
  * invocation its own subdirectory, because Playwright clears `outputDir` on
  * start and a shared one means the second run deletes the first's report. A
  * flat read of `test-results/` would then miss both.
  */
-function collectXml(dir: string, found: string[]): void {
+function collectReports(dir: string, found: string[]): void {
    for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name);
-      if (entry.isDirectory()) collectXml(full, found);
-      else if (entry.name.endsWith('.xml')) found.push(full);
+      if (entry.isDirectory()) collectReports(full, found);
+      else if (entry.name.endsWith('.xml') || /^spawn-boots-.*\.jsonl$/.test(entry.name)) found.push(full);
    }
 }
 
 /**
- * Every XML report under a `test-results/` directory, skipping trees that
+ * Every report under a `test-results/` directory, skipping trees that
  * cannot hold one.
  */
 function findReports(dir: string, found: string[] = []): string[] {
@@ -76,7 +76,7 @@ function findReports(dir: string, found: string[] = []): string[] {
       if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'lib' || entry.name === 'out') continue;
       const full = join(dir, entry.name);
       if (entry.name === 'test-results') {
-         collectXml(full, found);
+         collectReports(full, found);
          continue;
       }
       findReports(full, found);
@@ -145,77 +145,197 @@ function escapeMarkdown(text: string): string {
 }
 
 /** `packages/core` or `examples/order-flow/browser`, from the report's path. */
-function packageOf(reportPath: string): string {
+function packageOf(searchRoot: string, reportPath: string): string {
    const parts = relative(searchRoot, reportPath).split(sep);
    return parts.slice(0, parts.indexOf('test-results')).join('/') || '(root)';
 }
 
-const reports = findReports(searchRoot);
-const lines: string[] = [];
-
-if (reports.length === 0) {
-   lines.push('## Test results', '', '> **No JUnit reports were found.** Either no tier ran, or none is configured to');
-   lines.push('> emit one — an empty summary here is not a clean run.');
-} else {
-   // Keyed by package, not by report: a tier that runs its config twice emits
-   // two files for one package, and a row each would read as two packages.
-   const byPackage = new Map<string, TestCase[]>();
-   for (const report of reports) {
-      const name = packageOf(report);
-      const cases = (byPackage.get(name) ?? []).concat(parseCases(readFileSync(report, 'utf8')));
-      byPackage.set(name, cases);
-   }
-
-   const perPackage = [...byPackage]
-      .map(([name, cases]) => ({
-         name,
-         cases,
-         failed: cases.filter(one => one.failed),
-         skipped: cases.filter(one => one.skipped).length,
-         seconds: cases.reduce((total, one) => total + one.seconds, 0)
-      }))
-      .sort((left, right) => right.seconds - left.seconds);
-
-   const all = perPackage.flatMap(entry => entry.cases.map(one => ({ ...one, pkg: entry.name })));
-   const failures = all.filter(one => one.failed);
-
-   lines.push('## Test results', '');
-   lines.push(
-      `**${all.length}** cases across **${perPackage.length}** packages — ` +
-         `**${failures.length}** failed, **${all.filter(one => one.skipped).length}** skipped.`,
-      ''
-   );
-
-   if (failures.length > 0) {
-      lines.push('### Failures', '');
-      for (const failure of failures) lines.push(`- \`${failure.pkg}\` \`${failure.file}\` — ${escapeMarkdown(failure.name)}`);
-      lines.push('');
-   }
-
-   lines.push('<details><summary>Per package</summary>', '');
-   lines.push('| Package | Cases | Failed | Skipped | Time |', '| --- | ---: | ---: | ---: | ---: |');
-   for (const entry of perPackage) {
-      lines.push(
-         `| \`${entry.name}\` | ${entry.cases.length} | ${entry.failed.length} | ${entry.skipped} | ${entry.seconds.toFixed(1)}s |`
-      );
-   }
-   lines.push('', '</details>', '');
-
-   // The slowest cases, because a timeout is the failure this data prevents:
-   // the console reporter totals a package and names no test, so without this
-   // the next slow test is found by it going red.
-   const slowest = [...all].sort((left, right) => right.seconds - left.seconds).slice(0, SLOWEST);
-   lines.push(`<details><summary>Slowest ${slowest.length}</summary>`, '');
-   lines.push('| Time | Package | File | Test |', '| ---: | --- | --- | --- |');
-   for (const one of slowest) lines.push(`| ${one.seconds.toFixed(2)}s | \`${one.pkg}\` | \`${one.file}\` | ${escapeMarkdown(one.name)} |`);
-   lines.push('', '</details>');
+interface BootRecord {
+   serverModule: string;
+   elapsedMs: number;
+   budgetMs: number;
+   outcome: 'initialized' | 'failed';
 }
 
-const rendered = lines.join('\n') + '\n';
-const target = process.env.GITHUB_STEP_SUMMARY;
-if (target) {
-   appendFileSync(target, rendered);
-   console.log(`wrote ${reports.length} report(s) to the job summary`);
+function isBootRecord(value: unknown): value is BootRecord {
+   if (typeof value !== 'object' || value === null) return false;
+   return (
+      'serverModule' in value &&
+      typeof value.serverModule === 'string' &&
+      'elapsedMs' in value &&
+      typeof value.elapsedMs === 'number' &&
+      Number.isFinite(value.elapsedMs) &&
+      value.elapsedMs >= 0 &&
+      'budgetMs' in value &&
+      typeof value.budgetMs === 'number' &&
+      Number.isFinite(value.budgetMs) &&
+      value.budgetMs > 0 &&
+      'outcome' in value &&
+      (value.outcome === 'initialized' || value.outcome === 'failed')
+   );
+}
+
+function summarize(searchRoot: string): { rendered: string; reportCount: number } {
+   const found = findReports(searchRoot);
+   const reports = found.filter(report => report.endsWith('.xml'));
+   const lines: string[] = [];
+
+   if (reports.length === 0) {
+      lines.push('## Test results', '', '> **No JUnit reports were found.** Either no tier ran, or none is configured to');
+      lines.push('> emit one — an empty summary here is not a clean run.');
+   } else {
+      // Keyed by package, not by report: a tier that runs its config twice emits
+      // two files for one package, and a row each would read as two packages.
+      const byPackage = new Map<string, TestCase[]>();
+      for (const report of reports) {
+         const name = packageOf(searchRoot, report);
+         const cases = (byPackage.get(name) ?? []).concat(parseCases(readFileSync(report, 'utf8')));
+         byPackage.set(name, cases);
+      }
+
+      const perPackage = [...byPackage]
+         .map(([name, cases]) => ({
+            name,
+            cases,
+            failed: cases.filter(one => one.failed),
+            skipped: cases.filter(one => one.skipped).length,
+            seconds: cases.reduce((total, one) => total + one.seconds, 0)
+         }))
+         .sort((left, right) => right.seconds - left.seconds);
+
+      const all = perPackage.flatMap(entry => entry.cases.map(one => ({ ...one, pkg: entry.name })));
+      const failures = all.filter(one => one.failed);
+
+      lines.push('## Test results', '');
+      lines.push(
+         `**${all.length}** cases across **${perPackage.length}** packages — ` +
+            `**${failures.length}** failed, **${all.filter(one => one.skipped).length}** skipped.`,
+         ''
+      );
+
+      if (failures.length > 0) {
+         lines.push('### Failures', '');
+         for (const failure of failures) lines.push(`- \`${failure.pkg}\` \`${failure.file}\` — ${escapeMarkdown(failure.name)}`);
+         lines.push('');
+      }
+
+      lines.push('<details><summary>Per package</summary>', '');
+      lines.push('| Package | Cases | Failed | Skipped | Time |', '| --- | ---: | ---: | ---: | ---: |');
+      for (const entry of perPackage) {
+         lines.push(
+            `| \`${entry.name}\` | ${entry.cases.length} | ${entry.failed.length} | ${entry.skipped} | ${entry.seconds.toFixed(1)}s |`
+         );
+      }
+      lines.push('', '</details>', '');
+
+      // The slowest cases, because a timeout is the failure this data prevents:
+      // the console reporter totals a package and names no test, so without this
+      // the next slow test is found by it going red.
+      const slowest = [...all].sort((left, right) => right.seconds - left.seconds).slice(0, SLOWEST);
+      lines.push(`<details><summary>Slowest ${slowest.length}</summary>`, '');
+      lines.push('| Time | Package | File | Test |', '| ---: | --- | --- | --- |');
+      for (const one of slowest)
+         lines.push(`| ${one.seconds.toFixed(2)}s | \`${one.pkg}\` | \`${one.file}\` | ${escapeMarkdown(one.name)} |`);
+      lines.push('', '</details>');
+   }
+
+   const boots: (BootRecord & { pkg: string })[] = [];
+   let unreadableBootRecords = 0;
+   for (const report of found.filter(report => report.endsWith('.jsonl'))) {
+      try {
+         for (const line of readFileSync(report, 'utf8')
+            .split('\n')
+            .filter(line => line.trim())) {
+            try {
+               const record: unknown = JSON.parse(line);
+               if (!isBootRecord(record)) throw new Error('Invalid boot record');
+               boots.push({ ...record, pkg: packageOf(searchRoot, report) });
+            } catch {
+               unreadableBootRecords++;
+            }
+         }
+      } catch {
+         unreadableBootRecords++;
+      }
+   }
+   if (boots.length > 0) {
+      lines.push(
+         '',
+         '### Spawn boot budgets',
+         '',
+         `${boots.length} handshakes; showing the ${Math.min(SLOWEST, boots.length)} closest to their budget. Failed handshakes exclude teardown time.`,
+         ''
+      );
+      lines.push('| Package | Module | Outcome | Elapsed | Budget | Used | Remaining |', '| --- | --- | --- | ---: | ---: | ---: | ---: |');
+      for (const boot of boots.sort((a, b) => b.elapsedMs / b.budgetMs - a.elapsedMs / a.budgetMs).slice(0, SLOWEST)) {
+         lines.push(
+            `| ${escapeMarkdown(boot.pkg)} | ${escapeMarkdown(boot.serverModule).replace(/[\r\n]/g, ' ')} | ${boot.outcome} | ${(boot.elapsedMs / 1000).toFixed(2)}s | ${(boot.budgetMs / 1000).toFixed(2)}s | ${((100 * boot.elapsedMs) / boot.budgetMs).toFixed(1)}% | ${((boot.budgetMs - boot.elapsedMs) / 1000).toFixed(2)}s |`
+         );
+      }
+   }
+   if (unreadableBootRecords) lines.push('', `> Could not read ${unreadableBootRecords} spawn boot record(s) or report(s).`);
+
+   return { rendered: lines.join('\n') + '\n', reportCount: reports.length };
+}
+
+function selfTest(): void {
+   const root = mkdtempSync(join(tmpdir(), 'hydranium-test-summary-'));
+   try {
+      const directory = join(root, 'packages', 'one', 'test-results', 'nested');
+      mkdirSync(directory, { recursive: true });
+      const report = join(directory, 'spawn-boots-one.jsonl');
+      writeFileSync(
+         report,
+         [
+            JSON.stringify({ serverModule: 'slow.js', elapsedMs: 38_000, budgetMs: 120_000, outcome: 'initialized' }),
+            JSON.stringify({ serverModule: 'close|budget.js', elapsedMs: 38_000, budgetMs: 45_000, outcome: 'initialized' }),
+            JSON.stringify({ serverModule: 'failed.js', elapsedMs: 8_100, budgetMs: 8_000, outcome: 'failed' }),
+            JSON.stringify({ serverModule: 'invalid.js', elapsedMs: 1, budgetMs: 0, outcome: 'initialized' }),
+            '{truncated',
+            ''
+         ].join('\n')
+      );
+      const { rendered } = summarize(root);
+      assert.ok(rendered.includes('3 handshakes'));
+      assert.ok(rendered.includes('38.00s | 45.00s | 84.4% | 7.00s'));
+      assert.ok(rendered.includes('38.00s | 120.00s | 31.7% | 82.00s'));
+      assert.ok(rendered.includes('failed | 8.10s | 8.00s | 101.3% | -0.10s'));
+      assert.ok(rendered.includes('packages/one | close\\|budget.js'));
+      assert.ok(rendered.indexOf('failed.js') < rendered.indexOf('close\\|budget.js'));
+      assert.ok(rendered.indexOf('close\\|budget.js') < rendered.indexOf('slow.js'));
+      assert.ok(rendered.includes('Could not read 2 spawn boot record(s)'));
+      assert.ok(rendered.includes('No JUnit reports were found'));
+      console.log('✓ self-test: nested boot reports retain budgets, rank by usage, and skip malformed records');
+
+      const junit = join(directory, 'junit.xml');
+      writeFileSync(
+         junit,
+         '<testsuite><testcase name="passes" classname="one.test.ts" time="0.1"/>' +
+            '<testcase name="fails" classname="one.test.ts" time="0.2"><failure>failed</failure></testcase></testsuite>'
+      );
+      const combined = summarize(root);
+      assert.equal(combined.reportCount, 1);
+      assert.ok(combined.rendered.includes('**2** cases across **1** packages — **1** failed'));
+      assert.ok(combined.rendered.includes('3 handshakes'));
+      rmSync(report);
+      const junitOnly = summarize(root);
+      assert.ok(junitOnly.rendered.includes('**2** cases across **1** packages — **1** failed'));
+      assert.ok(!junitOnly.rendered.includes('Spawn boot budgets'));
+      console.log('✓ self-test: JUnit reports render with and without boot reports');
+   } finally {
+      rmSync(root, { recursive: true, force: true });
+   }
+}
+
+if (process.argv.includes('--self-test')) {
+   selfTest();
 } else {
-   process.stdout.write(rendered);
+   const { rendered, reportCount } = summarize(process.argv[2] ? resolve(process.argv[2]) : repoRoot);
+   const target = process.env.GITHUB_STEP_SUMMARY;
+   if (target) {
+      appendFileSync(target, rendered);
+      console.log(`wrote ${reportCount} report(s) to the job summary`);
+   } else {
+      process.stdout.write(rendered);
+   }
 }

@@ -56,7 +56,19 @@ being written. The timeout is an event-loop timer, so a test body that blocks â€
 anything built on `spawnSync` or `execFileSync` â€” runs to completion however
 long it takes. Make the test async if the timeout is to mean anything for it.
 Under `CI` each package also writes `test-results/junit.xml`; its per-testcase
-`time` is the only record of which test is closest to the timeout.
+`time` records each test's duration. The shared Vitest configuration also
+collects spawned-server boot durations and budgets under `test-results/` in
+CI. The job summary ranks those boots by budget usage and shows the remaining
+time; this is a report, not a timeout threshold.
+
+To collect boot reports locally, set `HYDRANIUM_SPAWN_REPORT_DIR=test-results`
+when running tests. Paths are relative to each package's working directory;
+set the variable to an empty string to disable collection, including in CI.
+The published harness records only when this variable names a directory.
+Reports append within each isolated test file and accumulate across runs:
+remove the old `spawn-boots-*.jsonl` files from the chosen directory before
+collecting a fresh run. Run `node scripts/summarize-test-results.mts` to view
+the summary locally; it discovers reports below `test-results/` directories.
 
 **A quiet run is not a clean run.** LSP harness teardown is quiet because the
 harness attaches the way a server entry point does: `withHydraniumLspFeatures`

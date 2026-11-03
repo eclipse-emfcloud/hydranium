@@ -41,9 +41,11 @@
  * measure.
  */
 
+import { SystemClock } from '@hydranium/protocol';
 import { type Harness } from '@hydranium/protocol/testing';
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -235,6 +237,30 @@ export interface SpawnedServer extends Harness {
  */
 const liveServers = new Set<SpawnedServer>();
 
+// Each module instance owns an append-only file, so isolated test files cannot
+// overwrite one another and a suite does not create a file for every spawn.
+const bootReportName = `spawn-boots-${randomUUID()}.jsonl`;
+
+function recordBoot(serverModule: string, elapsedMs: number, budgetMs: number, outcome: 'initialized' | 'failed'): void {
+   const directory = process.env.HYDRANIUM_SPAWN_REPORT_DIR;
+   if (!directory) return;
+   try {
+      mkdirSync(directory, { recursive: true });
+      appendFileSync(
+         path.join(directory, bootReportName),
+         JSON.stringify({
+            serverModule: path.relative(process.cwd(), serverModule).split(path.sep).join('/'),
+            elapsedMs,
+            budgetMs,
+            outcome
+         }) + '\n'
+      );
+   } catch (error) {
+      // A report failure must neither reject a healthy boot nor mask its error.
+      process.stderr.write(`Could not record spawned-server boot: ${String(error)}\n`);
+   }
+}
+
 /**
  * Terminate every server this module started that has not been disposed, and
  * forget them.
@@ -273,6 +299,9 @@ function bootDiagnosis(stdoutPrefix: string, stderr: string): string {
  * dead child leaves. A failed boot leaves NO child behind: the process is
  * killed before the rejection propagates, since an orphan holding a socket
  * makes the next run's result meaningless.
+ *
+ * Set `HYDRANIUM_SPAWN_REPORT_DIR` to record handshake durations and budgets.
+ * An absent or empty value disables recording; report failures only warn.
  */
 export async function startSpawnedServer(options: SpawnedServerOptions): Promise<SpawnedServer> {
    const serverModule = path.resolve(options.serverModule);
@@ -359,6 +388,7 @@ export async function startSpawnedServer(options: SpawnedServerOptions): Promise
    };
 
    const bootTimeoutMs = options.bootTimeoutMs ?? SPAWNED_SERVER_BOOT_TIMEOUT_MS;
+   const bootWatch = new SystemClock().stopwatch();
    let bootTimer: NodeJS.Timeout | undefined;
    let onEarlyClose: ((code: number | null) => void) | undefined;
    let initializeResult: InitializeResult;
@@ -382,7 +412,9 @@ export async function startSpawnedServer(options: SpawnedServerOptions): Promise
          child.once('error', reject);
          connection.sendRequest(InitializeRequest.type, initializeParams).then(resolve, reject);
       });
+      recordBoot(serverModule, bootWatch.stop(), bootTimeoutMs, 'initialized');
    } catch (error: unknown) {
+      recordBoot(serverModule, bootWatch.stop(), bootTimeoutMs, 'failed');
       await forceTerminate();
       throw error;
    } finally {

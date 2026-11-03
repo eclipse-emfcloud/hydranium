@@ -54,6 +54,11 @@ export function definePackageVitestConfig(name: string, options: { exclude?: rea
       test: {
          name,
          environment: 'node',
+         // Collection belongs to this repository's CI, not every adopter using
+         // the published harness. Preserve an explicit empty value to opt out.
+         env: {
+            HYDRANIUM_SPAWN_REPORT_DIR: process.env.HYDRANIUM_SPAWN_REPORT_DIR ?? (process.env.CI ? 'test-results' : '')
+         },
          include: ['test/**/*.{test,spec}.{ts,tsx}'],
          // A shared CI executor runs this suite several times slower than a
          // developer machine does under the SAME parallel turbo load — enough
