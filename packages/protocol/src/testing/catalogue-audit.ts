@@ -12,8 +12,7 @@ import { collectMessages } from '../messages/primitives';
 /**
  * Audit a translation catalogue against the codes that actually exist.
  *
- * **The one failure mode a catalogue has, and the only one nothing else
- * catches.** A key naming no declared code falls back to the English — which is
+ * A key naming no declared code falls back to the English, which is
  * byte-identical to a deliberate omission, so a typo is invisible at runtime and
  * indistinguishable from the partial-catalogue behaviour every adopter relies
  * on. Nothing on the render path can tell them apart, `theia nls-extract`
@@ -108,4 +107,15 @@ export function findUndeclaredCodes(
 export function findSharedCodes(first: readonly string[], second: readonly string[]): string[] {
    const other = new Set(second);
    return first.filter(key => other.has(key));
+}
+
+/**
+ * Declared codes with no catalogue entry. Completeness is opt-in: a partial
+ * catalogue remains valid at runtime and renders the missing entries in English.
+ * Re-exports count once even when several barrels expose the same declaration.
+ */
+export function findMissingCodes(catalogueKeys: readonly string[], barrels: readonly object[]): string[] {
+   const present = new Set(catalogueKeys);
+   const declared = new Set(barrels.flatMap(barrel => collectMessages(barrel).map(message => message.code)));
+   return [...declared].filter(code => !present.has(code));
 }

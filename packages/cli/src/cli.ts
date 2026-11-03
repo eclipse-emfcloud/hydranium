@@ -20,6 +20,7 @@ import { runInitCommand } from './commands/init-args.js';
 import { InitWizardCancelled } from './commands/init-prompt.js';
 import { runLintGrammarCommand } from './commands/lint-grammar-args.js';
 import { runMeasureMemoryCommand } from './commands/measure-memory-args.js';
+import { runMessageCatalogueCommand } from './commands/message-catalogue-args.js';
 import { runModelDocsCommand } from './commands/model-docs-args.js';
 import { runProjectsCommand } from './commands/projects-args.js';
 import { runQueryCommand } from './commands/query-args.js';
@@ -56,6 +57,7 @@ const COMMANDS: Record<string, { readonly summary: string; readonly run: (args: 
    init: { summary: 'Scaffold a new Hydranium language project (grammar + server head).', run: runInitCommand },
    'lint-grammar': { summary: 'Check a grammar against framework conventions (CI gate).', run: runLintGrammarCommand },
    'measure-memory': { summary: 'Measure model-store memory for a workspace (needs @hydranium/core).', run: runMeasureMemoryCommand },
+   'message-catalogue': { summary: 'Emit a starter translation catalogue from message barrels.', run: runMessageCatalogueCommand },
    'model-docs': { summary: 'Generate a navigable Markdown model reference for adopter docs.', run: runModelDocsCommand },
    projects: { summary: 'List projects exposed by a data-server subprocess.', run: runProjectsCommand },
    query: { summary: 'Print the data-server document envelope for a URI.', run: runQueryCommand },

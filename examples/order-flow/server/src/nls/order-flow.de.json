@@ -54,5 +54,12 @@
   "order-flow/palette/task": "Aufgabe",
   "order-flow/palette/gateway": "Verzweigung",
   "order-flow/palette/transition": "Übergang",
-  "order-flow/palette/effect": "Effekt"
+  "order-flow/palette/effect": "Effekt",
+  "hydranium/core/delete-directory-refused": "{uri} kann nicht gelöscht werden: Es ist ein Verzeichnis",
+  "hydranium/glsp-server/diagram-action-failed": "Die Diagrammaktion konnte nicht abgeschlossen werden.",
+  "hydranium/glsp-server/diagram-edit-readonly": "Das Diagramm ist schreibgeschützt. Die Änderung wurde nicht übernommen.",
+  "hydranium/glsp-server/diagram-loading": "Diagramm wird geladen...",
+  "hydranium/glsp-server/diagram-request-failed": "Die Diagrammanfrage konnte nicht abgeschlossen werden.",
+  "hydranium/glsp-server/diagram-settle-failed": "Die Diagrammänderungen konnten nicht mit dem Texteditor synchronisiert werden.",
+  "hydranium/glsp-server/diagram-validating": "Modell wird validiert..."
 }

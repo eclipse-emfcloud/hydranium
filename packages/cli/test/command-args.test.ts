@@ -39,6 +39,7 @@ import { INIT_FLAGS, INIT_HELP, INIT_VALUE_FLAGS, parseInitArgs } from '../src/c
 import { LINT_GRAMMAR_FLAGS, LINT_GRAMMAR_HELP, parseLintGrammarArgs } from '../src/commands/lint-grammar-args.js';
 import { MEASURE_MEMORY_FLAGS, MEASURE_MEMORY_HELP, parseMeasureMemoryArgs } from '../src/commands/measure-memory-args.js';
 import { MODEL_DOCS_FLAGS, MODEL_DOCS_HELP, parseModelDocsArgs } from '../src/commands/model-docs-args.js';
+import { MESSAGE_CATALOGUE_FLAGS, MESSAGE_CATALOGUE_HELP, parseMessageCatalogueArgs } from '../src/commands/message-catalogue-args.js';
 import { PROJECTS_FLAGS, PROJECTS_HELP, parseProjectsArgs } from '../src/commands/projects-args.js';
 import { QUERY_FLAGS, QUERY_HELP, parseQueryArgs } from '../src/commands/query-args.js';
 import { REFLECT_FLAGS, REFLECT_HELP, parseReflectArgs } from '../src/commands/reflect-args.js';
@@ -101,6 +102,12 @@ const COMMANDS: ReadonlyArray<{
       flags: MEASURE_MEMORY_FLAGS,
       help: MEASURE_MEMORY_HELP,
       parse: args => parseMeasureMemoryArgs(args, onError)
+   },
+   {
+      name: 'message-catalogue',
+      flags: MESSAGE_CATALOGUE_FLAGS,
+      help: MESSAGE_CATALOGUE_HELP,
+      parse: args => parseMessageCatalogueArgs(args, onError)
    },
    { name: 'model-docs', flags: MODEL_DOCS_FLAGS, help: MODEL_DOCS_HELP, parse: args => parseModelDocsArgs(args, onError) },
    { name: 'projects', flags: PROJECTS_FLAGS, help: PROJECTS_HELP, parse: args => parseProjectsArgs(args, onError) },

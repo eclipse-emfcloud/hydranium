@@ -807,3 +807,23 @@ describe('DefaultFileSystemProvider.deleteFile', () => {
       });
    }
 });
+
+describe('DefaultFileSystemProvider translated failures', () => {
+   const uri = URI.parse('memory:///a.x');
+   const cases: Array<[string, string, (provider: DefaultFileSystemProvider) => unknown]> = [
+      ['readFile', 'no-such-file', provider => provider.readFile(uri)],
+      ['readFileSync', 'no-such-file', provider => provider.readFileSync(uri)],
+      ['readBinary', 'no-such-file', provider => provider.readBinary(uri)],
+      ['readBinarySync', 'no-such-file', provider => provider.readBinarySync(uri)],
+      ['stat', 'no-such-path', provider => provider.stat(uri)],
+      ['statSync', 'no-such-path', provider => provider.statSync(uri)],
+      ['writeFile', 'unsupported-write', provider => provider.writeFile(uri, '')],
+      ['deleteFile', 'unsupported-delete', provider => provider.deleteFile(uri)]
+   ];
+   it.each(cases)('renders the declared failure from %s', async (_name, code, invoke) => {
+      const services = makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } });
+      services.MessageRenderer.renderMessage = (message, ..._params) => `translated: ${message.code}`;
+      const provider = new DefaultFileSystemProvider(services);
+      await expect(Promise.resolve().then(() => invoke(provider))).rejects.toThrow(`translated: hydranium/core/${code}`);
+   });
+});

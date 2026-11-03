@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { defineMessage } from '../../src/messages/primitives';
-import { findSharedCodes, findUndeclaredCodes, flattenCatalogue } from '../../src/testing/catalogue-audit';
+import { findMissingCodes, findSharedCodes, findUndeclaredCodes, flattenCatalogue } from '../../src/testing/catalogue-audit';
 
 const THING_MISSING = defineMessage('hydranium/one/thing-missing', "No thing named '{name}'.");
 const THING_STALE = defineMessage('hydranium/one/thing-stale', 'The thing is stale.');
@@ -125,5 +125,13 @@ describe('findSharedCodes', () => {
       // proving nothing. The caller asserts non-emptiness.
       expect(findSharedCodes([], [THING_STALE.code])).toEqual([]);
       expect(findSharedCodes([THING_STALE.code], [])).toEqual([]);
+   });
+});
+
+describe('findMissingCodes', () => {
+   it('names declarations absent from a partial catalogue across barrels', () => {
+      const other = { OWN: defineMessage('adopter/area/own', 'Ours.') };
+      expect(findMissingCodes([THING_MISSING.code], [BARREL, other, BARREL])).toEqual([THING_STALE.code, other.OWN.code]);
+      expect(findMissingCodes([THING_MISSING.code, THING_STALE.code, other.OWN.code], [BARREL, other])).toEqual([]);
    });
 });

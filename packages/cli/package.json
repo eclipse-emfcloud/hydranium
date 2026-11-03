@@ -67,6 +67,7 @@
   "dependencies": {
     "@clack/prompts": "~1.7.0",
     "commander": "^14.0.3",
+    "import-meta-resolve": "^4.2.0",
     "oxfmt": "0.71.0",
     "ts-morph": "^25.0.0"
   },

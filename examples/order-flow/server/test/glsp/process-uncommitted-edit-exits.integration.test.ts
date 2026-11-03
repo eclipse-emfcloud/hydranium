@@ -21,6 +21,7 @@ import {
 } from '@eclipse-glsp/server';
 import { DiagramStatus, type HydraniumGlspSubmissionHandler } from '@hydranium/glsp-server';
 import {
+   DIAGRAM_ACTION_FAILED,
    DIAGRAM_EDIT_DROPPED,
    DIAGRAM_EDIT_RAN_OUT,
    DIAGRAM_EDIT_UNREADABLE,
@@ -136,7 +137,7 @@ describe('the exits of an operation', () => {
             .slice(before)
             .filter(MessageAction.is)
             .map(({ severity, message, details }) => ({ severity, message, cause: details?.includes(refusal.message) ?? false }))
-      ).toEqual([{ severity: 'ERROR', message: `Could not process action: '${create.kind}`, cause: true }]);
+      ).toEqual([{ severity: 'ERROR', message: DIAGRAM_ACTION_FAILED.text, cause: true }]);
    });
 
    it('writes nothing, reverts the side effect and runs the next operation when a compound child throws after an earlier one succeeded', async () => {
@@ -281,7 +282,7 @@ describe('the exits of an operation', () => {
             .map(({ severity, message }) => ({ severity, message }))
       ).toEqual([
          { severity: 'WARNING', message: DIAGRAM_EDIT_DROPPED.text },
-         { severity: 'ERROR', message: `Could not process action: '${create.kind}` }
+         { severity: 'ERROR', message: DIAGRAM_ACTION_FAILED.text }
       ]);
    });
 

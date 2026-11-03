@@ -232,3 +232,23 @@ describe('InMemoryFileSystemProvider async misses reject', () => {
       await expect(seeded().readFile(URI.parse(`${ROOT}/alpha/one.a`))).resolves.toBe('content one');
    });
 });
+
+describe('InMemoryFileSystemProvider translated failures', () => {
+   it('renders missing-file and directory failures without losing ENOENT metadata', async () => {
+      const services = makeNoopSharedServices();
+      services.MessageRenderer.renderMessage = (message, ..._params) => `translated: ${message.code}`;
+      const files = new InMemoryFileSystemProvider(services, { rootUri: ROOT, seed: { 'dir/a.x': '' } });
+      const missing = URI.parse(`${ROOT}/missing.x`);
+      await expect(files.readFile(missing)).rejects.toMatchObject({
+         message: 'translated: hydranium/core/no-such-file',
+         code: 'ENOENT',
+         path: missing.fsPath
+      });
+      await expect(files.stat(missing)).rejects.toMatchObject({
+         message: 'translated: hydranium/core/no-such-path',
+         code: 'ENOENT',
+         path: missing.fsPath
+      });
+      await expect(files.deleteFile(URI.parse(`${ROOT}/dir`))).rejects.toThrow('translated: hydranium/core/delete-directory-refused');
+   });
+});

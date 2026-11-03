@@ -180,6 +180,6 @@ export class HydraniumLangiumDocuments extends DefaultLangiumDocuments implement
       }
       // The seam reports no loadable content, so there is nothing to read and
       // no error from a read to carry.
-      throw new Error(NO_LOADABLE_CONTENT.format({ uri: uri.toString() }));
+      throw new Error(this.services.MessageRenderer.renderMessage(NO_LOADABLE_CONTENT, { uri: uri.toString() }));
    }
 }

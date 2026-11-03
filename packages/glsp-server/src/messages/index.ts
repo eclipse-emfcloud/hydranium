@@ -49,3 +49,9 @@ export {
    SAVE_TARGET_UNKNOWN,
    SOURCE_URI_MISSING
 } from '../storage/hydranium-glsp-storage.js';
+
+export { DIAGRAM_EDIT_READONLY } from '../command/hydranium-glsp-operation-action-handler.js';
+export { DIAGRAM_ACTION_FAILED, DIAGRAM_REQUEST_FAILED } from '../launcher/hydranium-glsp-server.js';
+export { DIAGRAM_VALIDATING } from '../submission/hydranium-glsp-submission-handler.js';
+export { DIAGRAM_LOADING } from '../status/hydranium-glsp-request-model-action-handler.js';
+export { DIAGRAM_SETTLE_FAILED } from '../storage/hydranium-glsp-request-edits-settled-action-handler.js';

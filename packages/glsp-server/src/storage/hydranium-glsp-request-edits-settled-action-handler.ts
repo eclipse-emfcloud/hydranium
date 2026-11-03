@@ -19,7 +19,15 @@ import {
 } from '@eclipse-glsp/server';
 import type { ServerSharedServices } from '@hydranium/core';
 import type { AstNode } from '@hydranium/langium';
-import { EditsSettledAction, RequestEditsSettledAction, TIMED_OUT, describeError, describeErrorWithStack } from '@hydranium/protocol';
+import {
+   EditsSettledAction,
+   RequestEditsSettledAction,
+   TIMED_OUT,
+   defineMessage,
+   isResponseError,
+   describeError,
+   describeErrorWithStack
+} from '@hydranium/protocol';
 import { inject, injectable } from 'inversify';
 import { queuedDeliveriesOf } from '../command/queued-deliveries.js';
 import { HydraniumGlspServerActionDispatcher } from '../dispatcher/server-action-dispatcher.js';
@@ -27,6 +35,11 @@ import { markSettleFailureLogged, takeSettleFailureLogged } from './logged-settl
 import type { AbstractHydraniumGlspState } from '../state/abstract-hydranium-glsp-state.js';
 import { HydraniumTypes } from '../state/hydranium-shared-core-services.js';
 import { HydraniumGlspStorage } from './hydranium-glsp-storage.js';
+
+export const DIAGRAM_SETTLE_FAILED = defineMessage(
+   'hydranium/glsp-server/diagram-settle-failed',
+   'The diagram edits could not be synchronized with the text editor.'
+);
 
 /**
  * Answers a {@link RequestEditsSettledAction} with an {@link EditsSettledAction}
@@ -105,7 +118,12 @@ export class HydraniumGlspRequestEditsSettledActionHandler implements ActionHand
       } catch (error: unknown) {
          failure = { error };
          // A throw would reach nobody now; the server wraps this in its own rejection.
-         answer = RejectAction.create(describeError(error), { responseId: request.requestId });
+         answer = RejectAction.create(
+            isResponseError(error)
+               ? this.sharedServices.MessageRenderer.renderError(error)
+               : this.sharedServices.MessageRenderer.renderMessage(DIAGRAM_SETTLE_FAILED),
+            { responseId: request.requestId, detail: describeError(error) }
+         );
       }
       if (this.sessionEnded()) {
          this.logger.debug(
