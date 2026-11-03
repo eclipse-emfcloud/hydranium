@@ -9,7 +9,7 @@
  ********************************************************************************/
 
 /**
- * The comment gates. Two families, one comment extractor.
+ * The comment gates: line-comment tags, rotting pointers and unresolved links.
  *
  * ## No `{@link Target}` inside a `//` line comment
  *
@@ -72,7 +72,15 @@
  * it states the remedy instead. Strings in scripts are exempt, because the
  * tooling there operates on the pages it names.
  *
- * ## Both families
+ * ## Resolvable JSDoc links
+ *
+ * Package source ships to adopters, so a link whose target has no symbol
+ * leaves a broken pointer in their tooltips. Each build project's compiler
+ * context resolves the rightmost name of every JSDoc link. URLs and empty
+ * tags have no symbol target and are left alone. Tests, scripts and scaffold
+ * templates are outside this family because they are not package source.
+ *
+ * ## Comment extraction
  *
  * Comment ranges come from the TypeScript parser, never from a line regex. The
  * regex form of the link check — a line-anchored `//` followed by anything and
@@ -85,10 +93,13 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript-api';
+import { readExports } from './exports-map.mts';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -100,6 +111,200 @@ const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs']
  * prose names the family, and it renders as nothing either way.
  */
 const LINK_TAG = /\{@link\s+\S/;
+
+/** Resolve JSDoc names in their compiler context; a dotted target must resolve its final member. */
+function unresolvedLinks(sourceFile: ts.SourceFile, checker: ts.TypeChecker): { line: number; target: string }[] {
+   if (!sourceFile.text.includes('{@link')) return [];
+   const hits: { line: number; target: string }[] = [];
+   const walk = (node: ts.Node): void => {
+      if ((ts.isJSDocLink(node) || ts.isJSDocLinkCode(node) || ts.isJSDocLinkPlain(node)) && node.name) {
+         const name = node.name;
+         if (/^[a-z][a-z0-9+.-]*:/i.test(name.getText(sourceFile) + node.text)) return;
+         const rightmost = ts.isIdentifier(name) ? name : name.right;
+         if (!checker.getSymbolAtLocation(rightmost)) {
+            hits.push({
+               line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+               target: name.getText(sourceFile)
+            });
+         }
+      }
+      for (const child of node.getChildren(sourceFile)) walk(child);
+   };
+   walk(sourceFile);
+   return hits;
+}
+
+/** Each build tier supplies its own globals; dependencies are resolved but only package source is inspected. */
+function checkResolvedLinks(
+   files: string[],
+   root = REPO_ROOT,
+   report: (message: string) => void = console.error
+): { offences: number; checked: number } {
+   const missingDeclarations = files
+      .filter(file => /^packages\/[^/]+\/package\.json$/.test(file))
+      .flatMap(file => {
+         const manifest = JSON.parse(readFileSync(resolve(root, file), 'utf-8')) as { exports?: unknown };
+         return readExports(manifest.exports)
+            .flatMap(entry => entry.typePaths)
+            .map(path => resolve(root, dirname(file), path))
+            .filter(path => !existsSync(path));
+      });
+   if (missingDeclarations.length > 0) {
+      throw new Error(`Run npm run build:all before check:link-tags; package declarations are missing: ${missingDeclarations.join(', ')}`);
+   }
+   const sources = files.filter(
+      file => /^packages\/[^/]+\/src\//.test(file) && SOURCE_EXTENSIONS.some(ext => file.endsWith(ext)) && existsSync(resolve(root, file))
+   );
+   const remaining = new Set(sources);
+   let offences = 0;
+   for (const directory of new Set(sources.map(file => file.split('/').slice(0, 2).join('/')))) {
+      for (const config of ['tsconfig.json', 'tsconfig.browser.json']) {
+         const configPath = resolve(root, directory, config);
+         if (!existsSync(configPath)) continue;
+         const parsed = ts.getParsedCommandLineOfConfigFile(
+            configPath,
+            {},
+            {
+               ...ts.sys,
+               onUnRecoverableConfigFileDiagnostic: diagnostic => {
+                  throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
+               }
+            }
+         );
+         if (!parsed || parsed.errors.length)
+            throw new Error(
+               `Cannot read ${configPath}: ${parsed?.errors.map(error => ts.flattenDiagnosticMessageText(error.messageText, '\n')).join('\n')}`
+            );
+         const roots = new Set(parsed.fileNames.map(file => resolve(file)));
+         const covered = sources.filter(file => file.startsWith(`${directory}/`) && remaining.has(file) && roots.has(resolve(root, file)));
+         for (const file of covered) remaining.delete(file);
+         const linked = covered.filter(file => readFileSync(resolve(root, file), 'utf-8').includes('{@link'));
+         if (linked.length === 0) continue;
+         const program = ts.createProgram(parsed.fileNames, { ...parsed.options, noEmit: true });
+         const checker = program.getTypeChecker();
+         for (const file of linked) {
+            const absolute = resolve(root, file);
+            const source = program.getSourceFile(absolute);
+            if (!source) throw new Error(`Link resolution could not load package source: ${file}`);
+            for (const hit of unresolvedLinks(source, checker)) {
+               offences++;
+               report(`✗ ${file}:${hit.line}: unresolved JSDoc link ${hit.target} — use a resolvable symbol or backticks`);
+            }
+         }
+      }
+   }
+   if (sources.length === 0 || remaining.size > 0)
+      throw new Error(`Link resolution did not cover package source: ${[...remaining].join(', ') || 'no sources found'}`);
+   return { offences, checked: sources.length };
+}
+
+/** Real configs and untracked files keep discovery and tier selection on the same path as the repository scan. */
+function resolutionCoverageSelfTest(): boolean {
+   const root = mkdtempSync(resolve(tmpdir(), 'hydranium-link-coverage-'));
+   const write = (file: string, text: string): void => {
+      const path = resolve(root, file);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, text);
+   };
+   try {
+      execFileSync('git', ['init', '--quiet', root]);
+      const config = { compilerOptions: { lib: ['es2022'], types: [] }, include: ['src'], exclude: ['src/browser', 'src/excluded.ts'] };
+      for (const name of ['one', 'two', 'three']) {
+         write(`packages/${name}/tsconfig.json`, JSON.stringify(config));
+         write(
+            `packages/${name}/src/index.ts`,
+            name === 'three' ? 'export const value = 1;' : '/** {@link Missing} */\nexport const value = 1;'
+         );
+      }
+      write('packages/one/package.json', JSON.stringify({ exports: { '.': { types: './lib/index.d.ts' } } }));
+      assert.throws(() => checkResolvedLinks(listFiles(root), root, () => {}), /Run npm run build:all before check:link-tags/);
+      write('packages/one/lib/index.d.ts', 'export declare const value = 1;');
+      console.log('✓ self-test: missing package declarations require a build before resolving links');
+      write(
+         'packages/two/tsconfig.browser.json',
+         JSON.stringify({
+            compilerOptions: { lib: ['es2022', 'dom'], types: [] },
+            include: ['src/browser']
+         })
+      );
+      write('packages/two/src/browser/index.ts', '/** {@link Window} {@link MissingBrowser} */\nexport const value = 1;');
+      const messages: string[] = [];
+      const result = checkResolvedLinks(listFiles(root), root, message => messages.push(message));
+      assert.deepEqual(result, { offences: 3, checked: 4 });
+      assert.deepEqual(
+         messages.sort(),
+         [
+            '✗ packages/one/src/index.ts:1: unresolved JSDoc link Missing — use a resolvable symbol or backticks',
+            '✗ packages/two/src/index.ts:1: unresolved JSDoc link Missing — use a resolvable symbol or backticks',
+            '✗ packages/two/src/browser/index.ts:1: unresolved JSDoc link MissingBrowser — use a resolvable symbol or backticks'
+         ].sort()
+      );
+      console.log('✓ self-test: all packages and browser sources are checked with their own build configuration');
+
+      write('packages/three/src/excluded.ts', 'export const value = 1;');
+      assert.throws(() => checkResolvedLinks(listFiles(root), root, () => {}), {
+         message: 'Link resolution did not cover package source: packages/three/src/excluded.ts'
+      });
+      console.log('✓ self-test: a source excluded from both build configurations fails coverage');
+      write('packages/three/tsconfig.json', JSON.stringify({ compilerOptions: { target: 'invalid' }, include: ['src'] }));
+      assert.throws(() => checkResolvedLinks(listFiles(root), root, () => {}), /Cannot read .*tsconfig\.json/);
+      console.log('✓ self-test: an invalid build configuration fails the scan');
+      return false;
+   } catch (error) {
+      console.error('✗ SELF-TEST FAILED: JSDoc resolution coverage', error);
+      return true;
+   } finally {
+      rmSync(root, { recursive: true, force: true });
+   }
+}
+
+/** Synthetic modules exercise resolution, including imports, without adding exempt fixture files to the scan. */
+function resolutionSelfTest(): boolean {
+   const file = resolve(REPO_ROOT, 'link-resolution-probe.ts').replace(/\\/g, '/');
+   const dependency = resolve(REPO_ROOT, 'link-resolution-dependency.ts').replace(/\\/g, '/');
+   const sources = new Map([
+      [dependency, 'export interface Imported { member: string }'],
+      [
+         file,
+         [
+            "import type { Imported as Alias } from './link-resolution-dependency.js';",
+            'interface Local { member: string }',
+            '/** {@link Local} {@link Local.member} {@link Alias} {@link Alias.member}',
+            ' * {@link Missing} {@link Local.missing label} {@linkcode MissingCode} {@linkplain MissingPlain} {@link MissingLabel | https://example.com}',
+            ' * {@link ftp://example.com} {@linkcode mailto:user@example.com} {@linkplain urn:example:item}',
+            ' * {@link file:///example.ts} {@link git+ssh://example.com/repo} {@link custom.v1-test:resource} {@link FTP://example.com}',
+            ' * {@link https://example.com} {@link} */',
+            'export const value = 1;',
+            'const text = "{@link NotAComment}";',
+            '/* {@link NotJSDoc} */'
+         ].join('\n')
+      ]
+   ]);
+   const options: ts.CompilerOptions = {
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      noLib: true,
+      types: []
+   };
+   const host = ts.createCompilerHost(options);
+   const originalRead = host.readFile;
+   const originalExists = host.fileExists;
+   host.readFile = path => sources.get(path) ?? originalRead(path);
+   host.fileExists = path => sources.has(path) || originalExists(path);
+   host.getSourceFile = (path, version) => {
+      const text = host.readFile(path);
+      return text === undefined ? undefined : ts.createSourceFile(path, text, version, true);
+   };
+   const program = ts.createProgram([...sources.keys()], options, host);
+   const hits = unresolvedLinks(program.getSourceFile(file)!, program.getTypeChecker());
+   const expected = ['Missing', 'Local.missing', 'MissingCode', 'MissingPlain', 'MissingLabel'];
+   if (JSON.stringify(hits.map(hit => hit.target)) !== JSON.stringify(expected) || hits.some(hit => hit.line !== 4)) {
+      console.error(`✗ SELF-TEST FAILED: JSDoc resolution — expected ${expected.join(', ')}, got ${JSON.stringify(hits)}`);
+      return true;
+   }
+   console.log('✓ self-test: JSDoc links resolve local, member and imported names and reject missing targets');
+   return false;
+}
 
 /**
  * Every comment range in a file, keyed so a range reached by two tokens is
@@ -538,7 +743,8 @@ const TEMPLATE_SELF_TESTS = [
 ];
 
 function runSelfTests() {
-   let broken = false;
+   let broken = resolutionSelfTest();
+   broken = resolutionCoverageSelfTest() || broken;
    for (const probe of SELF_TESTS) {
       const hits = linkTagsInLineComments('self-test.ts', probe.source);
       if (hits.length > 0 === probe.flagged) {
@@ -585,9 +791,9 @@ function runSelfTests() {
 }
 
 /** Tracked and new-but-untracked files, so a bad comment is caught before it is committed. */
-function listFiles() {
+function listFiles(root = REPO_ROOT) {
    const stdout = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
-      cwd: REPO_ROOT,
+      cwd: root,
       encoding: 'utf-8',
       maxBuffer: 64 * 1024 * 1024
    });
@@ -663,7 +869,18 @@ for (const file of templates) {
    }
 }
 
-if (!failed) {
+let resolution: { offences: number; checked: number } | undefined;
+try {
+   resolution = checkResolvedLinks(files);
+   offences += resolution.offences;
+   failed ||= resolution.offences > 0;
+} catch (error) {
+   failed = true;
+   console.error(`✗ SELF-TEST FAILED: ${error instanceof Error ? error.message : String(error)}`);
+}
+
+if (!failed && resolution) {
+   console.log(`✓ JSDoc links resolve across ${resolution.checked} package source file(s)`);
    console.log(`✓ no {@link} in a // comment across ${sources.length} source file(s)`);
    console.log(`✓ no rotting pointer in a comment across ${pointerScoped.length} in-scope source file(s)`);
    console.log(`✓ no docs pointer across ${templates.length} init template(s)`);

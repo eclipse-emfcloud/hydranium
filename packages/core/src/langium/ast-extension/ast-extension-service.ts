@@ -70,7 +70,7 @@ export namespace AstExtensionPhase {
  * `ComputedScopes`), so reading a reference's `.ref` inside a `ComputedScopes`
  * callback triggers Langium's lazy lookup and returns the resolved target node.
  * A cascade rebuild does not re-run such a derivation unless
- * {@link DocumentBuilderOptions.refreshCrossDocumentComputedScopes} is set, so
+ * `DocumentBuilderOptions.refreshCrossDocumentComputedScopes` is set, so
  * one that reads another document's node goes stale when that node changes.
  *
  * **DO NOT** stage a `phase: ComputedScopes` placeholder hoping to refine it

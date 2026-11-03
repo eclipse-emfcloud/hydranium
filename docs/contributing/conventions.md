@@ -226,9 +226,12 @@ expensive. Do not write illustrative examples (they belong in `examples/`,
 where they compile), pointers to work items, docs pages, files or line numbers,
 history, or counts and inventories that go stale on the next addition.
 `check:link-tags` gates file references, work-item ids and docs pages in
-comments; a green gate is still not a swept file. TypeScript attaches only the
-last doc block above a declaration, so a second block silently documents the
-wrong thing. Test fixtures take neutral-abstract names (`TypeOne`, `Element`,
+comments and requires JSDoc link targets in `packages/*/src` to resolve. Use
+backticks when a name has no symbol in that scope. Run `npm run build:all`
+before invoking this check alone: cross-package links use built declarations.
+A green gate is still not a swept file. TypeScript attaches only the last doc
+block above a declaration, so a second block silently documents the wrong
+thing. Test fixtures take neutral-abstract names (`TypeOne`, `Element`,
 `file:///a.x`), never one domain's vocabulary.
 
 **Code that exists only for the oldest version a peer range admits opens its

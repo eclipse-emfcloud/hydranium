@@ -58,7 +58,7 @@ import { type NameProvider } from '../naming/name-provider.js';
  * - After a removal, surviving siblings need their `$containerIndex`
  *   renumbered, or a key derived afterwards addresses the wrong node.
  *
- * {@link appendChild} and {@link removeChildren} discharge both for arrays,
+ * `appendChild` and `removeChildren` discharge both for arrays,
  * and ship beside this provider because the constraint is this provider's
  * rather than any caller's. A single-valued property needs no helper: build
  * the node with its `$container` and `$containerProperty`, which

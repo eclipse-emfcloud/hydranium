@@ -197,7 +197,7 @@ export abstract class AbstractSerializer<
     *
     * Returns {@link MaybePromise} so subclasses may transparently await
     * async adopter hooks; the per-property loop in each subclass gates with
-    * {@link isPromiseLike} so sync hooks skip the microtask per
+    * `isPromiseLike` so sync hooks skip the microtask per
     * iteration.
     *
     * @param isArrayElement when `true`, the caller is producing an array
@@ -248,7 +248,7 @@ export abstract class AbstractSerializer<
     * Returns {@link MaybePromise} but does not `await` internally: each
     * dispatch branch either returns a sync value directly or returns the
     * recursive call's result verbatim. Callers (the subclass loops) gate
-    * with {@link isPromiseLike} so sync values bypass the
+    * with `isPromiseLike` so sync values bypass the
     * microtask per iteration.
     *
     * @param isArrayElement when `true`, nested nodes do not indent their first

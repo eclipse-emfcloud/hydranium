@@ -40,7 +40,7 @@
  *
  * This runs rewrite → serialize and stops. It does NOT open the document, push
  * text into the multi-client store, drive a build or return an
- * {@link AstDocument}: those need a live workspace, and a test that wants them
+ * `AstDocument`: those need a live workspace, and a test that wants them
  * should call a session's `update` itself rather than a driver standing in for
  * it. What is left is the part with no observable of its own — the text and the
  * rewritten model — which is why it needed lifting.

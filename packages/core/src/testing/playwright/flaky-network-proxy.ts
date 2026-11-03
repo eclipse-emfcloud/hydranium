@@ -78,7 +78,7 @@ interface ConnectionPair {
  *
  * Call it from a Playwright config, which runs in the main process before any
  * worker forks. Workers are separate processes and cannot reach the returned
- * object, which is what {@link controlUrl} and {@link flakyNetworkControlClient}
+ * object, which is what {@link FlakyNetworkProxy.controlUrl} and {@link flakyNetworkControlClient}
  * are for.
  */
 export async function startFlakyNetworkProxy(options: FlakyNetworkProxyOptions): Promise<FlakyNetworkProxy> {

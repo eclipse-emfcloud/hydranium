@@ -48,7 +48,7 @@ const NAMESPACED_AST_TYPE_NAME = 'AstType';
 const MERGED_EXPORT_NAME = 'astNode';
 
 /**
- * Emit a module binding {@link makeAstNodeBuilder} to a project's reflection,
+ * Emit a module binding `makeAstNodeBuilder` to a project's reflection,
  * once per grammar plus once across all of them.
  *
  * **The binding is boilerplate with exactly one degree of freedom** — the type

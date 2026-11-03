@@ -180,8 +180,8 @@ export interface SyncedWaitOptions {
  * Coordinating the primitives per-head drifts between heads — different
  * superseded-version handling, different settled-phase choices, different
  * content-change paths. The facade collapses that duplication and gives
- * adopters one extension surface — {@link rewriteModel},
- * {@link serialize} — to customise the in-process behaviour without
+ * adopters one extension surface — {@link DefaultModelService.rewriteModel},
+ * {@link DefaultModelService.serialize} — to customise the in-process behaviour without
  * re-implementing the plumbing.
  *
  * **Read-latest supersession**

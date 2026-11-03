@@ -102,7 +102,7 @@ export interface IntegrationServicesOptions<
        * `TShared` rather than over Langium's shared services.
        *
        * Both differences are the point, and neither is served by
-       * {@link extra}. Most framework shared services are constructed with
+       * `extra`. Most framework shared services are constructed with
        * no options (`ModelService: services => new DefaultModelService(services)`),
        * so rebinding the slot is the only way to boot one configured
        * differently; a caller that needs that is usually a test, and the slot
@@ -169,7 +169,7 @@ export interface IntegrationServicesOptions<
        * own module with no options
        * (`IntegrityService: services => new DefaultIntegrityService(services)`),
        * so booting one configured differently means rebinding the slot.
-       * {@link extra} serves neither half of that: it composes BEFORE
+       * `extra` serves neither half of that: it composes BEFORE
        * `adopter` and so loses every slot the adopter binds, and it is typed
        * `PartialLangiumServices`, which cannot express a framework ADDITION
        * like `IntegrityService` or `AstExtensionService` at all.

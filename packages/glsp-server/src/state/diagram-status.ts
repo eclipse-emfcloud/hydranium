@@ -11,7 +11,7 @@ import type { ProposalString, SeverityLevel } from '@eclipse-glsp/server';
 
 /**
  * Why a diagram is in a state its client has to show: the key an entry is set
- * and withdrawn under in {@link AbstractHydraniumGlspState.setStatus}.
+ * and withdrawn under in `AbstractHydraniumGlspState.setStatus`.
  *
  * Open, as GLSP's `EditMode` is: an adopter keys its own statuses with any
  * other string. Each writer withdraws only its own key, so no writer clears a

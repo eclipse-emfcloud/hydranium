@@ -327,7 +327,7 @@ export class DefaultCstResidencyService implements CstResidencyService {
     * {@link Debouncer}: re-`schedule()`d every time the document is used (rides
     * in a build batch), it fires once the document has been idle for `idleMs` and
     * sheds it. Lazily created, keyed by URI string, reused across shed/rehydrate
-    * cycles, and all cancelled by {@link dispose}.
+    * cycles, and all cancelled by {@link DefaultCstResidencyService.cancelPendingShed}.
     */
    protected readonly idleTimers = new Map<string, Debouncer>();
    /**
