@@ -95,6 +95,7 @@ describe('SingleProjectManager', () => {
    });
 
    it('isSingleProject is always true', () => {
+      // guidance-claim: scope-single-project
       const mgr = new SingleProjectManager(fakeServices([URI_A, URI_B]));
       expect(mgr.isSingleProject()).toBe(true);
    });

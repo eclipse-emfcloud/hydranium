@@ -282,6 +282,30 @@ each concern to its files** and links the guide rather than repeating it.
 word may run longer. `check:docs` fails the rest, since oxfmt does not format
 Markdown.
 
+### Agent guidance evidence
+
+`check:docs` checks guidance names and reciprocal claim/test links.
+
+A behavior claim with a test carries an HTML comment immediately before its
+paragraph, in this form:
+
+```html
+<!-- guidance-claim: unique-claim-id test=path/from/repository/root.test.ts -->
+```
+
+Inside the test that asserts it, put a line comment with the same id:
+
+```text
+// guidance-claim: unique-claim-id
+```
+
+Search the id when changing the assertion so the prose stays in step. This
+checked metadata is the exception to the ban on pointers in comments.
+
+Use the [guidance audit skill](../../.claude/skills/auditing-guidance/SKILL.md)
+for a periodic review outside the gate, particularly after dependency or
+architecture changes. It checks the prose the deterministic checks cannot.
+
 ## User-facing messages
 
 **The framework externalizes user-facing strings, ships no catalogue and

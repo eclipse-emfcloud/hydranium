@@ -20,10 +20,12 @@
  * Usage: node scripts/check-docs.mts [--write]
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkGuidance, guidanceSelfTests } from './guidance.mts';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BASELINE_FILE = 'scripts/check-docs-baseline.json';
@@ -289,6 +291,7 @@ function peersOf(page: string): string[] {
 /** Fabricated pages that must be classified one way, so a gate that stopped detecting cannot read as a clean tree. */
 function runSelfTests(): boolean {
    const probes: { name: string; passed: boolean }[] = [
+      ...guidanceSelfTests(),
       { name: 'a repeated heading gets a numbered anchor', passed: anchorsOf('# A\n## A\n').has('a-1') },
       { name: 'an em dash leaves a double hyphen', passed: anchorsOf('## Adopting — I build\n').has('adopting--i-build') },
       { name: 'a link inside a code span is not a link', passed: linksOf('see `[x](missing.md)`\n').length === 0 },
@@ -403,6 +406,26 @@ if (!INDEXES.every(index => pages.includes(index))) {
 }
 
 const texts = new Map(pages.map(page => [page, readFileSync(join(REPO_ROOT, page), 'utf-8')]));
+const treeFiles = [
+   ...new Set(
+      execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
+         cwd: REPO_ROOT,
+         encoding: 'utf8'
+      })
+         .split('\0')
+         .filter(file => file && existsSync(join(REPO_ROOT, file)))
+   )
+];
+for (const error of checkGuidance(texts, treeFiles, REPO_ROOT)) {
+   failed = true;
+   console.error(`✗ ${error}`);
+}
+try {
+   await promisify(execFile)(process.execPath, ['--test', 'scripts/guidance-console.test.mts'], { cwd: REPO_ROOT, timeout: 45_000 });
+} catch (error) {
+   failed = true;
+   console.error('✗ guidance console probe failed', error);
+}
 const anchorCache = new Map<string, Set<string>>();
 const linkGraph = new Map<string, string[]>();
 let checkedLinks = 0;

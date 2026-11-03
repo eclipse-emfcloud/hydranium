@@ -34,30 +34,13 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseSync } from 'oxc-parser';
+import { readCalleeChain, TEST_MODIFIERS, TEST_ROOTS } from './test-callees.mts';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'];
 
 /** Leading words that are names but no identifier in this repository declares. */
 const NAME_ALLOWLIST = ['Save All', 'LSP', 'Ctrl+', 'Monaco', 'GLSP', 'CRLF', 'CommentProvider'];
-
-const TITLED = new Set(['describe', 'suite', 'it', 'test']);
-const MODIFIERS = new Set([
-   'describe',
-   'skip',
-   'only',
-   'concurrent',
-   'sequential',
-   'todo',
-   'fails',
-   'each',
-   'for',
-   'skipIf',
-   'runIf',
-   'serial',
-   'parallel',
-   'fixme'
-]);
 
 /** Expressions that wrap a callee without changing which function it is. */
 const WRAPPERS = new Set(['ParenthesizedExpression', 'TSAsExpression', 'TSSatisfiesExpression', 'TSNonNullExpression', 'ChainExpression']);
@@ -112,26 +95,15 @@ function visit(node: unknown, onNode: (node: AstNode) => void): void {
 
 /** `describe.skip.each(table)` as `['describe', 'skip', 'each']`; undefined for anything else. */
 function calleeChain(callee: AstNode | undefined): string[] | undefined {
-   const parts: string[] = [];
-   let node = callee;
-   while (node) {
-      if (node.type === 'MemberExpression' && !node.computed && typeof node.property?.name === 'string') {
-         parts.unshift(node.property.name);
-         node = node.object;
-      } else if (node.type === 'CallExpression') {
-         node = node.callee;
-      } else if (node.type === 'TaggedTemplateExpression') {
-         node = node.tag;
-      } else if (WRAPPERS.has(String(node.type))) {
-         node = node.expression;
-      } else if (node.type === 'Identifier' && typeof node.name === 'string') {
-         parts.unshift(node.name);
-         return parts;
-      } else {
-         return undefined;
-      }
-   }
-   return undefined;
+   return readCalleeChain(callee, node => {
+      if (node.type === 'MemberExpression' && !node.computed && typeof node.property?.name === 'string' && node.object)
+         return { kind: 'member', name: node.property.name, object: node.object };
+      if (node.type === 'CallExpression' && node.callee) return { kind: 'call', callee: node.callee, arguments: node.arguments ?? [] };
+      if (node.type === 'TaggedTemplateExpression' && node.tag) return { kind: 'tag', tag: node.tag };
+      if (WRAPPERS.has(String(node.type)) && node.expression) return { kind: 'wrapper', expression: node.expression };
+      if (node.type === 'Identifier' && typeof node.name === 'string') return { kind: 'identifier', name: node.name };
+      return undefined;
+   })?.map(part => part.name);
 }
 
 function titleText(node: AstNode | undefined): string | undefined {
@@ -171,7 +143,7 @@ export function scanFile(fileName: string, text: string): { titles: Title[]; nam
       if (node.callee?.type === 'MemberExpression' && ['each', 'for', 'skipIf', 'runIf'].includes(String(node.callee.property?.name)))
          return;
       const chain = calleeChain(node.callee);
-      if (!chain || !TITLED.has(chain[0]) || !chain.slice(1).every(part => MODIFIERS.has(part))) return;
+      if (!chain || !TEST_ROOTS.has(chain[0]) || !chain.slice(1).every(part => TEST_MODIFIERS.has(part))) return;
       const text = titleText(node.arguments?.[0]);
       if (text === undefined) {
          unread++;

@@ -6,12 +6,13 @@ paths:
 
 # Test files
 
-Instrument a test with `process.stderr.write`, not `console.*`. Vitest prints
-a test's console output only when that test fails, under whichever test was
-running when the line was written, so a line from a passing test never shows
-and a late one lands under the wrong test. Stderr prints whether the test
-passes or fails, though a line written after the file's last test has ended
-is lost either way.
+<!-- guidance-claim: vitest-console-output test=scripts/guidance-console.test.mts -->
+
+With the shared configuration, Vitest prints console output from passing
+and failing tests. A command that sets `--silent` can suppress it. Use
+`process.stderr.write` when a diagnostic must bypass console capture, and
+write it while the test is still running. Do not infer which asynchronous
+operation produced a line from the test name the runner prints above it.
 
 A type-level guarantee goes in a `*.types.test.ts` file: each refusal is a
 `@ts-expect-error`, which `typecheck:test` fails when it goes unused, and each
