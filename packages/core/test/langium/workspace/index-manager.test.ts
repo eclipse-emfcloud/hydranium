@@ -12,7 +12,7 @@ import { Disposable } from '@hydranium/protocol';
 import { type AstNode, type AstNodeDescription, type AstNodeLocator, type AstReflection, type LangiumDocument } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
 import type { ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
-import { HydraniumIndexManager } from '../../../src/langium/workspace/index-manager.js';
+import { DefaultHydraniumIndexManager } from '../../../src/langium/workspace/index-manager.js';
 import { makeFakeAstNode, makeNoopSharedServices, makeStubServiceRegistry } from '../../../src/testing/index.js';
 
 const URI_A = URI.parse('memory:///doc-a.a');
@@ -74,7 +74,7 @@ function makeServices(
  * Test subclass that exposes the symbolIndex so we can seed it without
  * going through the full Langium build pipeline.
  */
-class TestIndexManager extends HydraniumIndexManager {
+class TestIndexManager extends DefaultHydraniumIndexManager {
    seedSymbols(uri: URI, descriptions: AstNodeDescription[]): void {
       this.symbolIndex.set(uri.toString(), descriptions);
    }
@@ -92,7 +92,7 @@ class TestIndexManager extends HydraniumIndexManager {
    }
 }
 
-describe('HydraniumIndexManager', () => {
+describe('DefaultHydraniumIndexManager', () => {
    describe('elementsByName maintenance', () => {
       it('addToElementsByName collects names from symbolIndex', () => {
          const manager = new TestIndexManager(makeServices(makeAstReflection()));
@@ -264,7 +264,7 @@ describe('HydraniumIndexManager', () => {
          const stubDocument = { parseResult: { value: root } } as unknown as LangiumDocument;
          const services = makeServices(makeAstReflection());
          (services.workspace.LangiumDocuments.getDocument as unknown as () => LangiumDocument | undefined) = () => stubDocument;
-         class SubclassManager extends HydraniumIndexManager {
+         class SubclassManager extends DefaultHydraniumIndexManager {
             protected override findSemanticRoot(document: LangiumDocument): AstNode {
                return (document.parseResult.value as unknown as { inner: AstNode }).inner;
             }

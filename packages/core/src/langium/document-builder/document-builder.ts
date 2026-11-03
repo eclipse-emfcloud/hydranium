@@ -18,6 +18,7 @@ import {
    describeErrorWithStack
 } from '@hydranium/protocol';
 import {
+   type DocumentBuilder,
    type AstNode,
    type BuildOptions,
    DefaultDocumentBuilder,
@@ -43,7 +44,7 @@ import { type LogNameOptions } from '../diagnostics/logger.js';
 import { IntegrityService } from '../integrity/integrity-service.js';
 import type { MessageRenderer } from '../../messages/renderer.js';
 import { CST_REHYDRATION_RESET_STATE, type CstResidencyService, isCstShed } from '../residency/cst-residency-service.js';
-import { type ExtendedServiceRegistry } from '../service-registry.js';
+import { type HydraniumServiceRegistry } from '../service-registry.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { type DocumentUriPolicy } from '../workspace/document-uri-policy.js';
 import { HydraniumWorkspaceLock } from '../workspace/hydranium-workspace-lock.js';
@@ -80,7 +81,7 @@ export const HYDRANIUM_BUILD_REASONS = Object.freeze({
 
 /**
  * Consecutive re-queued builds that leave a waited-on document at the same state
- * before {@link HydraniumDocumentBuilder.awaitDocumentState} stops re-queuing it.
+ * before {@link DefaultHydraniumDocumentBuilder.awaitDocumentState} stops re-queuing it.
  * A backstop against spinning builds for a document the builder will never carry
  * to the requested state, not a tuning knob — the first re-queue resolves the
  * case this exists for.
@@ -198,7 +199,7 @@ export type BuildEndedListener = (event: BuildEndedEvent) => void;
 /** Registered through {@link HydraniumDocumentBuilder.onDocumentPhaseDelivered}. */
 export type DocumentPhaseDeliveredListener = (document: LangiumDocument, version: number) => void;
 
-/** A wait {@link HydraniumDocumentBuilder.awaitBuilderState} holds until the builder reaches its state. */
+/** A wait {@link DefaultHydraniumDocumentBuilder.awaitBuilderState} holds until the builder reaches its state. */
 export interface BuilderStateWait {
    readonly state: DocumentState;
    /** Settles the wait and stops holding it. */
@@ -241,6 +242,31 @@ function sameClients(taken: readonly string[] | undefined, current: readonly str
    return taken !== undefined && taken.length === current.length && taken.every((client, i) => client === current[i]);
 }
 
+export interface HydraniumDocumentBuilder extends DocumentBuilder {
+   markNextReason(reason: string | undefined): void;
+   onDocumentPhaseDelivered(state: DocumentState, listener: DocumentPhaseDeliveredListener): Disposable;
+   onBuildEnded(listener: BuildEndedListener): Disposable;
+   isInsideBuildUpdate(): boolean;
+   readonly activeBuild: Promise<void> | undefined;
+   formatBuildStatus(uri: URI): string;
+   finalBuildState(): DocumentState;
+   shouldValidateDocument(document: LangiumDocument): boolean;
+   waitUntil(state: DocumentState, cancelToken?: CancellationToken): Promise<void>;
+   waitUntil(state: DocumentState, uri?: URI, cancelToken?: CancellationToken, options?: WaitUntilOptions): Promise<URI>;
+   scheduleUpdate(changed: URI[], deleted: URI[], reason?: string): Promise<void>;
+   buildForBatch(documents: readonly LangiumDocument[]): RunningBuild | undefined;
+   relinkInRunningBuild(document: LangiumDocument, cause: LangiumDocument, cancelToken: CancellationToken): Promise<boolean>;
+   reparse(document: LangiumDocument, cancelToken?: CancellationToken): Promise<void>;
+   reparseAndRelink(document: LangiumDocument, cancelToken?: CancellationToken): Promise<void>;
+   notifyDocumentPhase(document: LangiumDocument, state: DocumentState, cancelToken: CancellationToken): Promise<void>;
+   notifyBuildPhase(
+      documents: LangiumDocument[],
+      state: DocumentState,
+      cancelToken: CancellationToken,
+      build?: RunningBuild
+   ): Promise<void>;
+}
+
 /**
  * Extends Langium's {@link DefaultDocumentBuilder} with:
  *
@@ -279,7 +305,7 @@ function sameClients(taken: readonly string[] | undefined, current: readonly str
  * overrides {@link createBuildSession}, which puts that state under the same
  * preemption-correct teardown rather than a reimplementation of it.
  */
-export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
+export class DefaultHydraniumDocumentBuilder extends DefaultDocumentBuilder implements HydraniumDocumentBuilder {
    protected readonly tracer: Tracer;
    /** Plain — read once at construction to gate phase-listener registration. */
    protected readonly logLevel: LogThreshold;
@@ -300,10 +326,10 @@ export class HydraniumDocumentBuilder extends DefaultDocumentBuilder {
    protected readonly workspaceLock: WorkspaceLock;
    /** The latest write {@link scheduleUpdate} queued, until it ends; see {@link ScheduledUpdate}. */
    protected scheduledUpdate?: ScheduledUpdate;
-   /** Narrower handle on the same registry as the inherited `serviceRegistry`, for {@link ExtendedServiceRegistry.registrations}. */
-   protected readonly languageRegistry: ExtendedServiceRegistry;
+   /** Narrower handle on the same registry as the inherited `serviceRegistry`, for {@link HydraniumServiceRegistry.registrations}. */
+   protected readonly languageRegistry: HydraniumServiceRegistry;
    protected languageFileExtensions: string[] = [];
-   /** {@link ExtendedServiceRegistry.registrations} {@link languageFileExtensions} was built at; `-1` until first built. */
+   /** {@link HydraniumServiceRegistry.registrations} {@link languageFileExtensions} was built at; `-1` until first built. */
    protected cachedRegistrations = -1;
    /** Running since the last phase was reached, or since the active build started. */
    protected sinceLastPhase?: Stopwatch;

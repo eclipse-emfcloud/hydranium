@@ -36,7 +36,7 @@ import { DocumentState, type LangiumDocument, URI } from '@hydranium/langium';
 import { Disposable } from '@hydranium/protocol';
 import { makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
 import { LANGUAGE_CLIENT_ID } from '../../../src/documents/client-ids.js';
-import { HydraniumTextDocuments } from '../../../src/documents/hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments, type HydraniumTextDocuments } from '../../../src/documents/hydranium-text-documents.js';
 import type { ServerSharedServices } from '../../../src/langium/module.js';
 import { DefaultCstResidencyService } from '../../../src/langium/residency/cst-residency-service.js';
 import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
@@ -104,7 +104,7 @@ function makeComposition(): Composition {
 
    services.workspace.VersionSyncService = new DefaultVersionSyncService(services);
    services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);
-   const docs = new HydraniumTextDocuments<TextDocument>(services);
+   const docs = new DefaultHydraniumTextDocuments<TextDocument>(services);
    // The store is itself a workspace service — close the self-reference so the
    // residency service reads the SAME real instance.
    Object.assign(services.workspace, { TextDocuments: docs });

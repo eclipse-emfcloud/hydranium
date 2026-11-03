@@ -263,7 +263,7 @@ function sameGrammarValue(value: unknown, freshValue: unknown): boolean {
  * **Re-entry is safe.** A shed document that later re-enters a build has its
  * CST and every `$refNode` grafted back first ("rehydrate-on-re-entry"),
  * keeping its AST nodes so dependents outside the build stay linked to them.
- * `HydraniumDocumentBuilder.rehydrateShedDocuments` grafts a document that is
+ * `DefaultHydraniumDocumentBuilder.rehydrateShedDocuments` grafts a document that is
  * relinked or re-validated, before the build's phases, and
  * `HydraniumLangiumDocumentFactory.update` one reset to `Changed` whose text
  * has not changed. An edited document is re-parsed, and so is one whose graft

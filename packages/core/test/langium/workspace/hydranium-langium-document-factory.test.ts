@@ -12,7 +12,10 @@ import { type AstNode, DefaultLinker, type LangiumCoreServices, type MultiRefere
 import { DefaultModelLedger } from '../../../src/documents/model-ledger.js';
 import { DefaultVersionSyncService } from '../../../src/documents/version-sync-service.js';
 import type { ServerSharedServices } from '../../../src/langium/module.js';
-import { HydraniumLangiumDocumentFactory } from '../../../src/langium/workspace/hydranium-langium-document-factory.js';
+import {
+   DefaultHydraniumLangiumDocumentFactory,
+   type HydraniumLangiumDocumentFactory
+} from '../../../src/langium/workspace/hydranium-langium-document-factory.js';
 import { makeFakeAstNode, makeNoopTracer } from '../../../src/testing/index.js';
 
 interface NamedNode extends AstNode {
@@ -46,7 +49,7 @@ function factoryWith(serializeAst?: (node: AstNode) => string): HydraniumLangium
       }
    } as unknown as ServerSharedServices;
    services.workspace.VersionSyncService = new DefaultVersionSyncService(services);
-   return new HydraniumLangiumDocumentFactory(services);
+   return new DefaultHydraniumLangiumDocumentFactory(services);
 }
 
 const model = makeFakeAstNode<NamedNode>({ $type: 'Container', name: 'std' });
@@ -58,7 +61,7 @@ function makeTree(): { root: AstNode; child: AstNode } {
    return { root, child };
 }
 
-describe('HydraniumLangiumDocumentFactory.fromModel', () => {
+describe('DefaultHydraniumLangiumDocumentFactory.fromModel', () => {
    it('keeps the original model as the AST (identity preserved)', () => {
       const factory = factoryWith(node => `serialized:${(node as NamedNode).name}`);
       const doc = factory.fromModel(model, URI.parse('virtual:x'));

@@ -9,7 +9,7 @@ and how text, AST and transfer form relate in
 ## One store, one manager
 
 The core is
-[`HydraniumTextDocuments`](../../../packages/core/src/documents/hydranium-text-documents.ts),
+[`DefaultHydraniumTextDocuments`](../../../packages/core/src/documents/hydranium-text-documents.ts),
 the one text store every head writes to and the LSP text-sync endpoint: the
 editor's `textDocument/*` notifications arrive there directly. The non-textual
 heads open, update and save documents in AST terms through

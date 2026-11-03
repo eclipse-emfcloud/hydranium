@@ -14,7 +14,7 @@
  * Every other suite here boots through `initializeWorkspaceProgrammatically`
  * over `examples/order-flow/workspace`, so the stdlib always arrives beside the
  * model files a folder walk found. `initializeWorkspace([])` is the other branch
- * of `HydraniumWorkspaceManager.loadAdditionalDocuments`: no folders, no
+ * of `DefaultHydraniumWorkspaceManager.loadAdditionalDocuments`: no folders, no
  * traversal, and therefore no projects — the contribution is the ONLY thing that
  * puts a document in the workspace. That is the state of a client with no folder
  * open, and the branch `AdditionalDocumentRegistry.folders` exists to serve.

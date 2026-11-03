@@ -17,7 +17,7 @@
  * one way a server sets it, so that a test can outlast it.
  */
 
-import { HydraniumTextDocuments, INTEGRITY_CLIENT_ID, DOCUMENT_RELEASE_CLIENT_ID, type ServerSharedServices } from '@hydranium/core';
+import { DefaultHydraniumTextDocuments, INTEGRITY_CLIENT_ID, DOCUMENT_RELEASE_CLIENT_ID, type ServerSharedServices } from '@hydranium/core';
 import { DataServer } from '@hydranium/data-server';
 import { makeDataServerHarness, type DataServerHarness } from '@hydranium/data-server/testing';
 import { DocumentState, URI } from '@hydranium/langium';
@@ -74,7 +74,11 @@ async function boot(releaseGraceMs?: number): Promise<Booted> {
          ? {}
          : {
               extraSharedModules: [
-                 { workspace: { TextDocuments: (shared: ServerSharedServices) => new HydraniumTextDocuments(shared, { releaseGraceMs }) } }
+                 {
+                    workspace: {
+                       TextDocuments: (shared: ServerSharedServices) => new DefaultHydraniumTextDocuments(shared, { releaseGraceMs })
+                    }
+                 }
               ]
            }
    );

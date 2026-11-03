@@ -222,7 +222,7 @@ export class DefaultBuildPipelineIntegration implements BuildPipelineIntegration
    /**
     * Keep `document`'s local symbols for the root they were computed for. A
     * rebuild clears and re-keys `document.localSymbols`, and
-    * `HydraniumScopeProvider.localSymbolsOf` answers a node of the old root
+    * `DefaultHydraniumScopeProvider.localSymbolsOf` answers a node of the old root
     * from what this kept.
     */
    protected recordLocalSymbols(document: LangiumDocument): void {

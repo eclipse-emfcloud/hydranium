@@ -12,7 +12,12 @@ import { type AstNode, type LangiumCoreServices, type LangiumSharedCoreServices 
 import { URI } from '@hydranium/langium';
 import { createServerSharedModule, type ServerModuleContext } from '../../src/langium/module.js';
 import { makeFakeAstNode } from '../../src/testing/fake-document.js';
-import { ExtendedServiceRegistry, type TypedLanguageMetaData, typedMetadata } from '../../src/langium/service-registry.js';
+import {
+   DefaultHydraniumServiceRegistry,
+   type HydraniumServiceRegistry,
+   type TypedLanguageMetaData,
+   typedMetadata
+} from '../../src/langium/service-registry.js';
 
 interface AlphaServices extends LangiumCoreServices {
    readonly tag: 'alpha';
@@ -45,9 +50,9 @@ const BetaMeta = typedMetadata<BetaServices>({
    mode: 'production'
 });
 
-describe('ExtendedServiceRegistry', () => {
+describe('DefaultHydraniumServiceRegistry', () => {
    it('getServices(metadata) returns the registered services typed by the handle', () => {
-      const registry = new ExtendedServiceRegistry();
+      const registry = new DefaultHydraniumServiceRegistry();
       const alpha = makeServices<AlphaServices>('alpha', 'alpha', ['.a']);
       registry.register(alpha);
 
@@ -57,13 +62,13 @@ describe('ExtendedServiceRegistry', () => {
    });
 
    it('getServices(metadata) returns undefined for an unregistered language', () => {
-      const registry = new ExtendedServiceRegistry();
+      const registry = new DefaultHydraniumServiceRegistry();
       registry.register(makeServices<AlphaServices>('alpha', 'alpha', ['.a']));
       expect(registry.getServices(BetaMeta)).toBeUndefined();
    });
 
    it('getServices(uri) preserves Langium inherited URI-keyed semantics', () => {
-      const registry = new ExtendedServiceRegistry();
+      const registry = new DefaultHydraniumServiceRegistry();
       const alpha = makeServices<AlphaServices>('alpha', 'alpha', ['.a']);
       registry.register(alpha);
 
@@ -72,7 +77,7 @@ describe('ExtendedServiceRegistry', () => {
    });
 
    it('getServicesById returns the language services for the given id, undefined for unregistered', () => {
-      const registry = new ExtendedServiceRegistry();
+      const registry = new DefaultHydraniumServiceRegistry();
       const alpha = makeServices<AlphaServices>('alpha', 'alpha', ['.a']);
       registry.register(alpha);
       expect(registry.getServicesById('alpha')).toBe(alpha);
@@ -80,23 +85,23 @@ describe('ExtendedServiceRegistry', () => {
    });
 
    it('getServicesByExtension returns the language services for the given extension', () => {
-      const registry = new ExtendedServiceRegistry();
+      const registry = new DefaultHydraniumServiceRegistry();
       const alpha = makeServices<AlphaServices>('alpha', 'alpha', ['.a']);
       registry.register(alpha);
       expect(registry.getServicesByExtension('.a')).toBe(alpha);
       expect(registry.getServicesByExtension('.unknown')).toBeUndefined();
    });
 
-   it('createServerSharedModule binds ServiceRegistry to an ExtendedServiceRegistry instance', () => {
+   it('createServerSharedModule binds ServiceRegistry to a DefaultHydraniumServiceRegistry instance', () => {
       const module = createServerSharedModule({} as ServerModuleContext);
       // `Module<I, T>` types each slot as the recursively-mapped module value
       // (factory-or-nested-module union), so TS can't see that this leaf slot is
       // directly callable. The runtime value is a `(injector) => registry` factory.
       const serviceRegistryFactory = module.ServiceRegistry as unknown as (
          injector: LangiumCoreServices['shared']
-      ) => ExtendedServiceRegistry;
+      ) => HydraniumServiceRegistry;
       const registry = serviceRegistryFactory({} as LangiumCoreServices['shared']);
-      expect(registry).toBeInstanceOf(ExtendedServiceRegistry);
+      expect(registry).toBeInstanceOf(DefaultHydraniumServiceRegistry);
    });
 
    describe('declared-languageId lookup rung', () => {
@@ -114,8 +119,8 @@ describe('ExtendedServiceRegistry', () => {
          } as unknown as LangiumSharedCoreServices;
       }
 
-      function twoLanguages(shared?: LangiumSharedCoreServices): ExtendedServiceRegistry {
-         const registry = new ExtendedServiceRegistry(shared);
+      function twoLanguages(shared?: LangiumSharedCoreServices): HydraniumServiceRegistry {
+         const registry = new DefaultHydraniumServiceRegistry(shared);
          registry.register(makeServices<AlphaServices>('alpha', 'alpha', ['.a']));
          registry.register(makeServices<BetaServices>('beta', 'beta', ['.b']));
          return registry;
@@ -156,8 +161,8 @@ describe('ExtendedServiceRegistry', () => {
    });
 
    describe('servicesFor per-target lookup', () => {
-      function twoLanguages(): ExtendedServiceRegistry {
-         const registry = new ExtendedServiceRegistry();
+      function twoLanguages(): HydraniumServiceRegistry {
+         const registry = new DefaultHydraniumServiceRegistry();
          registry.register(makeServices<AlphaServices>('alpha', 'first', ['.one']));
          registry.register(makeServices<BetaServices>('beta', 'second', ['.two']));
          return registry;
@@ -203,7 +208,7 @@ describe('ExtendedServiceRegistry', () => {
       }
 
       it('returns every owner of a type, so the caller can tell none from several', () => {
-         const registry = new ExtendedServiceRegistry();
+         const registry = new DefaultHydraniumServiceRegistry();
          registry.register(producing('alpha', 'TypeOne', 'SharedType'));
          registry.register(producing('beta', 'TypeTwo', 'SharedType'));
 
@@ -213,7 +218,7 @@ describe('ExtendedServiceRegistry', () => {
       });
 
       it('soleServicesByType abstains on both no-owner and several-owners', () => {
-         const registry = new ExtendedServiceRegistry();
+         const registry = new DefaultHydraniumServiceRegistry();
          registry.register(producing('alpha', 'TypeOne', 'SharedType'));
          registry.register(producing('beta', 'TypeTwo', 'SharedType'));
 
@@ -225,7 +230,7 @@ describe('ExtendedServiceRegistry', () => {
       it('accounts for a language registered after the index was first built', () => {
          // The reason this index lives on the registry rather than in a
          // consumer's private memo: only the registry knows the set changed.
-         const registry = new ExtendedServiceRegistry();
+         const registry = new DefaultHydraniumServiceRegistry();
          registry.register(producing('alpha', 'SharedType'));
          expect(registry.soleServicesByType('SharedType')?.LanguageMetaData.languageId).toBe('alpha');
 
@@ -235,8 +240,8 @@ describe('ExtendedServiceRegistry', () => {
       });
 
       describe('getLanguageFor', () => {
-         function twoLanguages(): ExtendedServiceRegistry {
-            const registry = new ExtendedServiceRegistry();
+         function twoLanguages(): HydraniumServiceRegistry {
+            const registry = new DefaultHydraniumServiceRegistry();
             registry.register(producing('alpha', 'TypeOne', 'SharedType'));
             registry.register(producing('beta', 'TypeTwo', 'SharedType'));
             return registry;
@@ -253,7 +258,7 @@ describe('ExtendedServiceRegistry', () => {
          });
 
          it('answers the only registered language for any hint, and abstains on an ambiguous type', () => {
-            const single = new ExtendedServiceRegistry();
+            const single = new DefaultHydraniumServiceRegistry();
             single.register(producing('alpha', 'TypeOne'));
 
             expect(idOf(single.getLanguageFor({ target: 'file:///dir', type: 'UnknownType' }))).toBe('alpha');
@@ -265,7 +270,7 @@ describe('ExtendedServiceRegistry', () => {
 
    describe('registrations', () => {
       it('counts every register call', () => {
-         const registry = new ExtendedServiceRegistry();
+         const registry = new DefaultHydraniumServiceRegistry();
          expect(registry.registrations).toBe(0);
          registry.register(makeServices<AlphaServices>('alpha', 'alpha', ['.a']));
          registry.register(makeServices<BetaServices>('beta', 'beta', ['.b']));
@@ -279,7 +284,7 @@ describe('ExtendedServiceRegistry', () => {
          // set and keyed on the length would keep the replaced language's
          // metadata. The document builder's file-extension cache keys on this
          // counter for exactly that reason.
-         const registry = new ExtendedServiceRegistry();
+         const registry = new DefaultHydraniumServiceRegistry();
          registry.register(makeServices<AlphaServices>('alpha', 'alpha', ['.a']));
          const lengthBefore = registry.all.length;
          const countBefore = registry.registrations;

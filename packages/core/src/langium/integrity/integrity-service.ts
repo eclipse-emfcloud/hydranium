@@ -27,7 +27,7 @@ import { type HydraniumTextDocuments } from '../../documents/hydranium-text-docu
 import { Registry } from '../../util/registry.js';
 import { type ServerLanguageServices } from '../language-module.js';
 import { type ServerSharedServices } from '../module.js';
-import { type ExtendedServiceRegistry } from '../service-registry.js';
+import { type HydraniumServiceRegistry } from '../service-registry.js';
 import { hasSkippedText } from '../workspace/syntax-errors.js';
 import { isVirtualUri } from '../workspace/virtual-document.js';
 import { type IntegrityRuleRegistry } from './integrity-contribution.js';
@@ -766,7 +766,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
                await this.reenforce(dependent, document, run);
             }
             if (reread) {
-               const registry: ExtendedServiceRegistry<ServerLanguageServices> = this.services.shared.ServiceRegistry;
+               const registry: HydraniumServiceRegistry<ServerLanguageServices> = this.services.shared.ServiceRegistry;
                const service = registry.getServices(dependent.uri).integrity.IntegrityService;
                // Through its own language's service, which holds its once-guards and rules.
                await (service instanceof DefaultIntegrityService ? service : this).relinkDependents(dependent, run);
@@ -838,7 +838,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     */
    protected async reenforce(dependent: LangiumDocument, repaired: LangiumDocument, run: IntegrityRun): Promise<void> {
       // Read through the registry's server type, which the intersected `shared` type hides.
-      const registry: ExtendedServiceRegistry<ServerLanguageServices> = this.services.shared.ServiceRegistry;
+      const registry: HydraniumServiceRegistry<ServerLanguageServices> = this.services.shared.ServiceRegistry;
       const service = registry.getServices(dependent.uri).integrity.IntegrityService;
       // Another implementation keeps no bound this service can read, so this one's applies.
       const maxRepeatRepairs = service instanceof DefaultIntegrityService ? service.maxRepeatRepairs : this.maxRepeatRepairs;

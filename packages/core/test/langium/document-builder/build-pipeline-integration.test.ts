@@ -223,7 +223,7 @@ type IntegrityCalls = Array<{ documents: readonly LangiumDocument[]; phase: Docu
  * to language A. Each language owns its own IntegrityService recorder plus the
  * ast + validation slots the constructor and routing helper touch.
  *
- * Routing goes through a real `ExtendedServiceRegistry`
+ * Routing goes through a real `HydraniumServiceRegistry`
  * ({@link makeStubServiceRegistry}), so the grouping under test is driven by
  * the same extension lookup a booted two-grammar server uses.
  */

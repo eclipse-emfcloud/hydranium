@@ -8,7 +8,7 @@
  ********************************************************************************/
 
 /**
- * `HydraniumLangiumDocuments` against three real grammars, booted as a server
+ * `DefaultHydraniumLangiumDocuments` against three real grammars, booted as a server
  * rather than stubbed, so the reporting a caller actually sees is what is
  * asserted.
  *
@@ -19,7 +19,7 @@ import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { URI } from '@hydranium/langium';
 import { afterEach, describe, expect, it } from 'vitest';
-import { HydraniumLangiumDocuments } from '@hydranium/core';
+import { DefaultHydraniumLangiumDocuments } from '@hydranium/core';
 import { DomainLanguageMetaData, ProcessLanguageMetaData } from '../src/language-server/generated/module.js';
 import { makeScratchWorkspaceHarness, makeServices, type ScratchOrderFlowHarness } from './order-flow-harness.js';
 
@@ -31,7 +31,7 @@ function absentUri(extension: string): URI {
 describe('LangiumDocuments over three real grammars', () => {
    it('is the framework default, so a server gets it without binding anything', () => {
       const { shared } = makeServices();
-      expect(shared.workspace.LangiumDocuments).toBeInstanceOf(HydraniumLangiumDocuments);
+      expect(shared.workspace.LangiumDocuments).toBeInstanceOf(DefaultHydraniumLangiumDocuments);
    });
 
    it('rejects for a file that is not there, whichever grammar claims the extension', async () => {

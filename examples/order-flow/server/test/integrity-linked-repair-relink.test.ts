@@ -24,7 +24,7 @@ import {
    DefaultBuildPipelineIntegration,
    DefaultBuildPhasePassService,
    DefaultIntegrityService,
-   HydraniumDocumentBuilder,
+   DefaultHydraniumDocumentBuilder,
    type IntegrityRule,
    type BuildPhasePass,
    type RunningBuild,
@@ -676,7 +676,7 @@ describe('a Linked-phase integrity repair', () => {
          extraSharedModules: [
             {
                workspace: {
-                  DocumentBuilder: services => new HydraniumDocumentBuilder(services, { refreshCrossDocumentComputedScopes: true })
+                  DocumentBuilder: services => new DefaultHydraniumDocumentBuilder(services, { refreshCrossDocumentComputedScopes: true })
                }
             }
          ]
@@ -1254,7 +1254,7 @@ describe('a Linked-phase integrity repair', () => {
    ] as const)("keeps a tokenless batch's owner at %s while another build of the same document completes", async (_label, phase, pass) => {
       const rule = renameRule();
       rule.armed = false;
-      class CopyingBuilder extends HydraniumDocumentBuilder {
+      class CopyingBuilder extends DefaultHydraniumDocumentBuilder {
          protected override async runCancelable(
             documents: LangiumDocument[],
             state: DocumentState,
@@ -1449,7 +1449,7 @@ describe('a Linked-phase integrity repair', () => {
          rule.armed = false;
          const transform = (documents: readonly LangiumDocument[]): readonly LangiumDocument[] =>
             shape === 'filter' ? documents.filter(document => document.uri.path.endsWith('.domain')) : [...documents];
-         class WrappedBuilder extends HydraniumDocumentBuilder {
+         class WrappedBuilder extends DefaultHydraniumDocumentBuilder {
             override async notifyBuildPhase(
                documents: LangiumDocument[],
                phase: DocumentState,

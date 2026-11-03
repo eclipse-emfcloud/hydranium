@@ -28,7 +28,7 @@ import {
 } from 'vscode-languageserver-protocol/node';
 import type { TextDocument } from 'vscode-languageserver-textdocument';
 import type { ServerSharedServices } from '../../src/langium/module.js';
-import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments, type HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { DefaultFileSystemTaskQueue } from '../../src/documents/file-system-task-queue.js';
 import { DefaultModelLedger } from '../../src/documents/model-ledger.js';
@@ -50,7 +50,7 @@ class InspectableScheduler extends DefaultDocumentReleaseScheduler {
    }
 }
 
-class InspectableTextDocuments extends HydraniumTextDocuments<TextDocument> {
+class InspectableTextDocuments extends DefaultHydraniumTextDocuments<TextDocument> {
    protected override createDocumentReleaseScheduler(): DocumentReleaseScheduler {
       return new InspectableScheduler(this.services.Clock, super.createDocumentReleaseScheduler().graceMs);
    }
@@ -208,7 +208,7 @@ async function settle(): Promise<void> {
    await new Promise<void>(resolve => setImmediate(resolve));
 }
 
-describe('HydraniumTextDocuments revert on release', () => {
+describe('DefaultHydraniumTextDocuments revert on release', () => {
    it('rebuilds the document from disk once its last client closes it, with no LSP head', async () => {
       const { docs, builds } = makeRig();
       open(docs, 'form');
@@ -449,7 +449,7 @@ describe('HydraniumTextDocuments revert on release', () => {
    });
 });
 
-describe('HydraniumTextDocuments release grace', () => {
+describe('DefaultHydraniumTextDocuments release grace', () => {
    it('keeps a lost client’s document for 10 s when no grace is configured', async () => {
       const { docs, builds, clock } = makeRig();
       open(docs, 'form');
@@ -815,7 +815,7 @@ function openInEditor(editor: ProtocolConnection, uri: string): Promise<void> {
    });
 }
 
-describe('HydraniumTextDocuments with a language client whose worker port closes', () => {
+describe('DefaultHydraniumTextDocuments with a language client whose worker port closes', () => {
    it('closes every document the editor held, and each reverts', async () => {
       const { docs, builds } = makeRig();
       const port = listenOnWorkerPort(docs);

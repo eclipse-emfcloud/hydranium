@@ -20,7 +20,7 @@ import type { TextDocument, TextDocumentContentChangeEvent } from 'vscode-langua
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { INTEGRITY_CLIENT_ID } from '../../src/langium/integrity/integrity-rule.js';
-import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments, type HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { DefaultLanguageClientShadow, type LanguageClientShadow } from '../../src/documents/language-client-shadow.js';
 import { type AstNode } from '@hydranium/langium';
 import { asLanguageClientUri, type CanonicalUri, isSessionClosedError, textHash } from '@hydranium/protocol';
@@ -144,7 +144,7 @@ function makeDocs(
    // The framework's tracer surface is `with(uri).warn(msg)`; the LoggerStub
    // matches it and is returned from both `services.Logger.for(...)` and
    // `services.Tracer.for(...)` — the latter is what the constructor resolves.
-   const docs = new HydraniumTextDocuments(services);
+   const docs = new DefaultHydraniumTextDocuments(services);
    return { docs, recorded, logger };
 }
 
@@ -153,7 +153,7 @@ function openInLanguageClient(docs: HydraniumTextDocuments<TextDocument>, text: 
    docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 1, text } }, LANGUAGE_CLIENT_ID);
 }
 
-describe('HydraniumTextDocuments.applyEditToLanguageClient', () => {
+describe('DefaultHydraniumTextDocuments.applyEditToLanguageClient', () => {
    it('returns undefined when no Connection is bound', async () => {
       const { docs } = makeDocs(undefined);
       const result = await docs.applyEditToLanguageClient(URI, 'anything');
@@ -251,7 +251,7 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient', () => {
    });
 });
 
-describe('HydraniumTextDocuments shadow auto-tracking', () => {
+describe('DefaultHydraniumTextDocuments shadow auto-tracking', () => {
    it('language-client didOpen baselines the shadow', async () => {
       const { docs, recorded } = makeDocs({
          workspace: { applyEdit: async () => ({ applied: true }) }
@@ -329,7 +329,7 @@ describe('HydraniumTextDocuments shadow auto-tracking', () => {
  * A stub client with a REAL buffer is what makes that observable: a stub that
  * answers `{applied: true}` without applying anything cannot show a splice.
  */
-describe('HydraniumTextDocuments.applyEditToLanguageClient version gate', () => {
+describe('DefaultHydraniumTextDocuments.applyEditToLanguageClient version gate', () => {
    it('addresses a line-keyed diff at the version the language client last declared', async () => {
       const { docs, recorded } = makeDocs({
          workspace: { applyEdit: async () => ({ applied: true }) }
@@ -779,7 +779,7 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient version gate', () => 
    });
 });
 
-describe('HydraniumTextDocuments.isOpenInAnyClient', () => {
+describe('DefaultHydraniumTextDocuments.isOpenInAnyClient', () => {
    /**
     * `isOpenInAnyClient` reads the per-URI tracking record's `clients` set
     * (updated synchronously BEFORE the close event fires), so subscribers to {@link onDidClose}
@@ -822,14 +822,14 @@ describe('HydraniumTextDocuments.isOpenInAnyClient', () => {
    });
 });
 
-describe('HydraniumTextDocuments.releasesSettled', () => {
+describe('DefaultHydraniumTextDocuments.releasesSettled', () => {
    it('resolves once the release handler settled every release, including one handed over while it waits', async () => {
       const services = makeSharedServices(undefined, makeLogger());
       const finishes: Array<() => void> = [];
       services.workspace.DocumentReleaseHandler = {
          didReleaseDocument: () => new Promise<void>(resolve => finishes.push(resolve))
       };
-      const docs = new HydraniumTextDocuments(services);
+      const docs = new DefaultHydraniumTextDocuments(services);
       const other = 'file:///b.x';
       for (const uri of [URI, other]) {
          docs.notifyDidOpenTextDocument({ textDocument: { uri, languageId: 'plaintext', version: 1, text: 'x\n' } }, LANGUAGE_CLIENT_ID);
@@ -849,7 +849,7 @@ describe('HydraniumTextDocuments.releasesSettled', () => {
    });
 });
 
-describe('HydraniumTextDocuments.openDocuments', () => {
+describe('DefaultHydraniumTextDocuments.openDocuments', () => {
    it('is empty before any open', () => {
       const { docs } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
       expect(docs.openDocuments()).toEqual([]);
@@ -881,7 +881,7 @@ describe('HydraniumTextDocuments.openDocuments', () => {
    });
 });
 
-describe('HydraniumTextDocuments version gate and close reset', () => {
+describe('DefaultHydraniumTextDocuments version gate and close reset', () => {
    it('drops a late change whose version is not newer than the synced document', () => {
       const { docs } = makeDocs();
       // Open at v1, then accept monotonic edits up to v3.
@@ -956,7 +956,7 @@ describe('HydraniumTextDocuments version gate and close reset', () => {
    });
 });
 
-describe('HydraniumTextDocuments author history and pending content', () => {
+describe('DefaultHydraniumTextDocuments author history and pending content', () => {
    it('records authors at the server-assigned version, not the client-declared one', () => {
       const { docs, logger } = makeDocs();
       // Open at v1 authored by 'A'.
@@ -995,7 +995,7 @@ describe('HydraniumTextDocuments author history and pending content', () => {
    });
 });
 
-describe('HydraniumTextDocuments.commitRepair', () => {
+describe('DefaultHydraniumTextDocuments.commitRepair', () => {
    function openAt(docs: HydraniumTextDocuments<TextDocument>, text: string): void {
       docs.notifyDidOpenTextDocument({ textDocument: { uri: URI, languageId: 'plaintext', version: 4, text } }, 'A');
    }
@@ -1030,7 +1030,7 @@ describe('HydraniumTextDocuments.commitRepair', () => {
    });
 });
 
-describe('HydraniumTextDocuments.notifyDidChangeTextDocument guards', () => {
+describe('DefaultHydraniumTextDocuments.notifyDidChangeTextDocument guards', () => {
    it('ignores a change event carrying an empty contentChanges array', () => {
       // Kills the `changes.length === 0` early-return guard: with the
       // guard removed the manager would proceed to bump the version with no
@@ -1156,7 +1156,7 @@ describe('HydraniumTextDocuments.notifyDidChangeTextDocument guards', () => {
    });
 });
 
-describe('HydraniumTextDocuments open and close client gating', () => {
+describe('DefaultHydraniumTextDocuments open and close client gating', () => {
    it('is idempotent, so re-opening for the same client does not re-fire onDidOpen', () => {
       // Kills the `isOpenInClient` early-return guard in notifyDidOpen:
       // with `if (false)` a duplicate open for the same client would re-fire.
@@ -1212,7 +1212,7 @@ describe('HydraniumTextDocuments open and close client gating', () => {
    });
 });
 
-describe('HydraniumTextDocuments staged-content baseline', () => {
+describe('DefaultHydraniumTextDocuments staged-content baseline', () => {
    it('still delivers staged content to the language client that opened the file from disk', async () => {
       // `DefaultIntegrityService.syncCorrections` stages for a CLOSED file and sends no
       // edit of its own, so the open's own sync is the only delivery. Monaco opened from
@@ -1229,7 +1229,7 @@ describe('HydraniumTextDocuments staged-content baseline', () => {
    });
 });
 
-describe('HydraniumTextDocuments language-client attach baseline', () => {
+describe('DefaultHydraniumTextDocuments language-client attach baseline', () => {
    it('sends no edit when the language client attaches holding the text the sync would push', async () => {
       const { docs, recorded } = makeDocs({ workspace: { applyEdit: async () => ({ applied: true }) } });
       // The diagram-initiated open: a non-language client has the document, then
@@ -1271,7 +1271,7 @@ describe('HydraniumTextDocuments language-client attach baseline', () => {
    });
 });
 
-describe('HydraniumTextDocuments.applyEditToLanguageClient invalidation', () => {
+describe('DefaultHydraniumTextDocuments.applyEditToLanguageClient invalidation', () => {
    it('preserves the shadow when applyEdit reports applied=true', async () => {
       // Kills the `result.applied === false` mutations (`=== true`, `!== false`,
       // `if (true)`): an applied=true result must NOT invalidate the shadow.
@@ -1286,7 +1286,7 @@ describe('HydraniumTextDocuments.applyEditToLanguageClient invalidation', () => 
    });
 });
 
-describe('HydraniumTextDocuments query helpers', () => {
+describe('DefaultHydraniumTextDocuments query helpers', () => {
    it('version() returns 0 for a URI that was never opened', () => {
       // Kills the `this.get(uri)?.version` optional-chaining mutation in version():
       // without `?.` an unopened URI would throw instead of returning 0.
@@ -1326,7 +1326,7 @@ describe('HydraniumTextDocuments query helpers', () => {
    });
 });
 
-describe('HydraniumTextDocuments edit logging', () => {
+describe('DefaultHydraniumTextDocuments edit logging', () => {
    it('logs each edit as diagnosis, since one comes with every keystroke', () => {
       const { docs, logger } = makeDocs();
       openInLanguageClient(docs, 'v1\n');
@@ -1339,7 +1339,7 @@ describe('HydraniumTextDocuments edit logging', () => {
    });
 });
 
-describe('HydraniumTextDocuments.getAuthor missing-version logging', () => {
+describe('DefaultHydraniumTextDocuments.getAuthor missing-version logging', () => {
    it('logs "Could not detect author" only when history exists but the version is absent', () => {
       // Kills getAuthor's `!clientId && history` guard and its message:
       // a present version must NOT log; a missing version (with history) must.
@@ -1354,7 +1354,7 @@ describe('HydraniumTextDocuments.getAuthor missing-version logging', () => {
    });
 });
 
-describe('HydraniumTextDocuments willSave notifications', () => {
+describe('DefaultHydraniumTextDocuments willSave notifications', () => {
    it('notifyWillSaveTextDocument fires onWillSave for a synced document', () => {
       // Covers notifyWillSaveTextDocument and its syncedDocument guard.
       const { docs } = makeDocs();
@@ -1451,7 +1451,7 @@ describe('HydraniumTextDocuments willSave notifications', () => {
    });
 });
 
-describe('HydraniumTextDocuments second-client attach', () => {
+describe('DefaultHydraniumTextDocuments second-client attach', () => {
    it('fires onDidChangeContent for the attaching client with the unchanged version', () => {
       const { docs } = makeDocs();
       openInLanguageClient(docs, 'shared\n');
@@ -1468,7 +1468,7 @@ describe('HydraniumTextDocuments second-client attach', () => {
    });
 });
 
-describe('HydraniumTextDocuments server-owned version sequence', () => {
+describe('DefaultHydraniumTextDocuments server-owned version sequence', () => {
    // The shared document version is a server-owned, per-URI, monotonic counter
    // that advances exactly when the synced content changes — and never resets
    // while the server lives. Client-declared version ids (Monaco's model
@@ -1708,7 +1708,7 @@ describe('HydraniumTextDocuments server-owned version sequence', () => {
  * hand-written, so the fixtures cannot drift away from what `diffToEdits`
  * produces.
  */
-describe('HydraniumTextDocuments incremental language-client echo', () => {
+describe('DefaultHydraniumTextDocuments incremental language-client echo', () => {
    /**
     * The edits of the single `TextDocumentEdit` a recorded push carried.
     *
@@ -1874,7 +1874,7 @@ describe('HydraniumTextDocuments incremental language-client echo', () => {
    });
 });
 
-describe('HydraniumTextDocuments incremental echo after an attach', () => {
+describe('DefaultHydraniumTextDocuments incremental echo after an attach', () => {
    // The disk text an editor opens, and the text a non-language client has
    // already written over it in the store. They differ by a multi-line
    // deletion AND by a value, which is what makes the client's echo
@@ -1955,7 +1955,7 @@ describe('HydraniumTextDocuments incremental echo after an attach', () => {
    });
 });
 
-describe('HydraniumTextDocuments URI normalization', () => {
+describe('DefaultHydraniumTextDocuments URI normalization', () => {
    // LSP clients normally send already-percent-encoded URIs, so raw === normalized
    // and the gap below never bites in practice. But the manager keeps its own state
    // (its collaborators' per-URI entries) alongside the
@@ -1985,7 +1985,7 @@ describe('HydraniumTextDocuments URI normalization', () => {
    });
 });
 
-describe('HydraniumTextDocuments.get canonical lookup under symlink divergence', () => {
+describe('DefaultHydraniumTextDocuments.get canonical lookup under symlink divergence', () => {
    // With a realpath-style canonicalizer a symlinked file opened under path S has
    // canonical identity R≠S. The store keys synced docs by their CANONICAL identity
    // (documentKey), so a client-space caller addressing the symlink path S misses
@@ -2015,7 +2015,7 @@ describe('HydraniumTextDocuments.get canonical lookup under symlink divergence',
          }
       } as unknown as ServerSharedServices;
       services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);
-      return new HydraniumTextDocuments<TextDocument>(services);
+      return new DefaultHydraniumTextDocuments<TextDocument>(services);
    }
 
    it('resolves a canonical (real-path) URI to a doc opened under the symlink path', () => {
@@ -2043,7 +2043,7 @@ describe('HydraniumTextDocuments.get canonical lookup under symlink divergence',
       }
    }
 
-   class InspectableTextDocuments extends HydraniumTextDocuments<TextDocument> {
+   class InspectableTextDocuments extends DefaultHydraniumTextDocuments<TextDocument> {
       protected override createLanguageClientShadow(): LanguageClientShadow {
          return new InspectableShadow(this.configuration, this.tracer);
       }
@@ -2279,9 +2279,9 @@ describe('HydraniumTextDocuments.get canonical lookup under symlink divergence',
    });
 });
 
-describe('HydraniumTextDocuments content hash', () => {
+describe('DefaultHydraniumTextDocuments content hash', () => {
    /** Reads the hash a release recorded for the next open to compare against. */
-   class HashProbe extends HydraniumTextDocuments<TextDocument> {
+   class HashProbe extends DefaultHydraniumTextDocuments<TextDocument> {
       recordedHash(uri: string): string | undefined {
          return this.textLedger.recordOf(this.documentKey(uri))?.hash;
       }
@@ -2299,7 +2299,7 @@ describe('HydraniumTextDocuments content hash', () => {
    });
 });
 
-describe('HydraniumTextDocuments per-client staleness guard', () => {
+describe('DefaultHydraniumTextDocuments per-client staleness guard', () => {
    it("accepts a client's change whose own counter trails the shared version", () => {
       const { docs } = makeDocs();
       openInLanguageClient(docs, 'a\n');
@@ -2352,7 +2352,7 @@ describe('HydraniumTextDocuments per-client staleness guard', () => {
    });
 });
 
-describe('HydraniumTextDocuments release handler failure', () => {
+describe('DefaultHydraniumTextDocuments release handler failure', () => {
    it('still closes every document of an ending session and announces each release', async () => {
       const logger = makeLogger();
       const services = makeSharedServices(undefined, logger);
@@ -2361,7 +2361,7 @@ describe('HydraniumTextDocuments release handler failure', () => {
             throw new Error('handler broke');
          }
       };
-      const docs = new HydraniumTextDocuments(services);
+      const docs = new DefaultHydraniumTextDocuments(services);
       const released: string[] = [];
       docs.onDidReleaseDocument(event => released.push(event.uri));
       docs.registerSession('session');
@@ -2384,7 +2384,7 @@ describe('HydraniumTextDocuments release handler failure', () => {
             throw new Error('factory broke');
          }
       });
-      const docs = new HydraniumTextDocuments(services);
+      const docs = new DefaultHydraniumTextDocuments(services);
       const released: string[] = [];
       docs.onDidReleaseDocument(event => released.push(event.uri));
       docs.registerSession('session');
@@ -2408,7 +2408,7 @@ describe('HydraniumTextDocuments release handler failure', () => {
    ])('announces a document released dirty clean when the handler %s', async (_name, didReleaseDocument) => {
       const services = makeSharedServices(undefined, makeLogger());
       services.workspace.DocumentReleaseHandler = { didReleaseDocument };
-      const docs = new HydraniumTextDocuments(services);
+      const docs = new DefaultHydraniumTextDocuments(services);
       const dirty: boolean[] = [];
       docs.onDidChangeDirty(event => dirty.push(event.text?.dirty ?? false));
       openInLanguageClient(docs, 'a\n');
@@ -2423,7 +2423,7 @@ describe('HydraniumTextDocuments release handler failure', () => {
    });
 });
 
-describe('HydraniumTextDocuments release settle', () => {
+describe('DefaultHydraniumTextDocuments release settle', () => {
    type BeforeSettle = (docs: HydraniumTextDocuments, documents: ReturnType<typeof makeStubLangiumDocuments>) => void;
    const nothing: BeforeSettle = () => undefined;
    it.each<[string, boolean, BeforeSettle, string | undefined]>([
@@ -2445,7 +2445,7 @@ describe('HydraniumTextDocuments release settle', () => {
             beforeSettle(docs, documents);
          }
       };
-      const docs = new HydraniumTextDocuments(services);
+      const docs = new DefaultHydraniumTextDocuments(services);
       const announced: Array<string | undefined> = [];
       docs.onDidChangeDirty(event => announced.push(event.text?.hash));
       openInLanguageClient(docs, 'a\n');
@@ -2458,7 +2458,7 @@ describe('HydraniumTextDocuments release settle', () => {
    });
 });
 
-describe('HydraniumTextDocuments hands over whether a file was behind a released document', () => {
+describe('DefaultHydraniumTextDocuments hands over whether a file was behind a released document', () => {
    it.each<[string, string | undefined, boolean]>([
       ['as on disk when its baseline is a file', 'a\n', true],
       ['as not on disk when its baseline is no file', undefined, false]
@@ -2470,7 +2470,7 @@ describe('HydraniumTextDocuments hands over whether a file was behind a released
             handedOver.push(released.wasOnDisk);
          }
       };
-      const docs = new HydraniumTextDocuments(services);
+      const docs = new DefaultHydraniumTextDocuments(services);
       openInLanguageClient(docs, 'a\n');
       docs.setDiskBaseline(URI, baseline);
 
@@ -2480,7 +2480,7 @@ describe('HydraniumTextDocuments hands over whether a file was behind a released
    });
 });
 
-describe('HydraniumTextDocuments release skipped at teardown', () => {
+describe('DefaultHydraniumTextDocuments release skipped at teardown', () => {
    // The handler says it skipped: an error that merely looks like teardown is a failure.
    it.each([
       ['a skip', 'debug', (): Error => new DocumentReleaseSkippedError(new Error('Connection is disposed.'))],
@@ -2501,7 +2501,7 @@ describe('HydraniumTextDocuments release skipped at teardown', () => {
             throw skipped;
          }
       };
-      const docs = new HydraniumTextDocuments(services);
+      const docs = new DefaultHydraniumTextDocuments(services);
       const announced: Array<string | undefined> = [];
       docs.onDidChangeDirty(event => announced.push(event.text?.hash));
       openInLanguageClient(docs, 'a\n');
@@ -2519,7 +2519,7 @@ describe('HydraniumTextDocuments release skipped at teardown', () => {
    });
 });
 
-describe('HydraniumTextDocuments open by a closing session', () => {
+describe('DefaultHydraniumTextDocuments open by a closing session', () => {
    it.each([
       [
          'an open',
@@ -2532,7 +2532,7 @@ describe('HydraniumTextDocuments open by a closing session', () => {
       const services = makeSharedServices(undefined, makeLogger());
       (services as { Clock: unknown }).Clock = clock;
       services.workspace.DocumentReleaseHandler = { didReleaseDocument: async () => undefined };
-      const docs = new HydraniumTextDocuments(services, { releaseGraceMs: 1_000 });
+      const docs = new DefaultHydraniumTextDocuments(services, { releaseGraceMs: 1_000 });
       const released: string[] = [];
       docs.onDidReleaseDocument(event => released.push(event.uri));
       const open = (uri: string): void =>
@@ -2560,12 +2560,12 @@ describe('HydraniumTextDocuments open by a closing session', () => {
    });
 });
 
-describe('HydraniumTextDocuments without a release handler', () => {
+describe('DefaultHydraniumTextDocuments without a release handler', () => {
    it('says which slot is missing and still announces a document released dirty clean', async () => {
       const logger = makeLogger();
       const services = makeSharedServices(undefined, logger);
       delete (services.workspace as Partial<ServerSharedServices['workspace']>).DocumentReleaseHandler;
-      const docs = new HydraniumTextDocuments(services);
+      const docs = new DefaultHydraniumTextDocuments(services);
       const dirty: boolean[] = [];
       docs.onDidChangeDirty(event => dirty.push(event.text?.dirty ?? false));
       openInLanguageClient(docs, 'a\n');
@@ -2581,7 +2581,7 @@ describe('HydraniumTextDocuments without a release handler', () => {
    });
 });
 
-describe('HydraniumTextDocuments overridable factories', () => {
+describe('DefaultHydraniumTextDocuments overridable factories', () => {
    it('uses the ledger and dirty tracker its create methods return', () => {
       class RecordingLedger extends DefaultTextLedger {
          readonly authored: string[] = [];
@@ -2597,7 +2597,7 @@ describe('HydraniumTextDocuments overridable factories', () => {
             super.refreshDirty(key, document);
          }
       }
-      class RecordingTextDocuments extends HydraniumTextDocuments<TextDocument> {
+      class RecordingTextDocuments extends DefaultHydraniumTextDocuments<TextDocument> {
          get ledger(): RecordingLedger {
             return this.textLedger as RecordingLedger;
          }
@@ -2619,7 +2619,7 @@ describe('HydraniumTextDocuments overridable factories', () => {
    });
 
    it('builds a collaborator once the subclass has its own fields', () => {
-      class FieldTextDocuments extends HydraniumTextDocuments<TextDocument> {
+      class FieldTextDocuments extends DefaultHydraniumTextDocuments<TextDocument> {
          readonly ownLedger = new DefaultTextLedger();
          get ledger(): TextLedger {
             return this.textLedger;
@@ -2634,7 +2634,7 @@ describe('HydraniumTextDocuments overridable factories', () => {
    });
 
    /** Counts the calls that reach the store's own `create` and `update`. */
-   class CountingTextDocuments extends HydraniumTextDocuments<TextDocument> {
+   class CountingTextDocuments extends DefaultHydraniumTextDocuments<TextDocument> {
       creates = 0;
       updates = 0;
       override create(uri: string, languageId: string, version: number, content: string): TextDocument {
@@ -2666,7 +2666,7 @@ describe('HydraniumTextDocuments overridable factories', () => {
    });
 
    /** Answers open for any document once `holding` is set. */
-   class HoldingTextDocuments extends HydraniumTextDocuments<TextDocument> {
+   class HoldingTextDocuments extends DefaultHydraniumTextDocuments<TextDocument> {
       holding = false;
       override isOpenInAnyClient(uri: string): boolean {
          return this.holding || super.isOpenInAnyClient(uri);
@@ -2716,7 +2716,7 @@ describe('HydraniumTextDocuments overridable factories', () => {
    });
 });
 
-describe('HydraniumTextDocuments release order', () => {
+describe('DefaultHydraniumTextDocuments release order', () => {
    it('hands the document over only after its release listeners ran', () => {
       const services = makeSharedServices(undefined, makeLogger());
       const order: string[] = [];
@@ -2725,7 +2725,7 @@ describe('HydraniumTextDocuments release order', () => {
             order.push('handed over');
          }
       };
-      const docs = new HydraniumTextDocuments(services);
+      const docs = new DefaultHydraniumTextDocuments(services);
       docs.onDidReleaseDocument(() => order.push('released'));
       openInLanguageClient(docs, 'a\n');
       docs.notifyDidCloseTextDocument({ textDocument: { uri: URI } }, LANGUAGE_CLIENT_ID);
@@ -2756,7 +2756,7 @@ describe('HydraniumTextDocuments release order', () => {
       } else {
          services.workspace.DocumentReleaseHandler = handler;
       }
-      const docs = new HydraniumTextDocuments(services);
+      const docs = new DefaultHydraniumTextDocuments(services);
       const events: string[] = [];
       docs.onDidReleaseDocument(() => events.push('released'));
       docs.onDidChangeDirty(event => events.push(event.text?.dirty ? 'dirty' : 'clean'));

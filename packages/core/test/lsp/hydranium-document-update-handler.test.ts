@@ -21,7 +21,7 @@ import type { TextDocument } from 'vscode-languageserver-textdocument';
 import { URI } from '@hydranium/langium';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import {
-   HydraniumDocumentUpdateHandler,
+   DefaultHydraniumDocumentUpdateHandler,
    type HydraniumDocumentUpdateHandlerOptions
 } from '../../src/lsp/hydranium-document-update-handler.js';
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
@@ -62,7 +62,7 @@ async function flushMicrotasks(): Promise<void> {
  * `fireDocumentUpdate` with a single URI, the way `super.didChangeContent`
  * would, so tests need not stage a full `TextDocumentChangeEvent`.
  */
-class CapturingHandler extends HydraniumDocumentUpdateHandler {
+class CapturingHandler extends DefaultHydraniumDocumentUpdateHandler {
    public readonly dispatchCalls: DispatchCall[] = [];
 
    protected override dispatch(changed: URI[], deleted: URI[]): void {
@@ -220,7 +220,7 @@ function makeObservable(initial: number): ObservableValue<number> & { set: (next
    };
 }
 
-describe('HydraniumDocumentUpdateHandler with debounce off by default', () => {
+describe('DefaultHydraniumDocumentUpdateHandler with debounce off by default', () => {
    it('flushes synchronously when `debounceMs` is unset (default 0)', () => {
       const handler = new CapturingHandler(makeServicesStub());
       handler.triggerChange('file:///a.a');
@@ -236,7 +236,7 @@ describe('HydraniumDocumentUpdateHandler with debounce off by default', () => {
    });
 });
 
-describe('HydraniumDocumentUpdateHandler with debounce on', () => {
+describe('DefaultHydraniumDocumentUpdateHandler with debounce on', () => {
    it('schedules a timer instead of dispatching immediately', () => {
       const clock = makeFakeClock();
       const handler = new CapturingHandler(makeServicesStub({ clock }), { debounceMs: 50 });
@@ -279,7 +279,7 @@ describe('HydraniumDocumentUpdateHandler with debounce on', () => {
       // Kept, the reason would be staged on the next unrelated build.
       const clock = makeFakeClock();
       const documentReleased = new Emitter<{ uri: string }>();
-      const handler = new HydraniumDocumentUpdateHandler(makeServicesStub({ clock, documentReleased }), { debounceMs: 50 });
+      const handler = new DefaultHydraniumDocumentUpdateHandler(makeServicesStub({ clock, documentReleased }), { debounceMs: 50 });
       handler.didChangeContent({ document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>);
 
       documentReleased.fire({ uri: 'file:///a.a' });
@@ -356,7 +356,7 @@ describe('HydraniumDocumentUpdateHandler with debounce on', () => {
    });
 });
 
-describe('HydraniumDocumentUpdateHandler.bypassNonLanguageClientChanges', () => {
+describe('DefaultHydraniumDocumentUpdateHandler.bypassNonLanguageClientChanges', () => {
    it('bypasses debouncing when getAuthor !== LANGUAGE_CLIENT_ID (default true)', () => {
       const handler = new CapturingHandler(makeServicesStub({ getAuthor: () => 'glsp-client' }), { debounceMs: 50 });
       handler.simulateNonLanguageClientChange('file:///a.a');
@@ -385,7 +385,7 @@ describe('HydraniumDocumentUpdateHandler.bypassNonLanguageClientChanges', () => 
    });
 });
 
-describe('HydraniumDocumentUpdateHandler debounceMs as a MaybeObservableValue<number>', () => {
+describe('DefaultHydraniumDocumentUpdateHandler debounceMs as a MaybeObservableValue<number>', () => {
    it('accepts a static number', () => {
       const clock = makeFakeClock();
       const handler = new CapturingHandler(makeServicesStub({ clock }), { debounceMs: 75 });
@@ -415,7 +415,7 @@ describe('HydraniumDocumentUpdateHandler debounceMs as a MaybeObservableValue<nu
    });
 });
 
-describe('HydraniumDocumentUpdateHandler reason stamping', () => {
+describe('DefaultHydraniumDocumentUpdateHandler reason stamping', () => {
    // These use a BARE handler, not `CapturingHandler`, so the real `dispatch`
    // runs and the reason reaches the `scheduleUpdate` side-channel on the
    // services stub, a stub returning a resolved promise, so the reason under
@@ -424,7 +424,7 @@ describe('HydraniumDocumentUpdateHandler reason stamping', () => {
    it('didOpenDocument stamps `didOpen` and bypasses debouncing', async () => {
       const scheduledReasons: Array<string | undefined> = [];
       const services = makeServicesStub({ scheduledReasons });
-      const handler = new HydraniumDocumentUpdateHandler(services, { debounceMs: 50 });
+      const handler = new DefaultHydraniumDocumentUpdateHandler(services, { debounceMs: 50 });
       const event = { document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>;
       handler.didOpenDocument(event);
       handler.didChangeContent(event);
@@ -438,7 +438,7 @@ describe('HydraniumDocumentUpdateHandler reason stamping', () => {
    it('didChangeContent alone stamps `didChangeContent`', async () => {
       const scheduledReasons: Array<string | undefined> = [];
       const services = makeServicesStub({ scheduledReasons });
-      const handler = new HydraniumDocumentUpdateHandler(services);
+      const handler = new DefaultHydraniumDocumentUpdateHandler(services);
       const event = { document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>;
       handler.didChangeContent(event);
       await flushMicrotasks();
@@ -449,7 +449,7 @@ describe('HydraniumDocumentUpdateHandler reason stamping', () => {
       const clock = makeFakeClock();
       const scheduledReasons: Array<string | undefined> = [];
       const services = makeServicesStub({ scheduledReasons, clock });
-      const handler = new HydraniumDocumentUpdateHandler(services, { debounceMs: 50 });
+      const handler = new DefaultHydraniumDocumentUpdateHandler(services, { debounceMs: 50 });
       const event = { document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>;
       handler.didChangeContent(event);
       handler.didChangeContent(event);
@@ -466,7 +466,7 @@ describe('HydraniumDocumentUpdateHandler reason stamping', () => {
    it('didChangeWatchedFiles stamps `didChangeWatchedFiles` (overwriting any prior reason)', async () => {
       const scheduledReasons: Array<string | undefined> = [];
       const services = makeServicesStub({ scheduledReasons });
-      const handler = new HydraniumDocumentUpdateHandler(services);
+      const handler = new DefaultHydraniumDocumentUpdateHandler(services);
       // Stage a `didChangeContent` reason first — the watched-files event
       // must overwrite it (the watcher fires for an external write, which
       // is the more interesting trigger to log than the racing edit).
@@ -490,7 +490,7 @@ describe('HydraniumDocumentUpdateHandler reason stamping', () => {
       // Langium subscribes the handler to `onDidClose` only when it has a
       // `didCloseDocument`, and the store already reverts every head's last
       // close; one here would build the document a second time.
-      const handler = new HydraniumDocumentUpdateHandler(makeServicesStub());
+      const handler = new DefaultHydraniumDocumentUpdateHandler(makeServicesStub());
       expect((handler as { didCloseDocument?: unknown }).didCloseDocument).toBeUndefined();
    });
 
@@ -503,7 +503,7 @@ describe('HydraniumDocumentUpdateHandler reason stamping', () => {
          workspace: { WorkspaceManager: { ready: Promise<unknown> } };
       };
       stubServices.workspace.WorkspaceManager.ready = Promise.reject(new Error('boom'));
-      const handler = new HydraniumDocumentUpdateHandler(services);
+      const handler = new DefaultHydraniumDocumentUpdateHandler(services);
       handler.didChangeContent({ document: { uri: 'file:///a.a' } } as TextDocumentChangeEvent<TextDocument>);
       // Microtask flush so the .catch runs.
       await Promise.resolve();
@@ -515,7 +515,7 @@ describe('HydraniumDocumentUpdateHandler reason stamping', () => {
    });
 });
 
-describe('HydraniumDocumentUpdateHandler.didChangeWatchedFiles dispatch', () => {
+describe('DefaultHydraniumDocumentUpdateHandler.didChangeWatchedFiles dispatch', () => {
    it('short-circuits, never calling super.didChangeWatchedFiles when every change is a self-save', async () => {
       // Pins the `if (filtered.changes.length === 0) return;` guard. The
       // dispatch level can't distinguish (an empty super call dispatches
@@ -563,7 +563,7 @@ describe('HydraniumDocumentUpdateHandler.didChangeWatchedFiles dispatch', () => 
    });
 });
 
-describe('HydraniumDocumentUpdateHandler disk baseline of watched files', () => {
+describe('DefaultHydraniumDocumentUpdateHandler disk baseline of watched files', () => {
    it('reloads the baseline of each change the self-save filter keeps, deletions included', async () => {
       const reloadedBaselines: string[] = [];
       const deleted = URI.file('/hydranium-test/deleted.a').toString();
@@ -591,7 +591,7 @@ describe('HydraniumDocumentUpdateHandler disk baseline of watched files', () => 
    });
 });
 
-describe('HydraniumDocumentUpdateHandler.filterSelfSaves', () => {
+describe('DefaultHydraniumDocumentUpdateHandler.filterSelfSaves', () => {
    // No filesystem here: the handler reads the mtime through the
    // `FileSystemProvider.mtimeMs` seam, so an injected constant pins the
    // `uri → fsPath` + mtime pair the handler forwards to
@@ -678,7 +678,7 @@ describe('HydraniumDocumentUpdateHandler.filterSelfSaves', () => {
    });
 });
 
-describe('HydraniumDocumentUpdateHandler editor saves', () => {
+describe('DefaultHydraniumDocumentUpdateHandler editor saves', () => {
    const SAVED_URI = 'file:///saved.a';
    const willSave = { document: { uri: SAVED_URI }, reason: 1 } as unknown as TextDocumentWillSaveEvent<TextDocument>;
 
@@ -696,13 +696,13 @@ describe('HydraniumDocumentUpdateHandler editor saves', () => {
       opts: ServicesStubOptions = {},
       handlerOptions: HydraniumDocumentUpdateHandlerOptions = {}
    ): {
-      handler: HydraniumDocumentUpdateHandler;
+      handler: DefaultHydraniumDocumentUpdateHandler;
       queue: <T>(task: () => Promise<T>) => Promise<T>;
       editorSaved: () => void;
    } {
       const languageClientSaved = new Emitter<{ uri: string }>();
       const services = makeServicesStub({ clock: makeFakeClock(), languageClientSaved, ...opts });
-      const handler = new HydraniumDocumentUpdateHandler(services, handlerOptions);
+      const handler = new DefaultHydraniumDocumentUpdateHandler(services, handlerOptions);
       const queue = <T>(task: () => Promise<T>): Promise<T> => services.workspace.FileSystemTaskQueue.enqueue(SAVED_URI, task);
       return { handler, queue, editorSaved: () => languageClientSaved.fire({ uri: SAVED_URI }) };
    }

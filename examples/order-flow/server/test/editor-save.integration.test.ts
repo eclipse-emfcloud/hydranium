@@ -20,7 +20,7 @@
  */
 
 import { serverSharedFactory } from '@hydranium/core';
-import { HydraniumDocumentUpdateHandler } from '@hydranium/core/lsp';
+import { DefaultHydraniumDocumentUpdateHandler } from '@hydranium/core/lsp';
 import { DefaultFileSystemProvider } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
 import { type DataServerHarness, makeDataServerHarness } from '@hydranium/data-server/testing';
@@ -383,7 +383,7 @@ describe('an editor save right after a keystroke', () => {
                {
                   lsp: {
                      DocumentUpdateHandler: shared =>
-                        new HydraniumDocumentUpdateHandler(shared, { debounceMs: 60_000, willSaveGateMs: 60_000 })
+                        new DefaultHydraniumDocumentUpdateHandler(shared, { debounceMs: 60_000, willSaveGateMs: 60_000 })
                   }
                }
             ]

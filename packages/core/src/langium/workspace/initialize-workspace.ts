@@ -68,7 +68,7 @@ function toWorkspaceFolders(folders: WorkspaceFolderInput | ReadonlyArray<Worksp
  * Leaves the workspace exactly as an LSP `initialize`/`initialized` pair would:
  * `ProjectManager.discoverProjects` has run, the project registry is populated,
  * and the init build has covered every document in the workspace folders —
- * including the project descriptors, which `HydraniumWorkspaceManager.performStartup`
+ * including the project descriptors, which `DefaultHydraniumWorkspaceManager.performStartup`
  * back-fills because Langium's traversal drops URIs discovery already created a
  * document for. Documents outside the folders (a contributed library document
  * seeded elsewhere, a URI a client opens later) still build on demand; use

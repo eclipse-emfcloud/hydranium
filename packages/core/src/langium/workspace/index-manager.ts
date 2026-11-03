@@ -8,11 +8,27 @@
  ********************************************************************************/
 
 import { type Tracer } from '@hydranium/protocol';
-import { type AstNode, type AstNodeDescription, DefaultIndexManager, type LangiumDocument, type URI } from '@hydranium/langium';
+import {
+   type IndexManager,
+   type AstNode,
+   type AstNodeDescription,
+   DefaultIndexManager,
+   type LangiumDocument,
+   type URI
+} from '@hydranium/langium';
 import type { CancellationToken } from 'vscode-languageserver-protocol';
 import type { LogNameOptions } from '../diagnostics/logger.js';
 import type { ProjectManager } from '../project/project-manager.js';
 import type { ServerSharedServicesMinimal } from '../shared-services.js';
+
+export interface HydraniumIndexManager extends IndexManager {
+   getElementsByName(name: string, type?: string, languageId?: string): readonly AstNodeDescription[];
+   getElementByName(name: string, type?: string, languageId?: string): AstNodeDescription | undefined;
+   resolveElement(description?: AstNodeDescription): AstNode | undefined;
+   resolveElementByName(name: string, type?: string, languageId?: string): AstNode | undefined;
+   getElementsInProject(projectId: string, type?: string): AstNodeDescription[];
+   resolveSemanticElement(uri: URI): AstNode | undefined;
+}
 
 /**
  * Default `IndexManager` for `@hydranium/core` consumers. Layers an
@@ -39,7 +55,7 @@ import type { ServerSharedServicesMinimal } from '../shared-services.js';
  * member URIs for project-tier queries) override `updateContent` /
  * `removeContent` and chain `super`.
  */
-export class HydraniumIndexManager extends DefaultIndexManager {
+export class DefaultHydraniumIndexManager extends DefaultIndexManager implements HydraniumIndexManager {
    /** Maps `description.name` → list of descriptions with that name. Used for O(1) `getElementByName`. */
    protected elementsByName = new Map<string, AstNodeDescription[]>();
 

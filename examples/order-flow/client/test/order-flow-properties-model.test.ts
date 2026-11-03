@@ -34,7 +34,7 @@
  */
 
 import { initializeWorkspaceProgrammatically, type ServerSharedServices } from '@hydranium/core';
-import { HydraniumDocumentUpdateHandler } from '@hydranium/core/lsp';
+import { DefaultHydraniumDocumentUpdateHandler } from '@hydranium/core/lsp';
 import { NodeFileSystem } from '@hydranium/core/node';
 import {
    disposeScratchWorkspace,
@@ -1219,7 +1219,7 @@ describe('order-flow properties model beside a debouncing editor', () => {
                {
                   lsp: {
                      DocumentUpdateHandler: (services: ServerSharedServices) =>
-                        new HydraniumDocumentUpdateHandler(services, { debounceMs: 60_000 })
+                        new DefaultHydraniumDocumentUpdateHandler(services, { debounceMs: 60_000 })
                   }
                }
             ]

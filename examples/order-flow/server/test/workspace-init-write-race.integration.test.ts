@@ -38,7 +38,7 @@
  * load dependence.
  *
  * **Controls, including one that does NOT redden — and what that does NOT mean.**
- * Disabling `HydraniumDocumentBuilder.shouldRelink` reddens the diagnostics
+ * Disabling `DefaultHydraniumDocumentBuilder.shouldRelink` reddens the diagnostics
  * assertion; making `ModelService.ready` propagate its rejection reddens the
  * readiness assertion. Disabling `prepareBuild`'s retained-options upgrade
  * reddens NEITHER phase, with the control confirmed present in the built `lib/`.
@@ -114,7 +114,7 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 10_000): Promise<
  *
  * - Cancelled at `Linked`: the reference index was never populated, so
  *   `IndexManager.isAffected` cannot see the dependent and Langium never resets
- *   it for relinking. Repaired by `HydraniumDocumentBuilder.shouldRelink`, and
+ *   it for relinking. Repaired by `DefaultHydraniumDocumentBuilder.shouldRelink`, and
  *   this phase reddens when that override is disabled.
  * - Cancelled at `IndexedReferences`: the index IS populated, so the dependent
  *   is relinked. The retained-options hazard — `validation: false` carried into
@@ -122,7 +122,7 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 10_000): Promise<
  *   to this phase, yet from this harness Langium's own `prepareBuild` already
  *   clears it, because the in-process write opens the document first and that
  *   open's build completes. So disabling
- *   `HydraniumDocumentBuilder.prepareBuild`'s upgrade reddens neither phase
+ *   `DefaultHydraniumDocumentBuilder.prepareBuild`'s upgrade reddens neither phase
  *   here; what this phase pins is that a dependent cancelled past the index
  *   still ends up validated.
  */

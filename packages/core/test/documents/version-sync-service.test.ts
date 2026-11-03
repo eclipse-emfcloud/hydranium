@@ -16,7 +16,7 @@ import { describe, expect, it } from 'vitest';
 import { DocumentState, OperationCancelled, URI } from '@hydranium/langium';
 import { STALE_VERSION, UNRECORDED_VERSION } from '@hydranium/protocol';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments, type HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { type RecoveryBuildRequest, DefaultVersionSyncService } from '../../src/documents/version-sync-service.js';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { makeCapturingLogger, makeFakeAstNode, makeTestServices } from '../../src/testing/index.js';
@@ -46,7 +46,7 @@ interface SyncRig {
 function makeRig(): SyncRig {
    const { logger, lines } = makeCapturingLogger();
    const bundle = makeTestServices({ logger });
-   const textDocuments = new HydraniumTextDocuments(bundle.services);
+   const textDocuments = new DefaultHydraniumTextDocuments(bundle.services);
    const services = {
       ...bundle.services,
       workspace: { ...bundle.services.workspace, TextDocuments: textDocuments }

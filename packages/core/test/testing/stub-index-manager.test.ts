@@ -36,7 +36,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AstNode, AstNodeDescription, AstReflection, LangiumDocument } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
-import { HydraniumIndexManager } from '../../src/langium/workspace/index-manager.js';
+import { DefaultHydraniumIndexManager, type HydraniumIndexManager } from '../../src/langium/workspace/index-manager.js';
 import type { ServerSharedServicesMinimal } from '../../src/langium/shared-services.js';
 import {
    makeFakeAstNode,
@@ -104,7 +104,7 @@ async function realIndexManager(): Promise<HydraniumIndexManager> {
       AstReflection: REFLECTION,
       workspace: { LangiumDocuments: makeStubLangiumDocuments() }
    });
-   const manager = new HydraniumIndexManager(services);
+   const manager = new DefaultHydraniumIndexManager(services);
    for (const uri of EXPORTS.keys()) {
       await manager.updateContent(makeFakeDocument<AstNode>(uri, makeFakeAstNode({ $type: 'TypeOne' })));
    }
@@ -115,7 +115,7 @@ function names(descriptions: readonly AstNodeDescription[]): string[] {
    return descriptions.map(candidate => candidate.name);
 }
 
-describe('makeStubIndexManager differential against HydraniumIndexManager', () => {
+describe('makeStubIndexManager differential against DefaultHydraniumIndexManager', () => {
    it('streams the same global index, in the same order, on both sides', async () => {
       const real = await realIndexManager();
       const stub = makeStubIndexManager(SEED);

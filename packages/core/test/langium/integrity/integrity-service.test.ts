@@ -23,7 +23,7 @@ import {
 import { type ApplyWorkspaceEditParams, CancellationToken, CancellationTokenSource, type TextEdit } from 'vscode-languageserver';
 import type { BuildEndedEvent, BuildEndedListener, RunningBuild } from '../../../src/langium/document-builder/document-builder.js';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { HydraniumTextDocuments } from '../../../src/documents/hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments, type HydraniumTextDocuments } from '../../../src/documents/hydranium-text-documents.js';
 import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
 import { DefaultIntegrityService, IntegrityRun } from '../../../src/langium/integrity/integrity-service.js';
 import { virtualUri } from '../../../src/langium/workspace/virtual-document.js';
@@ -725,7 +725,7 @@ function makeEditorStagingHarness(): {
    });
    // `makeNoopSharedServices` answers the MINIMAL tree; the store declares the full
    // one and reads only the slots stubbed above.
-   const docs = new HydraniumTextDocuments<TextDocument>(storeServices as unknown as ServerSharedServices);
+   const docs = new DefaultHydraniumTextDocuments<TextDocument>(storeServices as unknown as ServerSharedServices);
    // One instance in both trees: the store the integrity service stages into is
    // the store the client opens against, which is the whole point of the probe.
    const probe = new CorrectionsProbe(makeIntegrityServices({ shared: { workspace: { TextDocuments: docs, FileSystemProvider: {} } } }), {

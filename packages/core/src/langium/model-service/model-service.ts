@@ -474,7 +474,7 @@ export class DefaultModelService<
     * things go wrong at once — the write's `WorkspaceLock.write` cancels the
     * initial build, and the cancelled build's non-validating options are then
     * inherited by the write's own build (see
-    * `HydraniumDocumentBuilder.prepareBuild`), so cross-document dependents
+    * `DefaultHydraniumDocumentBuilder.prepareBuild`), so cross-document dependents
     * are silently never validated. `workspaceInitialized` resolves after
     * `initializeWorkspace` completes, build included, which is what this
     * gate has always claimed to mean.

@@ -11,13 +11,13 @@ import { describe, expect, it } from 'vitest';
 import { type AstNode, DocumentState, type LangiumDocument, OperationCancelled, URI } from '@hydranium/langium';
 import { type CanonicalUri, UNRECORDED_VERSION } from '@hydranium/protocol';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { HydraniumTextDocuments } from '../../../src/documents/hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments, type HydraniumTextDocuments } from '../../../src/documents/hydranium-text-documents.js';
 import { DefaultModelLedger } from '../../../src/documents/model-ledger.js';
 import { DefaultVersionSyncService } from '../../../src/documents/version-sync-service.js';
 import type { ServerSharedServices } from '../../../src/langium/module.js';
 import type { ServerSharedServicesMinimal } from '../../../src/langium/shared-services.js';
 import { DefaultDocumentUriPolicy } from '../../../src/langium/workspace/document-uri-policy.js';
-import { HydraniumLangiumDocuments } from '../../../src/langium/workspace/langium-documents.js';
+import { DefaultHydraniumLangiumDocuments, type HydraniumLangiumDocuments } from '../../../src/langium/workspace/langium-documents.js';
 import { makeFakeAstNode, makeFakeDocument, makeNoopSharedServices, makeStubServiceRegistry } from '../../../src/testing/index.js';
 
 const TARGET = URI.parse('file:///ws/a.txt');
@@ -90,7 +90,7 @@ function harness(options: HarnessOptions = {}): Harness {
          }
       }
    });
-   const documents = new HydraniumLangiumDocuments(services);
+   const documents = new DefaultHydraniumLangiumDocuments(services);
    wired.instance = documents;
    const ledger = new DefaultModelLedger();
    services.workspace.LangiumDocuments = documents;
@@ -99,7 +99,7 @@ function harness(options: HarnessOptions = {}): Harness {
    return { documents, loads, fabricated, rehydrated, ledger };
 }
 
-describe('HydraniumLangiumDocuments.getOrCreateDocument on a failed load', () => {
+describe('DefaultHydraniumLangiumDocuments.getOrCreateDocument on a failed load', () => {
    it('propagates the read failure when the file is absent', async () => {
       const absent = new Error('ENOENT: no such file or directory');
       const { documents, loads } = harness({ failWith: absent });
@@ -172,13 +172,13 @@ describe('HydraniumLangiumDocuments.getOrCreateDocument on a failed load', () =>
    });
 });
 
-describe('HydraniumLangiumDocuments.addDocument', () => {
+describe('DefaultHydraniumLangiumDocuments.addDocument', () => {
    const FIRST = 'first';
    const SECOND = 'second';
 
    /** A store whose closed sequence for {@link TARGET} stands at version 1, on {@link SECOND}. */
    function storeAtVersionOne(): HydraniumTextDocuments {
-      const store = new HydraniumTextDocuments(
+      const store = new DefaultHydraniumTextDocuments(
          makeNoopSharedServices<ServerSharedServices>({ workspace: { DocumentUriPolicy: new DefaultDocumentUriPolicy() } })
       );
       store.reconcileExternalContent(TARGET.toString(), FIRST);
@@ -257,7 +257,7 @@ describe('HydraniumLangiumDocuments.addDocument', () => {
    });
 });
 
-describe('HydraniumLangiumDocuments.createEmptyDocument', () => {
+describe('DefaultHydraniumLangiumDocuments.createEmptyDocument', () => {
    it('parses empty text with the grammar the URI routes to', () => {
       const { documents, fabricated } = harness();
 

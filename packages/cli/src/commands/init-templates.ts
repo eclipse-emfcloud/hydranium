@@ -977,7 +977,6 @@ ${importList(
       'createLspServerLanguageModule',
       'createLspServerSharedModule',
       'type HydraniumSemanticTokenProviderOptions',
-      'type LspServerAddedServices',
       'type LspServerAddedSharedServices'
    ],
    '@hydranium/core/lsp',
@@ -991,8 +990,7 @@ ${languageImports}
 
 export type __NAME__SharedServices = ServerSharedServices & LspServerAddedSharedServices;
 export type __NAME__Services = LangiumServices &
-   ServerAddedServices &
-   LspServerAddedServices & {
+   ServerAddedServices & {
       shared: __NAME__SharedServices;
    };
 
@@ -1002,7 +1000,7 @@ export interface __NAME__Options extends HydraniumSemanticTokenProviderOptions {
     * Shared modules layered in after the framework's own bindings.
     *
     * The framework constructs most shared services with no options —
-    * \`DocumentBuilder: services => new HydraniumDocumentBuilder(services)\` — so
+    * \`DocumentBuilder: services => new DefaultHydraniumDocumentBuilder(services)\` — so
     * rebinding the slot is the only way to boot one configured differently, and
     * a factory that hard-codes its composition leaves a test nowhere to do it.
     * That is what this is for: pass a module binding \`workspace.DocumentBuilder\`

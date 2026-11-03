@@ -30,7 +30,12 @@
  * objects the store does and does not know about.
  */
 
-import { DefaultFileSystemProviderRegistry, DefaultIntegrityService, HydraniumTextDocuments, INTEGRITY_CLIENT_ID } from '@hydranium/core';
+import {
+   DefaultFileSystemProviderRegistry,
+   DefaultIntegrityService,
+   DefaultHydraniumTextDocuments,
+   INTEGRITY_CLIENT_ID
+} from '@hydranium/core';
 import { DefaultFileSystemProvider } from '@hydranium/core/node';
 import { DocumentState, URI } from '@hydranium/langium';
 import { asModelVersion, isConflictError } from '@hydranium/protocol';
@@ -109,7 +114,7 @@ class InterleavingFileSystemProvider extends DefaultFileSystemProvider {
  * Records every stage. For a URI a client holds, a stage is never read — only
  * a first open consumes one — so its only observable is the call itself.
  */
-class StageRecordingTextDocuments extends HydraniumTextDocuments<TextDocument> {
+class StageRecordingTextDocuments extends DefaultHydraniumTextDocuments<TextDocument> {
    override stagePendingContent(uri: string, text: string): void {
       staged.push(text);
       super.stagePendingContent(uri, text);

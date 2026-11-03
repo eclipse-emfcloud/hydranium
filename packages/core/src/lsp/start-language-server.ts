@@ -12,7 +12,7 @@ import {
    type LangiumSharedServices,
    type ServiceRequirements
 } from '@hydranium/langium/lsp';
-import { HydraniumDocumentUpdateHandler } from './hydranium-document-update-handler.js';
+import { DefaultHydraniumDocumentUpdateHandler } from './hydranium-document-update-handler.js';
 import { guardDiagnosticsConnection } from './diagnostics-connection.js';
 import { guardEditRequests } from './edit-requests-guard.js';
 import { refreshContentDocuments } from './content-refresh.js';
@@ -47,10 +47,10 @@ export function assertLspHeadComposed(services: LangiumSharedServices): void {
       return;
    }
    const handler = services.lsp.DocumentUpdateHandler;
-   if (!(handler instanceof HydraniumDocumentUpdateHandler)) {
+   if (!(handler instanceof DefaultHydraniumDocumentUpdateHandler)) {
       throw new Error(
          '[hydranium] the LSP head is starting without its shared module: `lsp.DocumentUpdateHandler` holds ' +
-            `'${handler?.constructor?.name ?? 'nothing'}' rather than a HydraniumDocumentUpdateHandler. Echo suppression for ` +
+            `'${handler?.constructor?.name ?? 'nothing'}' rather than a DefaultHydraniumDocumentUpdateHandler. Echo suppression for ` +
             "the server's own writes, the didChangeContent debounce, build-reason stamping and the last-client-close rebuild " +
             'are all inert in that state. Add `createLspServerSharedModule(context)` to the shared tier — as ' +
             '`sharedModules.extra` when composing through `createIntegrationServices`, or as an `inject(...)` argument ' +

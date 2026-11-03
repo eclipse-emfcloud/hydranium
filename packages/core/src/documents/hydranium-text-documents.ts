@@ -19,7 +19,7 @@
 // Moving it into lsp-server would force data-server / glsp-server to depend
 // on lsp-server, contradicting the peer architecture.
 // eslint-disable-next-line @typescript-eslint/no-restricted-imports
-import { NormalizedTextDocuments } from '@hydranium/langium/lsp';
+import { type TextDocuments, NormalizedTextDocuments } from '@hydranium/langium/lsp';
 import { type URI, UriUtils } from '@hydranium/langium';
 import { type ServerSharedServices } from '../langium/module.js';
 import {
@@ -173,6 +173,67 @@ interface ConnectionWithTextDocumentSync {
    __textDocumentSync?: TextDocumentSyncKind;
 }
 
+export interface HydraniumTextDocuments<T extends TextDocument = TextDocument> extends TextDocuments<T> {
+   create(uri: string, languageId: string, version: number, content: string): T;
+   update(document: T, changes: TextDocumentContentChangeEvent[], version: number): T;
+   readonly onDidChangeContent: Event<ClientTextDocumentChangeEvent<T>>;
+   readonly onDidOpen: Event<ClientTextDocumentChangeEvent<T>>;
+   readonly onDidClose: Event<ClientTextDocumentChangeEvent<T>>;
+   readonly onDidSave: Event<ClientTextDocumentChangeEvent<T>>;
+   listen(connection: Connection): Disposable;
+   notifyDidChangeTextDocument(event: DidChangeTextDocumentParams, clientId?: string): void;
+   applyContentChange(uri: DocumentUri, text: string, clientId: string): TextVersion;
+   notifyDidCloseTextDocument(event: DidCloseTextDocumentParams, clientId?: string, cause?: SessionEndCause): void;
+   releasesSettled(): Promise<void>;
+   notifyWillSaveTextDocument(event: WillSaveTextDocumentParams): void;
+   notifyWillSaveTextDocumentWaitUntil(event: WillSaveTextDocumentParams, token: CancellationToken): HandlerResult<TextEdit[], void>;
+   notifyDidSaveTextDocument(event: DidSaveTextDocumentParams, clientId?: string): void;
+   notifyDidOpenTextDocument(event: DidOpenTextDocumentParams, clientId?: string): void;
+   attachClient(uri: DocumentUri, clientId: string): boolean;
+   refreshContent(uri: DocumentUri, clientId: string): void;
+   setAuthor(uri: DocumentUri, version: number, author: string): void;
+   get(uri: DocumentUri): T | undefined;
+   version(uri: DocumentUri): TextVersion;
+   readonly epoch: string;
+   openedVersion(uri: DocumentUri): TextVersion | undefined;
+   assertLanguageClientHolds(uri: DocumentUri, version: number): void;
+   isLanguageClientBehind(uri: DocumentUri, version: TextVersion): boolean;
+   textState(uri: DocumentUri): TextState | undefined;
+   reconcileExternalContent(uri: DocumentUri, text: string): number | undefined;
+   commitRepair(uri: DocumentUri, parsedFrom: string, repaired: string): RepairCommit<T>;
+   getAuthor(uri: DocumentUri, version?: number): string | undefined;
+   isOpen(uri: DocumentUri): boolean;
+   isOpenInAnyClient(uri: DocumentUri): boolean;
+   isOpenInClient(uri: DocumentUri, client: string): boolean;
+   isOpenInLanguageClient(uri: DocumentUri): boolean;
+   clientsOf(uri: DocumentUri): string[];
+   isOnlyOpenInClient(uri: DocumentUri, client: string): boolean;
+   openDocuments(): OpenDocument[];
+   readonly onDidCloseSession: Event<ClientSessionClosedEvent>;
+   readonly onDidReleaseDocument: Event<DocumentReleasedEvent>;
+   readonly onDidSaveInLanguageClient: Event<LanguageClientSavedEvent>;
+   isReleaseDeferred(uri: DocumentUri): boolean;
+   isDirty(uri: DocumentUri): boolean;
+   readonly onDidChangeDirty: Event<DocumentDirtyChangedEvent>;
+   setDiskBaseline(uri: DocumentUri, text: string | undefined): void;
+   markCreated(uri: DocumentUri): void;
+   isUnsavedCreation(uri: DocumentUri): boolean;
+   reloadDiskBaseline(uri: DocumentUri): Promise<void>;
+   registerSession(clientId: string): void;
+   closeSession(clientId: string, cause?: SessionEndCause): void;
+   closeLanguageClientDocuments(): Promise<void>;
+   notifyDocumentDeleted(uri: DocumentUri): void;
+   delete(uri: string | URI | T): void;
+   stagePendingContent(uri: DocumentUri, text: string): void;
+   applyEditToLanguageClient(
+      uri: DocumentUri,
+      newText: string,
+      options?: { label?: string }
+   ): Promise<ApplyWorkspaceEditResult | undefined>;
+   setLanguageClientText(uri: DocumentUri, text: string): void;
+   invalidateLanguageClientText(uri: DocumentUri): void;
+}
+
 /**
  * The one text store every head writes to, on top of Langium's
  * `NormalizedTextDocuments`, and the LSP text-sync endpoint: every
@@ -198,7 +259,10 @@ interface ConnectionWithTextDocumentSync {
  * discovery. Direct {@link notifyDidOpenTextDocument} calls (the non-LSP
  * heads) do not pass that gate — their caller owns the ordering.
  */
-export class HydraniumTextDocuments<T extends TextDocument = TextDocument> extends NormalizedTextDocuments<T> {
+export class DefaultHydraniumTextDocuments<T extends TextDocument = TextDocument>
+   extends NormalizedTextDocuments<T>
+   implements HydraniumTextDocuments<T>
+{
    /** Content staged by integrity rules for a document no client holds, consumed by its first open. */
    protected readonly __pendingContent = new Map<CanonicalUri, string>();
 

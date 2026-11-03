@@ -13,7 +13,7 @@ import { Disposable, Emitter, type Event } from 'vscode-languageserver-protocol'
 import { type LogNameOptions } from '../langium/diagnostics/logger.js';
 import { type ServerSharedServices } from '../langium/module.js';
 import { HydraniumWorkspaceLock } from '../langium/workspace/hydranium-workspace-lock.js';
-import { HydraniumTextDocuments } from './hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments } from './hydranium-text-documents.js';
 import { refuseWaitInRead, runInReadLockScope } from '../langium/workspace/read-lock-scope.js';
 
 /** A build {@link VersionSyncService.requestRecoveryBuild} schedules. */
@@ -147,7 +147,7 @@ export class DefaultVersionSyncService implements VersionSyncService {
       }
       const store = workspace.TextDocuments;
       // Unregistered, it is a probe or a load whose registration reports it again.
-      if (!(store instanceof HydraniumTextDocuments) || workspace.LangiumDocuments.getDocument(document.uri) !== document) {
+      if (!(store instanceof DefaultHydraniumTextDocuments) || workspace.LangiumDocuments.getDocument(document.uri) !== document) {
          return;
       }
       const uri = document.uri.toString();

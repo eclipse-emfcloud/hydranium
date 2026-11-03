@@ -8,6 +8,7 @@
  ********************************************************************************/
 
 import {
+   type LangiumDocumentFactory,
    type AstNode,
    type AstReflection,
    AstUtils,
@@ -30,7 +31,7 @@ import { STALE_VERSION } from '@hydranium/protocol';
 import { type ModelLedger } from '../../documents/model-ledger.js';
 import { type CstResidencyService } from '../residency/cst-residency-service.js';
 import { type VersionSyncService } from '../../documents/version-sync-service.js';
-import { type ExtendedServiceRegistry } from '../service-registry.js';
+import { type HydraniumServiceRegistry } from '../service-registry.js';
 import { type ServerSharedServicesMinimal } from '../shared-services.js';
 import { type Serializer } from '../serialization/serializer.js';
 import { isVirtualUri } from './virtual-document.js';
@@ -38,6 +39,10 @@ import { isVirtualUri } from './virtual-document.js';
 /** Structural view of the per-language serializer slot on the resolved services. */
 interface WithSerializer {
    serializer?: { Serializer?: Serializer };
+}
+
+export interface HydraniumLangiumDocumentFactory extends LangiumDocumentFactory {
+   fromStringInLanguage<T extends AstNode = AstNode>(text: string, uri: URI, languageId: string): LangiumDocument<T>;
 }
 
 /**
@@ -79,13 +84,13 @@ interface WithSerializer {
  * server's positions match the client's. A text document passed in keeps its
  * text.
  */
-export class HydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFactory {
+export class DefaultHydraniumLangiumDocumentFactory extends DefaultLangiumDocumentFactory implements HydraniumLangiumDocumentFactory {
    /**
     * Narrows the inherited Langium `ServiceRegistry` field to the framework's
-    * {@link ExtendedServiceRegistry}, so the by-id lookup below needs no
+    * {@link HydraniumServiceRegistry}, so the by-id lookup below needs no
     * per-callsite cast. The framework's shared module binds that class.
     */
-   declare protected readonly serviceRegistry: ExtendedServiceRegistry;
+   declare protected readonly serviceRegistry: HydraniumServiceRegistry;
 
    /** A thunk: a version-sync service whose constructor reads this factory would otherwise be a cycle. */
    protected readonly versionSyncService: () => VersionSyncService;

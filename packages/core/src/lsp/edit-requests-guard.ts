@@ -18,7 +18,7 @@ import {
    type WorkspaceEdit
 } from 'vscode-languageserver';
 import { LANGUAGE_CLIENT_ID } from '../documents/client-ids.js';
-import { HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
 import { type ServerSharedServicesMinimal } from '../langium/shared-services.js';
 
 const wrappedConnections = new WeakSet<object>();
@@ -46,7 +46,7 @@ type Register<P, A extends unknown[], R, E> = (handler: (params: P, ...rest: A) 
  */
 export function guardEditRequests(connection: Connection, services: LangiumSharedServices): void {
    const store = services.workspace.TextDocuments;
-   if (wrappedConnections.has(connection) || !(store instanceof HydraniumTextDocuments)) {
+   if (wrappedConnections.has(connection) || !(store instanceof DefaultHydraniumTextDocuments)) {
       return;
    }
    wrappedConnections.add(connection);

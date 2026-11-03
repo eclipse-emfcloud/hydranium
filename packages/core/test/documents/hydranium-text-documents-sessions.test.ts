@@ -13,7 +13,7 @@ import type { TextDocument } from 'vscode-languageserver-textdocument';
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { SessionClosedError } from '../../src/documents/client-session-errors.js';
 import type { ClientSessionClosedEvent } from '../../src/documents/client-session-registry.js';
-import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments, type HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
 import { type CapturedLine, makeCapturingTracer, makeStubDocumentBuilder, makeStubLangiumDocuments } from '../../src/testing/index.js';
@@ -35,7 +35,7 @@ function makeDocs(): { docs: HydraniumTextDocuments<TextDocument>; lines: Captur
       }
    } as unknown as ServerSharedServices;
    services.workspace.DocumentReleaseHandler = new DefaultDocumentReleaseHandler(services);
-   return { docs: new HydraniumTextDocuments(services), lines };
+   return { docs: new DefaultHydraniumTextDocuments(services), lines };
 }
 
 function open(docs: HydraniumTextDocuments<TextDocument>, uri: string, clientId: string, text = 'text'): void {
@@ -53,7 +53,7 @@ afterEach(() => {
    Logger.setLevel('info');
 });
 
-describe('HydraniumTextDocuments client sessions', () => {
+describe('DefaultHydraniumTextDocuments client sessions', () => {
    it('closes everything a session has open, then announces the session closed', () => {
       const { docs } = makeDocs();
       docs.registerSession('s');
@@ -108,7 +108,7 @@ describe('HydraniumTextDocuments client sessions', () => {
    });
 });
 
-describe('HydraniumTextDocuments deletion closes opens', () => {
+describe('DefaultHydraniumTextDocuments deletion closes opens', () => {
    it('closes every open of a URI when a subclass deletes it, and continues its version sequence', () => {
       const { docs } = makeDocs();
       open(docs, A, 'form');

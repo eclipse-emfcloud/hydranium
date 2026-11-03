@@ -20,20 +20,20 @@ import { DefaultModelService, type ModelService } from './model-service/model-se
 import { type ProjectManager } from './project/project-manager.js';
 import { SingleProjectManager } from './project/single-project-manager.js';
 import { DefaultTransferEncoder, type TransferEncoder } from './transfer/transfer-encoder.js';
-import { HydraniumDocumentBuilder } from './document-builder/document-builder.js';
+import { DefaultHydraniumDocumentBuilder, type HydraniumDocumentBuilder } from './document-builder/document-builder.js';
 import { DefaultBuildPipelineIntegration, type BuildPipelineIntegration } from './document-builder/build-pipeline-integration.js';
 import { type BuildPhasePassContribution } from './build-phase-pass/build-phase-pass.js';
 import { type BuildPhasePassService, DefaultBuildPhasePassService } from './build-phase-pass/build-phase-pass-service.js';
 import { DefaultCstResidencyService, type CstResidencyService } from './residency/index.js';
 import { HydraniumConfigurationProvider } from './config/configuration-provider.js';
-import { HydraniumIndexManager } from './workspace/index-manager.js';
-import { HydraniumWorkspaceManager } from './workspace/hydranium-workspace-manager.js';
+import { DefaultHydraniumIndexManager, type HydraniumIndexManager } from './workspace/index-manager.js';
+import { DefaultHydraniumWorkspaceManager, type HydraniumWorkspaceManager } from './workspace/hydranium-workspace-manager.js';
 import { HydraniumWorkspaceLock } from './workspace/hydranium-workspace-lock.js';
-import { HydraniumLangiumDocumentFactory } from './workspace/hydranium-langium-document-factory.js';
-import { type HydraniumDocumentRegistry, HydraniumLangiumDocuments } from './workspace/langium-documents.js';
+import { DefaultHydraniumLangiumDocumentFactory } from './workspace/hydranium-langium-document-factory.js';
+import { DefaultHydraniumLangiumDocuments, type HydraniumLangiumDocuments } from './workspace/langium-documents.js';
 import { type AdditionalDocumentContribution } from './workspace/additional-document-contribution.js';
 import { DefaultDocumentUriPolicy, type DocumentUriPolicy } from './workspace/document-uri-policy.js';
-import { HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments, type HydraniumTextDocuments } from '../documents/hydranium-text-documents.js';
 import { DefaultAstDocumentManager, type AstDocumentManager } from '../documents/ast-document-manager.js';
 import { DefaultSelfSaveRegistry, type SelfSaveRegistry } from './workspace/self-save-registry.js';
 import { DefaultFileSystemTaskQueue, type FileSystemTaskQueue } from '../documents/file-system-task-queue.js';
@@ -48,7 +48,7 @@ import {
 } from './workspace/file-system-provider.js';
 import { VIRTUAL_SCHEME, VirtualFileSystemProvider } from './workspace/virtual-document.js';
 import { type ServerLanguageServices } from './language-module.js';
-import { ExtendedServiceRegistry } from './service-registry.js';
+import { DefaultHydraniumServiceRegistry, type HydraniumServiceRegistry } from './service-registry.js';
 
 /**
  * Shared services that `@hydranium/core`'s default shared module
@@ -75,20 +75,15 @@ export interface ServerAddedSharedServices<
     * Typed override of Langium's `ServiceRegistry` slot returning
     * {@link ServerLanguageServices} (incl. the typed
     * `serializer.Serializer` slot) so per-URI per-language lookups are
-    * type-safe. Bound to {@link ExtendedServiceRegistry} by default, which
+    * type-safe. Bound to {@link DefaultHydraniumServiceRegistry} by default, which
     * layers typed-metadata, string-id, file-extension, per-target and
     * producible-type lookups over the URI-keyed API it inherits from Langium.
     * Adopters extending with their own accessors subclass
-    * {@link ExtendedServiceRegistry} with a narrower TServices that extends
+    * {@link DefaultHydraniumServiceRegistry} with a narrower TServices that extends
     * `ServerLanguageServices`; method-bivariance preserves
     * assignability under `--strictFunctionTypes`.
-    *
-    * Typed as `ExtendedServiceRegistry` rather than the
-    * `HydraniumServiceRegistry` base because framework heads route by
-    * producible type, which only the extended class answers. The base stays
-    * exported for adopters composing a registry outside this slot.
     */
-   /* override */ ServiceRegistry: ExtendedServiceRegistry<ServerLanguageServices>;
+   /* override */ ServiceRegistry: HydraniumServiceRegistry<ServerLanguageServices>;
    /**
     * Emission-only cross-head logger. A dedicated top-level slot —
     * pervasive injectable infrastructure, like {@link Clock}, consumed
@@ -154,38 +149,27 @@ export interface ServerAddedSharedServices<
        * `createEmptyDocument` — reachable only through this narrowing, and
        * wanted by a scope provider querying a URI before the file exists.
        */
-      /* override */ LangiumDocuments: HydraniumDocumentRegistry;
+      /* override */ LangiumDocuments: HydraniumLangiumDocuments;
       /**
-       * Narrow Langium's `IndexManager` slot to the framework subclass, which
-       * layers an `elementsByName` map over Langium's index and exposes
+       * Narrow Langium's `IndexManager` slot to the framework contract, which exposes
        * `getElementByName` / `resolveElement` / `resolveElementByName` — an O(1)
        * name lookup instead of streaming `allElements()`. Bound by default so
        * neither adopters nor framework code has to fall back to that scan.
        */
       /* override */ IndexManager: HydraniumIndexManager;
       /**
-       * Narrow Langium's `DocumentBuilder` slot to the framework
-       * subclass — adopters inherit URI flattening + cascade deletes,
+       * Narrow Langium's `DocumentBuilder` slot to the framework contract.
+       * The default supplies URI flattening + cascade deletes,
        * the `awaitDocumentState` bug-fix, framework-wired phase logs,
        * and the `markNextReason` observability primitive without
        * binding the slot explicitly. The
-       * `HydraniumDocumentUpdateHandler`'s `dispatch` and
+       * `DefaultHydraniumDocumentUpdateHandler`'s `dispatch` and
        * `ModelService.rebuild` build through this slot's
        * `scheduleUpdate`, so narrowing here is a load-bearing contract:
        * a builder without it fails every LSP-driven build, and every
        * session write that takes the lock, at run time.
        */
       /* override */ DocumentBuilder: HydraniumDocumentBuilder;
-      /**
-       * Narrow Langium's `WorkspaceLock` slot to the framework subclass, which
-       * marks its write action as a write-lock scope. That is what lets
-       * `ModelService` detect the one shape the lock cannot survive — a facade
-       * write reached from inside a build, which cancels its own enclosing
-       * build — instead of stalling. Behaviourally identical to
-       * `DefaultWorkspaceLock` in every other respect, and the detection is
-       * inert unless a host installs a scope tracker.
-       */
-      /* override */ WorkspaceLock: HydraniumWorkspaceLock;
       /**
        * Tighten Langium's read-only `FileSystemProvider` slot to a
        * {@link FileSystemProviderRegistry}, which is writable: the
@@ -213,7 +197,7 @@ export interface ServerAddedSharedServices<
        * `FileSystemProvider.host`. A
        * registry that serves a seeded document under none of its providers
        * loses the document at its last close, which
-       * {@link HydraniumWorkspaceManager.warnIfDocumentsUnserved} reports
+       * {@link DefaultHydraniumWorkspaceManager.warnIfDocumentsUnserved} reports
        * once at startup.
        */
       /* override */ FileSystemProvider: FileSystemProviderRegistry;
@@ -469,7 +453,7 @@ export function createServerSharedModule(
       // registry construction-time dependent on `workspace.TextDocuments`,
       // which would close a DI cycle back to here through
       // Logger → Settings → lsp.configurationRoot.
-      ServiceRegistry: services => new ExtendedServiceRegistry<ServerLanguageServices>(services),
+      ServiceRegistry: services => new DefaultHydraniumServiceRegistry<ServerLanguageServices>(services),
       Logger: () => new NoopLogger(),
       Tracer: services => new ServerTracer(services.Logger, services.Clock),
       ServerLocale: services => new DefaultServerLocale(services),
@@ -532,9 +516,9 @@ export function createServerSharedModule(
          }
       },
       workspace: {
-         TextDocuments: services => new HydraniumTextDocuments(services),
-         WorkspaceManager: services => new HydraniumWorkspaceManager(services),
-         IndexManager: services => new HydraniumIndexManager(services),
+         TextDocuments: services => new DefaultHydraniumTextDocuments(services),
+         WorkspaceManager: services => new DefaultHydraniumWorkspaceManager(services),
+         IndexManager: services => new DefaultHydraniumIndexManager(services),
          // Langium's default asks only about sections named after registered
          // language ids, so a section `lsp.configurationRoot` is bound to reads
          // `undefined` forever with no request on the wire.
@@ -542,12 +526,12 @@ export function createServerSharedModule(
          // Override Langium's factory so a `fromModel` (code-built) document
          // retains serialized text via the per-language Serializer, and is
          // re-read from that text while no file is at its URI.
-         LangiumDocumentFactory: services => new HydraniumLangiumDocumentFactory(services),
+         LangiumDocumentFactory: services => new DefaultHydraniumLangiumDocumentFactory(services),
          // Langium's default routes through no identity seam and treats every
          // failed load alike, so leaving this unbound opts a server out of both
          // with nothing to signal it.
-         LangiumDocuments: services => new HydraniumLangiumDocuments(services),
-         DocumentBuilder: services => new HydraniumDocumentBuilder(services),
+         LangiumDocuments: services => new DefaultHydraniumLangiumDocuments(services),
+         DocumentBuilder: services => new DefaultHydraniumDocumentBuilder(services),
          // The write-lock scope this marks is inert unless a host installs a
          // scope tracker — `@hydranium/core/node` does.
          WorkspaceLock: services => new HydraniumWorkspaceLock(services),

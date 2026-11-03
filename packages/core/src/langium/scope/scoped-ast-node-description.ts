@@ -37,7 +37,7 @@ export type DescriptionTier = 'local' | 'project' | 'public' | 'universal';
  * fields directly to build per-query scopes without rediscovering
  * visibility via URI lookup on the hot path.
  *
- * The framework's `HydraniumScopeProvider.bucketFor`
+ * The framework's `DefaultHydraniumScopeProvider.bucketFor`
  * reads `tier` directly when present and falls back to the URI-based
  * lookup for untagged descriptions, so adoption is incremental.
  */
@@ -119,7 +119,7 @@ export function isProjectTier(
  *
  * `'public'` descriptions ALWAYS carry a `projectId` by construction
  * (the typed factory `createPublic` requires it). The framework's
- * `HydraniumScopeProvider.bucketFor` suppresses
+ * `DefaultHydraniumScopeProvider.bucketFor` suppresses
  * a `'public'` description inside its owning project (so the shorter-
  * name `'project'`-tier sibling is the canonical entry there) and
  * shows it to dependent projects in the source's visibility closure.

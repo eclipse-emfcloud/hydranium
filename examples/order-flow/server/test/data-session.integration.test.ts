@@ -44,7 +44,7 @@ import {
    type ClientSessionUpdateAllArgs,
    type ClientSessionWriteArgs,
    DefaultClientSession,
-   HydraniumTextDocuments,
+   DefaultHydraniumTextDocuments,
    initializeWorkspaceProgrammatically,
    RealpathDocumentUriPolicy,
    type ServerSharedServices
@@ -199,7 +199,11 @@ async function boot(releaseGraceMs?: number): Promise<Booted> {
          ? {}
          : {
               extraSharedModules: [
-                 { workspace: { TextDocuments: (shared: ServerSharedServices) => new HydraniumTextDocuments(shared, { releaseGraceMs }) } }
+                 {
+                    workspace: {
+                       TextDocuments: (shared: ServerSharedServices) => new DefaultHydraniumTextDocuments(shared, { releaseGraceMs })
+                    }
+                 }
               ]
            }
    );
@@ -1340,7 +1344,7 @@ describe('DataSession when its document is deleted', () => {
 
          // As the editor's file watcher reports it.
          rmSync(path(FILE));
-         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({ changes: [{ uri, type: FileChangeType.Deleted }] });
+         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles!({ changes: [{ uri, type: FileChangeType.Deleted }] });
          await waitFor(() => deleted.length > 0, { message: 'the client heard no deletion' });
          await waitFor(() => !servers[0].isWatching(uri, session.clientId), { message: 'the session kept its watch' });
 
@@ -1423,7 +1427,7 @@ describe('DataSession when its document is deleted', () => {
             const reconnect = client.drop();
             if (!created) {
                rmSync(path(FILE));
-               services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({
+               services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles!({
                   changes: [{ uri: target, type: FileChangeType.Deleted }]
                });
             }
@@ -1479,7 +1483,7 @@ describe('DataSession when its document is deleted', () => {
          // Within the store's default release grace, which the deletion ends.
          const reconnect = client.drop();
          rmSync(path(FILE));
-         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({ changes: [{ uri, type: FileChangeType.Deleted }] });
+         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles!({ changes: [{ uri, type: FileChangeType.Deleted }] });
          await waitFor(() => services.shared.model.ModelService.getDocument(uri) === undefined, { message: 'the document never left' });
          reconnect();
          await session.connected();
@@ -1509,7 +1513,7 @@ describe('DataSession when its document is deleted', () => {
 
          const reconnect = client.drop();
          rmSync(path(NEW_FILE));
-         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({ changes: [{ uri: newUri, type: FileChangeType.Deleted }] });
+         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles!({ changes: [{ uri: newUri, type: FileChangeType.Deleted }] });
          await waitFor(() => services.shared.model.ModelService.getDocument(newUri) === undefined, { message: 'the document never left' });
          reconnect();
          await waitFor(() => deleted.length > 0, { message: 'the client heard no deletion' });
@@ -1541,7 +1545,7 @@ describe('DataSession when its document is deleted', () => {
 
          const reconnect = client.drop();
          rmSync(workspace.resolve(FILE));
-         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({ changes: [{ uri: target, type: FileChangeType.Deleted }] });
+         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles!({ changes: [{ uri: target, type: FileChangeType.Deleted }] });
          await waitFor(() => services.shared.model.ModelService.getDocument(target) === undefined, { message: 'the document never left' });
          reconnect();
          await waitFor(() => client.deleted.length > 0, { message: 'the client heard no deletion' });
@@ -1582,7 +1586,7 @@ describe('DataSession when its document is deleted', () => {
 
          const reconnect = client.drop();
          rmSync(workspace.resolve(NEW_FILE));
-         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({ changes: [{ uri: target, type: FileChangeType.Deleted }] });
+         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles!({ changes: [{ uri: target, type: FileChangeType.Deleted }] });
          await waitFor(() => services.shared.model.ModelService.getDocument(target) === undefined, { message: 'the document never left' });
          reconnect();
          await waitFor(() => client.deleted.length > 0, { message: 'the client heard no deletion' });
@@ -1604,7 +1608,7 @@ describe('DataSession when its document is deleted', () => {
 
          const reconnect = client.drop();
          rmSync(path(FILE));
-         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles({ changes: [{ uri, type: FileChangeType.Deleted }] });
+         services.shared.lsp.DocumentUpdateHandler.didChangeWatchedFiles!({ changes: [{ uri, type: FileChangeType.Deleted }] });
          await waitFor(() => services.shared.model.ModelService.getDocument(uri) === undefined, { message: 'the document never left' });
          reconnect();
          await waitFor(() => deleted.length > 0, { message: 'the client heard no deletion' });

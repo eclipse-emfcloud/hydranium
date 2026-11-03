@@ -39,7 +39,7 @@
  * stale and redden too.
  */
 
-import { HydraniumDocumentBuilder, initializeWorkspaceProgrammatically } from '@hydranium/core';
+import { DefaultHydraniumDocumentBuilder, initializeWorkspaceProgrammatically } from '@hydranium/core';
 import { NodeFileSystem } from '@hydranium/core/node';
 import { disposeScratchWorkspace, makeScratchWorkspace } from '@hydranium/core/testing/node';
 import { type Field, type ProcessModel, type Task, isTask } from '../src/language-server/ast.js';
@@ -86,7 +86,7 @@ async function cascadeAfterDomainEdit(refreshCrossDocumentComputedScopes: boolea
                {
                   workspace: {
                      DocumentBuilder: (services: OrderFlowSharedServices) =>
-                        new HydraniumDocumentBuilder(services, { refreshCrossDocumentComputedScopes, logLevel: 'off' })
+                        new DefaultHydraniumDocumentBuilder(services, { refreshCrossDocumentComputedScopes, logLevel: 'off' })
                   }
                }
             ]

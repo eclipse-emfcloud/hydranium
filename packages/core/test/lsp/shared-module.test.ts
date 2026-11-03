@@ -21,7 +21,7 @@ import {
    type PartialLangiumSharedServices
 } from '@hydranium/langium/lsp';
 import { createServerSharedModule, type ServerModuleContext, type ServerSharedServices } from '../../src/langium/module.js';
-import { HydraniumDocumentUpdateHandler } from '../../src/lsp/hydranium-document-update-handler.js';
+import { DefaultHydraniumDocumentUpdateHandler } from '../../src/lsp/hydranium-document-update-handler.js';
 import { createLspServerLanguageModule } from '../../src/lsp/language-module.js';
 import { createLspServerSharedModule, type LspServerSharedServices } from '../../src/lsp/shared-module.js';
 import { assertLspHeadComposed } from '../../src/lsp/start-language-server.js';
@@ -67,7 +67,7 @@ describe('createLspServerSharedModule', () => {
       // anywhere else leaves Langium's default in place with no error, so the
       // framework's echo suppression, debounce, `markNextReason` stamping and
       // last-client-close rebuild go silently inert.
-      expect(composeShared().lsp.DocumentUpdateHandler).toBeInstanceOf(HydraniumDocumentUpdateHandler);
+      expect(composeShared().lsp.DocumentUpdateHandler).toBeInstanceOf(DefaultHydraniumDocumentUpdateHandler);
    });
 
    it('constructs without an adopter module, so a bare compose is enough', () => {
@@ -88,7 +88,7 @@ describe('createLspServerSharedModule', () => {
    });
 
    it('lets a module layered after it win (later-wins composition)', () => {
-      class AdopterHandler extends HydraniumDocumentUpdateHandler {}
+      class AdopterHandler extends DefaultHydraniumDocumentUpdateHandler {}
       const shared = composeShared({
          lsp: { DocumentUpdateHandler: (services: ServerSharedServices) => new AdopterHandler(services) }
       } as unknown as SharedModule);
@@ -172,7 +172,7 @@ describe('assertLspHeadComposed', () => {
    });
 
    it('passes for an adopter subclass, the documented way to extend the handler', () => {
-      class AdopterHandler extends HydraniumDocumentUpdateHandler {}
+      class AdopterHandler extends DefaultHydraniumDocumentUpdateHandler {}
       const shared = composeShared(connectionModule, {
          lsp: { DocumentUpdateHandler: (services: ServerSharedServices) => new AdopterHandler(services) }
       } as unknown as SharedModule);

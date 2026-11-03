@@ -32,7 +32,7 @@ import {
 } from '@hydranium/langium';
 import { type HydraniumLanguageServices } from '../../../src/langium/language-module.js';
 import { builtLocalSymbols } from '../../../src/langium/scope/built-local-symbols.js';
-import { HydraniumScopeProvider } from '../../../src/langium/scope/hydranium-scope-provider.js';
+import { DefaultHydraniumScopeProvider, type HydraniumScopeProvider } from '../../../src/langium/scope/hydranium-scope-provider.js';
 import { type TieredAstNodeDescription } from '../../../src/langium/scope/scoped-ast-node-description.js';
 import { makeFakeAstNode, makeFakeDescription, makeFakeReflection, makeNoopTracer, makeTestServices } from '../../../src/testing/index.js';
 
@@ -116,10 +116,10 @@ function makeStubServices(scopeExtensionService: unknown = {}): HydraniumLanguag
    } as unknown as HydraniumLanguageServices;
 }
 
-describe('HydraniumScopeProvider', () => {
+describe('DefaultHydraniumScopeProvider', () => {
    describe('referenceContextToInfo', () => {
       it('throws when the source cannot be resolved', () => {
-         const provider = new HydraniumScopeProvider(makeStubServices());
+         const provider = new DefaultHydraniumScopeProvider(makeStubServices());
          const ctx: ReferenceContext = {
             source: { type: 'Unknown' } as unknown as ReferenceSource,
             property: 'someRef'
@@ -129,7 +129,7 @@ describe('HydraniumScopeProvider', () => {
 
       it('builds a synthetic-element chain on top of a resolved root source', () => {
          const root = makeFakeAstNode<AstNode>({ $type: 'Root' });
-         class TestProvider extends HydraniumScopeProvider {
+         class TestProvider extends DefaultHydraniumScopeProvider {
             protected override resolveRootElement(): AstNode | undefined {
                return root;
             }
@@ -149,7 +149,7 @@ describe('HydraniumScopeProvider', () => {
 
       it("carries a step's index onto the stub as $containerIndex", () => {
          const root = makeFakeAstNode<AstNode>({ $type: 'Root' });
-         class TestProvider extends HydraniumScopeProvider {
+         class TestProvider extends DefaultHydraniumScopeProvider {
             protected override resolveRootElement(): AstNode | undefined {
                return root;
             }
@@ -169,7 +169,7 @@ describe('HydraniumScopeProvider', () => {
          // always has `[]` — so an extension or key provider reading one off a
          // stub meets a shape that occurs nowhere else in the tree.
          const root = makeFakeAstNode<AstNode>({ $type: 'Root' });
-         class TestProvider extends HydraniumScopeProvider {
+         class TestProvider extends DefaultHydraniumScopeProvider {
             protected override resolveRootElement(): AstNode | undefined {
                return root;
             }
@@ -188,7 +188,7 @@ describe('HydraniumScopeProvider', () => {
          // has no metadata for, and that must still produce a usable container
          // rather than throwing inside the lookup.
          const root = makeFakeAstNode<AstNode>({ $type: 'Root' });
-         class TestProvider extends HydraniumScopeProvider {
+         class TestProvider extends DefaultHydraniumScopeProvider {
             protected override resolveRootElement(): AstNode | undefined {
                return root;
             }
@@ -211,7 +211,7 @@ describe('HydraniumScopeProvider', () => {
          const first = makeFakeAstNode<AstNode>({ $type: 'Item' });
          const second = makeFakeAstNode<AstNode>({ $type: 'Item' });
          const root = makeFakeAstNode<AstNode>({ $type: 'Root', only: leaf, many: [first, second] });
-         class TestProvider extends HydraniumScopeProvider {
+         class TestProvider extends DefaultHydraniumScopeProvider {
             protected override resolveRootElement(): AstNode | undefined {
                return root;
             }
@@ -259,7 +259,7 @@ describe('HydraniumScopeProvider', () => {
    describe('source resolution hooks', () => {
       it('routes SyntheticSource through resolveSyntheticSource', () => {
          const sentinel = makeFakeAstNode<AstNode>({ $type: 'Sentinel' });
-         class TestProvider extends HydraniumScopeProvider {
+         class TestProvider extends DefaultHydraniumScopeProvider {
             protected override resolveSyntheticSource(): AstNode | undefined {
                return sentinel;
             }
@@ -274,7 +274,7 @@ describe('HydraniumScopeProvider', () => {
          const sentinel = makeFakeAstNode<AstNode>({ $type: 'Global' });
          let receivedName: string | undefined;
          let receivedType: string | undefined;
-         class TestProvider extends HydraniumScopeProvider {
+         class TestProvider extends DefaultHydraniumScopeProvider {
             protected override resolveElementByName(name: string, type?: string): AstNode | undefined {
                receivedName = name;
                receivedType = type;
@@ -290,14 +290,14 @@ describe('HydraniumScopeProvider', () => {
       });
 
       it('default resolveElementByName returns undefined (consumers opt in)', () => {
-         const provider = new HydraniumScopeProvider(makeStubServices());
+         const provider = new DefaultHydraniumScopeProvider(makeStubServices());
          const source: ElementSource = ReferenceSource.element('x', 'Y');
          const result = provider.resolveReferenceSource(source);
          expect(result).toBeUndefined();
       });
 
       it('default resolveSyntheticSource materialises a container when no document is loaded', () => {
-         const provider = new HydraniumScopeProvider(makeStubServices());
+         const provider = new DefaultHydraniumScopeProvider(makeStubServices());
          const source: SyntheticSource = ReferenceSource.synthetic('memory://missing', 'X');
 
          const result = provider.resolveReferenceSource(source);
@@ -310,7 +310,7 @@ describe('HydraniumScopeProvider', () => {
       });
 
       it('default resolveSyntheticSource parses the stand-in under its OWN language', () => {
-         const provider = new HydraniumScopeProvider(makeStubServices());
+         const provider = new DefaultHydraniumScopeProvider(makeStubServices());
          const source: SyntheticSource = ReferenceSource.synthetic('memory://a-folder', 'X');
 
          const result = provider.resolveReferenceSource(source);
@@ -418,7 +418,7 @@ describe('HydraniumScopeProvider', () => {
             ]
          });
          bundle.projectManager.ownUri('file:///workspace/projA/E.fake', 'A');
-         const provider = new HydraniumScopeProvider(makeLanguageServices(bundle.services));
+         const provider = new DefaultHydraniumScopeProvider(makeLanguageServices(bundle.services));
          const global = new MapScope([tiered('A.Element', 'file:///workspace/projA/E.fake', 'A')]);
          // Source URI is NOT owned by any project.
          const result = provider.getProjectScope(URI.parse('file:///workspace/unowned/S.fake'), global, REF_TYPE);
@@ -432,7 +432,7 @@ describe('HydraniumScopeProvider', () => {
          // hides it, which is what makes this discriminating.
          const bundle = makeTestServices<FakeRoot>({ seedProjects: [{ id: 'single', referenceName: 'single' }] });
          bundle.projectManager.ownUri('file:///workspace/single/S.fake', 'single');
-         const provider = new HydraniumScopeProvider(makeLanguageServices(bundle.services));
+         const provider = new DefaultHydraniumScopeProvider(makeLanguageServices(bundle.services));
          const foreign = new MapScope([tiered('foreign.Element', 'file:///workspace/other/E.fake', 'other')]);
          const result = provider.getProjectScope(URI.parse('file:///workspace/single/S.fake'), foreign, REF_TYPE);
          expect(names(result)).toEqual(['foreign.Element']);
@@ -454,7 +454,7 @@ describe('HydraniumScopeProvider', () => {
             ]
          });
          bundle.projectManager.ownUri('file:///workspace/projA/S.fake', 'A');
-         const provider = new HydraniumScopeProvider(makeLanguageServices(bundle.services));
+         const provider = new DefaultHydraniumScopeProvider(makeLanguageServices(bundle.services));
          // Project-tier and owned by 'B', which is not the source's project and
          // is not in its (empty) dependency closure.
          const global = new MapScope([tiered('B.Element', 'file:///workspace/projB/E.fake', 'B')]);
@@ -474,7 +474,7 @@ describe('HydraniumScopeProvider', () => {
          // was taken, so a too-permissive guard shows up as a call count rather than as
          // an equivalent-looking undefined.
          let identifiedCalls = 0;
-         class SpyProvider extends HydraniumScopeProvider {
+         class SpyProvider extends DefaultHydraniumScopeProvider {
             protected override resolveElementByName(): AstNode | undefined {
                identifiedCalls++;
                return makeFakeAstNode<AstNode>({ $type: 'Spurious' });
@@ -496,7 +496,7 @@ describe('HydraniumScopeProvider', () => {
          const docUri = 'memory://loaded';
          const root = makeFakeAstNode<FakeRoot>({ $type: 'FakeRoot', name: 'r' });
          const bundle = makeTestServices<FakeRoot>({ seedDocuments: [{ uri: docUri, root }] });
-         const provider = new HydraniumScopeProvider(makeLanguageServices(bundle.services));
+         const provider = new DefaultHydraniumScopeProvider(makeLanguageServices(bundle.services));
          const source: SyntheticSource = ReferenceSource.synthetic(docUri, 'Draft');
          const result = provider.resolveReferenceSource(source);
          expect(result).toBeDefined();
@@ -509,9 +509,9 @@ describe('HydraniumScopeProvider', () => {
    });
 });
 
-describe('HydraniumScopeProvider extension tiers', () => {
+describe('DefaultHydraniumScopeProvider extension tiers', () => {
    /** Answers a fixed project scope, so only the extension layering is under test. */
-   class ExtensionLayeringProvider extends HydraniumScopeProvider {
+   class ExtensionLayeringProvider extends DefaultHydraniumScopeProvider {
       projectScope: Scope = EMPTY_SCOPE;
       createScopeCalls = 0;
 
@@ -614,9 +614,9 @@ describe('HydraniumScopeProvider extension tiers', () => {
    });
 });
 
-describe('HydraniumScopeProvider document-local scope', () => {
+describe('DefaultHydraniumScopeProvider document-local scope', () => {
    /** Answers an empty project scope, so only the document-local tier is under test. */
-   class LocalScopeProvider extends HydraniumScopeProvider {
+   class LocalScopeProvider extends DefaultHydraniumScopeProvider {
       protected override createGlobalScope(): Scope {
          return EMPTY_SCOPE;
       }

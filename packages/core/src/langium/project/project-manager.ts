@@ -28,7 +28,7 @@ import type { MemberRelinkFinishedListener, MemberRelinkStartedListener, Project
  *
  * ## Lifecycle
  *
- * 1. `HydraniumWorkspaceManager.performStartup` awaits {@link discoverProjects}
+ * 1. `DefaultHydraniumWorkspaceManager.performStartup` awaits {@link discoverProjects}
  *    as **phase 0**, before Langium's file-discovery and document-loading
  *    phases. By the time any non-descriptor document hits `Parsed`, the
  *    registry is fully populated and {@link getProject} returns a

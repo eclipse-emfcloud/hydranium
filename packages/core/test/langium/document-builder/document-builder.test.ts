@@ -35,7 +35,8 @@ import {
    type BuildEndedEvent,
    DEFAULT_LOGGED_PHASES,
    type DocumentBuilderOptions,
-   HydraniumDocumentBuilder,
+   DefaultHydraniumDocumentBuilder,
+   type HydraniumDocumentBuilder,
    type RunningBuild
 } from '../../../src/langium/document-builder/document-builder.js';
 import {
@@ -58,7 +59,7 @@ import {
  * subclass field initialisers run *after* super() returns, by which time
  * super() has already invoked `registerPhaseListeners()`).
  */
-abstract class CapturingBuilder extends HydraniumDocumentBuilder {
+abstract class CapturingBuilder extends DefaultHydraniumDocumentBuilder {
    constructor(logger: Logger, options: DocumentBuilderOptions = {}) {
       super(makeStubServices(logger), options);
    }
@@ -182,7 +183,7 @@ function makeStubServices(
    });
 }
 
-describe('HydraniumDocumentBuilder', () => {
+describe('DefaultHydraniumDocumentBuilder', () => {
    /**
     * The workspace-startup validation drop, at the layer that decides it.
     *
@@ -333,7 +334,7 @@ describe('HydraniumDocumentBuilder', () => {
          services.workspace.DocumentUriPolicy = linkAware;
          services.workspace.LangiumDocuments.getDocument = (uri: URI) =>
             uri.toString() === REAL ? ({ state: DocumentState.Validated } as LangiumDocument) : undefined;
-         const builder = new HydraniumDocumentBuilder(services, { logLevel: 'off' });
+         const builder = new DefaultHydraniumDocumentBuilder(services, { logLevel: 'off' });
          const status = builder.formatBuildStatus(URI.parse(LINK));
          expect(status).toContain('Validated');
          expect(status).not.toContain('not loaded');
@@ -529,7 +530,7 @@ describe('HydraniumDocumentBuilder', () => {
    describe('ensureLanguageFileExtensions caching registered extensions', () => {
       // The walk filters on this list, so a stale entry means files of a
       // late-registered language never build on a watched-directory change.
-      class CacheBuilder extends HydraniumDocumentBuilder {
+      class CacheBuilder extends DefaultHydraniumDocumentBuilder {
          extensions(): string[] {
             this.ensureLanguageFileExtensions();
             return this.languageFileExtensions;
@@ -596,7 +597,7 @@ describe('HydraniumDocumentBuilder', () => {
       // `languageFileExtensions` are protected on the framework builder, so a
       // subclass reaches them directly — no cast. (`flattenAndAdaptURI` reads the
       // extensions but doesn't populate them — `update()` does — so seed them.)
-      class WalkBuilder extends HydraniumDocumentBuilder {
+      class WalkBuilder extends DefaultHydraniumDocumentBuilder {
          constructor(services: ServerSharedServicesMinimal) {
             super(services, { logLevel: 'off' });
             this.languageFileExtensions = ['.a'];
@@ -770,7 +771,7 @@ describe('HydraniumDocumentBuilder', () => {
                }
             }
          });
-         return new HydraniumDocumentBuilder(services, { logLevel: 'off', refreshCrossDocumentComputedScopes });
+         return new DefaultHydraniumDocumentBuilder(services, { logLevel: 'off', refreshCrossDocumentComputedScopes });
       }
       function doc(state: DocumentState, root: object | undefined, path = '/a.a'): LangiumDocument {
          return { uri: URI.file(path), state, parseResult: { value: root }, references: [] } as unknown as LangiumDocument;
@@ -782,7 +783,7 @@ describe('HydraniumDocumentBuilder', () => {
       }
       // The phases are stubbed out, so a build runs only the graft before them.
       async function buildWithoutPhases(run: () => Promise<void>): Promise<void> {
-         const phases = vi.spyOn(HydraniumDocumentBuilder.prototype as unknown as LangiumPhases, 'buildPhases').mockResolvedValue();
+         const phases = vi.spyOn(DefaultHydraniumDocumentBuilder.prototype as unknown as LangiumPhases, 'buildPhases').mockResolvedValue();
          try {
             await run();
          } finally {
@@ -844,7 +845,7 @@ describe('HydraniumDocumentBuilder', () => {
          const builder = rehydrateBuilder();
          const tokens: CancellationToken[] = [];
          const phases = vi
-            .spyOn(HydraniumDocumentBuilder.prototype as unknown as LangiumPhases, 'buildPhases')
+            .spyOn(DefaultHydraniumDocumentBuilder.prototype as unknown as LangiumPhases, 'buildPhases')
             .mockImplementation(async build => void tokens.push(build.cancelToken));
          const source = new CancellationTokenSource();
          try {
@@ -963,7 +964,7 @@ describe('HydraniumDocumentBuilder', () => {
    describe('subclass overrides', () => {
       it('formatUri override is honoured by phaseReachedLine', () => {
          const logger = makeNoopLogger();
-         class SubclassBuilder extends HydraniumDocumentBuilder {
+         class SubclassBuilder extends DefaultHydraniumDocumentBuilder {
             protected override formatUri(uri: URI): string {
                return `[ws]${uri.path}`;
             }
@@ -982,7 +983,7 @@ describe('HydraniumDocumentBuilder', () => {
    });
 
    describe('phase batch ownership', () => {
-      class OwnerBuilder extends HydraniumDocumentBuilder {
+      class OwnerBuilder extends DefaultHydraniumDocumentBuilder {
          associate(documents: LangiumDocument[], build: RunningBuild): void {
             this.buildsByBatch.set(documents, build);
          }
@@ -1090,7 +1091,7 @@ describe('HydraniumDocumentBuilder', () => {
    });
 
    describe('onBuildEnded', () => {
-      class EndingBuilder extends HydraniumDocumentBuilder {
+      class EndingBuilder extends DefaultHydraniumDocumentBuilder {
          constructor(logger: Logger) {
             super(makeStubServices(logger), { logLevel: 'off' });
          }
@@ -1183,7 +1184,7 @@ describe('HydraniumDocumentBuilder', () => {
    });
 
    describe('awaitBuilderState', () => {
-      class PhaseBuilder extends HydraniumDocumentBuilder {
+      class PhaseBuilder extends DefaultHydraniumDocumentBuilder {
          constructor() {
             super(makeStubServices(makeNoopLogger()), { logLevel: 'off' });
          }
@@ -1279,7 +1280,7 @@ describe('HydraniumDocumentBuilder', () => {
       // `Validated`, because the validation phase ran over an empty list. A
       // first read wanting diagnostics then waited on a phase notification that
       // no future build was going to emit.
-      class OrphanBuilder extends HydraniumDocumentBuilder {
+      class OrphanBuilder extends DefaultHydraniumDocumentBuilder {
          readonly updateCalls: string[][] = [];
          lastUpdateToken?: CancellationToken;
          readonly lock = this.workspaceLock;
@@ -1687,7 +1688,7 @@ describe('HydraniumDocumentBuilder', () => {
       // under test is that it removes ONLY byte-identical entries — anything else
       // would silently drop a distinct finding, and `data` in particular carries
       // quick-fix payloads.
-      class ExposedBuilder extends HydraniumDocumentBuilder {
+      class ExposedBuilder extends DefaultHydraniumDocumentBuilder {
          callDedupe(document: LangiumDocument): void {
             this.dedupeDiagnostics(document);
          }
@@ -1753,7 +1754,7 @@ describe('HydraniumDocumentBuilder', () => {
       // message: the renderer answers with a string by contract, so comparing
       // the answer against the message OBJECT never matches and the entry was
       // replaced with its own plain text.
-      class ExposedBuilder extends HydraniumDocumentBuilder {
+      class ExposedBuilder extends DefaultHydraniumDocumentBuilder {
          callRender(document: LangiumDocument): void {
             this.renderDiagnostics(document);
          }
@@ -1845,7 +1846,7 @@ describe('HydraniumDocumentBuilder', () => {
          ({ uri: URI.parse('file:///workspace/a.a'), textDocument: { version: 1 } }) as LangiumDocument;
 
       it('tells its listener after every phase listener ran, with the version they ran at', async () => {
-         const builder = new HydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
+         const builder = new DefaultHydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
          const order: string[] = [];
          builder.onDocumentPhaseDelivered(DocumentState.Validated, (_document, version) => void order.push(`delivered v${version}`));
          builder.onDocumentPhase(DocumentState.Validated, () => void order.push('first'));
@@ -1861,7 +1862,7 @@ describe('HydraniumDocumentBuilder', () => {
       });
 
       it('does not tell its listener when a cancel skipped a phase listener', async () => {
-         const builder = new HydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
+         const builder = new DefaultHydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
          const cancel = new CancellationTokenSource();
          const order: string[] = [];
          builder.onDocumentPhaseDelivered(DocumentState.Validated, () => void order.push('delivered'));
@@ -1877,7 +1878,7 @@ describe('HydraniumDocumentBuilder', () => {
       });
 
       it('tells its listener for a document with no phase listener at all', async () => {
-         const builder = new HydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
+         const builder = new DefaultHydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
          const deliveries: LangiumDocument[] = [];
          builder.onDocumentPhaseDelivered(DocumentState.Validated, delivered => void deliveries.push(delivered));
 
@@ -1893,7 +1894,7 @@ describe('HydraniumDocumentBuilder', () => {
          ['build', true, (builder: HydraniumDocumentBuilder) => builder.build([])],
          ['update', false, (builder: HydraniumDocumentBuilder) => builder.update([], [])]
       ] as const)('report a %s while it runs and nothing once it has ended', async (_kind, insideBuild, run) => {
-         const builder = new HydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
+         const builder = new DefaultHydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
          let seenInside: boolean | undefined;
          builder.onUpdate(() => void (seenInside = builder.isInsideBuildUpdate()));
          expect(builder.activeBuild).toBeUndefined();
@@ -1910,7 +1911,7 @@ describe('HydraniumDocumentBuilder', () => {
       });
 
       it('report no build once one has failed', async () => {
-         const builder = new HydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
+         const builder = new DefaultHydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
          builder.onUpdate(() => {
             throw new Error('listener failed');
          });
@@ -1924,7 +1925,7 @@ describe('HydraniumDocumentBuilder', () => {
       });
 
       it('tell an update listener a build calls it only before its first await, also while an update overlaps', async () => {
-         const builder = new HydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
+         const builder = new DefaultHydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
          const seen: string[] = [];
          const gate = new Deferred<void>();
          const bothCalled = new Deferred<void>();
@@ -1947,7 +1948,7 @@ describe('HydraniumDocumentBuilder', () => {
       });
 
       it('relink no document within a build when no build is linking', async () => {
-         const builder = new HydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
+         const builder = new DefaultHydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
          const document = makeFakeDocument('file:///a.x', makeFakeAstNode({ $type: 'Root' }), { state: DocumentState.Validated });
 
          await expect(builder.relinkInRunningBuild(document, document, CancellationToken.None)).resolves.toBe(false);

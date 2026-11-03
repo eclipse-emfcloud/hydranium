@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { HydraniumLangiumDocumentFactory } from '@hydranium/core';
+import { DefaultHydraniumLangiumDocumentFactory } from '@hydranium/core';
 import { startLanguageServer } from '@hydranium/core/lsp';
 import { makeLspServerConnection, type LspServerConnection } from '@hydranium/core/testing/node';
 import { CstUtils, isOperationCancelled, type LangiumDocument, URI } from '@hydranium/langium';
@@ -168,7 +168,7 @@ describe('virtual document text', () => {
       const virtual = [
          factory.fromString(text, URI.parse('virtual:bom/sync.domain')),
          await factory.fromString(text, URI.parse('virtual:bom/async.domain'), CancellationToken.None),
-         factory instanceof HydraniumLangiumDocumentFactory
+         factory instanceof DefaultHydraniumLangiumDocumentFactory
             ? factory.fromStringInLanguage(text, URI.parse('virtual:bom/by-language.domain'), 'order-flow-domain')
             : undefined
       ];

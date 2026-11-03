@@ -21,7 +21,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import type { ServerSharedServices } from '../../src/langium/module.js';
 import { type DocumentDirtyChangedEvent } from '../../src/documents/dirty-state-tracker.js';
-import { HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
+import { DefaultHydraniumTextDocuments, type HydraniumTextDocuments } from '../../src/documents/hydranium-text-documents.js';
 import { LANGUAGE_CLIENT_ID } from '../../src/documents/client-ids.js';
 import { DefaultFileSystemTaskQueue } from '../../src/documents/file-system-task-queue.js';
 import { DefaultDocumentUriPolicy } from '../../src/langium/workspace/document-uri-policy.js';
@@ -34,7 +34,7 @@ const DISK = 'on disk\n';
 const EDITED = 'edited\n';
 
 /** Reaches the store's protected editor-save path, which the LSP connection drives. */
-class EditorSavingTextDocuments extends HydraniumTextDocuments<TextDocument> {
+class EditorSavingTextDocuments extends DefaultHydraniumTextDocuments<TextDocument> {
    editorSaved(uri: string): Promise<void> {
       return this.notifyLanguageClientSave({ textDocument: { uri } });
    }
@@ -231,7 +231,7 @@ function open(docs: HydraniumTextDocuments<TextDocument>, clientId: string, text
    docs.notifyDidOpenTextDocument({ textDocument: { uri: FILE, languageId: 'plaintext', version: 1, text } }, clientId);
 }
 
-describe('HydraniumTextDocuments disk baseline and dirty state', () => {
+describe('DefaultHydraniumTextDocuments disk baseline and dirty state', () => {
    it('opens clean on the text it opened with, and flips on each change of the answer', () => {
       const { docs, flips } = makeRig();
       open(docs, 'form');
@@ -613,7 +613,7 @@ describe('HydraniumTextDocuments disk baseline and dirty state', () => {
    });
 });
 
-describe('HydraniumTextDocuments text state', () => {
+describe('DefaultHydraniumTextDocuments text state', () => {
    it('hashes the text of a held document once per version', () => {
       const { docs } = makeRig();
       open(docs, 'form');

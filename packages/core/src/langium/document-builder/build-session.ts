@@ -10,7 +10,7 @@
 import { type URI } from '@hydranium/langium';
 import { type Stopwatch } from '@hydranium/protocol';
 
-/** What a build is about, handed to `HydraniumDocumentBuilder.createBuildSession`. */
+/** What a build is about, handed to `DefaultHydraniumDocumentBuilder.createBuildSession`. */
 export interface BuildSessionContext {
    /**
     * Which entry point opened the build: `'build'` is the workspace-wide pass
@@ -43,11 +43,11 @@ export interface BuildSessionContext {
  * `undefined` on every build in a production configuration that logs above
  * `debug`. A teardown guard keyed on the id would then compare `undefined`
  * against `undefined` and let a preempted build clear its successor's state.
- * Reference equality against `HydraniumDocumentBuilder.activeSession` holds in
+ * Reference equality against `DefaultHydraniumDocumentBuilder.activeSession` holds in
  * both configurations, which is why nothing here is keyed on the id.
  *
  * Adopters carrying build-scoped state of their own subclass this and return it
- * from `HydraniumDocumentBuilder.createBuildSession`, narrowing with an
+ * from `DefaultHydraniumDocumentBuilder.createBuildSession`, narrowing with an
  * `instanceof` where they read it back. That buys them the framework's
  * preemption-correct teardown rather than a second copy of it.
  */

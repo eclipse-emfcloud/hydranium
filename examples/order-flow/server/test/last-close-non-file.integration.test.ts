@@ -18,12 +18,12 @@
 
 import {
    DefaultFileSystemProviderRegistry,
-   HydraniumWorkspaceManager,
+   DefaultHydraniumWorkspaceManager,
    inMemoryFileSystem,
    type ServerSharedServices,
    type WritableFileSystemProvider
 } from '@hydranium/core';
-import { HydraniumDocumentUpdateHandler } from '@hydranium/core/lsp';
+import { DefaultHydraniumDocumentUpdateHandler } from '@hydranium/core/lsp';
 import { NodeFileSystem } from '@hydranium/core/node';
 import { makeCapturingTracer } from '@hydranium/core/testing';
 import {
@@ -114,7 +114,7 @@ async function boot(
             {
                lsp: {
                   DocumentUpdateHandler: (shared: ServerSharedServices) =>
-                     new HydraniumDocumentUpdateHandler(shared, { debounceMs: 60_000 })
+                     new DefaultHydraniumDocumentUpdateHandler(shared, { debounceMs: 60_000 })
                }
             },
             ...extraSharedModules
@@ -271,13 +271,13 @@ const LIBRARY_MODULE: SharedModule = {
 const OVERRIDE_URI = URI.parse('library:/override.domain');
 
 /** Seeds a document under `library:` from its own `loadAdditionalDocuments`, bypassing the group. */
-class OverrideSeedingWorkspaceManager extends HydraniumWorkspaceManager {
+class OverrideSeedingWorkspaceManager extends DefaultHydraniumWorkspaceManager {
    constructor(protected readonly shared: ServerSharedServices) {
       super(shared);
    }
 
    protected override async loadAdditionalDocuments(
-      folders: Parameters<HydraniumWorkspaceManager['loadAdditionalDocuments']>[0],
+      folders: Parameters<DefaultHydraniumWorkspaceManager['loadAdditionalDocuments']>[0],
       collector: (document: LangiumDocument) => void
    ): Promise<void> {
       await super.loadAdditionalDocuments(folders, collector);
@@ -345,7 +345,7 @@ describe('a seeded document the bound provider cannot serve', () => {
 
    it('stays quiet when warnUnservedDocuments is false', async () => {
       const warnings = await startupWarnings(LIBRARY_MODULE, {
-         workspace: { WorkspaceManager: services => new HydraniumWorkspaceManager(services, { warnUnservedDocuments: false }) }
+         workspace: { WorkspaceManager: services => new DefaultHydraniumWorkspaceManager(services, { warnUnservedDocuments: false }) }
       });
 
       expect(warnings).toEqual([]);

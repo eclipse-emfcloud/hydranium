@@ -15,7 +15,10 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DefaultModelLedger } from '../../src/documents/model-ledger.js';
 import { DefaultVersionSyncService } from '../../src/documents/version-sync-service.js';
 import type { ServerSharedServices } from '../../src/langium/module.js';
-import { HydraniumLangiumDocumentFactory } from '../../src/langium/workspace/hydranium-langium-document-factory.js';
+import {
+   DefaultHydraniumLangiumDocumentFactory,
+   type HydraniumLangiumDocumentFactory
+} from '../../src/langium/workspace/hydranium-langium-document-factory.js';
 import { makeFakeAstNode } from '../../src/testing/fake-document.js';
 import { makeNoopTracer } from '../../src/testing/make-test-tracer.js';
 
@@ -63,7 +66,7 @@ function makeRig(text: string, version: number): Rig {
       }
    } as unknown as ServerSharedServices;
    services.workspace.VersionSyncService = new DefaultVersionSyncService(services);
-   return { factory: new HydraniumLangiumDocumentFactory(services), ledger, stored, hooks };
+   return { factory: new DefaultHydraniumLangiumDocumentFactory(services), ledger, stored, hooks };
 }
 
 function edit(stored: TextDocument, text: string): void {

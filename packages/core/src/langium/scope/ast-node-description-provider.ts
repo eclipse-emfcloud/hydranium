@@ -9,6 +9,7 @@
 
 import { type Tracer } from '@hydranium/protocol';
 import {
+   type AstNodeDescriptionProvider,
    type AstNode,
    AstUtils,
    CstUtils,
@@ -20,6 +21,30 @@ import {
 import type { LogNameOptions } from '../diagnostics/logger.js';
 import type { HydraniumLanguageServices } from '../language-module.js';
 import { type DescriptionTier, type TieredAstNodeDescription } from './scoped-ast-node-description.js';
+
+export interface HydraniumAstNodeDescriptionProvider extends AstNodeDescriptionProvider {
+   createDescription(node: AstNode, name: string | undefined, document?: LangiumDocument): TieredAstNodeDescription;
+   createLocal(options: { readonly node: AstNode; readonly name: string; readonly document: LangiumDocument }): TieredAstNodeDescription;
+   createProject(options: {
+      readonly node: AstNode;
+      readonly name: string;
+      readonly document: LangiumDocument;
+      readonly projectId: string;
+   }): TieredAstNodeDescription;
+   createPublic(options: {
+      readonly node: AstNode;
+      readonly name: string;
+      readonly document: LangiumDocument;
+      readonly projectId: string;
+   }): TieredAstNodeDescription;
+   createUniversal(options: {
+      readonly node: AstNode;
+      readonly name: string;
+      readonly document: LangiumDocument;
+   }): TieredAstNodeDescription;
+   nameSegmentOf(node: AstNode): DocumentSegment | undefined;
+   selectionSegmentOf(node: AstNode): DocumentSegment | undefined;
+}
 
 /**
  * Framework `AstNodeDescriptionProvider` extension. Adds four typed
@@ -38,7 +63,10 @@ import { type DescriptionTier, type TieredAstNodeDescription } from './scoped-as
  * document through Langium's `LangiumDocumentFactory.fromModel`; see
  * `virtualUri` for the URI-construction helper.
  */
-export class HydraniumAstNodeDescriptionProvider extends DefaultAstNodeDescriptionProvider {
+export class DefaultHydraniumAstNodeDescriptionProvider
+   extends DefaultAstNodeDescriptionProvider
+   implements HydraniumAstNodeDescriptionProvider
+{
    protected readonly tracer: Tracer;
    protected readonly services: HydraniumLanguageServices;
 

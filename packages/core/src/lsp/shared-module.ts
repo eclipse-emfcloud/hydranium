@@ -16,7 +16,7 @@ import {
 import { LspLogger } from '../langium/diagnostics/lsp-logger.js';
 import { type ServerModuleContext, type ServerSharedServices } from '../langium/module.js';
 import { VIRTUAL_SCHEME } from '../langium/workspace/virtual-document.js';
-import { HydraniumDocumentUpdateHandler } from './hydranium-document-update-handler.js';
+import { DefaultHydraniumDocumentUpdateHandler, type HydraniumDocumentUpdateHandler } from './hydranium-document-update-handler.js';
 
 /**
  * Shared-tier slots contributed by the LSP-textual protocol head. Bound by
@@ -33,7 +33,7 @@ import { HydraniumDocumentUpdateHandler } from './hydranium-document-update-hand
  *   (an output channel, a structured logger) override the slot after this
  *   module.
  *
- * - {@link HydraniumDocumentUpdateHandler} carries the framework's handling of
+ * - {@link DefaultHydraniumDocumentUpdateHandler} carries the framework's handling of
  *   the LSP document events. Adopters with their own update-handler subclass
  *   should extend it (not Langium's `DefaultDocumentUpdateHandler`) to keep
  *   that handling.
@@ -52,7 +52,6 @@ import { HydraniumDocumentUpdateHandler } from './hydranium-document-update-hand
  * per-language binding would attach N listener sets to the one document store.
  */
 export interface LspServerAddedSharedServices {
-   /* override */ Logger: LspLogger;
    lsp: {
       /* override */ DocumentUpdateHandler: HydraniumDocumentUpdateHandler;
       TextDocumentContentProvider: TextDocumentContentProvider;
@@ -84,11 +83,11 @@ export type LspServerSharedServices = ServerSharedServices & LspServerAddedShare
  */
 export function createLspServerSharedModule(
    _context: ServerModuleContext
-): Module<LspServerSharedServices, PartialLangiumSharedServices & LspServerAddedSharedServices> {
+): Module<LspServerSharedServices, PartialLangiumSharedServices & Pick<ServerSharedServices, 'Logger'> & LspServerAddedSharedServices> {
    return {
       Logger: services => new LspLogger(services),
       lsp: {
-         DocumentUpdateHandler: services => new HydraniumDocumentUpdateHandler(services),
+         DocumentUpdateHandler: services => new DefaultHydraniumDocumentUpdateHandler(services),
          TextDocumentContentProvider: services => new DefaultTextDocumentContentProvider(services, VIRTUAL_SCHEME)
       }
    };
