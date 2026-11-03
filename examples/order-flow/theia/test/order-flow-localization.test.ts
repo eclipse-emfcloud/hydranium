@@ -14,6 +14,7 @@ import { DATA_SERVER_CONNECT_FAILED, SESSION_CLOSED } from '@hydranium/protocol/
 import * as coreMessages from '@hydranium/core/messages';
 import * as dataServerMessages from '@hydranium/data-server/messages';
 import * as glspServerMessages from '@hydranium/glsp-server/messages';
+import * as processEditMessages from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-edit-messages';
 import * as orderFlowMessages from '@hydranium/example-order-flow-client/lib/properties/properties-messages';
 import * as orderFlowServerMessages from '@hydranium/example-order-flow-server/lib/messages';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -69,7 +70,15 @@ const serverTranslations = readCatalogue(SERVER_CATALOGUE);
  * barrel's other exports, and a hand-rolled union over `Object.values` does not
  * narrow.
  */
-const BARRELS = [protocolMessages, coreMessages, dataServerMessages, glspServerMessages, orderFlowMessages, orderFlowServerMessages];
+const BARRELS = [
+   protocolMessages,
+   coreMessages,
+   dataServerMessages,
+   glspServerMessages,
+   orderFlowMessages,
+   processEditMessages,
+   orderFlowServerMessages
+];
 
 /**
  * The one exemption, and it has to be exactly this narrow.
@@ -137,14 +146,7 @@ describe('the German catalogue', () => {
       expect(renderFrameworkMessage(reported)).toBe('Could not connect to the data server: ECONNREFUSED');
    });
 
-   it('shares no key with the catalogue the SERVER renders from but the one both sides raise', () => {
-      // The invariant, made checkable: a message rendered on both sides has two
-      // authorities over one sentence, and the two would drift on the first
-      // reword. Which side renders a message decides which file it belongs in,
-      // so an overlap is the defect — not a duplicate translation. The one
-      // exception is a message both sides RAISE: the server ends its sessions,
-      // and the client tier refuses a call on a session it has ended, so each
-      // renders its own, and the two entries must hold one sentence.
+   it('shares only messages both sides raise and gives them the same translation', () => {
       const serverKeys = Object.keys(serverTranslations);
       // Both non-empty first, which `findSharedCodes` documents as the caller's
       // job: an empty set on either side satisfies a disjointness assertion
@@ -152,8 +154,11 @@ describe('the German catalogue', () => {
       expect(serverKeys.length).toBeGreaterThan(0);
       expect(Object.keys(translations).length).toBeGreaterThan(0);
 
-      expect(findSharedCodes(serverKeys, Object.keys(translations))).toEqual([SESSION_CLOSED.code]);
-      expect(translations[SESSION_CLOSED.code]).toBe(serverTranslations[SESSION_CLOSED.code]);
+      const shared = [SESSION_CLOSED.code, processEditMessages.UNAVAILABLE.code].sort();
+      expect(findSharedCodes(serverKeys, Object.keys(translations)).sort()).toEqual(shared);
+      for (const code of shared) {
+         expect(translations[code]).toBe(serverTranslations[code]);
+      }
    });
 
    it('leaves every server-rendered code to the server, including the ones it used to hold', () => {

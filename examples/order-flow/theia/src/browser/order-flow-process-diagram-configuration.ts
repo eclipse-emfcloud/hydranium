@@ -7,6 +7,9 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import { ProcessEditMessageRenderer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-edit';
+import { renderFrameworkMessage } from '@hydranium/protocol';
+import { nls } from '@theia/core/lib/common/nls';
 import { type ContainerConfiguration } from '@eclipse-glsp/client';
 import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
 import { AbstractHydraniumGlspDiagramConfiguration, createGlspClientTheiaModule } from '@hydranium/glsp-client-theia/browser';
@@ -45,6 +48,9 @@ export class OrderFlowProcessDiagramConfiguration extends AbstractHydraniumGlspD
    protected override propagateMarkersToProblemsView = false;
 
    configureContainer(container: Container, ...containerConfiguration: ContainerConfiguration): Container {
+      container
+         .bind<ProcessEditMessageRenderer>(ProcessEditMessageRenderer)
+         .toConstantValue(message => renderFrameworkMessage(message, nls.localization?.translations));
       return initializeOrderFlowProcessDiagramContainer(container, ...containerConfiguration, orderFlowProcessTheiaModule);
    }
 }

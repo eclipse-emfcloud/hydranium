@@ -16,6 +16,8 @@ import {
    type IContextMenuItemProvider,
    TYPES
 } from '@eclipse-glsp/client';
+import { resolve, type MessageDefinition, type ResolvedMessage } from '@hydranium/protocol';
+import * as messages from './order-flow-process-edit-messages';
 import { inject, injectable, preDestroy } from 'inversify';
 import {
    EditProcessOperation,
@@ -31,12 +33,21 @@ export interface OpenProcessEditAction extends Action {
    elementId: string;
 }
 export const OPEN_PROCESS_EDIT = 'orderFlowOpenProcessEdit';
+export namespace OpenProcessEditAction {
+   export function create(elementId: string): OpenProcessEditAction {
+      return { kind: OPEN_PROCESS_EDIT, elementId };
+   }
+}
+
+export const ProcessEditMessageRenderer = Symbol('ProcessEditMessageRenderer');
+export type ProcessEditMessageRenderer = (message: ResolvedMessage) => string;
 
 /** The shared contributor keeps grammar and reference resolution on the server. */
 @injectable()
 export class OrderFlowProcessEdit implements IContextMenuItemProvider, IActionHandler {
    @inject(EditorContextService) protected readonly editorContext!: EditorContextService;
    @inject(TYPES.IActionDispatcher) protected readonly dispatcher!: IActionDispatcher;
+   @inject(ProcessEditMessageRenderer) protected readonly renderMessage!: ProcessEditMessageRenderer;
    protected dialog?: HTMLDialogElement;
 
    @preDestroy()
@@ -45,22 +56,32 @@ export class OrderFlowProcessEdit implements IContextMenuItemProvider, IActionHa
    }
 
    async getItems(): Promise<ClientMenuItem[]> {
-      if (this.editorContext.isReadonly || this.editorContext.selectedElements.length !== 1) {
-         return [];
-      }
-      const element = this.editorContext.selectedElements[0];
-      if (element.type !== PROCESS_EFFECT_TYPE && element.type !== PROCESS_GATEWAY_NODE_TYPE) {
+      const element = this.editableSelection();
+      if (!element) {
          return [];
       }
       return [
          {
             id: OPEN_PROCESS_EDIT,
-            label: element.type === PROCESS_EFFECT_TYPE ? 'Retarget effect…' : 'Add branch…',
+            label: this.text(element.type === PROCESS_EFFECT_TYPE ? messages.RETARGET_MENU : messages.BRANCH_MENU),
             group: 'edit',
-            actions: [{ kind: OPEN_PROCESS_EDIT, elementId: element.id } as OpenProcessEditAction],
+            actions: [OpenProcessEditAction.create(element.id)],
             isEnabled: () => !this.editorContext.isReadonly
          }
       ];
+   }
+
+   editableSelection() {
+      const selected = this.editorContext.selectedElements;
+      return !this.editorContext.isReadonly &&
+         selected.length === 1 &&
+         (selected[0].type === PROCESS_EFFECT_TYPE || selected[0].type === PROCESS_GATEWAY_NODE_TYPE)
+         ? selected[0]
+         : undefined;
+   }
+
+   text(message: MessageDefinition<string>): string {
+      return this.renderMessage(resolve(message));
    }
 
    handle(action: OpenProcessEditAction): void {
@@ -75,20 +96,20 @@ export class OrderFlowProcessEdit implements IContextMenuItemProvider, IActionHa
       const dialog = document.createElement('dialog');
       this.dialog = dialog;
       dialog.className = 'order-flow-process-edit';
-      dialog.setAttribute('aria-label', 'Edit process');
+      dialog.setAttribute('aria-label', this.text(messages.EDIT));
       const form = document.createElement('form');
       const title = document.createElement('h2');
-      title.textContent = 'Edit process';
+      title.textContent = this.text(messages.EDIT);
       const fields = document.createElement('fieldset');
       const status = document.createElement('p');
       status.setAttribute('role', 'status');
       const apply = document.createElement('button');
       apply.type = 'submit';
-      apply.textContent = 'Apply';
+      apply.textContent = this.text(messages.APPLY);
       apply.disabled = true;
       const cancel = document.createElement('button');
       cancel.type = 'button';
-      cancel.textContent = 'Cancel';
+      cancel.textContent = this.text(messages.CANCEL);
       cancel.onclick = () => dialog.close();
       form.append(title, fields, status, apply, cancel);
       dialog.append(form);
@@ -114,7 +135,7 @@ export class OrderFlowProcessEdit implements IContextMenuItemProvider, IActionHa
          const current = ++generation;
          apply.disabled = true;
          fields.disabled = true;
-         status.textContent = 'Loading choices…';
+         status.textContent = this.text(messages.LOADING);
          try {
             const response = await this.dispatcher.request<SetProcessEditAction>({
                kind: RequestProcessEditAction.KIND,
@@ -127,12 +148,12 @@ export class OrderFlowProcessEdit implements IContextMenuItemProvider, IActionHa
                return;
             }
             if (response.validationError || !response.mode) {
-               status.textContent = response.validationError ?? 'This element is no longer available.';
+               status.textContent = response.validationError ?? this.text(messages.UNAVAILABLE);
                return;
             }
             sourceVersion ??= response.sourceVersion;
             values = { ...response.values };
-            title.textContent = response.mode === 'branch' ? 'Add branch' : 'Retarget effect';
+            title.textContent = response.mode === 'branch' ? this.text(messages.BRANCH) : this.text(messages.RETARGET);
             fields.replaceChildren();
             const keys: (keyof ProcessEditValues)[] =
                response.mode === 'branch'
@@ -142,12 +163,12 @@ export class OrderFlowProcessEdit implements IContextMenuItemProvider, IActionHa
                     : ['entity', 'field'];
             for (const key of keys) {
                const label = document.createElement('label');
-               label.textContent = key.charAt(0).toUpperCase() + key.slice(1);
+               label.textContent = this.text(messages.FIELD_LABELS[key]);
                const input = key === 'label' ? document.createElement('input') : document.createElement('select');
                input.name = key;
                input.required = true;
                if (input instanceof HTMLSelectElement) {
-                  input.add(new Option('Choose…', ''));
+                  input.add(new Option(this.text(messages.CHOOSE), ''));
                   for (const candidate of response.candidates[key] ?? []) {
                      input.add(new Option(candidate.label, candidate.value));
                   }
@@ -177,7 +198,7 @@ export class OrderFlowProcessEdit implements IContextMenuItemProvider, IActionHa
             apply.disabled = false;
          } catch {
             if (this.dialog === dialog && current === generation) {
-               status.textContent = 'Could not load choices. Close and try again.';
+               status.textContent = this.text(messages.LOAD_FAILED);
             }
          }
       };
@@ -185,7 +206,7 @@ export class OrderFlowProcessEdit implements IContextMenuItemProvider, IActionHa
          const current = ++generation;
          fields.disabled = true;
          apply.disabled = true;
-         status.textContent = 'Checking edit…';
+         status.textContent = this.text(messages.CHECKING);
          let stale = false;
          try {
             const response = await this.dispatcher.request<SetProcessEditAction>({
@@ -201,14 +222,14 @@ export class OrderFlowProcessEdit implements IContextMenuItemProvider, IActionHa
             }
             stale = response.sourceVersion !== sourceVersion;
             if (response.validationError || !response.mode) {
-               status.textContent = response.validationError ?? 'This element is no longer available.';
+               status.textContent = response.validationError ?? this.text(messages.UNAVAILABLE);
                return;
             }
             await this.dispatcher.dispatch(EditProcessOperation.create(elementId, submitted, sourceVersion!));
             dialog.close();
          } catch {
             if (this.dialog === dialog && current === generation) {
-               status.textContent = 'Could not check the edit. Please try again.';
+               status.textContent = this.text(messages.CHECK_FAILED);
             }
          } finally {
             if (this.dialog === dialog && current === generation) {

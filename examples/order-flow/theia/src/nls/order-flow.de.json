@@ -1,5 +1,5 @@
 {
-  "_comment": "German catalogue for the messages THIS FRONTEND renders — see order-flow-localization-backend-module.ts. Codes the SERVER renders live in the server package's own catalogue, and the two key sets are disjoint by design, except hydranium/protocol/session-closed: the server raises it for its sessions and the client tier for one it has ended, so each side renders its own, and the two entries hold one sentence. COMPLETE over the codes this side renders, together with that one covering every code the barrels declare, and a test asserts it stays that way. An adopter shipping less still works — a code with no entry falls back to its English default. Nested keys are flattened on '/', so these are the hydranium/<package>/<name> codes the framework publishes.",
+  "_comment": "German catalogue for the messages THIS FRONTEND renders — see order-flow-localization-backend-module.ts. Codes the SERVER renders live in the server package's own catalogue, and the two key sets are disjoint by design, except hydranium/protocol/session-closed and order-flow/process/edit-unavailable: the server raises it for its sessions and the client tier for one it has ended, so each side renders its own, and the two entries hold one sentence. COMPLETE over the codes this side renders, together with that one covering every code the barrels declare, and a test asserts it stays that way. An adopter shipping less still works — a code with no entry falls back to its English default. Nested keys are flattened on '/', so these are the hydranium/<package>/<name> codes the framework publishes.",
   "hydranium": {
     "client-theia": {
       "command-dump-server-state": "Serverzustand ausgeben",
@@ -47,6 +47,27 @@
       "previous-write-conflict": "Order-Flow-Eigenschaften: '{field}' von {uri} wurde nicht gespeichert. Jemand anderes hat es zuerst geändert.",
       "previous-write-ran-out": "Order-Flow-Eigenschaften: '{field}' von {uri} wurde nicht gespeichert. Das Dokument hat sich beim Schreiben ständig geändert.",
       "previous-write-unavailable": "Order-Flow-Eigenschaften: '{field}' von {uri} wurde nicht gespeichert. Das Dokument war nicht mehr geöffnet, als die Änderung geschrieben werden sollte."
+    },
+    "process": {
+      "edit": "Prozess bearbeiten",
+      "apply": "Anwenden",
+      "cancel": "Abbrechen",
+      "loading": "Auswahl wird geladen…",
+      "edit-unavailable": "Dieses Element ist nicht mehr verfügbar.",
+      "branch": "Verzweigung hinzufügen",
+      "retarget": "Effektziel ändern",
+      "choose": "Auswählen…",
+      "load-failed": "Die Auswahl konnte nicht geladen werden. Schließen Sie den Dialog und versuchen Sie es erneut.",
+      "checking": "Änderung wird geprüft…",
+      "check-failed": "Die Änderung konnte nicht geprüft werden. Bitte versuchen Sie es erneut.",
+      "retarget-menu": "Effektziel ändern…",
+      "branch-menu": "Verzweigung hinzufügen…",
+      "palette": "Ausgewählten Effekt oder Gateway bearbeiten",
+      "entity": "Entität",
+      "field": "Feld",
+      "literal": "Literal",
+      "label": "Bezeichnung",
+      "target": "Ziel"
     }
   }
 }

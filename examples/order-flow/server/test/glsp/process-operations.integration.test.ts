@@ -222,6 +222,7 @@ describe('order-flow .process operations', () => {
       expect(remaining.effects[0].field.$refText).toBe('total');
       const failure = await diagram.expectEditRejected(EditProcessOperation.create(elementId, values, sourceVersion));
       expect(failure.message).toContain('The process changed');
+      expect(failure.details).toBeUndefined();
       expect(code(diagram.text())).toContain('reads Order.total');
       const request = { kind: RequestProcessEditAction.KIND, requestId: 'stale-edit', elementId, values, sourceVersion, validate: true };
       diagram.harness.dispatch(request);

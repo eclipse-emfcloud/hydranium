@@ -8,7 +8,9 @@
  ********************************************************************************/
 
 import type { Operation, RequestAction, ResponseAction } from '@eclipse-glsp/protocol';
-import type { ReferenceCandidate } from '@hydranium/protocol';
+import { defineMessage, type ReferenceCandidate } from '@hydranium/protocol';
+
+export const PROCESS_EDIT_UNAVAILABLE = defineMessage('order-flow/process/edit-unavailable', 'This element is no longer available.');
 
 export interface ProcessEditValues {
    entity?: string;

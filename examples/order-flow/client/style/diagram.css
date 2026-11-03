@@ -421,9 +421,9 @@
 }
 
 .order-flow-process-edit {
-   color: var(--theia-foreground, #222);
-   background: var(--theia-editor-background, #fff);
-   border: 1px solid #888;
+   color: var(--order-flow-panel-foreground);
+   background: var(--order-flow-panel-background);
+   border: 1px solid var(--order-flow-panel-border);
    border-radius: 6px;
    min-width: 280px;
 }
@@ -439,4 +439,12 @@
    border: 0;
    padding: 0;
    margin: 0;
+}
+
+.order-flow-process-edit input,
+.order-flow-process-edit select,
+.order-flow-process-edit button {
+   color: inherit;
+   background: var(--order-flow-panel-background);
+   border: 1px solid var(--order-flow-panel-border);
 }

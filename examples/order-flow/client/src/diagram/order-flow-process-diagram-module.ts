@@ -22,8 +22,10 @@ import {
    configureModelElement,
    editLabelFeature,
    selectFeature,
+   RankedSelectMouseListener,
    initializeDiagramContainer
 } from '@eclipse-glsp/client';
+import { renderFrameworkMessage } from '@hydranium/protocol';
 import { HydraniumGEdge, configureHydraniumModelElements } from '@hydranium/glsp-client';
 import { type Container, ContainerModule } from 'inversify';
 import {
@@ -36,8 +38,9 @@ import {
    PROCESS_TRANSITION_EDGE_TYPE,
    type ProcessElementType
 } from '@hydranium/example-order-flow-protocol';
-import { OrderFlowProcessEdit, OPEN_PROCESS_EDIT } from './order-flow-process-edit';
+import { OrderFlowProcessEdit, OPEN_PROCESS_EDIT, ProcessEditMessageRenderer } from './order-flow-process-edit';
 import { ProcessGatewayNode } from './order-flow-process-model';
+import { OrderFlowProcessSelectMouseListener } from './order-flow-process-select';
 import { OrderFlowProcessToolPalette } from './order-flow-process-tool-palette';
 import { ProcessEdgeView } from './order-flow-process-views';
 
@@ -109,12 +112,16 @@ export const PROCESS_ELEMENT_REGISTRATIONS: Readonly<Record<ProcessElementType, 
 export const orderFlowProcessDiagramModule = new ContainerModule((bind, unbind, isBound, rebind) => {
    const context = { bind, unbind, isBound, rebind };
    configureHydraniumModelElements(context);
+   if (!isBound(ProcessEditMessageRenderer)) {
+      bind<ProcessEditMessageRenderer>(ProcessEditMessageRenderer).toConstantValue(message => renderFrameworkMessage(message));
+   }
    bind(OrderFlowProcessEdit).toSelf().inSingletonScope();
    bind(TYPES.IContextMenuItemProvider).toService(OrderFlowProcessEdit);
    configureActionHandler(context, OPEN_PROCESS_EDIT, OrderFlowProcessEdit);
    for (const [elementTypeId, registration] of Object.entries(PROCESS_ELEMENT_REGISTRATIONS)) {
       configureModelElement(context, elementTypeId, registration.model, registration.view, registration.options);
    }
+   rebind(RankedSelectMouseListener).to(OrderFlowProcessSelectMouseListener).inSingletonScope();
    rebind(ToolPalette).to(OrderFlowProcessToolPalette).inSingletonScope();
 });
 

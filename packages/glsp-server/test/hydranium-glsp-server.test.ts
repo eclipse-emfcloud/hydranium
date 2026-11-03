@@ -41,7 +41,7 @@ import { AbstractHydraniumGlspState } from '../src/state/abstract-hydranium-glsp
 import { HydraniumTypes } from '../src/state/hydranium-shared-core-services.js';
 import { HydraniumGlspSubmissionHandler } from '../src/submission/hydranium-glsp-submission-handler.js';
 import { HydraniumGlspServer } from '../src/launcher/hydranium-glsp-server.js';
-import { DiagramEditDroppedError } from '../src/command/diagram-write-errors.js';
+import { DiagramEditDroppedError, DiagramEditRejectedError } from '../src/command/diagram-write-errors.js';
 import { makeGlspHarness } from '../src/testing/glsp-harness.js';
 import { waitFor } from '@hydranium/protocol/testing';
 
@@ -418,6 +418,19 @@ describe('HydraniumGlspServer logging the failures it ends', () => {
       expect(server.errors).toHaveLength(1);
       expect(server.errors[0]).toMatch(/someAction[\s\S]*boom[\s\S]*\n\s+at /);
       expect(server.sent.map(message => message.action.kind)).toEqual(['message']);
+   });
+
+   it('warns without a stack for an expected edit rejection and sends its explanation', () => {
+      const server = new RecordingServer();
+      server.failAction(new DiagramEditRejectedError('The process changed. Reopen the editor.'));
+      expect(server.errors).toEqual([]);
+      expect(server.warnings).toEqual(["Could not process action 'someAction': The process changed. Reopen the editor."]);
+      expect(server.sent[0].action).toMatchObject({
+         kind: 'message',
+         severity: 'ERROR',
+         message: 'The process changed. Reopen the editor.'
+      });
+      expect(JSON.stringify(server.sent)).not.toContain('order-flow/process/edit-stale');
    });
 
    it('warns once for a conflict, which is declined rather than failed, naming both versions', () => {

@@ -10,6 +10,65 @@
 import { expect, test } from '@playwright/test';
 
 test.describe('order-flow structured diagram edits', () => {
+   for (const selected of [false, true]) {
+      test(`moves a task by dragging an effect that is ${selected ? 'selected' : 'unselected'}`, async ({ page }) => {
+         await page.goto('/');
+         const diagram = page.locator('#order-flow-process-diagram');
+         const effect = diagram.locator('text').filter({ hasText: /^reads Order.id$/ });
+         await expect(effect).toBeVisible();
+         if (selected) {
+            await effect.click();
+            await expect(diagram.getByRole('button', { name: 'Edit selected effect or gateway' })).toBeEnabled();
+         }
+         const layout = page.locator('[data-report="layout-head"]');
+         await expect(layout).toHaveAttribute('title', /Pick -?[\d.]+,-?[\d.]+/);
+         const layoutBefore = await layout.getAttribute('title');
+         const before = (await effect.boundingBox())!;
+         await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+         await page.mouse.down();
+         await page.mouse.move(before.x + before.width / 2 + 80, before.y + before.height / 2 + 40, { steps: 12 });
+         await page.mouse.up();
+         await expect.poll(async () => (await effect.boundingBox())!.x - before.x).toBeGreaterThan(30);
+         await expect(layout).not.toHaveAttribute('title', layoutBefore!);
+         await expect(layout).toHaveAttribute('title', /Pick -?[\d.]+,-?[\d.]+/);
+         await effect.click();
+         await diagram.getByRole('button', { name: 'Edit selected effect or gateway' }).click();
+         await expect(page.locator('dialog').getByLabel('Field')).toHaveValue('id');
+      });
+   }
+
+   test('renders the process editor in the page locale and panel theme', async ({ page }) => {
+      await page.goto('/?locale=de');
+      const diagram = page.locator('#order-flow-process-diagram');
+      await diagram
+         .locator('text')
+         .filter({ hasText: /^reads Order.id$/ })
+         .click();
+      await diagram.getByRole('button', { name: 'Ausgewählten Effekt oder Gateway bearbeiten' }).click();
+      const dialog = page.locator('dialog.order-flow-process-edit');
+      await expect(dialog.getByRole('heading')).toHaveText('Effektziel ändern');
+      await expect(dialog.getByLabel('Entität')).toHaveValue('Order');
+      await expect(dialog.getByRole('button', { name: 'Anwenden', exact: true })).toBeVisible();
+      const colours = await dialog.evaluate(element => {
+         const probe = document.createElement('div');
+         probe.style.backgroundColor = 'var(--order-flow-panel-background)';
+         probe.style.color = 'var(--order-flow-panel-foreground)';
+         element.append(probe);
+         const expected = getComputedStyle(probe);
+         const actual = getComputedStyle(element);
+         const result = {
+            background: actual.backgroundColor,
+            foreground: actual.color,
+            expectedBackground: expected.backgroundColor,
+            expectedForeground: expected.color
+         };
+         probe.remove();
+         return result;
+      });
+      expect(colours.background).toBe(colours.expectedBackground);
+      expect(colours.foreground).toBe(colours.expectedForeground);
+   });
+
    test('keeps invalid branch labels editable and reports why they cannot be applied', async ({ page }) => {
       await page.goto('/');
       const diagram = page.locator('#order-flow-process-diagram');

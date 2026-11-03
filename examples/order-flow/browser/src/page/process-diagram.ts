@@ -26,10 +26,12 @@
 
 import { EditorContextService, GEdge, type GParentElement, GNode } from '@eclipse-glsp/client';
 import { glspConnection, type GlspDiagramMount, HydraniumGlspClient, mountGlspDiagram } from '@hydranium/glsp-client';
+import { ProcessEditMessageRenderer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-edit';
+import { pageTranslations } from './page-nls.js';
 import { initializeOrderFlowProcessDiagramContainer } from '@hydranium/example-order-flow-client/lib/diagram/order-flow-process-diagram-module';
 import { PROCESS_DIAGRAM_TYPE } from '@hydranium/example-order-flow-protocol';
 import type { Container } from 'inversify';
-import { describeError, type Logger, SystemClock } from '@hydranium/protocol';
+import { describeError, renderFrameworkMessage, type Logger, SystemClock } from '@hydranium/protocol';
 import type { MessageConnection } from 'vscode-jsonrpc/browser';
 import { requireElement } from './dom.js';
 // LAST, so esbuild emits these rules after `@eclipse-glsp/client`'s and they win
@@ -84,7 +86,12 @@ export async function mountProcessDiagram(
       diagramType: PROCESS_DIAGRAM_TYPE,
       sourceUri,
       glspClient,
-      initializeDiagramContainer: initializeOrderFlowProcessDiagramContainer,
+      initializeDiagramContainer: (container, ...configuration) => {
+         container
+            .bind<ProcessEditMessageRenderer>(ProcessEditMessageRenderer)
+            .toConstantValue(message => renderFrameworkMessage(message, pageTranslations()));
+         return initializeOrderFlowProcessDiagramContainer(container, ...configuration);
+      },
       logger
    });
    // Reported here and not left to the poll, which would wait out its deadline

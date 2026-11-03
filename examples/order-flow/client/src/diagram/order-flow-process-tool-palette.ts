@@ -8,9 +8,9 @@
  ********************************************************************************/
 
 import { ToolPalette, createIcon, type GModelRoot } from '@eclipse-glsp/client';
-import { injectable } from 'inversify';
-import { PROCESS_EFFECT_TYPE, PROCESS_GATEWAY_NODE_TYPE } from '@hydranium/example-order-flow-protocol';
-import { OPEN_PROCESS_EDIT, type OpenProcessEditAction } from './order-flow-process-edit';
+import { inject, injectable } from 'inversify';
+import { PALETTE } from './order-flow-process-edit-messages';
+import { OrderFlowProcessEdit, OpenProcessEditAction } from './order-flow-process-edit';
 
 /**
  * The tool palette, with its collapse toggle withdrawn alongside it.
@@ -43,19 +43,20 @@ import { OPEN_PROCESS_EDIT, type OpenProcessEditAction } from './order-flow-proc
  */
 @injectable()
 export class OrderFlowProcessToolPalette extends ToolPalette {
+   @inject(OrderFlowProcessEdit) protected readonly processEdit!: OrderFlowProcessEdit;
    protected editButton?: HTMLButtonElement;
 
    protected override createHeaderTools(): HTMLElement {
       const tools = super.createHeaderTools();
       const button = document.createElement('button');
       button.type = 'button';
-      button.title = 'Edit selected effect or gateway';
+      button.title = this.processEdit.text(PALETTE);
       button.setAttribute('aria-label', button.title);
       button.append(createIcon('edit'));
       button.onclick = () => {
-         const element = this.editableSelection();
+         const element = this.processEdit.editableSelection();
          if (element) {
-            void this.actionDispatcher.dispatch({ kind: OPEN_PROCESS_EDIT, elementId: element.id } as OpenProcessEditAction);
+            void this.actionDispatcher.dispatch(OpenProcessEditAction.create(element.id));
          }
       };
       this.editButton = button;
@@ -70,18 +71,9 @@ export class OrderFlowProcessToolPalette extends ToolPalette {
       this.updateEditButton();
    }
 
-   protected editableSelection() {
-      const selected = this.editorContext.selectedElements;
-      return !this.editorContext.isReadonly &&
-         selected.length === 1 &&
-         (selected[0].type === PROCESS_EFFECT_TYPE || selected[0].type === PROCESS_GATEWAY_NODE_TYPE)
-         ? selected[0]
-         : undefined;
-   }
-
    protected updateEditButton(): void {
       if (this.editButton) {
-         this.editButton.disabled = !this.editableSelection();
+         this.editButton.disabled = !this.processEdit.editableSelection();
       }
    }
 

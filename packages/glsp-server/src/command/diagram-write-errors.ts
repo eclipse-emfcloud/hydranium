@@ -10,6 +10,19 @@
 import { type Action, GLSPServerError, type Logger, RequestAction } from '@eclipse-glsp/server';
 import { type ConflictError, describeError, describeErrorWithStack, isConflictError, isDocumentSyntaxError } from '@hydranium/protocol';
 
+/** An edit declined before execution; its message is safe to show to the user. */
+export class DiagramEditRejectedError extends GLSPServerError {
+   constructor(message: string) {
+      super(message);
+      this.name = 'DiagramEditRejectedError';
+   }
+}
+
+/** Recognizes an expected refusal across installed copies of the package. */
+export function isDiagramEditRejectedError(error: unknown): error is DiagramEditRejectedError {
+   return error instanceof Error && error.name === 'DiagramEditRejectedError';
+}
+
 /**
  * Thrown when the reconcile of a diagram edit's write dropped it: a foreign
  * edit changed a field the edit writes. Declined by design rather than failed,
@@ -105,8 +118,8 @@ function carriesConflict(error: Error): boolean {
 
 /**
  * Log an action that failed, once, at the level of what happened. A dropped
- * edit logs at `debug`, since its reconcile has logged it. A refused write logs
- * at `warn`, since it was declined: a conflict, writes that ran out, a text
+ * edit logs at `debug`, since its reconcile has logged it. A rejected edit or refused write logs
+ * at `warn`, since it was declined: validation, a conflict, writes that ran out, a text
  * that could not be read, or a document that does not parse. Anything else
  * logs at `error`. Every line that has a conflict, the failure's own or its
  * cause's, names the conflict's versions. A request is named by its id too,
@@ -126,7 +139,7 @@ export function logActionFailure(logger: Logger, action: Action, error: unknown)
       logger.warn(
          `Could not process action ${named}: ${describeError(error)} (${conflict.uri}, model v${conflict.baseVersion} / text v${conflict.actualVersion})`
       );
-   } else if (isDocumentSyntaxError(error)) {
+   } else if (isDocumentSyntaxError(error) || isDiagramEditRejectedError(error)) {
       logger.warn(`Could not process action ${named}: ${describeError(error)}`);
    } else {
       const cause = error instanceof Error ? error.cause : undefined;
