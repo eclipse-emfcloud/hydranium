@@ -199,7 +199,9 @@ describe('createGlspClientTheiaModule', () => {
             createGlspClientTheiaModule({ bind, unbind, isBound, rebind }, { channelLogger: CHANNEL });
          });
          const container = initializeDiagramContainer(
-            new Container(),
+            // Theia's container, as production hands GLSP. From Theia 1.77 it is
+            // inversify's ESM class while GLSP types the CJS one. Only the types differ.
+            new Container() as unknown as Parameters<typeof initializeDiagramContainer>[0],
             createDiagramOptionsModule({ clientId: 'one', diagramType: 'diagram-one', glspClientProvider: async () => ({}) as never }),
             theiaModule
          );
