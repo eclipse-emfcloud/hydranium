@@ -35,6 +35,12 @@ guide says why a Theia app sideloads this instead of the full VS Code shell.
 - **`onStartupFinished`, not `onLanguage:*`.** A backend forwarder may poll a
   port command before any order-flow document is open.
 
+The servers extension enables process diagnostics for Theia's commands in
+[`src/extension.ts`](src/extension.ts). This trusts every connection to the
+child's data socket. The shared launcher leaves them disabled for other
+callers, including the full VS Code shell. Before copying this opt-in, read the
+[server trust boundary](../../../docs/adopting/status.md#server-trust-boundary).
+
 ## Packaging
 
 Plain `tsc` to CommonJS in `out/`, with `main` at `./out/extension.js`; nothing

@@ -15,4 +15,6 @@ import { createHostDiagnosticsBackendModule } from '@hydranium/data-client-theia
 // reached over an ordinary Theia service rather than the data socket, which is
 // why the two cannot share a proxy. Lights up the contribution's "Dump Backend
 // State" / "Write Heap Snapshot (Backend)" commands via bindHostDiagnostics.
-export default createHostDiagnosticsBackendModule();
+// Snapshots are on as for the example's language server, which its launcher
+// starts with `--enable-diagnostics`.
+export default createHostDiagnosticsBackendModule({ heapSnapshots: true });

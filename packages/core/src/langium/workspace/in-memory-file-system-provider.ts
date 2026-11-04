@@ -52,6 +52,12 @@ export const UNSUPPORTED_DELETE = defineMessage(
    'Cannot delete {uri}: the scheme names no location on disk'
 );
 
+/** A disk operation crosses the host's permitted filesystem roots. */
+export const FILE_ACCESS_DENIED = defineMessage(
+   'hydranium/core/file-access-denied',
+   'Cannot access {uri}: it is outside the allowed filesystem roots'
+);
+
 /**
  * File content keyed by path, for seeding an {@link InMemoryFileSystemProvider}.
  *

@@ -252,17 +252,9 @@ export interface DataServerOptions extends LogNameOptions {
     * a process to inspect — heap snapshot, profile capture, pod memory, server
     * state.
     *
-    * **Defaulted per platform, so most hosts pass nothing.** On Node the default
-    * is the real implementation; in a browser bundle `package.json`'s `browser`
-    * field selects a twin whose methods reject, because there is no process to
-    * inspect. Supply this only to override — a custom implementation, or to say
-    * explicitly at the call site which one you mean.
-    *
-    * It is injected rather than reached for because a static
-    * `@hydranium/core/node` import on this package's portable entry pulls
-    * `node:fs`, `node:v8` and `node:perf_hooks` into any browser build, over
-    * methods a browser cannot call anyway — which is what previously made the
-    * head unbundleable.
+    * Disabled by default on every platform. A host supplies a provider only
+    * on connections authorized to inspect the process and write diagnostic
+    * artifacts. Session registration does not grant that authorization.
     */
    readonly diagnostics?: DataServerDiagnosticsProvider;
 
@@ -365,7 +357,7 @@ export interface ResolvedDataServerOptions {
    readonly methodNamespace: string;
    readonly additionalMethods: readonly string[];
    readonly excludedMethods: readonly string[];
-   /** Always resolved — to the caller's, or to the platform default. */
+   /** Always resolved — to the host's provider or the rejecting default. */
    readonly diagnostics: DataServerDiagnosticsProvider;
    readonly referenceSettleTimeoutMs: number;
 }

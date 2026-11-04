@@ -59,12 +59,12 @@ describe('DefaultFileSystemProvider.realpath', () => {
    const real = (name: string): URI => URI.file(join(realDir, name));
 
    beforeAll(() => {
-      provider = new DefaultFileSystemProvider(services);
+      provider = new DefaultFileSystemProvider(services, { additionalRoots: [URI.file(tmpdir())] });
       // Resolved at creation: the temp root can itself be a symlink — on macOS
       // `tmpdir()` answers `/tmp`, which links to `/private/tmp` — and
       // `realpath` collapses the whole path, so an expectation built from the
       // unresolved root differs by a prefix that is not the link under test.
-      root = realpathSync(mkdtempSync(join(tmpdir(), 'hydranium-realpath-')));
+      root = realpathSync.native(mkdtempSync(join(tmpdir(), 'hydranium-realpath-')));
       realDir = join(root, 'real');
       linkDir = join(root, 'link');
       mkdirSync(realDir);
@@ -174,7 +174,9 @@ describe('DefaultFileSystemProvider.mtimeMs', () => {
 
    beforeAll(() => {
       selfSaveRegistry = makeStubSelfSaveRegistry();
-      provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: selfSaveRegistry } }));
+      provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: selfSaveRegistry } }), {
+         additionalRoots: [URI.file(tmpdir())]
+      });
       root = mkdtempSync(join(tmpdir(), 'hydranium-mtime-'));
       writeFileSync(join(root, 'present.fake'), 'content');
    });
@@ -230,7 +232,8 @@ describe('DefaultFileSystemProvider.existsSettled', () => {
          }
       }
       const provider = new ScriptedFileSystemProvider(
-         makeNoopSharedServices({ Clock: clock, workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } })
+         makeNoopSharedServices({ Clock: clock, workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } }),
+         { additionalRoots: [URI.file('/hydranium-test')] }
       );
       return { provider, clock, calls: () => calls };
    };
@@ -324,7 +327,9 @@ describe('DefaultFileSystemProvider.writeFile under concurrent writers', () => {
    const WINDOWS_REPLACE_GAP = new Set(['ENOENT', 'EPERM']);
 
    beforeAll(() => {
-      provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } }));
+      provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } }), {
+         additionalRoots: [URI.file(tmpdir())]
+      });
       root = mkdtempSync(join(tmpdir(), 'hydranium-atomic-write-'));
    });
 
@@ -439,7 +444,9 @@ describe('DefaultFileSystemProvider.writeFile preserves the target it replaces',
    let carriedMode: number;
 
    beforeAll(() => {
-      provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } }));
+      provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } }), {
+         additionalRoots: [URI.file(tmpdir())]
+      });
       root = mkdtempSync(join(tmpdir(), 'hydranium-write-preserve-'));
 
       const probe = join(root, 'probe.fake');
@@ -593,7 +600,9 @@ describe('DefaultFileSystemProvider read surface for URIs that name no disk loca
       occupiedPath = join(root, 'occupied.fake');
       writeFileSync(occupiedPath, 'unrelated on-disk content');
 
-      provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } }));
+      provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } }), {
+         additionalRoots: [URI.file(tmpdir())]
+      });
    });
 
    afterAll(() => {
@@ -685,7 +694,9 @@ describe('DefaultFileSystemProvider write surface for URIs that name no disk loc
 
    beforeAll(() => {
       root = mkdtempSync(join(tmpdir(), 'hydranium-write-surface-'));
-      provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } }));
+      provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } }), {
+         additionalRoots: [URI.file(tmpdir())]
+      });
    });
 
    afterAll(() => {
@@ -745,7 +756,9 @@ describe('DefaultFileSystemProvider.deleteFile', () => {
 
    beforeAll(() => {
       root = mkdtempSync(join(tmpdir(), 'hydranium-delete-'));
-      provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } }));
+      provider = new DefaultFileSystemProvider(makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } }), {
+         additionalRoots: [URI.file(tmpdir())]
+      });
       const probe = join(root, 'probe.fake');
       writeFileSync(probe, '');
       try {
@@ -823,7 +836,223 @@ describe('DefaultFileSystemProvider translated failures', () => {
    it.each(cases)('renders the declared failure from %s', async (_name, code, invoke) => {
       const services = makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() } });
       services.MessageRenderer.renderMessage = (message, ..._params) => `translated: ${message.code}`;
-      const provider = new DefaultFileSystemProvider(services);
+      const provider = new DefaultFileSystemProvider(services, { additionalRoots: [URI.file(tmpdir())] });
       await expect(Promise.resolve().then(() => invoke(provider))).rejects.toThrow(`translated: hydranium/core/${code}`);
+   });
+});
+
+describe('DefaultFileSystemProvider workspace containment', () => {
+   let root: string;
+   let workspace: string;
+   let provider: DefaultFileSystemProvider;
+
+   beforeAll(() => {
+      root = realpathSync.native(mkdtempSync(join(tmpdir(), 'hydranium-access-')));
+      workspace = join(root, 'workspace');
+      mkdirSync(workspace);
+      writeFileSync(join(root, 'outside.fake'), 'outside');
+      provider = new DefaultFileSystemProvider(
+         makeNoopSharedServices({
+            workspace: {
+               SelfSaveRegistry: makeStubSelfSaveRegistry(),
+               WorkspaceManager: { workspaceFolders: [{ uri: URI.file(workspace).toString(), name: 'workspace' }] }
+            }
+         })
+      );
+   });
+
+   afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+   it('permits workspace reads and writes but refuses sibling paths', async () => {
+      const inside = URI.file(join(workspace, 'new', 'a.fake'));
+      await provider.writeFile(inside, 'inside');
+      expect(await provider.readFile(inside)).toBe('inside');
+      const outside = URI.file(join(root, 'outside.fake'));
+      await expect(provider.readFile(outside)).rejects.toThrow('outside the allowed filesystem roots');
+      await expect(provider.writeFile(outside, 'changed')).rejects.toThrow('outside the allowed filesystem roots');
+      await expect(provider.deleteFile(outside)).rejects.toThrow('outside the allowed filesystem roots');
+      expect(readFileSync(outside.fsPath, 'utf8')).toBe('outside');
+      await expect(provider.writeFile(URI.file(join(root, 'workspace-other', 'new.fake')), '')).rejects.toThrow();
+      expect(existsSync(join(root, 'workspace-other'))).toBe(false);
+   });
+
+   it('refuses symlink escapes including a new file below a linked directory', async () => {
+      symlinkSync(root, join(workspace, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
+      const linked = URI.file(join(workspace, 'escape', 'outside.fake'));
+      await expect(provider.readFile(linked)).rejects.toThrow('outside the allowed filesystem roots');
+      await expect(provider.writeFile(URI.file(join(workspace, 'escape', 'new.fake')), '')).rejects.toThrow();
+      expect(existsSync(join(root, 'new.fake'))).toBe(false);
+   });
+
+   it.for(['delete', 'write'] as const)(
+      'refuses an outside symlink entry during %s even when its target is inside',
+      async (operation, context) => {
+         const target = join(workspace, `entry-${operation}.fake`);
+         if (operation === 'delete') {
+            writeFileSync(target, 'inside');
+         }
+         const entry = join(root, `outside-${operation}.fake`);
+         try {
+            symlinkSync(target, entry, 'file');
+         } catch (error) {
+            context.skip(
+               process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM',
+               'file symlinks require privilege'
+            );
+            throw error;
+         }
+         const uri = URI.file(entry);
+         const mutation = operation === 'delete' ? provider.deleteFile(uri) : provider.writeFile(uri, 'outside write');
+         await expect(mutation).rejects.toThrow('outside the allowed filesystem roots');
+         expect(lstatSync(entry).isSymbolicLink()).toBe(true);
+         if (operation === 'delete') {
+            expect(readFileSync(target, 'utf8')).toBe('inside');
+         } else {
+            expect(existsSync(target)).toBe(false);
+         }
+      }
+   );
+
+   it('refuses synchronous and metadata reads outside the roots', async () => {
+      const outside = URI.file(join(root, 'outside.fake'));
+      expect(() => provider.readFileSync(outside)).toThrow('outside the allowed filesystem roots');
+      expect(() => provider.readBinarySync(outside)).toThrow('outside the allowed filesystem roots');
+      expect(() => provider.statSync(outside)).toThrow('outside the allowed filesystem roots');
+      await expect(provider.readBinary(outside)).rejects.toThrow('outside the allowed filesystem roots');
+      await expect(provider.stat(outside)).rejects.toThrow('outside the allowed filesystem roots');
+   });
+
+   it('answers an existing file outside the roots as absent from the probes', async () => {
+      const outside = URI.file(join(root, 'outside.fake'));
+      expect(provider.existsSync(outside)).toBe(false);
+      expect(provider.readDirectorySync(URI.file(root))).toEqual([]);
+      expect(await provider.exists(outside)).toBe(false);
+      expect(await provider.existsSettled(outside)).toBe(false);
+      expect(await provider.mtimeMs(outside)).toBeUndefined();
+      expect(await provider.readDirectory(URI.file(root))).toEqual([]);
+   });
+
+   it.for(['readFile', 'readFileSync', 'readBinary', 'readBinarySync', 'stat', 'statSync', 'deleteFile', 'writeFile'] as const)(
+      'refuses parent traversal after a symlink during %s',
+      async operation => {
+         const outsideDirectory = join(root, `parent-${operation}`);
+         mkdirSync(join(outsideDirectory, 'sub'), { recursive: true });
+         const link = join(workspace, `link-${operation}`);
+         symlinkSync(join(outsideDirectory, 'sub'), link, process.platform === 'win32' ? 'junction' : 'dir');
+         const outside = join(outsideDirectory, 'secret.fake');
+         writeFileSync(outside, 'outside');
+         writeFileSync(join(workspace, 'secret.fake'), 'inside');
+         const uri = URI.file(`${link}/../secret.fake`);
+         await expect(
+            Promise.resolve().then(async () => {
+               await (operation === 'writeFile' ? provider.writeFile(uri, 'changed') : provider[operation](uri));
+            })
+         ).rejects.toThrow('outside the allowed filesystem roots');
+         expect(readFileSync(outside, 'utf8')).toBe('outside');
+         expect(readFileSync(join(workspace, 'secret.fake'), 'utf8')).toBe('inside');
+      }
+   );
+
+   it.for(['exists', 'existsSync', 'existsSettled', 'mtimeMs', 'readDirectory', 'readDirectorySync'] as const)(
+      'answers parent traversal after a symlink as absent during %s',
+      async operation => {
+         const outside = join(root, `parent-${operation}`);
+         mkdirSync(join(outside, 'sub'), { recursive: true });
+         writeFileSync(join(outside, 'secret.fake'), 'outside');
+         const link = join(workspace, `link-${operation}`);
+         symlinkSync(join(outside, 'sub'), link, process.platform === 'win32' ? 'junction' : 'dir');
+         const directory = operation === 'readDirectory' || operation === 'readDirectorySync';
+         const answer = await provider[operation](URI.file(directory ? `${link}/..` : `${link}/../secret.fake`));
+         expect(answer).toEqual(directory ? [] : operation === 'mtimeMs' ? undefined : false);
+      }
+   );
+
+   it('checks parent traversal inside an existing symlink target using filesystem semantics', async context => {
+      const outside = join(root, 'target-parent');
+      mkdirSync(join(outside, 'sub'), { recursive: true });
+      const link = join(workspace, 'target-link');
+      symlinkSync(join(outside, 'sub'), link, process.platform === 'win32' ? 'junction' : 'dir');
+      writeFileSync(join(outside, 'secret.fake'), 'outside');
+      writeFileSync(join(workspace, 'secret.fake'), 'inside');
+      const alias = join(workspace, 'target-alias.fake');
+      try {
+         symlinkSync(`${link}/../secret.fake`, alias, 'file');
+      } catch (error) {
+         context.skip(process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM', 'file symlinks require privilege');
+         throw error;
+      }
+      // Windows normalizes the target's parent traversal before following the
+      // directory link. POSIX follows the link first. Verify the disk target
+      // independently before checking that the provider authorizes that target.
+      if (process.platform === 'win32') {
+         expect(readFileSync(alias, 'utf8')).toBe('inside');
+         await expect(provider.readFile(URI.file(alias))).resolves.toBe('inside');
+         await provider.writeFile(URI.file(alias), 'changed');
+         expect(readFileSync(join(workspace, 'secret.fake'), 'utf8')).toBe('changed');
+      } else {
+         expect(readFileSync(alias, 'utf8')).toBe('outside');
+         await expect(provider.readFile(URI.file(alias))).rejects.toThrow('outside the allowed filesystem roots');
+         await expect(provider.writeFile(URI.file(alias), 'changed')).rejects.toThrow('outside the allowed filesystem roots');
+         expect(readFileSync(join(workspace, 'secret.fake'), 'utf8')).toBe('inside');
+      }
+      expect(readFileSync(join(outside, 'secret.fake'), 'utf8')).toBe('outside');
+   });
+
+   it('judges a link to nothing by the path it names', async context => {
+      const entry = join(workspace, 'dangling-out.fake');
+      try {
+         symlinkSync(join(root, 'not-yet.fake'), entry, 'file');
+      } catch (error) {
+         context.skip(process.platform === 'win32' && (error as NodeJS.ErrnoException).code === 'EPERM', 'file symlinks require privilege');
+         throw error;
+      }
+      await expect(provider.writeFile(URI.file(entry), 'outside write')).rejects.toThrow('outside the allowed filesystem roots');
+      expect(() => provider.readFileSync(URI.file(entry))).toThrow('outside the allowed filesystem roots');
+      expect(lstatSync(entry).isSymbolicLink()).toBe(true);
+   });
+
+   it('writes through a link to the file the access check resolved', async context => {
+      context.skip(process.platform === 'win32', 'Windows normalizes the parent traversal before following the link');
+      const outside = join(root, 'write-parent');
+      mkdirSync(outside);
+      mkdirSync(join(workspace, 'write-sub'));
+      symlinkSync(join(workspace, 'write-sub'), join(outside, 'dir-link'), 'dir');
+      writeFileSync(join(workspace, 'write-target.fake'), 'inside');
+      // Lexically `<outside>/write-target.fake`. The kernel follows `dir-link` first.
+      const alias = join(workspace, 'write-alias.fake');
+      symlinkSync(`${outside}/dir-link/../write-target.fake`, alias, 'file');
+      await provider.writeFile(URI.file(alias), 'changed');
+      expect(readFileSync(join(workspace, 'write-target.fake'), 'utf8')).toBe('changed');
+      expect(existsSync(join(outside, 'write-target.fake'))).toBe(false);
+   });
+
+   it('allows an explicit additional root before initialization', async () => {
+      const configured = new DefaultFileSystemProvider(
+         makeNoopSharedServices({
+            workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry() }
+         }),
+         { additionalRoots: [URI.file(root)] }
+      );
+      expect(await configured.readFile(URI.file(join(root, 'outside.fake')))).toBe('outside');
+   });
+
+   it('resolves the roots again once the workspace folders are replaced', async () => {
+      const manager: { workspaceFolders?: Array<{ uri: string; name: string }> } = {};
+      const late = new DefaultFileSystemProvider(
+         makeNoopSharedServices({ workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry(), WorkspaceManager: manager } })
+      );
+      const file = URI.file(join(root, 'outside.fake'));
+      expect(await late.exists(file)).toBe(false);
+      manager.workspaceFolders = [{ uri: URI.file(root).toString(), name: 'root' }];
+      expect(await late.exists(file)).toBe(true);
+   });
+
+   it('denies access before workspace roots are known', async () => {
+      const closed = new DefaultFileSystemProvider(
+         makeNoopSharedServices({
+            workspace: { SelfSaveRegistry: makeStubSelfSaveRegistry(), WorkspaceManager: { workspaceFolders: undefined } }
+         })
+      );
+      await expect(closed.readFile(URI.file(join(root, 'outside.fake')))).rejects.toThrow('outside the allowed filesystem roots');
    });
 });

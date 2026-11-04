@@ -15,6 +15,9 @@ You talk to the data head through a `DataConnection` from
 writes from everyone else's, and it owns what you have open: when the session
 ends, its documents close.
 
+Your host still decides who may connect. A session id grants no access rights.
+See the [server trust boundary](../adopting/status.md#server-trust-boundary).
+
 ## Steps
 
 1. Open one connection for your page or process, over a `DataPort` for your
@@ -98,6 +101,31 @@ await form.withOpenDocument({ uri }, opened =>
    `close()` would wait for the writes too, and for an open still under way,
    within the same bound, but then sends a close request, which a server that
    never answers leaves pending.
+
+## Process diagnostics
+
+Diagnostics inspect the server process, so only enable them on connections
+whose callers may see all the data in that process.
+
+Generated Node servers accept `--enable-diagnostics` and an optional
+`--diagnostics-directory <path>` at startup. This enables diagnostics for every
+data connection to that process. A directory alone leaves them disabled. For
+a host you compose yourself, bind the provider per connection:
+
+1. On a Node host, import `nodeDataServerDiagnostics` from
+   `@hydranium/data-server/node` and pass its result as `diagnostics` when you
+   construct the `DataServer` for that connection. Without a provider, the
+   server rejects diagnostics requests. `diagnosticsFromArgs()` from the same
+   entry reads the two startup flags above and returns the provider or
+   `undefined`.
+2. If you need snapshots and profiles in a particular directory, pass
+   `directory` to that factory. Otherwise it creates a private temporary
+   directory on first use. The client cannot change the destination. Your host
+   owns cleanup, and heap snapshots may contain secrets from any client.
+3. Call `dumpServerState` through the connection. A reply containing the
+   server's heap usage confirms the provider is bound. Order Flow's
+   [Theia servers extension](../../examples/order-flow/vscode-servers/README.md)
+   enables it for the example's diagnostics commands.
 
 ## When the connection drops
 

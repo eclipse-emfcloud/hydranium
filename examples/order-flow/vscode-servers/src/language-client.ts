@@ -51,7 +51,10 @@ export const ORDER_FLOW_HOST_PORT_COMMANDS = {
  * VS Code shell, which runs this launch too, would fail to activate beside the
  * servers extension.
  */
-export async function startOrderFlowLanguageClient(context: ExtensionContext): Promise<LanguageClient> {
+export async function startOrderFlowLanguageClient(
+   context: ExtensionContext,
+   options: { readonly enableDiagnostics?: boolean } = {}
+): Promise<LanguageClient> {
    // Resolved through the package layout, so this works both in the F5 dev host
    // (sibling workspace package) and from an installed VSIX (hoisted).
    const serverModule = require.resolve('@hydranium/example-order-flow-server/lib/main.js');
@@ -59,10 +62,14 @@ export async function startOrderFlowLanguageClient(context: ExtensionContext): P
    // Fork + IPC: the extension host is Node, and IPC keeps stdout free — which
    // matters because the server's GLSP head routes its logs over the LSP
    // connection precisely to avoid corrupting a stdio transport.
+   // This host-owned option authorizes diagnostics on every data connection to
+   // this child process. It must not come from workspace settings or RPC input.
+   const args = options.enableDiagnostics ? ['--enable-diagnostics'] : [];
    const serverOptions: ServerOptions = {
-      run: { module: serverModule, transport: TransportKind.ipc },
+      run: { module: serverModule, transport: TransportKind.ipc, args },
       debug: {
          module: serverModule,
+         args,
          transport: TransportKind.ipc,
          options: { execArgv: ['--nolazy', '--inspect=6009'] }
       }

@@ -31,7 +31,7 @@ export interface DumpHostStateArgs {
 export interface WriteHostHeapSnapshotArgs {
    /** Optional label folded into the snapshot filename. */
    label?: string;
-   /** Directory to write into; defaults to the OS temp dir when absent or not present on disk. */
+   /** Destination hint for custom servers. The Theia `HostDiagnosticsServer` ignores it and uses its host-configured directory. */
    directory?: string;
 }
 

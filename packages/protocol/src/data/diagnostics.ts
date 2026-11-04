@@ -12,8 +12,9 @@
  * state snapshots of the running server process for OOM debugging (notably in a
  * cloud pod). Kept OUT of `DataServerProtocol` so the core document /
  * project contract stays lean, but the framework `DataServer` registers these
- * BY DEFAULT (so every head gets them with no wiring); a head that does not want
- * them drops the names via `DataServerOptions.excludedMethods`.
+ * by default but rejects process inspection until the host supplies an authorized
+ * diagnostics provider. A head can remove the methods via
+ * `DataServerOptions.excludedMethods`.
  *
  * Returns are plain formatted strings — the caller (a command, a log sink, the
  * pod's stdout) decides how to surface them. The wire names are
@@ -40,7 +41,7 @@ export type StartProfilingArgs = ProfileCaptureOptions;
 export interface StopProfilingArgs {
    /** Optional label folded into the profile filenames + report heading. */
    label?: string;
-   /** Directory to write profile artefacts into; defaults to the OS temp dir when absent or not present on disk. */
+   /** Destination hint for custom providers. The Node provider ignores it and uses its host-configured directory. */
    directory?: string;
 }
 
@@ -48,7 +49,7 @@ export interface StopProfilingArgs {
 export interface WriteServerHeapSnapshotArgs {
    /** Optional label folded into the snapshot filename. */
    label?: string;
-   /** Directory to write into; defaults to the OS temp dir when absent or not present on disk. */
+   /** Destination hint for custom providers. The Node provider ignores it and uses its host-configured directory. */
    directory?: string;
 }
 

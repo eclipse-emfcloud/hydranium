@@ -29,9 +29,18 @@
 
 import { NodeFileSystem, startStdioServer } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
+import { diagnosticsFromArgs } from '@hydranium/data-server/node';
+import { parseArgs } from 'node:util';
 // The TRANSFER root, not the AST one — same reasoning as `main.ts`.
 import type { BookstoreModel } from '@hydranium/bookstore-protocol';
 import { createBookstoreServices } from './language-server/bookstore-module.js';
+
+const { positionals } = parseArgs({
+   options: { 'enable-diagnostics': { type: 'boolean' }, 'diagnostics-directory': { type: 'string' } },
+   allowPositionals: true
+});
+// The host opts in for every connection to this process.
+const diagnostics = diagnosticsFromArgs();
 
 const { shared } = createBookstoreServices({ ...NodeFileSystem });
 
@@ -46,12 +55,12 @@ const server = startStdioServer(
       shared,
       // Defaults to the process cwd, which is what the CLI's `--cwd` sets on the
       // spawned child; an explicit path argument overrides it.
-      workspace: process.argv[2] ?? process.cwd(),
+      workspace: positionals[0] ?? process.cwd(),
       logger: shared.Logger,
       logTag: 'ModelServer'
    },
    connection => {
-      new DataServer<BookstoreModel>(connection, shared);
+      new DataServer<BookstoreModel>(connection, shared, { diagnostics });
       // The DataServer self-cleans via `connection.onClose`, so there is nothing
       // extra to tear down here.
       return { dispose: () => undefined };

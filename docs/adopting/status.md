@@ -29,6 +29,35 @@ already run on one shared workspace.
   subclassing, so a `protected` member is held to the same bar as a public one,
   even when nothing in the framework calls it.
 
+## Server trust boundary
+
+Your host decides who can connect and which workspace roots they may use.
+The socket launchers bind to loopback, but do not authenticate callers. A
+session tracks a client's documents and edits. It does not identify a user or
+isolate their data from other clients in the process.
+
+With `NodeFileSystem`, disk access stays inside the initialized workspace
+roots. A client that sends no workspace folders, such as one opened on a single
+file, gets no disk access at all. If you load libraries outside the roots,
+serve such clients, or read before initialization, pass the directories as
+`additionalRoots` to `nodeFileSystem(...)` in place of `NodeFileSystem`. Each
+root permits both reads and writes, so it must come from your host's
+configuration. A custom filesystem provider owns its own access checks.
+
+Outside the roots, reads, writes and deletes fail with `EACCES`, while
+existence checks and directory listings answer as if nothing were there.
+Paths containing `..` components are treated the same way. The checks follow
+symlinks and check the directory entry before a write or delete. They cannot
+prevent another process from replacing a link during an operation, or a hard
+link from sharing a file outside the workspace. If users can change the
+underlying filesystem, isolate their server processes with operating-system
+permissions as well.
+
+Process diagnostics can expose every client's data, including secrets in heap
+snapshots. They are disabled until you enable them for a connection you trust.
+[Connect a data client](../guides/connect-a-data-client.md#process-diagnostics)
+shows the binding and where its output goes.
+
 ## Known limitations
 
 ### The framework ships no translations

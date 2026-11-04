@@ -11,6 +11,7 @@
   "hydranium/core/missing-iteration": "Erwartet wurde mindestens eine Wiederholung, beginnend mit einer der folgenden Token-Folgen:\n  <{sequences}>\ngefunden wurde: '{found}'",
   "hydranium/core/model-update-edit": "Modell aktualisieren",
   "hydranium/core/no-loadable-content": "Kein ladbarer Inhalt für {uri}",
+  "hydranium/core/file-access-denied": "Zugriff auf {uri} verweigert: Der Pfad liegt außerhalb der erlaubten Dateisystemverzeichnisse",
   "hydranium/core/no-such-file": "Datei nicht gefunden: {uri}",
   "hydranium/core/no-such-path": "Datei oder Verzeichnis nicht gefunden: {uri}",
   "hydranium/core/unsupported-write": "{uri} kann nicht geschrieben werden: Das URI-Schema verweist auf keinen Speicherort im Dateisystem",

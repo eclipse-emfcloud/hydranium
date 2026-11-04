@@ -35,6 +35,11 @@ npx hydranium-cli projects --server "node ./lib/data-server-main.js ../workspace
 npx hydranium-cli query --server "node ./lib/data-server-main.js ../workspace" --uri <file:// URI of ../workspace/nodes.bookstore>
 ```
 
+For an authorized process capture, add `--enable-diagnostics` to either
+Node server entry. `--diagnostics-directory <path>` chooses where it writes
+artifacts. A directory alone does not enable diagnostics.
+Only enable this for callers you trust to inspect the whole process.
+
 ## Layout
 
 - `src/grammar/bookstore.langium` — the `Bookstore` grammar (.bookstore)

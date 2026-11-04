@@ -38,7 +38,7 @@ import type { LanguageClient } from 'vscode-languageclient/node';
 let client: LanguageClient | undefined;
 
 export async function activate(context: ExtensionContext): Promise<void> {
-   client = await startOrderFlowLanguageClient(context);
+   client = await startOrderFlowLanguageClient(context, { enableDiagnostics: true });
 
    // Here and not in the shared launch: VS Code throws on a second registration
    // of one id, so the VS Code shell would fail to activate beside this one.

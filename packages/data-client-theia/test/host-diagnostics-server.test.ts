@@ -20,17 +20,36 @@ vi.mock('@hydranium/protocol/node', () => ({
    writeHeapSnapshotToDir: writeHeapSnapshotToDirMock
 }));
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HOST_DIAGNOSTICS_PATH } from '@hydranium/protocol';
 import { ConnectionHandler } from '@theia/core';
-import { Container } from '@theia/core/shared/inversify';
-import { createHostDiagnosticsBackendModule, HostDiagnosticsServer } from '../src/node/host-diagnostics-server';
+import { Container, injectable } from '@theia/core/shared/inversify';
+import {
+   createHostDiagnosticsBackendModule,
+   type HostDiagnosticsOptions,
+   HostDiagnosticsServer
+} from '../src/node/host-diagnostics-server';
+
+/** The server as the backend module binds it. */
+function serverWith(options?: HostDiagnosticsOptions): HostDiagnosticsServer {
+   const container = new Container();
+   container.load(createHostDiagnosticsBackendModule(options));
+   return container.get(HostDiagnosticsServer);
+}
 
 describe('HostDiagnosticsServer', () => {
+   let hostDirectory: string;
+
    beforeEach(() => {
       formatProcessMemoryMock.mockClear();
       writeHeapSnapshotToDirMock.mockClear();
+      hostDirectory = join(mkdtempSync(join(tmpdir(), 'hydranium-host-diagnostics-test-')), 'host');
    });
+
+   afterEach(() => rmSync(join(hostDirectory, '..'), { recursive: true, force: true }));
 
    it('folds a caller label into the dump heading', async () => {
       await new HostDiagnosticsServer().dumpHostState({ label: 'after import' });
@@ -65,23 +84,41 @@ describe('HostDiagnosticsServer', () => {
       // data-server child's in a directory holding both.
       const info = vi.spyOn(console, 'info').mockImplementation(() => {});
       try {
-         await new HostDiagnosticsServer().writeHostHeapSnapshot({ directory: '/tmp/x', label: 'peak' });
+         await serverWith({ heapSnapshots: true, directory: hostDirectory }).writeHostHeapSnapshot({ label: 'peak' });
       } finally {
          info.mockRestore();
       }
 
-      expect(writeHeapSnapshotToDirMock).toHaveBeenCalledWith('/tmp/x', 'peak', 'heap-backend');
+      expect(writeHeapSnapshotToDirMock).toHaveBeenCalledWith(hostDirectory, 'peak', 'heap-backend');
+   });
+
+   it('refuses a heap snapshot unless the host enables them', async () => {
+      await expect(serverWith().writeHostHeapSnapshot({})).rejects.toThrow('disabled');
+      expect(writeHeapSnapshotToDirMock).not.toHaveBeenCalled();
+   });
+
+   it('writes a snapshot to the host directory rather than the one the client names', async () => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+      try {
+         await serverWith({ heapSnapshots: true, directory: hostDirectory }).writeHostHeapSnapshot({
+            directory: join(hostDirectory, 'client')
+         });
+      } finally {
+         info.mockRestore();
+      }
+
+      expect(writeHeapSnapshotToDirMock).toHaveBeenCalledWith(hostDirectory, 'backend', 'heap-backend');
    });
 
    it('falls back to a backend label when the caller names none', async () => {
       const info = vi.spyOn(console, 'info').mockImplementation(() => {});
       try {
-         await new HostDiagnosticsServer().writeHostHeapSnapshot({});
+         await serverWith({ heapSnapshots: true, directory: hostDirectory }).writeHostHeapSnapshot({});
       } finally {
          info.mockRestore();
       }
 
-      expect(writeHeapSnapshotToDirMock).toHaveBeenCalledWith(undefined, 'backend', 'heap-backend');
+      expect(writeHeapSnapshotToDirMock).toHaveBeenCalledWith(hostDirectory, 'backend', 'heap-backend');
    });
 });
 
@@ -96,5 +133,19 @@ describe('createHostDiagnosticsBackendModule', () => {
       const handlers = container.getAll<ConnectionHandler>(ConnectionHandler);
       expect(handlers.map(handler => handler.path)).toEqual([HOST_DIAGNOSTICS_PATH]);
       expect(container.get(HostDiagnosticsServer)).toBe(container.get(HostDiagnosticsServer));
+   });
+
+   it('hands its options to a subclass bound in place of the server', () => {
+      @injectable()
+      class CustomServer extends HostDiagnosticsServer {
+         snapshotsAllowed(): boolean | undefined {
+            return this.options.heapSnapshots;
+         }
+      }
+      const container = new Container();
+      container.load(createHostDiagnosticsBackendModule({ heapSnapshots: true }));
+      container.rebind(HostDiagnosticsServer).to(CustomServer).inSingletonScope();
+
+      expect((container.get(HostDiagnosticsServer) as CustomServer).snapshotsAllowed()).toBe(true);
    });
 });

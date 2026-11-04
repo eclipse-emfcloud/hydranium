@@ -431,6 +431,11 @@ npx hydranium-cli projects --server "node ./lib/data-server-main.js ../workspace
 npx hydranium-cli query --server "node ./lib/data-server-main.js ../workspace" --uri <file:// URI of ../workspace/nodes.domain>
 ```
 
+For an authorized process capture, add `--enable-diagnostics` to either
+Node server entry. `--diagnostics-directory <path>` chooses where it writes
+artifacts. A directory alone does not enable diagnostics.
+Only enable this for callers you trust to inspect the whole process.
+
 ## Layout
 
 - `src/grammar/domain.langium` — the `Domain` grammar (.domain)
@@ -1288,6 +1293,7 @@ server/src/main.ts
 
 import { NodeFileSystem, publishPortOnLspConnection, startSocketServer } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
+import { diagnosticsFromArgs } from '@hydranium/data-server/node';
 import { describeErrorWithStack } from '@hydranium/protocol';
 // The framework's entry point, NOT Langium's `@hydranium/langium/lsp` one. It is
 // signature-compatible and delegates straight through; what it adds first is
@@ -1308,6 +1314,9 @@ import { createOrderFlowServices } from './language-server/order-flow-module.js'
 
 import { ORDER_FLOW_DATA_SERVER_PORT_COMMAND } from 'order-flow-protocol';
 
+// The host opts in for every connection to this process.
+const diagnostics = diagnosticsFromArgs();
+
 const connection = createConnection(withHydraniumLspFeatures(ProposedFeatures.all));
 const { shared } = createOrderFlowServices({ connection, ...NodeFileSystem });
 startLanguageServer(shared);
@@ -1319,7 +1328,7 @@ startLanguageServer(shared);
 // head serving text edits while every data client waits on a port command that was
 // never registered, and the launcher reports a bind failure only if given a logger.
 const dataServer = startSocketServer({ shared, port: 0, logTag: 'ModelServer', logger: shared.Logger }, dataConnection => {
-   new DataServer<DomainModel | LayoutModel | ProcessModel>(dataConnection, shared);
+   new DataServer<DomainModel | LayoutModel | ProcessModel>(dataConnection, shared, { diagnostics });
    return { dispose: () => undefined };
 });
 dataServer.started
@@ -1366,9 +1375,18 @@ server/src/data-server-main.ts
 
 import { NodeFileSystem, startStdioServer } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
+import { diagnosticsFromArgs } from '@hydranium/data-server/node';
+import { parseArgs } from 'node:util';
 // The TRANSFER roots, not the AST ones — same reasoning as `main.ts`.
 import type { DomainModel, LayoutModel, ProcessModel } from 'order-flow-protocol';
 import { createOrderFlowServices } from './language-server/order-flow-module.js';
+
+const { positionals } = parseArgs({
+   options: { 'enable-diagnostics': { type: 'boolean' }, 'diagnostics-directory': { type: 'string' } },
+   allowPositionals: true
+});
+// The host opts in for every connection to this process.
+const diagnostics = diagnosticsFromArgs();
 
 const { shared } = createOrderFlowServices({ ...NodeFileSystem });
 
@@ -1383,12 +1401,12 @@ const server = startStdioServer(
       shared,
       // Defaults to the process cwd, which is what the CLI's `--cwd` sets on the
       // spawned child; an explicit path argument overrides it.
-      workspace: process.argv[2] ?? process.cwd(),
+      workspace: positionals[0] ?? process.cwd(),
       logger: shared.Logger,
       logTag: 'ModelServer'
    },
    connection => {
-      new DataServer<DomainModel | LayoutModel | ProcessModel>(connection, shared);
+      new DataServer<DomainModel | LayoutModel | ProcessModel>(connection, shared, { diagnostics });
       // The DataServer self-cleans via `connection.onClose`, so there is nothing
       // extra to tear down here.
       return { dispose: () => undefined };

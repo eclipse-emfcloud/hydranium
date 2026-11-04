@@ -289,7 +289,7 @@ export class ProfileCapture {
          // rather than scattering to os.tmpdir() via snapshotFilePath's fallback,
          // and so a caller writing a summary beside them finds the directory.
          if (directory) {
-            fs.mkdirSync(directory, { recursive: true });
+            fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
          }
          // Stop BOTH inspector samplers before serializing anything: writing the CPU
          // profile allocates, and a still-running allocation sampler would record that

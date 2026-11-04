@@ -11,6 +11,11 @@ for report columns, shared ownership, server and renderer lifecycles, and
 snapshot comparisons. It ships with the adopter skill so both audiences use
 the same retention model.
 
+If the investigation needs a new capture, follow the
+[profiling skill's capture guidance](../../../skills/hydranium-profiling/SKILL.md#capture-from-a-running-node-server)
+before calling process diagnostics. Opening a workspace does not authorize a
+heap snapshot.
+
 For framework investigations, verify holder edge names in `packages/` or
 `node_modules/langium/lib`.
 

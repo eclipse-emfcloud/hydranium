@@ -29,11 +29,20 @@
 
 import { NodeFileSystem, startStdioServer } from '@hydranium/core/node';
 import { DataServer } from '@hydranium/data-server';
+import { diagnosticsFromArgs } from '@hydranium/data-server/node';
+import { parseArgs } from 'node:util';
 // The TRANSFER roots, not the AST ones — same reasoning as `main.ts`. All
 // THREE grammars, because one data server per process serves every registered
 // language and `.layout` is one of them.
 import type { DomainModel, LayoutModel, ProcessModel } from '@hydranium/example-order-flow-protocol';
 import { createOrderFlowServices } from './language-server/order-flow-module.js';
+
+const { positionals } = parseArgs({
+   options: { 'enable-diagnostics': { type: 'boolean' }, 'diagnostics-directory': { type: 'string' } },
+   allowPositionals: true
+});
+// The host opts in for every connection to this process.
+const diagnostics = diagnosticsFromArgs();
 
 const { shared } = createOrderFlowServices({ ...NodeFileSystem });
 
@@ -48,12 +57,14 @@ const server = startStdioServer(
       shared,
       // Defaults to the process cwd, which is what the CLI's `--cwd` sets on the
       // spawned child; an explicit path argument overrides it.
-      workspace: process.argv[2] ?? process.cwd(),
+      workspace: positionals[0] ?? process.cwd(),
       logger: shared.Logger,
       logTag: 'ModelServer'
    },
    connection => {
-      new DataServer<DomainModel | LayoutModel | ProcessModel>(connection, shared);
+      new DataServer<DomainModel | LayoutModel | ProcessModel>(connection, shared, {
+         diagnostics
+      });
       // The DataServer self-cleans via `connection.onClose`, so there is nothing
       // extra to tear down here.
       return { dispose: () => undefined };

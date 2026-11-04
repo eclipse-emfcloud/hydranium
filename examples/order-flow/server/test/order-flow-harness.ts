@@ -23,7 +23,7 @@
 
 import { initializeWorkspaceProgrammatically } from '@hydranium/core';
 import { disposeScratchWorkspace, makeScratchWorkspace, type ScratchWorkspace, settleServer } from '@hydranium/core/testing/node';
-import { NodeFileSystem } from '@hydranium/core/node';
+import { nodeFileSystem } from '@hydranium/core/node';
 import type { AstNode, LangiumDocument } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
 import type { AsyncHarness } from '@hydranium/protocol/testing';
@@ -111,7 +111,9 @@ export interface OrderFlowHarness {
  * `lsp.Connection`.
  */
 export function makeServices(options: OrderFlowOptions = {}): OrderFlowHarness {
-   const { shared, Domain, Process, Layout } = createOrderFlowServices({ ...NodeFileSystem }, options);
+   // Fixtures read and write scratch copies under the temp directory, often
+   // with no workspace initialized.
+   const { shared, Domain, Process, Layout } = createOrderFlowServices(nodeFileSystem({ additionalRoots: [URI.file(tmpdir())] }), options);
    return { shared, domain: Domain, process: Process, layout: Layout };
 }
 

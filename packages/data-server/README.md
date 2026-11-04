@@ -45,6 +45,11 @@ with `@hydranium/core`.
 3. In a web worker, start it with `startDataServerInWorker` from `./browser`
    on the port the page transferred for it; its callback creates the server.
 
+For a connection allowed to inspect the process, pass
+`diagnostics: nodeDataServerDiagnostics()` from `./node` in the server options.
+Otherwise diagnostics requests fail. *Connect a data client* covers this
+binding and its output directory.
+
 See *Add a data-server method* and *Connect a data client* in
 [Adopting Hydranium](https://github.com/eclipse-emfcloud/hydranium/blob/main/docs/ADOPTING.md).
 
