@@ -10,7 +10,7 @@
 import { applyPatch, compare, deepClone, getValueByPointer } from 'fast-json-patch';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { reconcileByPatchReplay } from '../src/patch-merge';
+import { editRoot, reconcileByPatchReplay } from '../src/patch-merge';
 
 /**
  * Generative companion to the example-based `patch-merge.test.ts`. Where those
@@ -312,6 +312,93 @@ describe('patch-merge property tests', () => {
                expect(server[keys[2 * i]]).toEqual(editVals[2 * i]);
                expect(server[keys[2 * i + 1]]).toEqual(editVals[2 * i + 1]);
             }
+         })
+      );
+   });
+});
+
+/** Rows from a small id pool, so arrays come out keyed, keyless, with a repeated key, or mixed, at any depth. */
+const rows = fc.letrec(tie => ({
+   row: fc.record(
+      {
+         id: fc.constantFrom('a', 'b', 'c', 'd', '__proto__'),
+         value: leaf,
+         children: fc.array(tie('row'), { maxLength: 3 })
+      },
+      { requiredKeys: ['value'] }
+   ),
+   rows: fc.oneof({ maxDepth: 2 }, fc.constant([]), fc.array(tie('row'), { maxLength: 4 }))
+})).rows;
+const rowDocument = fc.record({ title: leaf, rows });
+
+const byId = {
+   itemKey: (item: unknown): string | undefined =>
+      typeof item === 'object' && item !== null && 'id' in item && typeof item.id === 'string' ? item.id : undefined
+};
+
+describe('patch-merge property tests with item keys', () => {
+   it('editRoot gives the edited root on the root it was made from', () => {
+      fc.assert(
+         fc.property(rowDocument, rowDocument, (before, after) => {
+            expect(editRoot(before, after, byId)(deepClone(before))).toEqual(after);
+         })
+      );
+   });
+
+   it('a key function that keys no array changes no outcome', async () => {
+      await fc.assert(
+         fc.asyncProperty(jsonObject, jsonObject, jsonObject, async (base, ours, theirs) => {
+            const keyless = await reconcileByPatchReplay(base, ours, async () => deepClone(theirs), { itemKey: () => undefined });
+
+            // Serialized, so a property order the rewrite changed counts too.
+            expect(JSON.stringify(keyless)).toBe(JSON.stringify(await reconcileByPatchReplay(base, ours, async () => deepClone(theirs))));
+         })
+      );
+   });
+
+   it('an array with a repeated key is matched by index', async () => {
+      const withTwins = rowDocument.map(document => ({
+         ...document,
+         rows: [...document.rows, { id: 'a', value: 1 }, { id: 'a', value: 2 }]
+      }));
+      const repeated = fc.tuple(withTwins, withTwins, withTwins);
+
+      await fc.assert(
+         fc.asyncProperty(repeated, async ([base, ours, theirs]) => {
+            const keyed = await reconcileByPatchReplay(base, ours, async () => deepClone(theirs), byId);
+
+            expect(keyed).toEqual(await reconcileByPatchReplay(base, ours, async () => deepClone(theirs)));
+         })
+      );
+   });
+
+   it('merges edits of keyed rows into the rows they were made on, wherever the refetch inserted rows', async () => {
+      const scenario = fc.uniqueArray(fc.string({ minLength: 1, maxLength: 3 }), { minLength: 1, maxLength: 6 }).chain(ids =>
+         fc.record({
+            ids: fc.constant(ids),
+            userEdits: fc.array(fc.option(leaf, { nil: undefined }), { minLength: ids.length, maxLength: ids.length }),
+            foreignEdits: fc.array(fc.option(leaf, { nil: undefined }), { minLength: ids.length, maxLength: ids.length }),
+            inserts: fc.array(fc.nat(ids.length), { maxLength: 4 })
+         })
+      );
+
+      await fc.assert(
+         fc.asyncProperty(scenario, async ({ ids, userEdits, foreignEdits, inserts }) => {
+            fc.pre(userEdits.some(edit => edit !== undefined));
+            const base = { rows: ids.map(id => ({ id })) };
+            const ours = { rows: ids.map((id, i) => (userEdits[i] === undefined ? { id } : { id, user: userEdits[i] })) };
+            const theirs: { rows: JsonRecord[] } = {
+               rows: ids.map((id, i) => (foreignEdits[i] === undefined ? { id } : { id, foreign: foreignEdits[i] }))
+            };
+            inserts.forEach((at, i) => theirs.rows.splice(Math.min(at, theirs.rows.length), 0, { id: `new ${i}` }));
+            const expected = theirs.rows.map(row => {
+               const edit = userEdits[ids.indexOf(String(row.id))];
+               return edit === undefined ? row : { ...row, user: edit };
+            });
+
+            const outcome = await reconcileByPatchReplay(base, ours, async () => deepClone(theirs), byId);
+
+            expect(outcome).toEqual({ status: 'merged', merged: { rows: expected } });
          })
       );
    });

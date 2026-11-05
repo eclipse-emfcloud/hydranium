@@ -12,6 +12,7 @@ import {
    applyPatch,
    compare,
    deepClone,
+   escapePathComponent,
    getValueByPointer,
    type Operation as JsonPatchOperation,
    unescapePathComponent
@@ -97,8 +98,11 @@ export type ReconcileOutcome<T> =
          * User and foreign writer changed one path to different values, or
          * both changed one inside an array the refetch holds otherwise than
          * the user, even to the same value. Both inserted the same array
-         * element. Or the foreign writer removed or replaced what the user
-         * edited inside, or moved it as {@link reconcileByPatchReplay} says.
+         * element into an array matched by index, or items of one key and
+         * different content into one matched by key. Or a reorder collided,
+         * as {@link ReplayOptions.itemKey} says. Or the foreign writer
+         * removed or replaced what the user edited inside, or moved it as
+         * {@link reconcileByPatchReplay} says.
          */
         status: 'conflict';
         /**
@@ -140,6 +144,10 @@ export type ReconcileOutcome<T> =
  *   element in the edited one's place takes the edit. The caller drops the
  *   write and surfaces `theirs`.
  *
+ * With {@link ReplayOptions.itemKey}, an array matched by key escapes the
+ * move check: an op follows its item to wherever the refetch holds it. Its
+ * order merges, or conflicts, as that option says.
+ *
  * I/O is the caller's: `refetch` supplies the current root, and applying the
  * `merged` result (update vs save, new base, UI refresh) stays at the call
  * site so form and GLSP paths keep their own persistence semantics.
@@ -147,7 +155,8 @@ export type ReconcileOutcome<T> =
 export async function reconcileByPatchReplay<T extends object>(
    base: T,
    ours: T,
-   refetch: () => Promise<T | undefined>
+   refetch: () => Promise<T | undefined>,
+   options: ReplayOptions = {}
 ): Promise<ReconcileOutcome<T>> {
    const userPatch = compare(base, ours);
    if (userPatch.length === 0) {
@@ -157,6 +166,66 @@ export async function reconcileByPatchReplay<T extends object>(
    if (!theirs) {
       return { status: 'unavailable' };
    }
+   return options.itemKey ? replayByKey(base, ours, theirs, options.itemKey) : replay(base, ours, theirs, userPatch);
+}
+
+/** Options of {@link reconcileByPatchReplay} and {@link editRoot}. */
+export interface ReplayOptions {
+   /**
+    * The key of an array item. It may be passed any item of any array, at any
+    * depth, so primitives and `null` too. Return `undefined` for an item
+    * without a key rather than throw: what it throws, the reconcile rejects
+    * with and the change of {@link editRoot} throws.
+    *
+    * An array is matched by key when every item has one and no key repeats,
+    * in each of the base, the user's root and the refetch that holds it. Any
+    * other array is matched by index, and so is everything in it, as is a
+    * value one root holds as an array and another as no array. A key needs to
+    * be unique only within its array. One key names one item, so an item both
+    * sides inserted under one key is inserted once, and conflicts only when
+    * its content differs. By index, two equal inserts stay two items and
+    * conflict. Changing an item's key reads as removing it and inserting
+    * another, so it conflicts with the other side's edit of that item, which
+    * merges by index.
+    *
+    * The items' order is merged as one value: the user's when only the user
+    * reordered the items the roots share, else the refetch's. Both reordering
+    * them differently is a conflict, and so is one side reordering them where
+    * the other removed the array. An item one side inserted follows the item
+    * it followed there.
+    */
+   readonly itemKey?: (item: unknown) => string | undefined;
+}
+
+/**
+ * A change for a form that hands back a whole new root per edit: `before` is
+ * the root the form edited, `after` the one it handed back. The change
+ * replays that edit on whatever newer root it is given. Pass it to an edit
+ * that runs again on every newer snapshot, so another client's update stays
+ * visible and a form model older than the root writes no update back.
+ *
+ * The change is dropped whole, and the root returned as it is, wherever
+ * {@link reconcileByPatchReplay} would report a conflict: the server wins,
+ * and an edit of several fields never lands in part.
+ */
+export function editRoot<T extends object>(before: T, after: T, options: ReplayOptions = {}): (root: T) => T {
+   if (_areEquals(before, after)) {
+      return root => root;
+   }
+   // The patch is made per call: its op values end up in the result, which another call must not share.
+   return root => {
+      const outcome = options.itemKey
+         ? replayByKey(before, after, root, options.itemKey)
+         : replay(before, after, root, compare(before, after));
+      return outcome.status === 'merged' ? outcome.merged : root;
+   };
+}
+
+/** A {@link ReconcileOutcome} once the refetch is in hand. */
+type ReplayOutcome<T> = Exclude<ReconcileOutcome<T>, { status: 'no-op' } | { status: 'unavailable' }>;
+
+/** {@link reconcileByPatchReplay} on the refetch `theirs`, with every array matched by index. */
+function replay<T extends object>(base: T, ours: T, theirs: T, userPatch: readonly JsonPatchOperation[]): ReplayOutcome<T> {
    const comparable = toJson(theirs);
    const pending = withoutAgreed(base, ours, comparable, userPatch);
    if (pending.length === 0) {
@@ -171,6 +240,176 @@ export async function reconcileByPatchReplay<T extends object>(
    } catch {
       return { status: 'conflict', theirs };
    }
+}
+
+/**
+ * Prefixed to an item key in its array's object form, so a key that names an
+ * `Object.prototype` member stays an own key that a patch may address.
+ */
+const ITEM_KEY_PREFIX = '#';
+
+/** The keys of one array matched by key, prefixed, in the base, the user's root and the refetch. `undefined` where that root holds no array. */
+type KeyLists = readonly [base?: readonly string[], ours?: readonly string[], theirs?: readonly string[]];
+
+/**
+ * {@link replay} with each array matched by key rewritten into an object from
+ * prefixed key to item, so an op addresses an item by key and follows it to
+ * any index. Ops address an array by index, and `compare` diffs one index by
+ * index, so an insert before a row would otherwise read as an edit of every row.
+ */
+function replayByKey<T extends object>(base: T, ours: T, theirs: T, itemKey: (item: unknown) => string | undefined): ReplayOutcome<T> {
+   const keyed = new Map<string, KeyLists>();
+   const comparable = toJson(theirs);
+   // Structural casts: the rewrite keeps each root's type apart from its keyed arrays.
+   const [keyedBase, keyedOurs, keyedTheirs] = withArraysByKey([base, ours, comparable], '', itemKey, keyed) as [T, T, T];
+   const arrays = new Map<string, KeyedArray>();
+   for (const [pointer, lists] of keyed) {
+      const kept = keptOrder(lists);
+      if (!kept) {
+         return { status: 'conflict', theirs };
+      }
+      arrays.set(pointer, { lists, kept });
+   }
+   const outcome = replay(keyedBase, keyedOurs, keyedTheirs, compare(keyedBase, keyedOurs));
+   if (outcome.status === 'conflict') {
+      return { status: 'conflict', theirs };
+   }
+   if (outcome.status === 'merged') {
+      return { status: 'merged', merged: withArraysRestored(outcome.merged, '', arrays) as T };
+   }
+   // Applied in content, the refetch may still lack the user's order.
+   const reordered = withArraysRestored(keyedTheirs, '', arrays) as T;
+   return _areEquals(reordered, comparable) ? { status: 'already-applied', theirs } : { status: 'merged', merged: reordered };
+}
+
+/**
+ * `roots`, values at `pointer` in the base, the user's root and the refetch,
+ * with each array matched by key rewritten into its object form, recorded in
+ * `keyed`. Arrays matched by index are kept as they are with all they hold: a
+ * patch shifts their items, so a keyed array inside could not be found again.
+ */
+function withArraysByKey(
+   roots: readonly unknown[],
+   pointer: string,
+   itemKey: (item: unknown) => string | undefined,
+   keyed: Map<string, KeyLists>
+): unknown[] {
+   const present = roots.filter(root => root !== undefined);
+   let children: Array<Map<string, unknown> | undefined>;
+   if (present.length > 0 && present.every(Array.isArray)) {
+      children = roots.map(root => (Array.isArray(root) ? itemsByKey(root, itemKey) : undefined));
+      if (roots.some((root, i) => root !== undefined && !children[i])) {
+         return [...roots];
+      }
+      const [base, ours, theirs] = children.map(items => items && [...items.keys()]);
+      keyed.set(pointer, [base, ours, theirs]);
+   } else if (present.length > 0 && present.every(root => typeof root === 'object' && root !== null && !Array.isArray(root))) {
+      children = roots.map(root => (typeof root === 'object' && root !== null ? new Map(Object.entries(root)) : undefined));
+   } else {
+      return [...roots];
+   }
+   const rewritten = new Map<string, unknown[]>();
+   for (const name of new Set(children.flatMap(items => (items ? [...items.keys()] : [])))) {
+      rewritten.set(
+         name,
+         withArraysByKey(
+            children.map(items => items?.get(name)),
+            `${pointer}/${escapePathComponent(name)}`,
+            itemKey,
+            keyed
+         )
+      );
+   }
+   // Each root keeps its own property order, so a merge keeps the refetch's.
+   // fromEntries makes even a `__proto__` key an own key.
+   return children.map((items, i) => items && Object.fromEntries([...items.keys()].map(name => [name, rewritten.get(name)?.[i]])));
+}
+
+/** The items of `array` by prefixed key, `undefined` when an item has no key or a key repeats. */
+function itemsByKey(array: readonly unknown[], itemKey: (item: unknown) => string | undefined): Map<string, unknown> | undefined {
+   const items = new Map<string, unknown>();
+   for (const item of array) {
+      const key = itemKey(item);
+      if (key === undefined || items.has(ITEM_KEY_PREFIX + key)) {
+         return undefined;
+      }
+      items.set(ITEM_KEY_PREFIX + key, item);
+   }
+   return items;
+}
+
+/**
+ * The order an array matched by key keeps, as {@link ReplayOptions.itemKey}
+ * says: the user's when only the user reordered the items the roots share,
+ * else the refetch's. `undefined` when both reordered them differently, or
+ * one reordered them and the other removed the array. No op or `test` sees a
+ * reorder, as the object form compares unordered.
+ */
+function keptOrder([base, ours, theirs]: KeyLists): readonly string[] | undefined {
+   if (!base || (!ours && !theirs)) {
+      return theirs ?? ours ?? [];
+   }
+   const held = [ours, theirs].filter(list => list !== undefined).map(list => new Set(list));
+   const shared = new Set(base.filter(key => held.every(keys => keys.has(key))));
+   const [was, user, foreign] = [base, ours, theirs].map(list => list && JSON.stringify(list.filter(key => shared.has(key))));
+   if (!ours || !theirs) {
+      return (user ?? foreign) === was ? (theirs ?? ours) : undefined;
+   }
+   if (user === was || user === foreign) {
+      return theirs;
+   }
+   return foreign === was ? ours : undefined;
+}
+
+/** An array matched by key: its keys in each root, and the order it keeps. */
+interface KeyedArray {
+   readonly lists: KeyLists;
+   readonly kept: readonly string[];
+}
+
+/** `value` with each object {@link withArraysByKey} made of an array, by `arrays`, an array again. */
+function withArraysRestored(value: unknown, pointer: string, arrays: ReadonlyMap<string, KeyedArray>): unknown {
+   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return value;
+   }
+   const entries = Object.entries(value).map(([name, child]): [string, unknown] => [
+      name,
+      withArraysRestored(child, `${pointer}/${escapePathComponent(name)}`, arrays)
+   ]);
+   const array = arrays.get(pointer);
+   return array ? arranged(new Map(entries), array) : Object.fromEntries(entries);
+}
+
+/**
+ * The merged `items` of one array matched by key, in {@link keptOrder}. An item
+ * that order lacks follows the item it followed in the root that holds it.
+ * Linear, however many items either side inserted.
+ */
+function arranged(items: ReadonlyMap<string, unknown>, { lists, kept }: KeyedArray): unknown[] {
+   const inKept = new Set(kept);
+   // The items each kept item is followed by, from the start for `undefined`.
+   const following = new Map<string | undefined, string[]>();
+   for (const list of [lists[1], lists[2]]) {
+      let anchor: string | undefined;
+      for (const key of list ?? []) {
+         if (inKept.has(key)) {
+            anchor = key;
+         } else {
+            const inserted = following.get(anchor) ?? [];
+            inserted.push(key);
+            following.set(anchor, inserted);
+         }
+      }
+   }
+   const order = new Set<string>(following.get(undefined));
+   for (const key of kept) {
+      order.add(key);
+      for (const next of following.get(key) ?? []) {
+         order.add(next);
+      }
+   }
+   // Each merged item comes from the refetch or a user op, so one of the lists holds it.
+   return [...order].filter(key => items.has(key)).map(key => items.get(key));
 }
 
 /**
@@ -256,7 +495,10 @@ function toJson<T>(value: T): T {
  * Replayed, the first inserts the value a second time and the second replaces
  * the foreign value. Identical array elements conflict rather than being
  * skipped: skipping drops one of two insertions that merely happen to be
- * equal. `theirs` is the refetch through {@link toJson}.
+ * equal. An item of an array matched by key is an object key here, so two
+ * equal inserts under one key agree before this check, as
+ * {@link ReplayOptions.itemKey} says. `theirs` is the refetch through
+ * {@link toJson}.
  */
 function addsCollide(base: object, theirs: object, userPatch: readonly JsonPatchOperation[]): boolean {
    // Each array's elements are counted once, however many ops insert into it, so a bulk insert stays linear.
@@ -406,11 +648,14 @@ export interface ConflictResolver {
  * Default {@link ConflictResolver}: field-level three-way merge via
  * {@link reconcileByPatchReplay}. A foreign edit to a different field is
  * merged; a same-field collision is reported as a conflict rather than
- * clobbered.
+ * clobbered. Made with an {@link ReplayOptions.itemKey}, it matches array
+ * items by key.
  */
 export class ReconcilingConflictResolver implements ConflictResolver {
+   constructor(protected readonly options: ReplayOptions = {}) {}
+
    resolve<T extends object>(base: T, ours: T, refetch: () => Promise<T | undefined>): Promise<ReconcileOutcome<T>> {
-      return reconcileByPatchReplay(base, ours, refetch);
+      return reconcileByPatchReplay(base, ours, refetch, this.options);
    }
 }
 
