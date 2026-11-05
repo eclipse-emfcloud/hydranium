@@ -41,7 +41,17 @@ interface ProbeElement extends TransferElement {
    $type: 'TypeOne';
    name: string;
    note: string;
+   items?: readonly ProbeItem[];
 }
+
+interface ProbeItem {
+   id?: string;
+   label: string;
+}
+
+/** Matches an item of `items` by its id, and nothing else. */
+const itemKey = (item: unknown): string | undefined =>
+   typeof item === 'object' && item !== null && 'id' in item && typeof item.id === 'string' ? item.id : undefined;
 
 const URI_A = 'file:///a.x';
 const OTHER_CLIENT = 'other';
@@ -555,6 +565,29 @@ function makeCopyHarness(settleBeforeCloseMs?: number, restoreWithDiagnostics = 
  */
 function typeWhileDown(copy: WorkingCopy<ProbeElement>): Promise<WorkingCopyEditOutcome> {
    return copy.edit(root => ({ ...root, name: 'typed' }));
+}
+
+/**
+ * A copy matching `items` by key whose first edit, to `ours`, another
+ * client's write of `theirs` drops while it is out. `release` lets the write
+ * answer, so an edit made before it is written after the drop.
+ */
+async function keyedDrop(items: readonly ProbeItem[], ours: readonly ProbeItem[], theirs: readonly ProbeItem[]) {
+   const { server, session, events } = makeCopyHarness();
+   server.root = { ...server.root, items };
+   const copy = new HeldCopy(session, events, URI_A, { itemKey });
+   await copy.open();
+   const opened = copy.root!;
+   const answered = new Deferred<void>();
+   server.updateGate = answered.promise;
+   const first = copy.editRoot(opened, { ...opened, items: ours });
+   await waitFor(() => server.updates === 1);
+   await server.foreignWrite({ items: theirs });
+   const release = (): void => {
+      server.updateGate = undefined;
+      answered.resolve();
+   };
+   return { server, copy, first, release };
 }
 
 /** Resolves once the session has restored a document. */
@@ -1339,6 +1372,157 @@ describe('WorkingCopy', () => {
       expect(await first).toEqual({ status: 'conflict' });
       expect(await second).toEqual({ status: 'merged' });
       expect(server.root).toEqual({ $type: 'TypeOne', name: 'theirs', note: 'later' });
+      expect(copy.root).toEqual(server.root);
+   });
+
+   it("writes a whole-root edit of an item onto that item once another client's insert moved it during the write", async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.root = { ...server.root, items: [{ id: 'b', label: 'b' }] };
+      const copy = new HeldCopy(session, events, URI_A, { itemKey });
+      await copy.open();
+      const before = copy.root!;
+      const answered = new Deferred<void>();
+      server.updateGate = answered.promise;
+      const edited = copy.editRoot(before, { ...before, items: [{ id: 'b', label: 'ours' }] });
+      await waitFor(() => server.updates === 1);
+      await server.foreignWrite({ items: [{ id: 'a', label: 'a' }, ...before.items!] });
+      server.updateGate = undefined;
+      answered.resolve();
+
+      expect(await edited).toEqual({ status: 'merged' });
+      expect(server.root.items).toEqual([
+         { id: 'a', label: 'a' },
+         { id: 'b', label: 'ours' }
+      ]);
+      expect(copy.root).toEqual(server.root);
+   });
+
+   it("writes a whole-root edit of an item onto that item when the edit was made before another client's insert moved it", async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.root = { ...server.root, items: [{ id: 'b', label: 'b' }] };
+      const copy = new HeldCopy(session, events, URI_A, { itemKey });
+      await copy.open();
+      const before = copy.root!;
+      await server.foreignWrite({ items: [{ id: 'a', label: 'a' }, ...before.items!] });
+      await waitFor(() => copy.root?.items?.length === 2);
+
+      expect(await copy.editRoot(before, { ...before, items: [{ id: 'b', label: 'ours' }] })).toEqual({ status: 'applied' });
+      expect(server.root.items).toEqual([
+         { id: 'a', label: 'a' },
+         { id: 'b', label: 'ours' }
+      ]);
+      expect(copy.root).toEqual(server.root);
+   });
+
+   it("writes a whole-root edit made during a write whose edit of an item another client's edit dropped, when it edits another item", async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.root = {
+         ...server.root,
+         items: [
+            { id: 'a', label: 'a' },
+            { id: 'b', label: 'b' }
+         ]
+      };
+      const copy = new HeldCopy(session, events, URI_A, { itemKey });
+      await copy.open();
+      const opened = copy.root!;
+      const answered = new Deferred<void>();
+      server.updateGate = answered.promise;
+      const first = copy.editRoot(opened, { ...opened, items: [opened.items![0], { id: 'b', label: 'ours' }] });
+      await waitFor(() => server.updates === 1);
+      await server.foreignWrite({ items: [opened.items![0], { id: 'b', label: 'theirs' }] });
+
+      const shown = copy.root!;
+      const second = copy.editRoot(shown, { ...shown, items: [shown.items![1]] });
+      server.updateGate = undefined;
+      answered.resolve();
+
+      expect(await first).toEqual({ status: 'conflict' });
+      expect(await second).toEqual({ status: 'merged' });
+      expect(server.root.items).toEqual([{ id: 'b', label: 'theirs' }]);
+      expect(copy.root).toEqual(server.root);
+   });
+
+   it("reports a conflict for a whole-root edit made during a write that reverts an item another client's edit dropped the write's edit of, past its insert", async () => {
+      const [a, b] = [
+         { id: 'a', label: 'a' },
+         { id: 'b', label: 'b' }
+      ];
+      const { server, copy, first, release } = await keyedDrop(
+         [a, b],
+         [a, { id: 'b', label: 'ours' }],
+         [a, { id: 'x', label: 'x' }, { id: 'b', label: 'theirs' }]
+      );
+
+      const shown = copy.root!;
+      const second = copy.editRoot(shown, { ...shown, items: shown.items!.map(item => (item.id === 'b' ? b : item)) });
+      release();
+
+      expect([await first, await second]).toEqual([{ status: 'conflict' }, { status: 'conflict' }]);
+      expect(server.root.items).toEqual([a, { id: 'x', label: 'x' }, { id: 'b', label: 'theirs' }]);
+      expect(copy.root).toEqual(server.root);
+   });
+
+   it("reports a conflict for a whole-root edit made during a write that edits an item another client's edit dropped the write's edit of, and adds an item without a key", async () => {
+      const a = { id: 'a', label: 'a' };
+      const { server, copy, first, release } = await keyedDrop(
+         [a, { id: 'b', label: 'b' }],
+         [a, { id: 'b', label: 'ours' }],
+         [a, { id: 'b', label: 'theirs' }]
+      );
+
+      const shown = copy.root!;
+      const second = copy.editRoot(shown, { ...shown, items: [a, { id: 'b', label: 'mine' }, { label: 'n' }] });
+      release();
+
+      expect([await first, await second]).toEqual([{ status: 'conflict' }, { status: 'conflict' }]);
+      expect(server.root.items).toEqual([a, { id: 'b', label: 'theirs' }]);
+      expect(copy.root).toEqual(server.root);
+   });
+
+   it("reports a conflict for a whole-root edit made during a write that reorders items another client's reorder dropped the write's reorder of", async () => {
+      const [a, b, c] = [
+         { id: 'a', label: 'a' },
+         { id: 'b', label: 'b' },
+         { id: 'c', label: 'c' }
+      ];
+      const { server, copy, first, release } = await keyedDrop([a, b, c], [c, a, b], [b, a, c]);
+
+      const shown = copy.root!;
+      const second = copy.editRoot(shown, { ...shown, items: [a, b, c] });
+      release();
+
+      expect([await first, await second]).toEqual([{ status: 'conflict' }, { status: 'conflict' }]);
+      expect(server.root.items).toEqual([b, a, c]);
+      expect(copy.root).toEqual(server.root);
+   });
+
+   it("writes the whole-root edit of a batch onto its item once another client's insert moved it, dropping only the batch's edit that collided", async () => {
+      const { server, session, events } = makeCopyHarness();
+      const [a, b] = [
+         { id: 'a', label: 'a' },
+         { id: 'b', label: 'b' }
+      ];
+      server.root = { ...server.root, items: [a, b] };
+      const copy = new HeldCopy(session, events, URI_A, { itemKey });
+      await copy.open();
+      const answered = new Deferred<void>();
+      server.updateGate = answered.promise;
+      const sent = copy.edit(root => ({ ...root, note: 'sent' }));
+      await waitFor(() => server.updates === 1);
+      const shown = copy.root!;
+      const colliding = copy.editRoot(shown, { ...shown, items: [a, { id: 'b', label: 'ours' }] });
+      const moved = copy.editRoot(shown, { ...shown, items: [{ id: 'a', label: 'ours' }, b] });
+      await server.foreignWrite({ items: [{ id: 'x', label: 'x' }, a, { id: 'b', label: 'theirs' }] });
+      server.updateGate = undefined;
+      answered.resolve();
+
+      expect([await sent, await colliding, await moved]).toEqual([{ status: 'merged' }, { status: 'conflict' }, { status: 'merged' }]);
+      expect(server.root.items).toEqual([
+         { id: 'x', label: 'x' },
+         { id: 'a', label: 'ours' },
+         { id: 'b', label: 'theirs' }
+      ]);
       expect(copy.root).toEqual(server.root);
    });
 

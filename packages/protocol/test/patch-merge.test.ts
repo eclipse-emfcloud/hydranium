@@ -11,6 +11,7 @@ import { describe, expect, test } from 'vitest';
 import { applyPatch, compare } from 'fast-json-patch';
 import {
    augmentWithTestOps,
+   changedPaths,
    editRoot,
    ForceConflictResolver,
    ReconcilingConflictResolver,
@@ -950,6 +951,41 @@ describe('editRoot', () => {
       const root = { title: 'foreign' };
 
       expect(editRoot({ title: 't' }, { title: 't' })(root)).toBe(root);
+   });
+});
+
+describe('changedPaths', () => {
+   const before = {
+      items: [
+         { id: 'a', label: 'a' },
+         { id: 'b', label: 'b' }
+      ]
+   };
+
+   test('names an item edited in an array matched by key by its key, at any index', () => {
+      const after = { items: [{ id: 'x', label: 'x' }, ...before.items.map(item => (item.id === 'b' ? { ...item, label: 'u' } : item))] };
+
+      expect(changedPaths([before, after], byId)).toEqual([['/items/#b/label', '/items/#x']]);
+   });
+
+   test("names the array for a reorder of an array matched by key, and nothing for an insert that keeps the others' order", () => {
+      const reordered = { items: [...before.items].reverse() };
+      const inserted = { items: [{ id: 'x', label: 'x' }, ...reordered.items] };
+
+      expect(changedPaths([before, reordered, inserted], byId)).toEqual([['/items'], ['/items/#x']]);
+   });
+
+   test('names indices in every change for an array one root holds an item without a key in', () => {
+      const edited = { items: [before.items[0], { id: 'b', label: 'u' }] };
+      const appended = { items: [...edited.items, { label: 'n' }] };
+
+      expect(changedPaths([before, edited, appended], byId)).toEqual([['/items/1/label'], ['/items/2']]);
+   });
+
+   test('names indices without an item key', () => {
+      const after = { items: [before.items[1]] };
+
+      expect(changedPaths([before, after])).toEqual([compare(before, after).map(operation => operation.path)]);
    });
 });
 

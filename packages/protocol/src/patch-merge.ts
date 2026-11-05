@@ -169,13 +169,13 @@ export async function reconcileByPatchReplay<T extends object>(
    return options.itemKey ? replayByKey(base, ours, theirs, options.itemKey) : replay(base, ours, theirs, userPatch);
 }
 
-/** Options of {@link reconcileByPatchReplay} and {@link editRoot}. */
+/** Options of {@link reconcileByPatchReplay}, {@link editRoot} and {@link changedPaths}. */
 export interface ReplayOptions {
    /**
     * The key of an array item. It may be passed any item of any array, at any
     * depth, so primitives and `null` too. Return `undefined` for an item
     * without a key rather than throw: what it throws, the reconcile rejects
-    * with and the change of {@link editRoot} throws.
+    * with, and the change of {@link editRoot} and {@link changedPaths} throw.
     *
     * An array is matched by key when every item has one and no key repeats,
     * in each of the base, the user's root and the refetch that holds it. Any
@@ -221,6 +221,36 @@ export function editRoot<T extends object>(before: T, after: T, options: ReplayO
    };
 }
 
+/**
+ * For each change from one of `roots` to the next, the JSON pointers it
+ * writes, to tell whether two changes touch the same value. Pass every root
+ * whose changes are compared in one call. An array matched by key in all of
+ * them, as {@link ReplayOptions.itemKey} says, is addressed by item key, so a
+ * path names one item at any index, and a change of its items' order writes
+ * the array's own pointer. Any other array is addressed by index in all of
+ * them, so the paths of one change stay comparable with another's.
+ */
+export function changedPaths<T extends object>(roots: readonly T[], options: ReplayOptions = {}): string[][] {
+   const keyed = new Map<string, KeyLists>();
+   // Structural cast: the rewrite keeps each root's shape apart from its keyed arrays.
+   const forms = (options.itemKey ? withArraysByKey(roots, '', options.itemKey, keyed) : roots) as object[];
+   return forms
+      .slice(1)
+      .map((after, i) => [
+         ...compare(forms[i], after).map(operation => operation.path),
+         ...[...keyed].filter(([, lists]) => reorders(lists[i], lists[i + 1])).map(([pointer]) => pointer)
+      ]);
+}
+
+/** Whether the keys both lists hold stand in another order in `after` than in `before`. */
+function reorders(before: readonly string[] | undefined, after: readonly string[] | undefined): boolean {
+   if (!before || !after) {
+      return false;
+   }
+   const [inBefore, inAfter] = [new Set(before), new Set(after)];
+   return JSON.stringify(before.filter(key => inAfter.has(key))) !== JSON.stringify(after.filter(key => inBefore.has(key)));
+}
+
 /** A {@link ReconcileOutcome} once the refetch is in hand. */
 type ReplayOutcome<T> = Exclude<ReconcileOutcome<T>, { status: 'no-op' } | { status: 'unavailable' }>;
 
@@ -248,8 +278,8 @@ function replay<T extends object>(base: T, ours: T, theirs: T, userPatch: readon
  */
 const ITEM_KEY_PREFIX = '#';
 
-/** The keys of one array matched by key, prefixed, in the base, the user's root and the refetch. `undefined` where that root holds no array. */
-type KeyLists = readonly [base?: readonly string[], ours?: readonly string[], theirs?: readonly string[]];
+/** The keys of one array matched by key, prefixed, in each root, for a replay the base, the user's root and the refetch. `undefined` where that root holds no array. */
+type KeyLists = readonly (readonly string[] | undefined)[];
 
 /**
  * {@link replay} with each array matched by key rewritten into an object from
@@ -283,10 +313,11 @@ function replayByKey<T extends object>(base: T, ours: T, theirs: T, itemKey: (it
 }
 
 /**
- * `roots`, values at `pointer` in the base, the user's root and the refetch,
- * with each array matched by key rewritten into its object form, recorded in
- * `keyed`. Arrays matched by index are kept as they are with all they hold: a
- * patch shifts their items, so a keyed array inside could not be found again.
+ * `roots`, values at `pointer` in each root, for a replay the base, the user's
+ * root and the refetch, with each array matched by key in all of them
+ * rewritten into its object form, recorded in `keyed`. Arrays matched by
+ * index are kept as they are with all they hold: a patch shifts their items,
+ * so a keyed array inside could not be found again.
  */
 function withArraysByKey(
    roots: readonly unknown[],
@@ -301,8 +332,10 @@ function withArraysByKey(
       if (roots.some((root, i) => root !== undefined && !children[i])) {
          return [...roots];
       }
-      const [base, ours, theirs] = children.map(items => items && [...items.keys()]);
-      keyed.set(pointer, [base, ours, theirs]);
+      keyed.set(
+         pointer,
+         children.map(items => items && [...items.keys()])
+      );
    } else if (present.length > 0 && present.every(root => typeof root === 'object' && root !== null && !Array.isArray(root))) {
       children = roots.map(root => (typeof root === 'object' && root !== null ? new Map(Object.entries(root)) : undefined));
    } else {
