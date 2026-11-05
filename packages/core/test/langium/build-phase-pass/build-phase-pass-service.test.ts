@@ -191,8 +191,20 @@ describe('BuildPhasePassService profiling', () => {
    it.each(['info', 'debug'] as const)('keeps ownership across overlapping tokenless runs at %s', async level => {
       const { service } = capturingService();
       Logger.setLevel(level);
-      const first: RunningBuild = { documents: [], documentSet: new Set(), options: {}, cancelToken: CancellationToken.None };
-      const second: RunningBuild = { documents: [], documentSet: new Set(), options: {}, cancelToken: CancellationToken.None };
+      const first: RunningBuild = {
+         kind: 'update',
+         documents: [],
+         documentSet: new Set(),
+         options: {},
+         cancelToken: CancellationToken.None
+      };
+      const second: RunningBuild = {
+         kind: 'update',
+         documents: [],
+         documentSet: new Set(),
+         options: {},
+         cancelToken: CancellationToken.None
+      };
       const entered = new Deferred<void>();
       const resume = new Deferred<void>();
       const seen: (RunningBuild | undefined)[] = [];

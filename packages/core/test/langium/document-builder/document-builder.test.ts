@@ -796,7 +796,7 @@ describe('DefaultHydraniumDocumentBuilder', () => {
          return (builder as unknown as { runningBuildDocuments: Set<RunningBuild> }).runningBuildDocuments;
       }
       function running(documents: LangiumDocument[], cancelToken: CancellationToken, linking?: LangiumDocument[]): RunningBuild {
-         return { documents, documentSet: new Set(documents), options: {}, cancelToken, linking };
+         return { kind: 'update', documents, documentSet: new Set(documents), options: {}, cancelToken, linking };
       }
 
       it('relinks no document within a build that links the repaired document under another token than the repair, and builds it after', async () => {
@@ -1028,7 +1028,13 @@ describe('DefaultHydraniumDocumentBuilder', () => {
       ])('keeps the explicit owner when the phase runner filters its input at %s', async state => {
          const builder = new OwnerBuilder(makeStubServices(makeNoopLogger()), { logLevel: 'off' });
          const documents = [0, 1].map(index => ({ state, uri: URI.parse(`file:///phase-${index}.a`) }) as LangiumDocument);
-         const build: RunningBuild = { documents, documentSet: new Set(documents), options: {}, cancelToken: CancellationToken.None };
+         const build: RunningBuild = {
+            kind: 'update',
+            documents,
+            documentSet: new Set(documents),
+            options: {},
+            cancelToken: CancellationToken.None
+         };
          const seen: RunningBuild[] = [];
          builder.onBuildPhase(state, batch => {
             expect(batch).toEqual([documents[0]]);
@@ -1045,7 +1051,13 @@ describe('DefaultHydraniumDocumentBuilder', () => {
       )('holds notification ownership across awaits at %s, failure=%s, prior=%s', async (level, fails, prior) => {
          const builder = new OwnerBuilder(makeStubServices(makeNoopLogger()), { logLevel: level });
          const documents = [{ state: DocumentState.Parsed, uri: URI.parse('file:///phase.a') } as LangiumDocument];
-         const build: RunningBuild = { documents, documentSet: new Set(documents), options: {}, cancelToken: CancellationToken.None };
+         const build: RunningBuild = {
+            kind: 'update',
+            documents,
+            documentSet: new Set(documents),
+            options: {},
+            cancelToken: CancellationToken.None
+         };
          const previous: RunningBuild = { ...build };
          if (prior) builder.associate(documents, previous);
          const entered = new Deferred<void>();
@@ -1077,7 +1089,13 @@ describe('DefaultHydraniumDocumentBuilder', () => {
       it.each(['first', 'second'])('keeps concurrent notification ownership when %s finishes first', async finishes => {
          const builder = new OwnerBuilder(makeStubServices(makeNoopLogger()), { logLevel: 'off' });
          const documents = [{ state: DocumentState.Parsed, uri: URI.parse('file:///phase.a') } as LangiumDocument];
-         const first: RunningBuild = { documents, documentSet: new Set(documents), options: {}, cancelToken: CancellationToken.None };
+         const first: RunningBuild = {
+            kind: 'update',
+            documents,
+            documentSet: new Set(documents),
+            options: {},
+            cancelToken: CancellationToken.None
+         };
          const second: RunningBuild = { ...first };
          const entered = new Map([
             [first, new Deferred<void>()],
@@ -1972,6 +1990,31 @@ describe('DefaultHydraniumDocumentBuilder', () => {
          await Promise.all([build, update]);
 
          expect(seen).toEqual(['before await true', 'before await false', 'after await false', 'after await false']);
+      });
+
+      it('tell each running build its kind after the update listeners, also while a build and an update overlap', async () => {
+         const builder = new DefaultHydraniumDocumentBuilder(makeStubServices(makeNoopLogger()));
+         // Langium's `build` hands its options on unchanged, which tells the two builds apart.
+         const buildOptions = {};
+         const kinds = new Map<string, RunningBuild['kind'] | undefined>();
+         builder.onBuildEnded(event => kinds.set(event.build?.options === buildOptions ? 'build()' : 'update()', event.build?.kind));
+         const gate = new Deferred<void>();
+         let calls = 0;
+         const bothCalled = new Deferred<void>();
+         builder.onUpdate(async () => {
+            if (++calls === 2) {
+               bothCalled.resolve();
+            }
+            await gate.promise;
+         });
+
+         const build = builder.build([], buildOptions);
+         const update = builder.update([], []);
+         await bothCalled.promise;
+         gate.resolve();
+         await Promise.all([build, update]);
+
+         expect(Object.fromEntries(kinds)).toEqual({ 'build()': 'build', 'update()': 'update' });
       });
 
       it('relink no document within a build when no build is linking', async () => {

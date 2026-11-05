@@ -690,6 +690,29 @@ describe('a Linked-phase integrity repair', () => {
       expect(fixture.processDocument.localSymbols).toBeDefined();
    });
 
+   it('tells the build-phase listeners of a dependent the repair adds to an explicit build which build they run in', async () => {
+      const { fixture, copy, rule } = await setUpCopy({
+         extraSharedModules: [
+            {
+               workspace: {
+                  DocumentBuilder: services => new DefaultHydraniumDocumentBuilder(services, { refreshCrossDocumentComputedScopes: true })
+               }
+            }
+         ]
+      });
+      const builder = fixture.harness.shared.workspace.DocumentBuilder;
+      const kinds: Array<RunningBuild['kind'] | undefined> = [];
+      builder.onBuildPhase(DocumentState.ComputedScopes, documents => {
+         if (documents.includes(fixture.processDocument)) {
+            kinds.push(builder.buildForBatch(documents)?.kind);
+         }
+      });
+      await build(fixture, [copy]);
+
+      expect(rule.repairs).toBe(1);
+      expect(kinds).toEqual(['build']);
+   });
+
    it.each([
       ['links eagerly', { validation: true }],
       ['resolves its references lazily', { eagerLinking: false, validation: true }]

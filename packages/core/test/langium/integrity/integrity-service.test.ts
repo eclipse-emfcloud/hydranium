@@ -1895,6 +1895,7 @@ describe('IntegrityService relink of the dependents of a Linked-phase repair', (
             enforce: node => repairs && (node as FakeNode).id === 'a'
          });
          const [first, active, other, clean, last] = [1, 2, 3, 4, 5].map((): RunningBuild => ({
+            kind: 'update',
             documents: [a],
             documentSet: new Set([a]),
             options: {},
@@ -1950,6 +1951,7 @@ describe('IntegrityService relink of the dependents of a Linked-phase repair', (
             enforce: node => repairs && (node as FakeNode).id === 'a'
          });
          const [first, clean, last] = [1, 2, 3].map((): RunningBuild => ({
+            kind: 'update',
             documents: [a],
             documentSet: new Set([a]),
             options: {},
