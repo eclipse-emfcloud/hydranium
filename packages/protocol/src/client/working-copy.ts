@@ -19,7 +19,14 @@ import {
    STALE_BASE_VERSION_UPDATE
 } from '../errors';
 import { type BaseVersion, isModelVersion, type ModelVersion, UNRECORDED_VERSION } from '../model-service/base-version';
-import { type ConflictResolver, type ReconcileOutcome, ReconcilingConflictResolver } from '../patch-merge';
+import {
+   changedPaths,
+   type ConflictResolver,
+   editRoot,
+   type ReconcileOutcome,
+   ReconcilingConflictResolver,
+   type ReplayOptions
+} from '../patch-merge';
 import { PendingWorkTracker } from '../pending-work-tracker';
 import { type ReconcileWriteOutcome, reconcileWrite, type VersionedModel } from '../reconcile-write';
 import type { TransferDiagnostic } from '../transfer-diagnostic';
@@ -92,8 +99,11 @@ export interface WorkingCopyOpen<TTransfer extends TransferElement> {
    base?: VersionedModel<TTransfer> & {
       readonly epoch: string;
       readonly unconfirmed?: boolean;
-      /** The root the user saw before a conflict dropped edits, but for edits whose writes ran out, and the paths the dropped edits wrote. */
-      readonly dropped?: { readonly seen: TTransfer; readonly paths: readonly string[] };
+      /**
+       * The root the user saw before a conflict dropped edits, but for edits
+       * whose writes ran out, and the same root without the dropped edits.
+       */
+      readonly dropped?: { readonly kept: TTransfer; readonly seen: TTransfer };
       /** The snapshot's root the base was made on with the write out's edits over it, absent when the snapshot held them. */
       readonly onto?: TTransfer;
    };
@@ -142,19 +152,26 @@ function rootOrUndefined<TTransfer>(root: () => TTransfer | undefined): TTransfe
  */
 function writesDropped<TTransfer extends TransferElement>(
    batch: readonly { readonly change: (root: TTransfer) => TTransfer }[],
-   dropped: { readonly seen: TTransfer; readonly paths: readonly string[] } | undefined
+   dropped: { readonly kept: TTransfer; readonly seen: TTransfer } | undefined,
+   options: ReplayOptions
 ): boolean[] {
    if (!dropped) {
       return batch.map(() => false);
    }
+   // An edit that throws, and every one after it, writes nothing.
+   const roots = [dropped.kept, dropped.seen];
+   for (const edit of batch) {
+      const root = rootOrUndefined(() => edit.change(roots[roots.length - 1]));
+      if (root === undefined) {
+         break;
+      }
+      roots.push(root);
+   }
+   // One call, so an array is addressed by key in every change or in none.
+   const [droppedPaths, ...editPaths] = changedPaths(roots, options);
    const overlaps = (path: string): boolean =>
-      dropped.paths.some(droppedPath => path === droppedPath || path.startsWith(`${droppedPath}/`) || droppedPath.startsWith(`${path}/`));
-   let root: TTransfer | undefined = dropped.seen;
-   return batch.map(edit => {
-      const before = root;
-      root = before === undefined ? undefined : rootOrUndefined(() => edit.change(before));
-      return before !== undefined && root !== undefined && compare(before, root).some(operation => overlaps(operation.path));
-   });
+      droppedPaths.some(droppedPath => path === droppedPath || path.startsWith(`${droppedPath}/`) || droppedPath.startsWith(`${path}/`));
+   return batch.map((_, index) => editPaths[index]?.some(overlaps) ?? false);
 }
 
 /**
@@ -195,6 +212,14 @@ function isDropped(outcome: WorkingCopyEditOutcome | Promise<never>): boolean {
 function isLost(outcome: WorkingCopyEditOutcome | Promise<never>): boolean {
    return !('status' in outcome) || outcome.status === 'conflict';
 }
+
+/**
+ * How a {@link WorkingCopy} matches the edits it replays. Its reconcile, its
+ * {@link WorkingCopy.editRoot}, and its check whether a later edit writes what
+ * a dropped one wrote all take these options, so they match an array by the
+ * same key.
+ */
+export type WorkingCopyOptions = ReplayOptions;
 
 /**
  * The client's working copy of one data-server document: the server's latest
@@ -247,8 +272,12 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    /** Fires whenever {@link dirty} changes. Apart from {@link onDidChange}, since a save changes no content. */
    readonly onDidChangeDirty: Event<void> = this.dirtyEmitter.event;
 
-   /** Asked for each conflicting write, see {@link reconcile}. */
-   protected readonly conflictResolver: ConflictResolver = new ReconcilingConflictResolver();
+   /**
+    * Asked for each conflicting write, see {@link reconcile}. Made from
+    * {@link replayOptions}. An override that should match by key passes them
+    * to its resolver.
+    */
+   protected readonly conflictResolver: ConflictResolver;
    /**
     * Writes of one reconcile, the first included, after which a conflict that
     * would still merge is dropped. A write the copy refuses unsent, on a base
@@ -303,8 +332,12 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       protected readonly session: DataSession<TTransfer>,
       protected readonly events: DataEvents<TTransfer>,
       /** The document followed, as the caller spells it, which the session keys its open by. */
-      readonly uri: string
+      readonly uri: string,
+      /** How the copy matches the edits it replays, see {@link WorkingCopyOptions}. */
+      protected readonly replayOptions: WorkingCopyOptions = {}
    ) {
+      // Set here, since a field initializer runs before `replayOptions` is assigned.
+      this.conflictResolver = new ReconcilingConflictResolver(replayOptions);
       // A deletion carries no document, so it has a channel of its own.
       this.subscriptions = [
          session.onDidRegister(event => this.handleRegistered(event)),
@@ -428,6 +461,16 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          void this.writeQueued(open);
       }
       return edit.outcome.promise;
+   }
+
+   /**
+    * {@link edit} with the change from `before` to `after`, replayed on each
+    * newer root with {@link replayOptions}. For a form that hands back a whole
+    * new root. `before` is the root the form edited, not the copy's current
+    * one, which would undo another client's update the form never showed.
+    */
+   editRoot(before: TTransfer, after: TTransfer): Promise<WorkingCopyEditOutcome> {
+      return this.edit(editRoot(before, after, this.replayOptions));
    }
 
    /**
@@ -724,7 +767,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          try {
             // The server keeps the other client's value of a field a lost edit
             // wrote, so an edit of it conflicts, a revert included.
-            const lost = writesDropped(batch, base.dropped);
+            const lost = writesDropped(batch, base.dropped, this.replayOptions);
             const written = batch.filter((_, index) => !lost[index]);
             const roots = written.reduce((made, edit) => [...made, edit.change(made[made.length - 1])], [base.model]);
             let writtenOutcomes: (WorkingCopyEditOutcome | Promise<never>)[] = written.map(() => ({ status: 'unchanged' }));
@@ -768,7 +811,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
             const kept = keptOf(batch, outcomes, onto);
             // What the user saw but for a run-out's edits, which set no value.
             const seen = keptOf(batch, outcomes, onto, outcome => isDropped(outcome) && !isLost(outcome));
-            const dropped = { seen, paths: compare(kept, seen).map(operation => operation.path) };
+            const dropped = { kept, seen };
             open.base = { ...open.base, model: kept, unconfirmed: true, dropped, onto: undefined };
          }
       }
