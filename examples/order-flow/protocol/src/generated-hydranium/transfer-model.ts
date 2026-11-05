@@ -47,7 +47,7 @@ export const VisibilityValues = ['public'] as const;
 // --- Terminal Patterns (anchored for validation) ---
 export const OrderFlowTerminals = {
    WS: /^(?:\s+)$/,
-   ID: /^(?:[_a-zA-Z][\w_]*)$/,
+   ID: /^(?:\^?[_a-zA-Z][\w_]*)$/,
    ML_COMMENT: /^(?:\/\*[\s\S]*?\*\/)$/,
    SL_COMMENT: /^(?:\/\/[^\n\r]*)$/,
    NUMBER: /^(?:-?[0-9]+(\.[0-9]+)?)$/,

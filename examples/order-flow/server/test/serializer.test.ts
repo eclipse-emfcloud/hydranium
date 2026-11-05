@@ -173,6 +173,24 @@ describe('order-flow per-grammar serializers routed per URI', () => {
       expect(reparsedProcess.value.transitions).toHaveLength(2);
    });
 
+   // Each source also carries a keyword of a sibling grammar, which stays bare.
+   it.each([
+      [
+         'domain',
+         'project ^project requires ^entity-core\n\nentity ^entity {\n   ^public: ^enum[]\n   task: ^enum\n}\n\nenum ^enum { ^public, ^project }'
+      ],
+      [
+         'process',
+         'process ^process for entity {\n   task ^task\n      writes ^writes.^reads = ^task\n   gateway ^gateway\n      ^transition -> ^task\n   transition ^task -> ^gateway\n}'
+      ],
+      ['layout', 'layout {\n   node ^node at 1, 2\n   node process at 3, 4\n}']
+   ] as const)('writes keywords of the %s grammar escaped and keywords of the others bare', async (grammar, source) => {
+      const services = (await makeWorkspaceHarness())[grammar];
+      const parsed = services.parser.LangiumParser.parse(source);
+      expect([...parsed.lexerErrors, ...parsed.parserErrors]).toHaveLength(0);
+      expect(await services.serializer.Serializer.serializeAst(parsed.value)).toBe(source);
+   });
+
    it('serializes declarations whose names, types and coordinates parser recovery left absent', async () => {
       const harness = await makeWorkspaceHarness();
       const serialize = async (services: typeof harness.domain, text: string): Promise<string> =>

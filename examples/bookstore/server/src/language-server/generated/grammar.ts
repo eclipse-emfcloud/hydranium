@@ -106,7 +106,7 @@ export const BookstoreGrammar = (): Grammar => loadedBookstoreGrammar ?? (loaded
       "name": "ID",
       "definition": {
         "$type": "RegexToken",
-        "regex": "/[_a-zA-Z][\\\\w_]*/",
+        "regex": "/\\\\^?[_a-zA-Z][\\\\w_]*/",
         "parenthesized": false
       },
       "fragment": false,

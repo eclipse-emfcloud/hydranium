@@ -47,7 +47,7 @@ export const PROCESS_EDIT_REFERENCE_INVALID = defineMessage(
 );
 export const BRANCH_LABEL_INVALID = defineMessage(
    'order-flow/process/branch-label-invalid',
-   'Enter a valid identifier for the branch label. Reserved words are not allowed.'
+   'Enter a valid identifier for the branch label.'
 );
 export const BRANCH_LABEL_DUPLICATE = defineMessage(
    'order-flow/process/branch-label-duplicate',
@@ -144,10 +144,6 @@ export function processEditValidation(
       }
       if (node.branches.some(branch => branch.label === label)) {
          return BRANCH_LABEL_DUPLICATE;
-      }
-      const parsed = state.languageServicesFor(state.sourceRoot)?.parser.LangiumParser.parse(`process P for E { gateway G ${label} -> T }`);
-      if (!parsed || parsed.parserErrors.length || parsed.lexerErrors.length) {
-         return BRANCH_LABEL_INVALID;
       }
       return valid('target') ? undefined : PROCESS_EDIT_REFERENCE_INVALID;
    }

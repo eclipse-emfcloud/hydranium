@@ -11,7 +11,7 @@ export namespace Domain {
 
     export const Terminals = {
         WS: /\s+/,
-        ID: /[_a-zA-Z][\w_]*/,
+        ID: /\^?[_a-zA-Z][\w_]*/,
         ML_COMMENT: /\/\*[\s\S]*?\*\//,
         SL_COMMENT: /\/\/[^\n\r]*/,
     };
@@ -55,7 +55,7 @@ export namespace Layout {
     export const Terminals = {
         NUMBER: /-?[0-9]+(\.[0-9]+)?/,
         WS: /\s+/,
-        ID: /[_a-zA-Z][\w_]*/,
+        ID: /\^?[_a-zA-Z][\w_]*/,
         ML_COMMENT: /\/\*[\s\S]*?\*\//,
         SL_COMMENT: /\/\/[^\n\r]*/,
     };
@@ -103,7 +103,7 @@ export namespace Process {
 
     export const Terminals = {
         WS: /\s+/,
-        ID: /[_a-zA-Z][\w_]*/,
+        ID: /\^?[_a-zA-Z][\w_]*/,
         ML_COMMENT: /\/\*[\s\S]*?\*\//,
         SL_COMMENT: /\/\/[^\n\r]*/,
     };

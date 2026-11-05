@@ -98,13 +98,13 @@ export class ProcessSerializer extends AbstractSerializer<ProcessModel> {
          ...model.nodes.map(node => this.serializeNode(node, 1)),
          ...model.transitions.map(transition => this.emitTransition(transition, 1))
       ];
-      const subject = this.serializeReferenceText(model.subject) ?? '';
-      const header = `process ${model.name ?? ''} for ${subject}`;
+      const subject = this.formatId(this.serializeReferenceText(model.subject) ?? '');
+      const header = `process ${this.formatId(model.name ?? '')} for ${subject}`;
       return body.length === 0 ? `${header} {}` : `${header} {\n${body.join('\n')}\n}`;
    }
 
    private emitTask(task: Task, level: number): string {
-      const header = `${this.indent(level)}task ${task.name ?? ''}`;
+      const header = `${this.indent(level)}task ${this.formatId(task.name ?? '')}`;
       if (task.effects.length === 0) {
          return header;
       }
@@ -112,7 +112,7 @@ export class ProcessSerializer extends AbstractSerializer<ProcessModel> {
    }
 
    private emitGateway(gateway: Gateway, level: number): string {
-      const header = `${this.indent(level)}gateway ${gateway.name ?? ''}`;
+      const header = `${this.indent(level)}gateway ${this.formatId(gateway.name ?? '')}`;
       if (gateway.branches.length === 0) {
          return header;
       }
@@ -120,21 +120,25 @@ export class ProcessSerializer extends AbstractSerializer<ProcessModel> {
    }
 
    private emitEffect(effect: Effect, level: number): string {
-      const target = `${this.serializeReferenceText(effect.entity) ?? ''}.${this.serializeReferenceText(effect.field) ?? ''}`;
+      const target = `${this.formatReference(effect.entity)}.${this.formatReference(effect.field)}`;
       if (isWrite(effect)) {
-         return `${this.indent(level)}writes ${target} = ${this.serializeReferenceText(effect.literal) ?? ''}`;
+         return `${this.indent(level)}writes ${target} = ${this.formatReference(effect.literal)}`;
       }
       return `${this.indent(level)}reads ${target}`;
    }
 
    private emitBranch(branch: Branch, level: number): string {
-      return `${this.indent(level)}${branch.label} -> ${this.serializeReferenceText(branch.target) ?? ''}`;
+      return `${this.indent(level)}${this.formatId(branch.label ?? '')} -> ${this.formatReference(branch.target)}`;
    }
 
    private emitTransition(transition: Transition, level: number): string {
-      const source = this.serializeReferenceText(transition.source) ?? '';
-      const target = this.serializeReferenceText(transition.target) ?? '';
+      const source = this.formatReference(transition.source);
+      const target = this.formatReference(transition.target);
       return `${this.indent(level)}transition ${source} -> ${target}`;
+   }
+
+   private formatReference(reference: unknown): string {
+      return this.formatId(this.serializeReferenceText(reference) ?? '');
    }
 
    private indent(level: number): string {

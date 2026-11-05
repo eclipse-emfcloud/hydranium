@@ -1578,6 +1578,17 @@ const SERIALIZATION_SUITE = `describe('__GRAMMAR__ serialization', () => {
 
       expect(await __GRAMMAR__.serializer.Serializer.serializeTransfer(model)).toBe(source);
    });
+
+   it('reads back a name and a reference that are keywords', async () => {
+      const { __GRAMMAR__ } = createServices();
+      const model = transferNode(Transfer__ENTRY_RULE__, { nodes: [transferNode(__NODE_RULE__, { name: 'node', target: 'node' })] });
+
+      const text = await __GRAMMAR__.serializer.Serializer.serializeTransfer(model);
+      const { parseResult } = await parseHelper<__ENTRY_RULE__>(__GRAMMAR__)(text, { documentUri: 'file:///keywords.__EXTENSION__' });
+
+      expect([...parseResult.lexerErrors, ...parseResult.parserErrors]).toHaveLength(0);
+      expect(parseResult.value.nodes[0]).toMatchObject({ name: 'node', target: { $refText: 'node' } });
+   });
 });`;
 
 /**

@@ -72,7 +72,7 @@ export class LayoutSerializer extends AbstractSerializer<LayoutModel> {
     * measured is a real state, produced by creating one from the canvas.
     */
    private emitDiagramNode(node: DiagramNode, level: number): string {
-      const flowNode = this.serializeReferenceText(node.flowNode) ?? '';
+      const flowNode = this.formatId(this.serializeReferenceText(node.flowNode) ?? '');
       const bounds = `at ${this.emitNumber(node.x)}, ${this.emitNumber(node.y)}`;
       const size =
          node.width !== undefined && node.height !== undefined

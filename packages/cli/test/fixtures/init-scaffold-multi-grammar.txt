@@ -532,7 +532,7 @@ server/src/grammar/common.langium
 // language's TYPES — separate reasons that are worth keeping separate.
 
 hidden terminal WS: /\s+/;
-terminal ID: /[_a-zA-Z][\w_]*/;
+terminal ID: /\^?[_a-zA-Z][\w_]*/;
 hidden terminal SL_COMMENT: /\/\/[^\n\r]*/;
 hidden terminal ML_COMMENT: /\/\*[\s\S]*?\*\//;
 
@@ -861,10 +861,12 @@ export class DomainSerializer extends AbstractSerializer<DomainModel> {
     * `serializeTransfer` carries `target` as a plain string rather than a
     * `Reference`, and a serializer that reaches for `$refText` directly emits
     * the AST correctly and drops every reference on the transfer path.
+    * `formatId` escapes a name or reference that is a keyword of this grammar.
     */
    private emitNode(node: DomainNode): string {
       const target = this.serializeReferenceText(node.target);
-      return target === undefined ? `node ${node.name}` : `node ${node.name} -> ${target}`;
+      const header = `node ${this.formatId(node.name ?? '')}`;
+      return target === undefined ? header : `${header} -> ${this.formatId(target)}`;
    }
 }
 
@@ -1004,10 +1006,12 @@ export class ProcessSerializer extends AbstractSerializer<ProcessModel> {
     * `serializeTransfer` carries `target` as a plain string rather than a
     * `Reference`, and a serializer that reaches for `$refText` directly emits
     * the AST correctly and drops every reference on the transfer path.
+    * `formatId` escapes a name or reference that is a keyword of this grammar.
     */
    private emitNode(node: ProcessNode): string {
       const target = this.serializeReferenceText(node.target);
-      return target === undefined ? `node ${node.name}` : `node ${node.name} -> ${target}`;
+      const header = `node ${this.formatId(node.name ?? '')}`;
+      return target === undefined ? header : `${header} -> ${this.formatId(target)}`;
    }
 }
 
@@ -1147,10 +1151,12 @@ export class LayoutSerializer extends AbstractSerializer<LayoutModel> {
     * `serializeTransfer` carries `target` as a plain string rather than a
     * `Reference`, and a serializer that reaches for `$refText` directly emits
     * the AST correctly and drops every reference on the transfer path.
+    * `formatId` escapes a name or reference that is a keyword of this grammar.
     */
    private emitNode(node: LayoutNode): string {
       const target = this.serializeReferenceText(node.target);
-      return target === undefined ? `node ${node.name}` : `node ${node.name} -> ${target}`;
+      const header = `node ${this.formatId(node.name ?? '')}`;
+      return target === undefined ? header : `${header} -> ${this.formatId(target)}`;
    }
 }
 
@@ -1830,6 +1836,17 @@ describe('Domain serialization', () => {
 
       expect(await Domain.serializer.Serializer.serializeTransfer(model)).toBe(source);
    });
+
+   it('reads back a name and a reference that are keywords', async () => {
+      const { Domain } = createServices();
+      const model = transferNode(TransferDomainModel, { nodes: [transferNode(DomainNode, { name: 'node', target: 'node' })] });
+
+      const text = await Domain.serializer.Serializer.serializeTransfer(model);
+      const { parseResult } = await parseHelper<DomainModel>(Domain)(text, { documentUri: 'file:///keywords.domain' });
+
+      expect([...parseResult.lexerErrors, ...parseResult.parserErrors]).toHaveLength(0);
+      expect(parseResult.value.nodes[0]).toMatchObject({ name: 'node', target: { $refText: 'node' } });
+   });
 });
 
 describe('Process serialization', () => {
@@ -1852,6 +1869,17 @@ describe('Process serialization', () => {
 
       expect(await Process.serializer.Serializer.serializeTransfer(model)).toBe(source);
    });
+
+   it('reads back a name and a reference that are keywords', async () => {
+      const { Process } = createServices();
+      const model = transferNode(TransferProcessModel, { nodes: [transferNode(ProcessNode, { name: 'node', target: 'node' })] });
+
+      const text = await Process.serializer.Serializer.serializeTransfer(model);
+      const { parseResult } = await parseHelper<ProcessModel>(Process)(text, { documentUri: 'file:///keywords.process' });
+
+      expect([...parseResult.lexerErrors, ...parseResult.parserErrors]).toHaveLength(0);
+      expect(parseResult.value.nodes[0]).toMatchObject({ name: 'node', target: { $refText: 'node' } });
+   });
 });
 
 describe('Layout serialization', () => {
@@ -1873,6 +1901,17 @@ describe('Layout serialization', () => {
       });
 
       expect(await Layout.serializer.Serializer.serializeTransfer(model)).toBe(source);
+   });
+
+   it('reads back a name and a reference that are keywords', async () => {
+      const { Layout } = createServices();
+      const model = transferNode(TransferLayoutModel, { nodes: [transferNode(LayoutNode, { name: 'node', target: 'node' })] });
+
+      const text = await Layout.serializer.Serializer.serializeTransfer(model);
+      const { parseResult } = await parseHelper<LayoutModel>(Layout)(text, { documentUri: 'file:///keywords.diagram' });
+
+      expect([...parseResult.lexerErrors, ...parseResult.parserErrors]).toHaveLength(0);
+      expect(parseResult.value.nodes[0]).toMatchObject({ name: 'node', target: { $refText: 'node' } });
    });
 });
 
