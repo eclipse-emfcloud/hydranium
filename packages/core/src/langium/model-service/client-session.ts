@@ -187,9 +187,11 @@ export interface ClientSession<
    close(uri: string): Promise<void>;
    /**
     * Open `uri`, run `fn`, and close `uri` when `fn` settles, whether it
-    * returned or threw. A URI the session already had open, or is still
-    * opening through another call, stays open: the close undoes only the open
-    * this call made.
+    * returned or threw. The close undoes only the open this call made. A URI
+    * the session already had open, or was still opening through another call,
+    * stays open. So does a URI that an `open` or `create` of the session opens
+    * before `fn` settles, or that another `withOpen` of the session is still
+    * using. An explicit {@link close} still closes at once.
     */
    withOpen<T>(uri: string, fn: () => MaybePromise<T>): Promise<T>;
    /** Whether an event's `sourceClientId` names this session, i.e. the event echoes its own write. */
@@ -243,6 +245,10 @@ export class DefaultClientSession<
     * than racing it, and `withOpen` can tell an open another call is making.
     */
    protected readonly pendingOpens = new Map<string, Promise<void>>();
+   /** How many `withOpen` calls of this session still run, by canonical URI. See {@link runWithOpen}. */
+   protected readonly withOpenHolds = new Map<string, number>();
+   /** The canonical URIs the last `withOpen` ending must leave open. See {@link runWithOpen}. */
+   protected readonly heldByOpen = new Set<string>();
    /**
     * The options of this session's opens, by canonical URI. A first open
     * records its entry before the store has the URI open, and the entry goes
@@ -282,13 +288,21 @@ export class DefaultClientSession<
          if (event.clientId === this.clientId) {
             this.openOptionsByUri.delete(event.document.uri);
             this.writeNumbers.delete(event.document.uri);
+            this.heldByOpen.delete(event.document.uri);
          }
       });
    }
 
    open(uri: string, options?: TOpenOptions): Promise<void> {
       this.assertLive();
-      return this.openDocument(uri, options);
+      const key = this.canonicalKey(uri);
+      this.heldByOpen.add(key);
+      return this.openDocument(uri, options).catch((error: unknown) => {
+         if (!this.services.workspace.TextDocuments.isOpenInClient(uri, this.clientId)) {
+            this.heldByOpen.delete(key);
+         }
+         throw error;
+      });
    }
 
    openOptions(uri: string): TOpenOptions | undefined {
@@ -708,6 +722,7 @@ export class DefaultClientSession<
       const listener = this.services.workspace.TextDocuments.onDidOpen(event => {
          if (event.clientId === this.clientId && event.document.uri === key) {
             created = event.document.version;
+            this.heldByOpen.add(key);
          }
       });
       try {
@@ -723,17 +738,43 @@ export class DefaultClientSession<
       return created;
    }
 
+   /**
+    * Opens of one URI are not counted, so one close ends them all. The last
+    * `withOpen` running closes the URI only when {@link heldByOpen} lacks it,
+    * since closing it would take away an open another call asked for. `open`
+    * adds the URI when it is called and `create` when the store opens it, so
+    * a `withOpen` ending before they settle leaves it. The first `withOpen`
+    * adds it for an open it finds, and for one still under way once that has
+    * opened and stays open, which keeps an open a subclass makes through
+    * {@link openDocument}. The URI goes when the store closes this session's
+    * open, whoever closes it, and when an `open` fails with the URI not open.
+    * Counting every open instead would leak: callers open a URI again freely
+    * and close it once.
+    */
    protected async runWithOpen<T>(uri: string, fn: () => MaybePromise<T>): Promise<T> {
-      // An open another call of this session is still making counts as made:
-      // closing it afterwards would take away an open that call asked for.
-      const alreadyOpen =
-         this.services.workspace.TextDocuments.isOpenInClient(uri, this.clientId) || this.pendingOpens.has(this.canonicalKey(uri));
-      await this.openDocument(uri, undefined);
+      const key = this.canonicalKey(uri);
+      const holds = this.withOpenHolds.get(key) ?? 0;
+      const documents = this.services.workspace.TextDocuments;
+      if (holds === 0 && documents.isOpenInClient(uri, this.clientId)) {
+         this.heldByOpen.add(key);
+      }
+      const joined = holds === 0 && this.pendingOpens.has(key);
+      this.withOpenHolds.set(key, holds + 1);
       try {
+         await this.openDocument(uri, undefined);
+         if (joined && documents.isOpenInClient(uri, this.clientId)) {
+            this.heldByOpen.add(key);
+         }
          return await fn();
       } finally {
-         if (!alreadyOpen && !this.disposed) {
-            await this.closeDocument(uri);
+         const left = (this.withOpenHolds.get(key) ?? 1) - 1;
+         if (left > 0) {
+            this.withOpenHolds.set(key, left);
+         } else {
+            this.withOpenHolds.delete(key);
+            if (!this.heldByOpen.has(key) && !this.disposed) {
+               await this.closeDocument(uri);
+            }
          }
       }
    }
