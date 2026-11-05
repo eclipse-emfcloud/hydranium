@@ -757,7 +757,10 @@ jobs:
       # No `--with-deps`: the runner image carries Chromium's system libraries,
       # and their apt install can stall for minutes on a slow mirror. A library
       # missing or too old fails the launch with Playwright's or Chromium's error.
+      # The `!cancelled()` tiers below also need this step's success: a failed
+      # build skips it, and they must not fail on the missing browser instead.
       - name: Install Playwright browsers
+        id: browsers
         run: npx playwright install chromium
 
       # Each tier boots its own server through Playwright's `webServer`, which
@@ -778,7 +781,7 @@ jobs:
       # summary reads. It runs after a failed order-flow tier too, so one
       # failure does not hide the other's result.
       - name: Bookstore browser e2e
-        if: ${{ !cancelled() && matrix.shard == 1 }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' && matrix.shard == 1 }}
         env:
           PLAYWRIGHT_HTML_OPEN: never
           PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/junit.xml
@@ -789,7 +792,7 @@ jobs:
       # dealt out between the shards instead. One here and two on the other
       # keeps the halves within seconds of each other.
       - name: Theia e2e
-        if: ${{ !cancelled() && matrix.shard == 1 }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' && matrix.shard == 1 }}
         run: npm run test:e2e -w @hydranium/example-order-flow-theia-app
 
       # Separated by the suite itself, at one worker: it kills and re-launches
@@ -814,7 +817,7 @@ jobs:
       # The app `init --hosts theia-browser` emits, as bookstore carries it, on
       # the shard without the bookstore page. Reporters as for the page.
       - name: Bookstore Theia e2e
-        if: ${{ !cancelled() && matrix.shard == 2 }}
+        if: ${{ !cancelled() && steps.browsers.outcome == 'success' && matrix.shard == 2 }}
         env:
           PLAYWRIGHT_HTML_OPEN: never
           PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/junit.xml
@@ -886,8 +889,11 @@ jobs:
 
       # Downloads the pinned VS Code with retries, so the tiers below find it
       # cached and make no request of their own to the update server. Each
-      # package keeps its own copy, as an adopter's scaffold does.
+      # package keeps its own copy, as an adopter's scaffold does. The
+      # `!cancelled()` tiers below need this step's success, so a failed build
+      # does not fail them on a missing VS Code.
       - name: Install VS Code
+        id: vscode
         run: |
           npm run test:e2e:install -w @hydranium/example-order-flow-vscode
           npm run test:e2e:install -w bookstore-host-vscode
@@ -898,14 +904,14 @@ jobs:
         run: xvfb-run -a npm run test:host -w @hydranium/example-order-flow-vscode
 
       - name: VS Code e2e (webview tier)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.vscode.outcome == 'success' }}
         run: xvfb-run -a npm run test:e2e -w @hydranium/example-order-flow-vscode
 
       # The extension `init --hosts vscode` emits, as bookstore carries it. The
       # emitted config names no reporter, so the step adds the ones the other
       # tiers report with, as the bookstore browser step does.
       - name: Bookstore VS Code e2e
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.vscode.outcome == 'success' }}
         env:
           PLAYWRIGHT_HTML_OPEN: never
           PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/junit.xml
