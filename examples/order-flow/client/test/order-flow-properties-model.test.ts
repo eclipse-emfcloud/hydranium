@@ -50,7 +50,6 @@ import {
    DataConnection,
    DataEvents,
    Deferred,
-   isConflictError,
    type DataSession,
    type Logger,
    type LogLevel,
@@ -779,18 +778,20 @@ describe('order-flow properties model', () => {
       expect(readFileSync(path.join(workspace!.root, FULFILLMENT_PROCESS), 'utf8')).toContain('process Fulfilment ');
    });
 
-   it('refuses to save text that moved past what it shows', async () => {
+   it('saves text that moved past what it shows once it has shown it', async () => {
       const uri = uriOf(FULFILLMENT_PROCESS);
       const model = pinnedModel(uri);
       await model.open();
       await model.setField('name', 'Fulfilment');
       const foreign = (await currentRoot(uri)) as ProcessModel;
       await thirdPartyWrite(uri, { ...foreign, subject: 'LineItem' });
+      const shown: unknown[] = [];
+      model.onDidChange(() => shown.push((model.root as ProcessModel | undefined)?.subject));
 
-      const refusal = await model.save().catch((error: unknown) => error);
+      expect(await model.save()).toBeDefined();
 
-      expect(isConflictError(refusal)).toBe(true);
-      expect(readFileSync(path.join(workspace!.root, FULFILLMENT_PROCESS), 'utf8')).not.toContain('LineItem');
+      expect(shown).toContain('LineItem');
+      expect(readFileSync(path.join(workspace!.root, FULFILLMENT_PROCESS), 'utf8')).toContain('LineItem');
    });
 
    it('writes an edit made just before it is disposed', async () => {

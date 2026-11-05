@@ -121,8 +121,9 @@ export interface ConflictErrorData extends HydraniumMessageData {
  * | Refetch + replay user edit | Specific structural edits (`setField`, drag-position). Adopter responsibility. |
  * | Surface to user | Large edits, multi-step transactions. Adopter UI. |
  *
- * The framework provides the **detection**; adopters provide the **policy**.
- * No auto-retry or auto-merge ships by default.
+ * A client session only detects the conflict. `WorkingCopy` adds a policy:
+ * it reconciles a conflicting edit, and after a conflicting save it reads
+ * the document again and saves once more.
  */
 export class ConflictError extends ResponseError<ConflictErrorData> {
    /** `message` words what was refused: an edit, or with {@link STALE_BASE_VERSION_SAVE} a save. */
