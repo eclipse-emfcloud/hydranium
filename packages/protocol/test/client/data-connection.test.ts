@@ -40,6 +40,8 @@ import {
    DataSession,
    type DataSessionFactory,
    type DataSessionHost,
+   type DataSessionOpening,
+   type DataSessionOpenOptions,
    type DataSessionRegisterEvent
 } from '../../src/client/data-session';
 import {
@@ -1190,6 +1192,212 @@ describe('DataConnection.sessions', () => {
 
          expect(version).toBe(2);
          expect(of(calls, 'close').map(call => call.uri)).toEqual([URI_B, URI_C]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('withOpenDocument leaves open a document its callback opens', async () => {
+      const { connection, calls, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+
+         await panel.withOpenDocument({ uri: URI_A }, () => panel.openDocument({ uri: URI_A }));
+
+         expect(of(calls, 'close')).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('withOpenDocument leaves open a document an open joins while its own open is under way', async () => {
+      const opening = gate();
+      const { connection, calls, dispose } = harness({ openGate: opening.promise });
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const withOpen = panel.withOpenDocument({ uri: URI_A }, () => undefined);
+         await waitFor(() => of(calls, 'open').length === 1);
+
+         const plain = panel.openDocument({ uri: URI_A });
+         opening.release();
+         await Promise.all([withOpen, plain]);
+
+         expect(of(calls, 'close')).toEqual([]);
+      } finally {
+         opening.release();
+         dispose();
+      }
+   });
+
+   it('withOpenDocument leaves open a document a nested withOpenDocument still runs on, which closes it', async () => {
+      const { connection, calls, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         const running = gate();
+         let inner: Promise<void> | undefined;
+
+         await panel.withOpenDocument({ uri: URI_A }, () => {
+            inner = panel.withOpenDocument({ uri: URI_A }, () => running.promise);
+         });
+         expect(of(calls, 'close')).toEqual([]);
+         running.release();
+         await inner;
+
+         expect(of(calls, 'close').map(call => call.uri)).toEqual([URI_A]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('withOpenDocument sends no second close after its callback closed the document', async () => {
+      const { connection, calls, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+
+         await panel.withOpenDocument({ uri: URI_A }, () => panel.closeDocument({ uri: URI_A }));
+
+         expect(of(calls, 'close').map(call => call.uri)).toEqual([URI_A]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('withOpenDocument sends no second close after a close its callback left under way', async () => {
+      const { connection, calls, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+
+         await panel.withOpenDocument({ uri: URI_A }, () => {
+            void panel.closeDocument({ uri: URI_A });
+         });
+
+         expect(of(calls, 'close').map(call => call.uri)).toEqual([URI_A]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('withOpenDocument sends no close once its callback disposed the session', async () => {
+      const { connection, calls, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+
+         await panel.withOpenDocument({ uri: URI_A }, () => panel.dispose());
+
+         expect(of(calls, 'close')).toEqual([]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('withOpenDocument closes a document an earlier open of the session opened and a close closed', async () => {
+      const { connection, calls, dispose } = harness();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         await panel.closeDocument({ uri: URI_A });
+
+         await panel.withOpenDocument({ uri: URI_A }, () => undefined);
+
+         expect(of(calls, 'close').map(call => call.uri)).toEqual([URI_A, URI_A]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('withOpenDocument still closes after an open in its callback failed', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+
+         await panel.withOpenDocument({ uri: URI_A }, async () => {
+            behaviour.failOpens = new Set([URI_A]);
+            await expect(panel.openDocument({ uri: URI_A })).rejects.toThrow('open refused');
+         });
+
+         expect(of(calls, 'close').map(call => call.uri)).toEqual([URI_A]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it.each([
+      ['fails, closes the document', true, [URI_A]],
+      ['succeeds, leaves the document open', false, []]
+   ] as const)('withOpenDocument, when an open its callback started is still under way as it ends and %s', async (_how, fails, closed) => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, dispose } = harness(behaviour);
+      const held = gate();
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         let late: Promise<unknown> | undefined;
+
+         await panel.withOpenDocument({ uri: URI_A }, async () => {
+            behaviour.openGate = held.promise;
+            behaviour.failOpens = fails ? new Set([URI_A]) : undefined;
+            late = panel.openDocument({ uri: URI_A }).catch(() => undefined);
+            await waitFor(() => of(calls, 'open').length === 2);
+         });
+         expect(of(calls, 'close')).toEqual([]);
+         held.release();
+         await late;
+         // An open waits for a close of the URI under way, so a close the
+         // late open started without awaiting it is recorded once this answers.
+         behaviour.failOpens = undefined;
+         await panel.openDocument({ uri: URI_A });
+
+         expect(of(calls, 'close').map(call => call.uri)).toEqual(closed);
+      } finally {
+         held.release();
+         dispose();
+      }
+   });
+
+   it('withOpenDocument tells its own open from an explicit one under a subclass that overrides trackOpen', async () => {
+      class ForwardingSession extends DataSession<ProbeElement> {
+         protected override trackOpen<T>(
+            uri: string,
+            options: DataSessionOpenOptions<ProbeElement, DataServerProtocol<ProbeElement>>,
+            call: (opening: DataSessionOpening<ProbeElement, DataServerProtocol<ProbeElement>>) => Promise<T>
+         ): Promise<T> {
+            return super.trackOpen(uri, options, call);
+         }
+      }
+      const { connection, calls, dispose } = harness(
+         {},
+         undefined,
+         undefined,
+         undefined,
+         undefined,
+         (clientId, host, label) => new ForwardingSession(clientId, host, label)
+      );
+      try {
+         const panel = connection.createSession('panel', 'panel');
+
+         await panel.withOpenDocument({ uri: URI_A }, () => undefined);
+         await panel.withOpenDocument({ uri: URI_B }, () => panel.openDocument({ uri: URI_B }));
+
+         expect(of(calls, 'close').map(call => call.uri)).toEqual([URI_A]);
+      } finally {
+         dispose();
+      }
+   });
+
+   it('withOpenDocument closes a document whose earlier open the restore failed to re-open', async () => {
+      const behaviour: ServerBehaviour = {};
+      const { connection, calls, dropTransport, dispose } = harness(behaviour);
+      try {
+         const panel = connection.createSession('panel', 'panel');
+         await panel.openDocument({ uri: URI_A });
+         behaviour.failOpens = new Set([URI_A]);
+         dropTransport();
+         await panel.connected();
+         behaviour.failOpens = undefined;
+
+         await panel.withOpenDocument({ uri: URI_A }, () => undefined);
+
+         expect(of(calls, 'close').map(call => call.uri)).toEqual([URI_A]);
       } finally {
          dispose();
       }
@@ -6656,14 +6864,14 @@ describe('DataSession.deleteDocument', () => {
       }
    });
 
-   it('deletes a document withOpenDocument opened for the call, and closes it after', async () => {
+   it('deletes a document withOpenDocument opened for the call, and sends no close after, as the delete ended the open', async () => {
       const { connection, calls, dispose } = harness({}, 10_000);
       try {
          const panel = connection.createSession('panel', 'panel');
 
          await panel.withOpenDocument({ uri: URI_A }, () => panel.deleteDocument({ uri: URI_A, baseVersion: 'any' }));
 
-         expect(sent(calls)).toEqual([`open ${URI_A}`, `watch ${URI_A}`, `delete ${URI_A}`, `close ${URI_A}`]);
+         expect(sent(calls)).toEqual([`open ${URI_A}`, `watch ${URI_A}`, `delete ${URI_A}`]);
          expect(serverUrisOf(panel).size).toBe(0);
       } finally {
          dispose();
