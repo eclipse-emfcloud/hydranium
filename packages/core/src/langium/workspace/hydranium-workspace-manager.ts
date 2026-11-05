@@ -176,14 +176,15 @@ export interface HydraniumWorkspaceManager extends WorkspaceManager {
  * ## Cascade rebuild
  *
  * Subscribes to {@link ProjectManager.onProjectsChanged} in the
- * constructor. When a project's identity, version, or dependencies
- * change post-startup, the project manager emits the affected document
- * URIs (its own members plus any transitive dependents per the
- * `getAffectedProjects` hook). This manager re-runs
- * `DocumentBuilder.resetToState(doc, DocumentState.Changed)` on each
- * affected document so the build of the update that changed the descriptor
- * re-links them with the new visibility scope. A project manager that defers
- * the relink emits them from a follow-up build of its own instead.
+ * constructor. When a project changes post-startup, through its descriptor
+ * or a document `AbstractProjectManager.projectsAffectedBy` maps to it, the
+ * project manager emits the affected document URIs (its own members plus
+ * any transitive dependents per the `getAffectedProjects` hook). This
+ * manager re-runs `DocumentBuilder.resetToState(doc, DocumentState.Changed)`
+ * on each affected document so the build of the update that changed the
+ * project re-links them with the new visibility scope. A project manager
+ * that defers the relink emits them from a follow-up build of its own
+ * instead.
  *
  * Descriptor URIs that triggered the cycle are intentionally excluded
  * from the affected set by `AbstractProjectManager.onBuildUpdate` —
@@ -615,7 +616,7 @@ export class DefaultHydraniumWorkspaceManager extends DefaultWorkspaceManager im
    /**
     * Default cascade-rebuild handler. Iterates {@link ProjectChangeEvent.affectedDocuments}
     * and resets each to {@link DocumentState.Changed} so the build of the update
-    * that changed the descriptor re-runs the pipeline (parse → link → validate)
+    * that changed the project re-runs the pipeline (parse → link → validate)
     * under the new project visibility scope. Under the project manager's
     * `deferMemberRelink`, its follow-up build emits the members instead.
     *

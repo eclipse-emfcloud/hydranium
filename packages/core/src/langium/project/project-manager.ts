@@ -38,7 +38,8 @@ import type { MemberRelinkFinishedListener, MemberRelinkStartedListener, Project
  *    `IndexedContent`, integrity rules, scope providers) awaits this.
  * 3. After startup, the abstract `AbstractProjectManager` base auto-
  *    subscribes to `DocumentBuilder.onUpdate` to track incremental
- *    changes to descriptor files; each relevant update fires
+ *    changes to descriptor files and to the documents that
+ *    `projectsAffectedBy` maps to projects. Each relevant update fires
  *    {@link onProjectsChanged} with the registry diff + affected
  *    documents, and `HydraniumWorkspaceManager` re-runs
  *    `DocumentBuilder.resetToState` on the affected URIs to cascade
@@ -85,7 +86,11 @@ export interface ProjectManager<TProject extends Project = Project> {
     * Subscribe to project add / update / remove events. Fires whenever
     * the registry changes — both during incremental rebuilds (descriptor
     * file edited / deleted) and as a single event at the end of
-    * {@link discoverProjects} when projects were found.
+    * {@link discoverProjects} when projects were found. Also fires with
+    * only `updated` once a build completes, for projects that a document
+    * other than their descriptor changed. Members a follow-up build relinks
+    * may still hold their old links then, so await
+    * {@link memberRelinkSettled} before reading them.
     *
     * Returns a `Disposable` that unregisters the listener.
     */
@@ -106,7 +111,7 @@ export interface ProjectManager<TProject extends Project = Project> {
     * Resolves once no deferred member relink is pending, queued or building,
     * including one queued while this waits. It covers only relinks already
     * queued, so a test awaits the build of the change first. A test that
-    * drives a descriptor change awaits it, and so does a teardown, or the
+    * drives a project change awaits it, and so does a teardown, or the
     * relink runs against a workspace already removed. Resolved at once by a
     * manager that never defers.
     *
