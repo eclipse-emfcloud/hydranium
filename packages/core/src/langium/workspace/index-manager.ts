@@ -62,13 +62,13 @@ export interface HydraniumIndexManager extends IndexManager {
 }
 
 /**
- * Default `IndexManager` for `@hydranium/core` consumers. Layers an
- * additional **`elementsByName: name → descriptions`** index on top of
- * Langium's {@link DefaultIndexManager} so consumers can look up
- * descriptions by exact name in O(1) instead of streaming the whole
- * index. Provides the resolution helpers built on that index:
+ * Default `IndexManager` for `@hydranium/core` consumers. Layers an additional
+ * **`elementsByName: name → document → descriptions`** index on top of Langium's
+ * {@link DefaultIndexManager} so consumers can look up descriptions by exact
+ * name without streaming the whole index. Provides the resolution helpers
+ * built on that index:
  *
- * - {@link getElementsByName} — O(1) name lookup returning every match,
+ * - {@link getElementsByName} — cached name lookup returning every match,
  *   optionally narrowed by reference type and owning language.
  * - {@link getElementByName} — the first-match form; callers that need
  *   to distinguish documents inspect all matches.
@@ -87,8 +87,10 @@ export interface HydraniumIndexManager extends IndexManager {
  * `removeContent` and chain `super`.
  */
 export class DefaultHydraniumIndexManager extends DefaultIndexManager implements HydraniumIndexManager {
-   /** Maps `description.name` → list of descriptions with that name. Used for O(1) `getElementByName`. */
-   protected elementsByName = new Map<string, AstNodeDescription[]>();
+   /** Name → document URI → descriptions, so removing a document never scans another document's entries. */
+   protected elementsByName = new Map<string, Map<string, AstNodeDescription[]>>();
+   /** Materialized name matches, discarded whenever that name's contributions change. */
+   protected nameMatches = new Map<string, readonly AstNodeDescription[]>();
 
    protected readonly sharedServices: ServerSharedServicesMinimal;
    protected readonly tracer: Tracer;
@@ -136,16 +138,16 @@ export class DefaultHydraniumIndexManager extends DefaultIndexManager implements
       if (!oldDescs) {
          return;
       }
-      for (const desc of oldDescs) {
-         const entries = this.elementsByName.get(desc.name);
+      for (const description of oldDescs) {
+         const name = description.name;
+         const entries = this.elementsByName.get(name);
          if (!entries) {
             continue;
          }
-         const filtered = entries.filter(entry => entry.documentUri.toString() !== uriStr);
-         if (filtered.length === 0) {
-            this.elementsByName.delete(desc.name);
-         } else {
-            this.elementsByName.set(desc.name, filtered);
+         entries.delete(uriStr);
+         this.nameMatches.delete(name);
+         if (entries.size === 0) {
+            this.elementsByName.delete(name);
          }
       }
    }
@@ -161,12 +163,18 @@ export class DefaultHydraniumIndexManager extends DefaultIndexManager implements
          return;
       }
       for (const desc of newDescs) {
-         const entries = this.elementsByName.get(desc.name);
+         let byDocument = this.elementsByName.get(desc.name);
+         if (!byDocument) {
+            byDocument = new Map();
+            this.elementsByName.set(desc.name, byDocument);
+         }
+         const entries = byDocument.get(uriStr);
          if (entries) {
             entries.push(desc);
          } else {
-            this.elementsByName.set(desc.name, [desc]);
+            byDocument.set(uriStr, [desc]);
          }
+         this.nameMatches.delete(desc.name);
       }
    }
 
@@ -175,10 +183,11 @@ export class DefaultHydraniumIndexManager extends DefaultIndexManager implements
    // ============================================================
 
    /**
-    * O(1) lookup by exact name, returning EVERY match — optionally
+    * Cached lookup by exact name, returning EVERY match — optionally
     * narrowed by reference type (via Langium's `AstReflection.isSubtype`,
     * so grammar subtype relations are honoured) and by the owning
-    * document's language.
+    * document's language. The first read after a name changes materializes
+    * its document buckets. Subsequent unfiltered reads reuse that array.
     *
     * The name index spans every language in the workspace, so a name is
     * only as unique as the adopter's naming scheme makes it. Callers that
@@ -187,9 +196,14 @@ export class DefaultHydraniumIndexManager extends DefaultIndexManager implements
     * disambiguate from context (or want to report the ambiguity) use this.
     */
    getElementsByName(name: string, type?: string, languageId?: string): readonly AstNodeDescription[] {
-      const candidates = this.elementsByName.get(name);
-      if (!candidates || candidates.length === 0) {
-         return [];
+      let candidates = this.nameMatches.get(name);
+      if (!candidates) {
+         const byDocument = this.elementsByName.get(name);
+         if (!byDocument) {
+            return [];
+         }
+         candidates = [...byDocument.values()].flat();
+         this.nameMatches.set(name, candidates);
       }
       const byType = type ? candidates.filter(candidate => this.astReflection.isSubtype(candidate.type, type)) : candidates;
       if (languageId === undefined) {
@@ -199,7 +213,7 @@ export class DefaultHydraniumIndexManager extends DefaultIndexManager implements
    }
 
    /**
-    * O(1) lookup by exact name, returning the FIRST match — optionally
+    * Cached lookup by exact name, returning the FIRST match — optionally
     * narrowed by reference type and owning language.
     *
     * **First-match is deliberate here, and is not a routing answer.** A real
@@ -275,14 +289,16 @@ export class DefaultHydraniumIndexManager extends DefaultIndexManager implements
       }
       const result: AstNodeDescription[] = [];
       for (const bucket of this.elementsByName.values()) {
-         for (const description of bucket) {
-            if (!memberUriSet.has(description.documentUri.toString())) {
-               continue;
+         for (const descriptions of bucket.values()) {
+            for (const description of descriptions) {
+               if (!memberUriSet.has(description.documentUri.toString())) {
+                  continue;
+               }
+               if (type && !this.astReflection.isSubtype(description.type, type)) {
+                  continue;
+               }
+               result.push(description);
             }
-            if (type && !this.astReflection.isSubtype(description.type, type)) {
-               continue;
-            }
-            result.push(description);
          }
       }
       return result;
