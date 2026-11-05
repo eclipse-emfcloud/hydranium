@@ -10,7 +10,14 @@
 import { compare } from 'fast-json-patch';
 import { type Disposable, Emitter, type Event } from 'vscode-jsonrpc';
 import { type Clock, SystemClock, TIMED_OUT } from '../clock';
-import { ConflictError, DocumentNotOpenError, SaveFailedError, SessionClosedError, STALE_BASE_VERSION_UPDATE } from '../errors';
+import {
+   ConflictError,
+   DocumentNotOpenError,
+   isConflictError,
+   SaveFailedError,
+   SessionClosedError,
+   STALE_BASE_VERSION_UPDATE
+} from '../errors';
 import { type BaseVersion, isModelVersion, type ModelVersion, UNRECORDED_VERSION } from '../model-service/base-version';
 import { type ConflictResolver, type ReconcileOutcome, ReconcilingConflictResolver } from '../patch-merge';
 import { PendingWorkTracker } from '../pending-work-tracker';
@@ -251,9 +258,10 @@ export class WorkingCopy<TTransfer extends TransferElement> {
     */
    protected readonly maxWrites?: number;
    /**
-    * How long {@link save}, {@link close} and {@link whenWritesSettled} wait
-    * for the copy's edits before going on anyway, and how long a document
-    * from a server that reports no writes is held for a request at most.
+    * How long {@link close}, {@link whenWritesSettled} and each attempt of
+    * {@link save} wait for the copy's edits before going on anyway, and how
+    * long a document from a server that reports no writes is held for a
+    * request at most.
     */
    protected readonly settleWritesMs: number = 30_000;
    /** The clock of {@link settleWritesMs}. */
@@ -428,19 +436,50 @@ export class WorkingCopy<TTransfer extends TransferElement> {
     * it. Resolves to what the persist answered, or `undefined` when nothing
     * needed saving. Rejects with a `DocumentNotOpenError` when the copy
     * follows no document, at the call or once the edits have answered, or
-    * follows one opened again meanwhile. Rejects with a `ConflictError` when
-    * the text moved past the copy's version or the server restarted since
-    * the copy's document, and with a `SaveFailedError` when an edit has
-    * not answered within {@link settleWritesMs}.
+    * follows one opened again meanwhile. Rejects when the copy is disposed,
+    * at the call or once the edits have answered.
+    *
+    * When the text moved past the copy's version or the server restarted
+    * since the copy's document, the persist conflicts. The server need not
+    * have pushed the newer text yet, so the copy reads the document again,
+    * announces it, and saves once more. Rejects with the `ConflictError`
+    * when that save conflicts too. Rejects with a `SaveFailedError` when an
+    * edit has not answered within {@link settleWritesMs}, or when
+    * {@link canPersist} declines either save.
     */
    async save(): Promise<TransferSavedDocument<TTransfer> | undefined> {
       this.assertLive();
       const before = this.requireOpen();
+      try {
+         return await this.saveOnce(before);
+      } catch (error: unknown) {
+         if (!isConflictError(error)) {
+            throw error;
+         }
+      }
+      await this.reread(before);
+      return this.saveOnce(before);
+   }
+
+   /**
+    * Whether {@link save} may persist the server's text at `snapshot`, the
+    * text the copy shows. Asked before each persist. A no rejects the save
+    * with a `SaveFailedError`, and the document stays dirty.
+    */
+   protected canPersist(_snapshot: TransferDocument<TTransfer>): boolean {
+      return true;
+   }
+
+   /** One attempt of {@link save}, for the open `before` it was called under. */
+   protected async saveOnce(before: WorkingCopyOpen<TTransfer>): Promise<TransferSavedDocument<TTransfer> | undefined> {
       // An edit made during the wait is written first, or the persist would be
       // gated on the version before it.
       if (!(await this.whenEditsIdle())) {
          throw new SaveFailedError([{ uri: this.uri, reason: 'an edit has not been answered' }]);
       }
+      // Disposed during the wait, the copy announces no text it takes, so it
+      // saves none on its own behalf.
+      this.assertLive();
       // Gone during the wait, as after a deletion, the save is not reported as
       // done, nor made on a document opened again meanwhile.
       const open = this.requireOpen();
@@ -451,8 +490,12 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       if (!model || !open.serverDirty) {
          return undefined;
       }
+      if (!this.canPersist(open.snapshot)) {
+         throw new SaveFailedError([{ uri: this.uri, reason: 'the host declined to save it' }]);
+      }
       // Gated on the copy's version: text the copy has not shown is not saved
-      // on its behalf, and the save rejects with the `ConflictError` instead.
+      // on its behalf, and the attempt rejects with the `ConflictError`
+      // instead.
       let saved: TransferSavedDocument<TTransfer> | undefined;
       open.snapshotRequests++;
       try {
@@ -523,7 +566,9 @@ export class WorkingCopy<TTransfer extends TransferElement> {
     * session lives, since dropping them would lose what the user typed, and
     * the copy follows the document until they have answered, so their writes
     * still heed a restore or a deletion. A host that ends the session as well
-    * waits for {@link whenWritesSettled} first.
+    * waits for {@link whenWritesSettled} first. A {@link save} under way
+    * rejects before it persists, so a host that saves before disposing awaits
+    * the save first.
     */
    dispose(): void {
       if (this.disposed) {

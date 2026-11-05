@@ -340,6 +340,14 @@ a conflict. The restored document carries its problems. A session that
 restores without them leaves the copy the problems from before until it reads
 the document again.
 
+**A save persists only text the copy has shown**, that is taken and announced
+through `onDidChange`. Whether anyone looked at it is the host's call:
+`canPersist` is asked before each persist. The persist is gated on the copy's
+version and epoch, and the server may answer a conflict before the push that
+moved the text reaches the copy. The copy then reads the document again, takes
+and announces it, and saves once more. A second conflict rejects. A disposed
+copy announces nothing, so a save under way then rejects before it persists.
+
 **A write that raced nobody reports `applied`.** A write refused and then
 written again, by the server or by the copy itself on an unconfirmed base,
 reports `merged` when the document it read in between differs from the one the

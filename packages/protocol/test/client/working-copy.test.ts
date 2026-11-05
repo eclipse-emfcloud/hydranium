@@ -74,6 +74,8 @@ class ProbeServer {
    saveGate?: Promise<void>;
    /** Reads received. */
    reads = 0;
+   /** Refuses the next read. */
+   failRead?: Error;
    /** Refuses the next write before it lands. */
    failNext?: Error;
    /** Refuses the write with this number, counted from one, before it lands. */
@@ -169,6 +171,11 @@ class ProbeServer {
 
    async getModelDocument(args: { includeDiagnostics?: boolean }): Promise<unknown> {
       this.reads++;
+      const failure = this.failRead;
+      if (failure) {
+         this.failRead = undefined;
+         throw failure;
+      }
       // Each gate holds the requests received after a test set it.
       const readGate = this.readGate;
       await this.buildGate;
@@ -241,6 +248,12 @@ class ProbeServer {
    /** Write `root` as another client, and push it. */
    foreignWrite(root: Partial<ProbeElement>): Promise<void> {
       return this.change({ ...this.root, ...root }, OTHER_CLIENT);
+   }
+
+   /** Write `root` as another client whose push has not reached the copy yet. */
+   unpushedWrite(root: Partial<ProbeElement>): void {
+      this.root = { ...this.root, ...root };
+      this.version++;
    }
 
    /** Save the text as another client, and push that it is clean. */
@@ -1062,12 +1075,15 @@ describe('WorkingCopy', () => {
       await server.foreignWrite({ note: 'theirs' });
       await waitFor(() => copy.clock.pendingTimers() > 0);
 
-      // Gated on the version before the update, so it answers at once.
-      await expect(copy.save()).rejects.toBeInstanceOf(ConflictError);
+      // Gated on the version before the update, it conflicts at once, and
+      // its read answers with the first save still out.
+      const second = copy.save();
+      await waitFor(() => server.saved === server.version);
 
       expect({ note: copy.root?.note, timers: copy.clock.pendingTimers() }).toEqual({ note: 'theirs', timers: 0 });
       saved.resolve();
       await first;
+      await second;
    });
 
    it("holds another client's update from a server that sends no heldWrites while its write is unanswered, and shows it once the write fails", async () => {
@@ -1736,6 +1752,220 @@ describe('WorkingCopy', () => {
 
       expect(copy.version).toBe(3);
       expect(copy.root?.note).toBe('theirs');
+   });
+
+   it("saves again once it has shown another client's text its save conflicted with", async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      await copy.edit(root => ({ ...root, name: 'ours' }));
+      server.unpushedWrite({ note: 'theirs' });
+      const shown: { note?: string; saved: number }[] = [];
+      copy.onDidChange(() => shown.push({ note: copy.root?.note, saved: server.saved }));
+
+      const saved = await copy.save();
+
+      expect(saved?.persisted).toEqual({ version: 3 });
+      expect(shown).toEqual([{ note: 'theirs', saved: 1 }]);
+      expect({ saved: server.saved, dirty: copy.dirty }).toEqual({ saved: 3, dirty: false });
+   });
+
+   it('rejects a save that conflicts again with a write not pushed during its read', async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      await copy.edit(root => ({ ...root, name: 'ours' }));
+      server.unpushedWrite({ note: 'theirs' });
+      const read = new Deferred<void>();
+      server.readGate = read.promise;
+      const reads = server.reads;
+      const saving = copy.save();
+      await waitFor(() => server.reads === reads + 1);
+      server.unpushedWrite({ note: 'later' });
+
+      read.resolve();
+
+      await expect(saving).rejects.toBeInstanceOf(ConflictError);
+      expect({ reads: server.reads - reads, saved: server.saved, dirty: copy.dirty }).toEqual({ reads: 1, saved: 1, dirty: true });
+   });
+
+   it('saves the write another client pushed during its read after a conflict', async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      await copy.edit(root => ({ ...root, name: 'ours' }));
+      server.unpushedWrite({ note: 'theirs' });
+      const read = new Deferred<void>();
+      server.readGate = read.promise;
+      const reads = server.reads;
+      const saving = copy.save();
+      await waitFor(() => server.reads === reads + 1);
+      await server.foreignWrite({ note: 'later' });
+      await waitFor(() => copy.root?.note === 'later');
+
+      read.resolve();
+
+      await saving;
+      expect({ saved: server.saved, note: copy.root?.note, dirty: copy.dirty }).toEqual({
+         saved: server.version,
+         note: 'later',
+         dirty: false
+      });
+   });
+
+   it('rejects with the conflict a save whose read after it fails', async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      await copy.edit(root => ({ ...root, name: 'ours' }));
+      server.unpushedWrite({ note: 'theirs' });
+      server.failRead = new Error('read refused');
+      const reads = server.reads;
+
+      await expect(copy.save()).rejects.toBeInstanceOf(ConflictError);
+
+      expect({ reads: server.reads - reads, saved: server.saved, note: copy.root?.note, dirty: copy.dirty }).toEqual({
+         reads: 1,
+         saved: 1,
+         note: 'initial',
+         dirty: true
+      });
+   });
+
+   it('fails a save whose read after a conflict finds the file gone', async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      await copy.edit(root => ({ ...root, name: 'ours' }));
+      server.unpushedWrite({ note: 'theirs' });
+      server.missing = true;
+
+      await expect(copy.save()).rejects.toBeInstanceOf(DocumentNotOpenError);
+
+      expect({ saved: server.saved, snapshot: copy.snapshot }).toEqual({ saved: 1, snapshot: undefined });
+   });
+
+   it('does not read again after a save that fails other than by a conflict', async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      await copy.edit(root => ({ ...root, name: 'ours' }));
+      // Ended on the server without an event, so the persist is refused.
+      server.opens.clear();
+      const reads = server.reads;
+
+      await expect(copy.save()).rejects.toBeInstanceOf(DocumentNotOpenError);
+
+      expect({ reads: server.reads - reads, saved: server.saved }).toEqual({ reads: 0, saved: 1 });
+   });
+
+   it('writes an edit made during the read after a conflict before it saves again', async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      await copy.edit(root => ({ ...root, name: 'ours' }));
+      server.unpushedWrite({ note: 'theirs' });
+      const read = new Deferred<void>();
+      server.readGate = read.promise;
+      const reads = server.reads;
+      const saving = copy.save();
+      await waitFor(() => server.reads === reads + 1);
+      server.readGate = undefined;
+      const written = copy.edit(root => ({ ...root, name: 'later' }));
+
+      read.resolve();
+
+      // Made on the text before the read, its write conflicts and merges.
+      expect(await written).toEqual({ status: 'merged' });
+      await saving;
+      expect(server.saved).toBe(server.version);
+      expect(server.root).toMatchObject({ name: 'later', note: 'theirs' });
+   });
+
+   it('does not save the text a read after a conflict brings once the copy is disposed, as it is not announced', async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      await copy.edit(root => ({ ...root, name: 'ours' }));
+      server.unpushedWrite({ note: 'theirs' });
+      const read = new Deferred<void>();
+      server.readGate = read.promise;
+      const reads = server.reads;
+      const saving = copy.save();
+      await waitFor(() => server.reads === reads + 1);
+      copy.dispose();
+
+      read.resolve();
+
+      await expect(saving).rejects.toThrow('WorkingCopy is disposed');
+      expect(server.saved).toBe(1);
+   });
+
+   it('does not save the text another client pushed once the copy is disposed while the save waits for its edits', async () => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      const gate = new Deferred<void>();
+      server.updateGate = gate.promise;
+      const written = copy.edit(root => ({ ...root, name: 'ours' }));
+      await waitFor(() => server.updates === 1);
+      const saving = copy.save();
+      copy.dispose();
+      await server.foreignWrite({ note: 'theirs' });
+      server.updateGate = undefined;
+
+      gate.resolve();
+
+      await written;
+      await expect(saving).rejects.toThrow('WorkingCopy is disposed');
+      expect(server.saved).toBe(1);
+   });
+
+   it.each([
+      ['deleted', (_copy: HeldCopy, server: ProbeServer) => server.deleteFile()],
+      ['closed', (copy: HeldCopy) => copy.close()]
+   ] as const)('fails a save whose document was %s during the read after a conflict', async (_case, end) => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+      await copy.edit(root => ({ ...root, name: 'ours' }));
+      server.unpushedWrite({ note: 'theirs' });
+      const read = new Deferred<void>();
+      server.readGate = read.promise;
+      const reads = server.reads;
+      const saving = copy.save();
+      await waitFor(() => server.reads === reads + 1);
+      await end(copy, server);
+      await waitFor(() => copy.snapshot === undefined);
+
+      read.resolve();
+
+      await expect(saving).rejects.toBeInstanceOf(DocumentNotOpenError);
+      expect(server.saved).toBe(1);
+   });
+
+   it.each([
+      ['the first', () => false, 0],
+      [
+         "the second, once it shows another client's text",
+         (snapshot: TransferDocument<ProbeElement>) => snapshot.model?.root.note !== 'theirs',
+         1
+      ]
+   ] as const)('refuses %s save its host declines and stays dirty', async (_case, allowed, rereads) => {
+      const { server, session, events } = makeCopyHarness();
+      const copy = new (class extends HeldCopy {
+         protected override canPersist(snapshot: TransferDocument<ProbeElement>): boolean {
+            return allowed(snapshot);
+         }
+      })(session, events, URI_A);
+      await copy.open();
+      await copy.edit(root => ({ ...root, name: 'ours' }));
+      server.unpushedWrite({ note: 'theirs' });
+      const reads = server.reads;
+
+      await expect(copy.save()).rejects.toBeInstanceOf(SaveFailedError);
+
+      expect({ reads: server.reads - reads, saved: server.saved, dirty: copy.dirty }).toEqual({ reads: rereads, saved: 1, dirty: true });
    });
 
    it.each([
@@ -2898,20 +3128,23 @@ describe('WorkingCopy', () => {
       expect(restarted.root).toMatchObject({ name: 'ours', note: 'external' });
    });
 
-   it('does not save a change made while its server was down that it has not shown', async () => {
+   it('saves a change made while its server was down only once it has shown it', async () => {
       const harness = makeCopyHarness();
       harness.server.saved = 0;
       const copy = new HeldCopy(harness.session, harness.events, URI_A);
       await copy.open();
       expect(copy.dirty).toBe(true);
+      const shown: { note?: string; saved: number }[] = [];
 
       const restored = nextRestore(harness.session);
       const restarted = harness.restart({ note: 'external' });
       restarted.saved = 0;
+      copy.onDidChange(() => shown.push({ note: copy.root?.note, saved: restarted.saved }));
       const saved = copy.save();
 
-      await expect(saved).rejects.toThrow(ConflictError);
-      expect(restarted.saved).toBe(0);
+      await saved;
+      expect(shown.find(entry => entry.note === 'external')).toEqual({ note: 'external', saved: 0 });
+      expect(restarted.saved).toBe(restarted.version);
       await restored;
    });
 
