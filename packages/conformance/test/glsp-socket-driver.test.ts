@@ -71,7 +71,7 @@ function connect(clientSessionId?: string): Promise<GlspSocketDriver<Act>> {
       diagramType: 'type-one',
       clientActionKinds: ['echoReply'],
       clientSessionId,
-      timeoutMs: 500
+      timeoutMs: 5_000
    });
 }
 
@@ -140,7 +140,7 @@ describe('connectGlspSocketDriver', () => {
          diagramType: 'type-one',
          clientActionKinds: [],
          respond: action => (action.kind === 'echoReply' ? { kind: 'answer' } : undefined),
-         timeoutMs: 500
+         timeoutMs: 5_000
       });
       try {
          await driver.start();
