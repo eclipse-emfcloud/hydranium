@@ -1139,6 +1139,8 @@ export class DefaultHydraniumDocumentBuilder extends DefaultDocumentBuilder impl
       // A token of its own, so `runCancelable` tells this build from one that
       // overlaps it. Not for `None`, which Langium's builds never yield for.
       const source = cancelToken === CancellationToken.None ? undefined : new CancellationTokenSource();
+      // Read before any cancel: a source cancelled before `token` is read throws on its second cancel.
+      const token = source?.token ?? CancellationToken.None;
       // Never disposed, so a listener that keeps the token past the build still sees a later cancel.
       // One listener per build on the caller's token, which lives as long as that token does.
       if (source !== undefined) {
@@ -1148,7 +1150,6 @@ export class DefaultHydraniumDocumentBuilder extends DefaultDocumentBuilder impl
       if (cancelToken.isCancellationRequested) {
          source?.cancel();
       }
-      const token = source?.token ?? CancellationToken.None;
       const running: RunningBuild = { documents, documentSet: new Set(documents), options, cancelToken: token };
       // One already linking under the same `None` can no longer be told from this one, so a build after both relinks for it.
       this.runningBuildDocuments.forEach(other => {
