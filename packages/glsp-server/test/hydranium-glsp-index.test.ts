@@ -7,12 +7,13 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { describe, expect, it } from 'vitest';
-import { GModelElement } from '@eclipse-glsp/server';
+import { describe, expect, it, vi } from 'vitest';
+import { GEdge, GModelElement } from '@eclipse-glsp/server';
 import 'reflect-metadata';
 import { Container } from 'inversify';
 import type { AstNode } from '@hydranium/langium';
 import { URI } from '@hydranium/langium';
+import { Logger, type LogThreshold } from '@hydranium/protocol';
 import type { ElementKeyProvider, ServerSharedServices } from '@hydranium/core';
 import {
    type CapturedLine,
@@ -460,6 +461,40 @@ describe('HydraniumGlspIndex', () => {
          expect(root.children).toBe(children);
          expect(root.children).toEqual([childA, childB]);
          expect(lines.filter(line => line.level === 'warn')).toEqual([]);
+      });
+   });
+
+   describe('indexRoot dangling edges', () => {
+      function makeEdge(id: string, sourceId: string, targetId: string): GEdge {
+         return Object.assign(new GEdge(), { id, sourceId, targetId });
+      }
+
+      function indexAtLevel(index: HydraniumGlspIndex, level: LogThreshold): void {
+         const root = makeGModelElement('root');
+         root.children = [makeGModelElement('a'), makeEdge('linked', 'a', 'root'), makeEdge('dangling', 'gone', 'missing')];
+         const originalLevel = Logger.getLevel();
+         Logger.setLevel(level);
+         try {
+            index.indexRoot(root);
+         } finally {
+            Logger.setLevel(originalLevel);
+         }
+      }
+
+      it('logs one debug line per edge end that names no element', () => {
+         const { index, lines } = createIndex(new Map());
+         indexAtLevel(index, 'debug');
+         expect(lines.filter(line => line.message.includes('names no element'))).toEqual([
+            { level: 'debug', message: 'Edge dangling names no element as its source: gone' },
+            { level: 'debug', message: 'Edge dangling names no element as its target: missing' }
+         ]);
+      });
+
+      it('skips the edge scan below debug', () => {
+         const { index } = createIndex(new Map());
+         const getAllEdges = vi.spyOn(index, 'getAllEdges');
+         indexAtLevel(index, 'info');
+         expect(getAllEdges).not.toHaveBeenCalled();
       });
    });
 });

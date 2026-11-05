@@ -135,9 +135,8 @@ const EFFECT_COMPARTMENT_LAYOUT_OPTIONS = {
 export const UNPOSITIONED_ROW_HEIGHT = 80;
 
 /**
- * Translates a `.process` root into a GLSP {@link GGraph}. Nodes are emitted
- * before the connections that join them, so every edge endpoint id already
- * exists:
+ * Translates a `.process` root into a GLSP {@link GGraph} in which every edge
+ * endpoint id names a drawn node:
  *
  * - a {@link GNode} per flow node — task or gateway, distinct types;
  * - an effect {@link GCompartment} per task, one {@link GLabel} per
@@ -157,8 +156,8 @@ export const UNPOSITIONED_ROW_HEIGHT = 80;
  * exist, or a `writes` clause naming a missing `.domain` field, is a state the
  * example deliberately produces (`test/fixtures/broken-effect.process`). An
  * edge whose endpoint cannot be resolved is skipped rather than emitted with a
- * dangling id, because a GLSP edge pointing at a non-existent node id fails
- * client-side with a far less obvious error than a missing edge.
+ * dangling id, because the client draws an edge to a non-existent node id as a
+ * bare `?` and logs nothing.
  *
  * Ids come from the index (`OrderFlowGlspIndex`) rather than being composed
  * here. Transitions, branches and effects are unnamed, so the key provider's

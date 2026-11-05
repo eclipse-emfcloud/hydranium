@@ -4,11 +4,11 @@
 // Ids come from the index rather than being composed here, so the id strategy
 // stays in one place. An id derived from a node's, for its label, its edge or an
 // external node, appends a suffix starting with `-`, which the grammar's `ID`
-// does not allow, so it never clashes with a node's own. Nodes are emitted
-// before edges, because a GLSP edge pointing at an id that does not exist fails
-// client-side with a far less obvious error than a missing edge. An unresolved
-// reference is SKIPPED rather than treated as an error: a dangling reference is
-// ordinary editing state, and the language already reports it as a diagnostic.
+// does not allow, so it never clashes with a node's own. Every edge ends at a
+// drawn node, because the client draws an edge to an id that does not exist as
+// a bare `?` and logs nothing. An unresolved reference is SKIPPED rather than
+// treated as an error: a dangling reference is ordinary editing state, and the
+// language already reports it as a diagnostic.
 //
 // A reference into another document is drawn to an external node standing for
 // its target, once however many nodes reference it, so the diagram shows what

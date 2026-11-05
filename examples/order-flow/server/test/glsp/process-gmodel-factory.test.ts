@@ -212,8 +212,8 @@ describe('order-flow .process GModel projection', () => {
          ['Pay', 'PaymentOk'],
          ['Pick', 'Ship']
       ]);
-      // The invariant that matters: a GLSP edge naming an id no node carries
-      // fails client-side with a far less obvious error than a missing edge.
+      // The invariant that matters: the client draws a GLSP edge naming an id
+      // no node carries as a bare `?` and logs nothing.
       for (const edge of transitions) {
          expect(nodeIds.has(edge.sourceId), edge.id).toBe(true);
          expect(nodeIds.has(edge.targetId), edge.id).toBe(true);

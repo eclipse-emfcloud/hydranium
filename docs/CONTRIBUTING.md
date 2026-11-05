@@ -185,6 +185,13 @@ the test layers, the narrower commands, e2e and the on-demand audits.
   (`npx changeset add`), named for the change rather than the generated name,
   and never empty. [Releasing](contributing/releasing.md) covers versioning,
   dist-tags and provenance.
+- **A change that breaks an adopter gets a `Breaking` section** in the commit
+  body and in the PR description, one bullet per break saying what the adopter
+  has to change. Its subject carries the `!` (`feat(scope)!: ...`) and it has
+  no `BREAKING CHANGE:` footer, since the section already says what broke. A
+  change to which nodes get an element key, or to a key's string, counts as
+  one: GModel ids are built from the keys `HydraniumGlspIndex.doFindId`
+  returns, so the ids an adopter's diagram uses change with them.
 - Reference the design page under `docs/contributing/design/` your change
   follows, if there is one.
 - A test must justify its existence: it should catch a real class of bug.
