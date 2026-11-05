@@ -41,9 +41,9 @@ import { captureReadLockScope, refuseWaitInRead, runInReadLockScope } from '../w
 /** Constructor options for {@link AbstractProjectManager}. */
 export interface ProjectManagerOptions extends LogNameOptions {
    /**
-    * Relink the member documents a descriptor change affects in a build of
+    * Relink the member documents a project change affects in a build of
     * their own, queued once the build of the change has ended. The write that
-    * changed the descriptor then answers without waiting for them, and they
+    * changed the project then answers without waiting for them, and they
     * keep the links they had until that build starts. An explicit
     * `DocumentBuilder.build`, such as workspace initialization, keeps them in
     * the build of the change, as without the option. Default `false`.
@@ -61,7 +61,7 @@ export interface ProjectManagerOptions extends LogNameOptions {
     * arriving, the members keep the links they had until the writes pause.
     *
     * A test or a teardown awaits {@link ProjectManager.memberRelinkSettled}
-    * after a descriptor change, or the relink runs against a workspace already
+    * after a project change, or the relink runs against a workspace already
     * removed.
     *
     * A member counts as relinked only once a build links it, so under
@@ -108,6 +108,8 @@ export interface ProjectManagerOptions extends LogNameOptions {
  * - {@link shouldEnterDirectory} — default skips hidden directories,
  *   `node_modules`, and `out`. Override to customise exclusion rules
  *   without re-implementing the walk.
+ * - {@link projectsAffectedBy} — default names none. Override when a
+ *   document other than a descriptor changes a project.
  * - {@link getAffectedProjects} — default walks {@link Project.dependencies}
  *   transitively in reverse (projects whose dep closure touches a changed
  *   project also rebuild). Override for a different rebuild policy.
@@ -177,6 +179,10 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
    protected readonly memberRelinks = new Set<Promise<void>>();
    protected readonly memberRelinkStartedListeners = new Set<MemberRelinkStartedListener>();
    protected readonly memberRelinkFinishedListeners = new Set<MemberRelinkFinishedListener>();
+   /** Ids {@link projectsAffectedBy} named, each announced `updated` once a build completes. */
+   protected readonly pendingUpdatedIds = new Set<string>();
+   /** Set once {@link announceUpdatedOnceBuilt} has registered its build-ended listener. */
+   protected buildEndedListenerRegistered = false;
 
    constructor(
       protected readonly services: ServerSharedServicesMinimal,
@@ -529,6 +535,10 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     * Handle a `DocumentBuilder.onUpdate` event. Filters for descriptor
     * URIs, diffs the registry, and emits {@link ProjectChangeEvent} with
     * the registry diff plus the affected documents that need rebuilding.
+    * The projects {@link projectsAffectedBy} names always reset their members
+    * and dependents, with no {@link requiresMemberRebuild} check, and are
+    * announced `updated` in an event of their own (see
+    * {@link announceUpdatedOnceBuilt}).
     *
     * Descriptor URIs that triggered the cycle are excluded from
     * {@link ProjectChangeEvent.affectedDocuments} — re-adding them would
@@ -548,15 +558,16 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
       // Asked before the first await, while the builder still answers for
       // this call.
       const deferRelink = this.shouldDeferMemberRelink();
+      // An explicit build reports the documents it builds as changed, whether or not they changed.
+      const explicitBuild = this.documentBuilder.isInsideBuildUpdate();
       const changedDescriptors = changed.filter(uri => this.isDescriptorUri(uri));
       const deletedDescriptors = deleted.filter(uri => this.isDescriptorUri(uri));
-      if (changedDescriptors.length === 0 && deletedDescriptors.length === 0) {
-         return;
+      if (changedDescriptors.length > 0 || deletedDescriptors.length > 0) {
+         // Descriptor removals below mutate the maps `computeProject` reads. Drop the
+         // memoized results now (adds also re-clear via `loadDescriptor`), so the
+         // `getProject` calls in `collectAffectedDocuments` see the post-change state.
+         this.invalidateMembershipCache();
       }
-      // Descriptor removals below mutate the maps `computeProject` reads; drop the
-      // memoized results now (adds also re-clear via `loadDescriptor`), so the
-      // `getProject` calls in `collectAffectedDocuments` see the post-change state.
-      this.invalidateMembershipCache();
       // Note: we intentionally do NOT await `ready` here. In the production
       // flow `discoverProjects` completes (resolving `ready`) inside
       // `DefaultHydraniumWorkspaceManager.performStartup` before `documentBuilder.build`
@@ -625,12 +636,22 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
          }
       }
 
-      if (added.length === 0 && updated.length === 0 && removed.length === 0) {
+      let namedIds: string[] = [];
+      const asked = !explicitBuild && changed.length + deleted.length > 0;
+      try {
+         namedIds = asked ? [...new Set(this.projectsAffectedBy(changed, deleted))].filter(id => this.projects.has(id)) : [];
+      } catch (error: unknown) {
+         // A throw would fail the update and drop the registry change above unannounced.
+         this.tracer.error(
+            `Failed to find which ${this.conceptName()} the changed documents affect, so none is named: ${describeErrorWithStack(error)}`
+         );
+      }
+      if (added.length === 0 && updated.length === 0 && removed.length === 0 && namedIds.length === 0) {
          return;
       }
 
       const removedIds = removed.map(entry => entry.id);
-      const affectedProjectIds = new Set(this.getAffectedProjects([...rebuildIds, ...removedIds]));
+      const affectedProjectIds = new Set(this.getAffectedProjects([...rebuildIds, ...namedIds, ...removedIds]));
       const excluded = new Set<string>();
       for (const uri of changedDescriptors) {
          excluded.add(uri.toString());
@@ -654,10 +675,61 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
             (document && document.state < this.lastPhaseOf(document) ? carried : deferred).push(uri);
          }
          this.queueMemberRelink(deferred);
-         this.emit({ added, updated, removed, affectedDocuments: carried });
+         this.emitUnlessEmpty({ added, updated, removed, affectedDocuments: carried });
       } else {
-         this.emit({ added, updated, removed, affectedDocuments });
+         this.emitUnlessEmpty({ added, updated, removed, affectedDocuments });
       }
+      this.announceUpdatedOnceBuilt(namedIds);
+   }
+
+   /**
+    * The ids of the projects that the `changed` and `deleted` documents
+    * change other than through their descriptor, such as a type document
+    * that adds dependencies to the projects typed by it. Their members and
+    * dependents, through {@link getAffectedProjects}, are reset and relinked
+    * on every such update, since no {@link requiresMemberRebuild} check
+    * applies. They are announced `updated` once a build completes. Ids
+    * no project is registered under are ignored. Called with every update
+    * that changes or deletes a document, once its descriptors are reloaded,
+    * so keep it cheap. Not called for an explicit `DocumentBuilder.build`,
+    * which reports the documents it builds as changed whether or not they
+    * changed. A throw is logged and names none. Default: none.
+    *
+    * When it is asked, a changed document still holds its previous AST and
+    * is out of the index, and the documents that refer to it are unlinked.
+    * So an override maps from the descriptor side, from what each descriptor
+    * refers to as recorded when it was parsed or linked. A reference that
+    * resolves only once the change is indexed is missed.
+    */
+   protected projectsAffectedBy(_changed: readonly URI[], _deleted: readonly URI[]): readonly string[] {
+      return [];
+   }
+
+   /**
+    * Announce `ids` as `updated` once a build completes, since a project they
+    * name reads its effective settings through the index. By then the build
+    * of the change has indexed and linked the changed documents, and the
+    * update's own event and cache resets have run. Members that
+    * {@link shouldDeferMemberRelink} left to a follow-up build may not be
+    * relinked yet, as with a descriptor change. A cancelled or failed build
+    * leaves them to the next build that completes.
+    */
+   protected announceUpdatedOnceBuilt(ids: readonly string[]): void {
+      if (ids.length === 0) {
+         return;
+      }
+      if (!this.buildEndedListenerRegistered) {
+         this.buildEndedListenerRegistered = true;
+         this.documentBuilder.onBuildEnded(({ completed }) => completed && this.announcePendingUpdated());
+      }
+      ids.forEach(id => this.pendingUpdatedIds.add(id));
+   }
+
+   /** Announce the {@link pendingUpdatedIds} still registered. */
+   protected announcePendingUpdated(): void {
+      const updated = [...this.pendingUpdatedIds].filter(id => this.projects.has(id));
+      this.pendingUpdatedIds.clear();
+      this.emitUnlessEmpty({ added: [], updated, removed: [], affectedDocuments: [] });
    }
 
    /**
@@ -1003,6 +1075,13 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
    // ============================================================
    // Event emission
    // ============================================================
+
+   /** {@link emit} `event` unless it carries nothing. */
+   protected emitUnlessEmpty(event: ProjectChangeEvent<TProject>): void {
+      if (event.added.length + event.updated.length + event.removed.length + event.affectedDocuments.length > 0) {
+         this.emit(event);
+      }
+   }
 
    protected emit(event: ProjectChangeEvent<TProject>): void {
       // Copy the listener list so a listener registering or disposing

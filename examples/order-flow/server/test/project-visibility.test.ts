@@ -28,6 +28,7 @@ import {
    AstUtils,
    DefaultLexer,
    DocumentState,
+   isOperationCancelled,
    type LexerResult,
    type LexingDiagnostic,
    type ReferenceInfo,
@@ -36,6 +37,7 @@ import {
    UriUtils
 } from '@hydranium/langium';
 import { readFileSync } from 'node:fs';
+import { CancellationTokenSource } from 'vscode-languageserver';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { type DomainModel, type Entity, type Field, isEntity } from '../src/language-server/ast.js';
 import type { OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
@@ -585,5 +587,79 @@ describe('order-flow projects with a deferred member relink', () => {
 
       expect(finished).toEqual([false, true]);
       expect(buildsEnded.at(-1)).toBe('completed=true amount=undefined');
+   });
+});
+
+describe('order-flow project named by a member document', () => {
+   /** Names `commerce-core` for every change to its headerless member. */
+   class NamingProjectManager extends OrderFlowProjectManager {
+      protected override projectsAffectedBy(changed: readonly URI[], deleted: readonly URI[]): readonly string[] {
+         return [...changed, ...deleted].some(uri => uri.path.endsWith(`/${WORKSPACE_FILES.commerceCoreInternal}`))
+            ? ['commerce-core']
+            : [];
+      }
+   }
+
+   async function namingHarness(): Promise<{
+      harness: OrderFlowHarness;
+      internalUri: URI;
+      returnsUri: URI;
+      addCoupon: () => void;
+      couponVisible: () => boolean;
+   }> {
+      const { harness, workspace, dispose } = await makeScratchWorkspaceHarness(undefined, {
+         extraSharedModules: [{ workspace: { ProjectManager: (services: OrderFlowSharedServices) => new NamingProjectManager(services) } }]
+      });
+      onTestFinished(() => dispose());
+      const internalUri = URI.file(workspace.resolve(WORKSPACE_FILES.commerceCoreInternal));
+      const couponVisible = (): boolean => {
+         const model = harness.shared.workspace.LangiumDocuments.getDocument(internalUri)!.parseResult.value as DomainModel;
+         return typeCandidates(harness, fieldNamed(entityNamed(model, 'AuditStamp'), 'stamp')).includes('Coupon');
+      };
+      const addCoupon = (): void => {
+         const path = workspace.resolve(WORKSPACE_FILES.commerceCoreInternal);
+         workspace.write(WORKSPACE_FILES.commerceCoreInternal, `${readFileSync(path, 'utf8')}\nentity Coupon {\n   code: String\n}\n`);
+      };
+      // Primes the scope caches, which must not answer from before the change.
+      expect(couponVisible()).toBe(false);
+      return { harness, internalUri, returnsUri: URI.file(workspace.resolve(WORKSPACE_FILES.returnsProcess)), addCoupon, couponVisible };
+   }
+
+   it('announces it updated once the build of the change completes, with the change in scope', async () => {
+      const { harness, internalUri, addCoupon, couponVisible } = await namingHarness();
+      const log: string[] = [];
+      harness.shared.workspace.DocumentBuilder.onBuildPhase(DocumentState.IndexedContent, () => {
+         // A build may index in several batches.
+         if (log.at(-1) !== 'indexed') {
+            log.push('indexed');
+         }
+      });
+      harness.shared.workspace.ProjectManager.onProjectsChanged(event => {
+         if (event.updated.length > 0) {
+            // Coupon is declared in the changed document, so this checks the timing, not cross-project scope.
+            log.push(`updated ${event.updated.join()} coupon=${couponVisible()}`);
+         }
+      });
+
+      addCoupon();
+      await harness.shared.workspace.DocumentBuilder.scheduleUpdate([internalUri], []);
+
+      expect(log).toEqual(['indexed', 'updated commerce-core coupon=true']);
+   });
+
+   it('leaves the announce of a cancelled build to the next build that completes', async () => {
+      const { harness, internalUri, returnsUri, addCoupon } = await namingHarness();
+      const builder = harness.shared.workspace.DocumentBuilder;
+      const updated: string[] = [];
+      harness.shared.workspace.ProjectManager.onProjectsChanged(event => updated.push(...event.updated));
+      const cancellation = new CancellationTokenSource();
+      builder.onBuildPhase(DocumentState.IndexedContent, () => cancellation.cancel());
+
+      addCoupon();
+      await expect(builder.update([internalUri], [], cancellation.token)).rejects.toSatisfy(isOperationCancelled);
+      expect(updated, 'a cancelled build announced it').toEqual([]);
+      await builder.update([returnsUri], []);
+
+      expect(updated).toEqual(['commerce-core']);
    });
 });

@@ -49,6 +49,8 @@ const URI_MEMBER_A1 = URI.parse('file:///workspace/projA/Element1.a');
 const URI_MEMBER_A2 = URI.parse('file:///workspace/projA/Element2.a');
 const URI_MEMBER_B1 = URI.parse('file:///workspace/projB/Element1.a');
 const URI_OUTSIDE = URI.parse('file:///workspace/other/Stranger.a');
+/** Not a descriptor, but the projects typed by it change with it. */
+const URI_TYPE = URI.parse('file:///workspace/types/Base.type');
 
 const isDescriptorPredicate = (uri: URI | string): boolean => {
    const s = typeof uri === 'string' ? uri : uri.toString();
@@ -100,6 +102,8 @@ interface Stubs {
    onBuilt?: (document: LangiumDocument) => void;
    /** How many `Linked`, `IndexedReferences` and `Validated` listeners are registered. */
    phaseListeners: () => number;
+   /** Run the build-ended listeners, as a build that ends does. */
+   endBuild: (completed?: boolean) => void;
 }
 
 function makeStubs(knownDocuments: URI[] = []): Stubs {
@@ -107,6 +111,7 @@ function makeStubs(knownDocuments: URI[] = []): Stubs {
    const linkedListeners: Array<(document: LangiumDocument) => void> = [];
    const indexedListeners: Array<(document: LangiumDocument) => void> = [];
    const deliveredListeners: Array<(document: LangiumDocument) => void> = [];
+   const buildEndedListeners: Array<(event: { completed: boolean }) => void> = [];
    const { logger, lines: logs } = makeCapturingLogger();
 
    const docs: URI[] = [...knownDocuments];
@@ -180,6 +185,10 @@ function makeStubs(knownDocuments: URI[] = []): Stubs {
          }
          return Disposable.create(() => undefined);
       },
+      onBuildEnded: (listener: (event: { completed: boolean }) => void) => {
+         buildEndedListeners.push(listener);
+         return Disposable.create(() => undefined);
+      },
       onDocumentPhaseDelivered: (state: DocumentState, listener: (document: LangiumDocument) => void) => {
          if (state === DocumentState.Validated) {
             deliveredListeners.push(listener);
@@ -231,7 +240,8 @@ function makeStubs(knownDocuments: URI[] = []): Stubs {
       validateOnly: uri => deliveredListeners.forEach(listener => listener(fakeDocument(uri))),
       validates: true,
       eagerLinking: true,
-      phaseListeners: () => linkedListeners.length + indexedListeners.length + deliveredListeners.length
+      phaseListeners: () => linkedListeners.length + indexedListeners.length + deliveredListeners.length,
+      endBuild: (completed = true) => buildEndedListeners.forEach(listener => listener({ completed }))
    };
    return stubs;
 }
@@ -247,6 +257,12 @@ class TestProjectManager extends AbstractProjectManager {
    readonly events: ProjectChangeEvent[] = [];
    descriptors = new Map<string, FakeDescriptor>();
    discoveryUris: URI[] = [];
+   /** Non-descriptor URI → the ids of the projects it changes. */
+   typedBy = new Map<string, string[]>();
+   /** Thrown by `projectsAffectedBy` when set. */
+   affectedByError: Error | undefined;
+   /** How often `projectsAffectedBy` was asked. */
+   affectedByAsks = 0;
 
    constructor(stubs: Stubs, options: ProjectManagerOptions = {}, lock: WorkspaceLock = new DefaultWorkspaceLock()) {
       // The default Tracer wraps the Logger slot, so the manager's log lines
@@ -302,6 +318,14 @@ class TestProjectManager extends AbstractProjectManager {
 
    protected override async findDescriptorUris(): Promise<URI[]> {
       return this.discoveryUris;
+   }
+
+   protected override projectsAffectedBy(changed: readonly URI[], deleted: readonly URI[]): readonly string[] {
+      this.affectedByAsks++;
+      if (this.affectedByError) {
+         throw this.affectedByError;
+      }
+      return [...changed, ...deleted].flatMap(uri => this.typedBy.get(uri.toString()) ?? []);
    }
 }
 
@@ -717,6 +741,166 @@ describe('AbstractProjectManager incremental updates', () => {
       // A's own member + B's member (transitive)
       expect(affected).toContain(URI_MEMBER_A1.toString());
       expect(affected).toContain(URI_MEMBER_B1.toString());
+   });
+});
+
+describe('AbstractProjectManager.projectsAffectedBy', () => {
+   async function setup(): Promise<{ stubs: Stubs; mgr: TestProjectManager }> {
+      const stubs = makeStubs([URI_DESCRIPTOR_A, URI_DESCRIPTOR_B, URI_MEMBER_A1, URI_MEMBER_B1, URI_TYPE]);
+      const mgr = new TestProjectManager(stubs);
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1' });
+      mgr.descriptors.set(URI_DESCRIPTOR_B.toString(), { id: 'B@1', dependencies: ['A@1'] });
+      mgr.discoveryUris = [URI_DESCRIPTOR_A, URI_DESCRIPTOR_B];
+      await mgr.discoverProjects([]);
+      mgr.events.length = 0;
+      mgr.typedBy.set(URI_TYPE.toString(), ['A@1']);
+      return { stubs, mgr };
+   }
+
+   it('resets the members of a named project and its dependents, and announces it updated only once a build completes', async () => {
+      const { stubs, mgr } = await setup();
+
+      await stubs.triggerBuildUpdate([URI_TYPE], []);
+
+      // A descriptor is a member of its project, and only the changed document triggered the update.
+      expect(mgr.events).toEqual([
+         { added: [], updated: [], removed: [], affectedDocuments: [URI_DESCRIPTOR_A, URI_DESCRIPTOR_B, URI_MEMBER_A1, URI_MEMBER_B1] }
+      ]);
+      stubs.endBuild(false);
+      expect(mgr.events, 'a build that did not complete announced it').toHaveLength(1);
+      stubs.endBuild();
+      stubs.endBuild();
+      expect(mgr.events.slice(1)).toEqual([{ added: [], updated: ['A@1'], removed: [], affectedDocuments: [] }]);
+   });
+
+   it('announces a project named for a deleted document only once a build completes', async () => {
+      const { stubs, mgr } = await setup();
+
+      await stubs.triggerBuildUpdate([], [URI_TYPE]);
+      expect(mgr.events.flatMap(event => event.updated)).toEqual([]);
+      stubs.endBuild();
+
+      expect(mgr.events.map(event => event.updated)).toEqual([[], ['A@1']]);
+   });
+
+   it('announces a project two documents or two updates name once', async () => {
+      const { stubs, mgr } = await setup();
+      mgr.typedBy.set(URI_MEMBER_B1.toString(), ['A@1']);
+
+      await stubs.triggerBuildUpdate([], [URI_TYPE, URI_MEMBER_B1]);
+      await stubs.triggerBuildUpdate([URI_MEMBER_B1], []);
+      stubs.endBuild();
+
+      expect(mgr.events.flatMap(event => event.updated)).toEqual(['A@1']);
+   });
+
+   it('announces a named project after the registry event of a later update that removes and adds it again', async () => {
+      const { stubs, mgr } = await setup();
+
+      await stubs.triggerBuildUpdate([URI_TYPE], []);
+      await stubs.triggerBuildUpdate([], [URI_DESCRIPTOR_A]);
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], [URI_TYPE]);
+      stubs.endBuild();
+
+      expect(mgr.events.map(event => [event.added, event.removed.map(entry => entry.id), event.updated])).toEqual([
+         [[], [], []],
+         [[], ['A@1'], []],
+         [['A@1'], [], []],
+         [[], [], ['A@1']]
+      ]);
+   });
+
+   it('does not announce a named project a later update removes or renames before a build completes', async () => {
+      const { stubs, mgr } = await setup();
+
+      await stubs.triggerBuildUpdate([URI_TYPE], []);
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@2' });
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []);
+      await stubs.triggerBuildUpdate([], [URI_DESCRIPTOR_B]);
+      mgr.typedBy.set(URI_TYPE.toString(), ['B@1']);
+      await stubs.triggerBuildUpdate([URI_TYPE], []);
+      await stubs.triggerBuildUpdate([], [URI_DESCRIPTOR_A]);
+      stubs.endBuild();
+
+      expect(mgr.events.flatMap(event => event.updated)).toEqual([]);
+   });
+
+   it('does not ask on an explicit build, which reports the documents it builds as changed', async () => {
+      const { stubs, mgr } = await setup();
+      stubs.insideBuildUpdate = true;
+
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A, URI_DESCRIPTOR_B, URI_MEMBER_A1, URI_MEMBER_B1, URI_TYPE], []);
+      stubs.endBuild();
+
+      expect(mgr.events).toEqual([{ added: [], updated: ['A@1', 'B@1'], removed: [], affectedDocuments: [] }]);
+   });
+
+   it('announces a project an earlier update named once an explicit build completes', async () => {
+      const { stubs, mgr } = await setup();
+
+      await stubs.triggerBuildUpdate([URI_TYPE], []);
+      stubs.insideBuildUpdate = true;
+      await stubs.triggerBuildUpdate([URI_TYPE, URI_MEMBER_A1], []);
+      stubs.endBuild();
+
+      expect(mgr.events.map(event => event.updated)).toEqual([[], ['A@1']]);
+   });
+
+   it('names a project whose descriptor appears in the same update', async () => {
+      const { stubs, mgr } = await setup();
+      const descriptorC = URI.parse('file:///workspace/projC/project.a');
+      stubs.knownDocuments.push(descriptorC);
+      mgr.descriptors.set(descriptorC.toString(), { id: 'C@1' });
+      mgr.typedBy.set(URI_TYPE.toString(), ['C@1']);
+
+      await stubs.triggerBuildUpdate([descriptorC, URI_TYPE], []);
+      stubs.endBuild();
+
+      expect(mgr.events.map(event => [event.added, event.updated])).toEqual([
+         [['C@1'], []],
+         [[], ['C@1']]
+      ]);
+   });
+
+   it('still announces the descriptor change of an update whose ask throws, and names no project', async () => {
+      const { stubs, mgr } = await setup();
+      mgr.affectedByError = new Error('broken hook');
+
+      mgr.descriptors.set(URI_DESCRIPTOR_B.toString(), { id: 'B@1', dependencies: ['A@1'], version: '2' });
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_B, URI_TYPE], []);
+      stubs.endBuild();
+
+      expect(mgr.events.map(event => event.updated)).toEqual([['B@1']]);
+   });
+
+   it('does not ask on an update that changes and deletes nothing', async () => {
+      const { stubs, mgr } = await setup();
+
+      await stubs.triggerBuildUpdate([], []);
+      await stubs.triggerBuildUpdate([URI_TYPE], []);
+
+      expect(mgr.affectedByAsks).toBe(1);
+   });
+
+   it('ignores an id no project is registered under', async () => {
+      const { stubs, mgr } = await setup();
+      mgr.typedBy.set(URI_TYPE.toString(), ['Z@1']);
+
+      await stubs.triggerBuildUpdate([URI_TYPE], []);
+      stubs.endBuild();
+
+      expect(mgr.events).toEqual([]);
+   });
+
+   it('announces a changed descriptor at once, and a project it names again once a build completes', async () => {
+      const { stubs, mgr } = await setup();
+
+      mgr.descriptors.set(URI_DESCRIPTOR_B.toString(), { id: 'B@1', dependencies: ['A@1'], version: '2' });
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_B, URI_TYPE], []);
+      expect(mgr.events.map(event => event.updated)).toEqual([['B@1']]);
+      stubs.endBuild();
+
+      expect(mgr.events.map(event => event.updated)).toEqual([['B@1'], ['A@1']]);
    });
 });
 
@@ -1361,6 +1545,25 @@ describe('AbstractProjectManager with deferMemberRelink', () => {
       ]);
       expect(stubs.updates).toBe(1);
       expect(log).toEqual(['started Element1.a,Element2.a', 'finished completed=true']);
+   });
+
+   it('relinks the members of a project a non-descriptor document names in the follow-up build', async () => {
+      const { stubs, mgr, log } = await setup();
+      mgr.typedBy.set(URI_TYPE.toString(), ['A@1']);
+
+      await mgr.lock.write(async () => {
+         await stubs.triggerBuildUpdate([URI_TYPE], []);
+         expect(stubs.updates, 'the members were built inside the build of the change').toBe(0);
+      });
+      expect(mgr.events, 'the build of the change carried a member').toEqual([]);
+      await mgr.memberRelinkSettled();
+
+      expect(mgr.events).toEqual([
+         { added: [], updated: [], removed: [], affectedDocuments: [URI_DESCRIPTOR_A, URI_MEMBER_A1, URI_MEMBER_A2] }
+      ]);
+      expect(log).toEqual(['started project.a,Element1.a,Element2.a', 'finished completed=true']);
+      stubs.endBuild();
+      expect(mgr.events.at(-1)).toEqual({ added: [], updated: ['A@1'], removed: [], affectedDocuments: [] });
    });
 
    it('refuses a wait inside a request for a relink, which waits for the request, once the grace period has passed', async () => {

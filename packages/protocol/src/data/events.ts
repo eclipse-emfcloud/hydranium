@@ -213,8 +213,9 @@ export type TransferDocumentsBuiltListener = (event: TransferDocumentsBuiltEvent
  * registered (descriptor discovered); `updated` — the project's
  * descriptor content changed and its registry entry was refreshed
  * (same id, possibly different version / dependencies / adopter-specific
- * fields); `removed` — the project's descriptor disappeared and the
- * registry entry was dropped.
+ * fields), or another document that changes the project changed and a
+ * build has completed; `removed` — the project's descriptor disappeared
+ * and the registry entry was dropped.
  */
 export type ProjectChangeReason = 'added' | 'updated' | 'removed';
 

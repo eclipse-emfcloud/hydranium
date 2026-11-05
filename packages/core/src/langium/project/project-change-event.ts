@@ -15,7 +15,9 @@ import type { URI } from '@hydranium/langium';
  * registry diffs after a workspace update. Reports both the registry-level
  * diff (which projects appeared / changed / disappeared) and the document-
  * level fallout (which documents need to rebuild because their reachable
- * scope changed).
+ * scope changed). A project a document other than its descriptor changed
+ * is reported as {@link updated} in an event of its own, once a build
+ * completes.
  *
  * - {@link added} / {@link updated} carry **project ids**, not {@link Project}
  *   objects. The full {@link Project} can be retrieved via
@@ -28,7 +30,7 @@ import type { URI } from '@hydranium/langium';
  * - {@link affectedDocuments} lists URIs whose reachable scope changed. The
  *   default cascade plumbing in `HydraniumWorkspaceManager` subscribes to
  *   this event and re-runs `DocumentBuilder.resetToState` for each entry,
- *   which the build of the update that changed the descriptor picks up.
+ *   which the build of the update that changed the project picks up.
  *   Empty when the project manager relinks them in a follow-up build of its
  *   own instead (`ProjectManagerOptions.deferMemberRelink`). That build
  *   emits an event of its own, with no project in it, carrying the members
@@ -43,6 +45,8 @@ export interface ProjectChangeEvent<TProject extends Project = Project> {
     * Ids of projects re-parsed from a changed descriptor that kept the same
     * id. A descriptor that now names a *different* id is reported as a
     * removal of the old id plus an addition of the new one, never here.
+    * Projects that `AbstractProjectManager.projectsAffectedBy` names are
+    * reported in an event of their own, once a build completes.
     */
    readonly updated: readonly string[];
 
@@ -61,8 +65,8 @@ export interface ProjectChangeEvent<TProject extends Project = Project> {
     * `AbstractProjectManager.getAffectedProjects`). In the event a deferred
     * relink emits, the members it resets.
     *
-    * Descriptor URIs themselves are intentionally excluded: they triggered
-    * this cycle and re-adding them would loop.
+    * The descriptors that triggered this cycle are excluded, since re-adding
+    * them would loop. Any other descriptor of an affected project is a member.
     */
    readonly affectedDocuments: readonly URI[];
 }
