@@ -241,6 +241,9 @@ function makeStubs(knownDocuments: URI[] = []): Stubs {
  * from a controlled map; discovery skips the FS walk via override.
  */
 class TestProjectManager extends AbstractProjectManager {
+   get projectRegistry(): Map<string, Project> {
+      return this.projects;
+   }
    readonly events: ProjectChangeEvent[] = [];
    descriptors = new Map<string, FakeDescriptor>();
    discoveryUris: URI[] = [];
@@ -797,6 +800,31 @@ describe('AbstractProjectManager.isUnqualifiedProjectReference', () => {
 });
 
 describe('AbstractProjectManager.isSingleProject', () => {
+   it('does not enumerate the registry for repeated project count checks', () => {
+      const mgr = new TestProjectManager(makeStubs());
+      const enumerate = vi.spyOn(mgr.projectRegistry, 'values');
+      for (let i = 0; i < 256; i++) {
+         expect(mgr.isSingleProject()).toBe(true);
+      }
+      expect(enumerate).not.toHaveBeenCalled();
+   });
+   it('counts registered projects independently of a getProjects override', () => {
+      class CustomProjectManager extends TestProjectManager {
+         listedProjects: readonly Project[] = [];
+         override getProjects(): readonly Project[] {
+            return this.listedProjects;
+         }
+      }
+      const mgr = new CustomProjectManager(makeStubs());
+      const first = { id: 'first', referenceName: 'first' };
+      const second = { id: 'second', referenceName: 'second' };
+      mgr.listedProjects = [first, second];
+      expect(mgr.isSingleProject()).toBe(true);
+      mgr.projectRegistry.set(first.id, first);
+      mgr.projectRegistry.set(second.id, second);
+      mgr.listedProjects = [];
+      expect(mgr.isSingleProject()).toBe(false);
+   });
    it('true with zero projects', () => {
       const stubs = makeStubs();
       const mgr = new TestProjectManager(stubs);
@@ -822,6 +850,31 @@ describe('AbstractProjectManager.isSingleProject', () => {
       await mgr.discoverProjects([]);
       // length 2 → false. Kills `> 1` (true), `true` literal, and `< 1` mutants.
       expect(mgr.isSingleProject()).toBe(false);
+   });
+});
+
+describe('AbstractProjectManager affected project scaling', () => {
+   it.each([64, 128, 256])('reads dependencies linearly for a reverse ordered chain of %i projects', size => {
+      let reads = 0;
+      class ChainManager extends TestProjectManager {
+         constructor() {
+            super(makeStubs());
+            for (let i = 0; i < size; i++) {
+               const dependencies = i + 1 < size ? [`p${i + 1}`] : [];
+               this.projects.set(`p${i}`, {
+                  id: `p${i}`,
+                  referenceName: `p${i}`,
+                  get dependencies() {
+                     reads++;
+                     return dependencies;
+                  }
+               });
+            }
+         }
+      }
+      const mgr = new ChainManager();
+      expect(new Set(mgr.affectedProjects([`p${size - 1}`]))).toEqual(new Set(Array.from({ length: size }, (_, i) => `p${i}`)));
+      expect(reads).toBeLessThanOrEqual(size * 2);
    });
 });
 

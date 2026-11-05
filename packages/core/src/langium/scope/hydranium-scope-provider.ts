@@ -75,8 +75,8 @@ export interface HydraniumScopeProviderOptions extends LogNameOptions {
 /**
  * Per-query context shared across the three sub-scope factory hooks of
  * {@link HydraniumScopeProvider}. Built once per scope build by
- * {@link DefaultHydraniumScopeProvider.makeScopeContext}, which walks the global
- * scope exactly once and partitions it into per-tier buckets via
+ * {@link DefaultHydraniumScopeProvider.makeScopeContext}, which selects visible
+ * descriptions from a shared project index and partitions them via
  * {@link DefaultHydraniumScopeProvider.bucketFor}. The sub-scope hooks wrap their
  * bucket (or re-read {@link descriptions} to widen) without re-walking
  * the index.
@@ -94,6 +94,14 @@ export interface ScopeContext {
    readonly dependencyEntries: readonly AstNodeDescription[];
    /** Descriptions routed to the universal tier. */
    readonly universalEntries: readonly AstNodeDescription[];
+}
+
+/** Global-order positions grouped by visibility, shared across project queries until the index changes. */
+export interface ProjectScopeIndex {
+   readonly descriptions: readonly AstNodeDescription[];
+   readonly own: ReadonlyMap<string, readonly number[]>;
+   readonly dependencies: ReadonlyMap<string, readonly number[]>;
+   readonly universal: readonly number[];
 }
 
 /**
@@ -165,7 +173,7 @@ export interface HydraniumScopeProvider extends ScopeProvider {
  *   layering lives in framework-owned `getGlobalScope` outside
  *   `createGlobalScope`, an adopter's bypass cannot hide the extension
  *   layers.
- * - Tier-walk hooks ({@link makeScopeContext}, {@link bucketFor},
+ * - Tier-walk hooks ({@link makeScopeContext}, {@link indexProjectDescriptions}, {@link bucketFor},
  *   {@link createOwnProjectScope}, {@link createDependencyScope},
  *   {@link createUniversalScope}, {@link chainScopes},
  *   {@link getProjectIdForDescription}) — override an individual tier
@@ -195,8 +203,8 @@ export class DefaultHydraniumScopeProvider extends DefaultScopeProvider implemen
    protected readonly options: HydraniumScopeProviderOptions;
    /**
     * Cache keyed by `${sourceProjectId}::${referenceType}`. Result is
-    * the chained `project → public → universal` scope built from one
-    * single-pass partition over the global index. Evicted by
+    * the chained `project → public → universal` scope built from the visible
+    * projects' descriptions. Evicted by
     * Langium's `DocumentBuilder.onUpdate` (the `WorkspaceCache` default)
     * so any index change rebuilds.
     *
@@ -206,6 +214,7 @@ export class DefaultHydraniumScopeProvider extends DefaultScopeProvider implemen
     * the workspace-global `DocumentBuilder.onUpdate`.
     */
    protected readonly scopeCache: WorkspaceCache<string, Scope>;
+   protected readonly projectScopeIndex: WorkspaceCache<Scope, ProjectScopeIndex>;
    /**
     * Each container's local scope per reference type, keyed by the local
     * symbols it was built from. A build replaces a document's local symbols
@@ -243,12 +252,12 @@ export class DefaultHydraniumScopeProvider extends DefaultScopeProvider implemen
       this.scopeExtensionService = services.references.ScopeExtensionService;
       this.options = options;
       this.scopeCache = new WorkspaceCache(services.shared);
+      this.projectScopeIndex = new WorkspaceCache(services.shared);
       this.tracer = services.shared.Tracer.for(options.logName ?? 'ScopeProvider').trace('instantiated');
    }
 
    /**
-    * Drop every cached scope — the framework's project-tier chain and the
-    * inherited global scope it is filtered from.
+    * Drop cached global scopes, project indexes and filtered scope chains.
     *
     * **Called from outside the class**, by the build pipeline once the batch is
     * re-indexed. The caches' own eviction does not cover this:
@@ -257,13 +266,14 @@ export class DefaultHydraniumScopeProvider extends DefaultScopeProvider implemen
     * scope built in that gap denies those symbols exist and every document the
     * same build links afterwards resolves against it.
     *
-    * Both go together because the second is derived from the first: clearing
-    * only {@link scopeCache} refills it from a stale `globalScopeCache`, and
-    * clearing only `globalScopeCache` leaves the filtered copy standing.
+    * The project indexes and filtered chains derive from the inherited global
+    * scope. All three caches go together so no derived copy survives or refills
+    * from a stale global scope.
     */
    clearScopeCaches(): void {
       this.scopeCache.clear();
       this.globalScopeCache.clear();
+      this.projectScopeIndex.clear();
    }
 
    /**
@@ -498,9 +508,9 @@ export class DefaultHydraniumScopeProvider extends DefaultScopeProvider implemen
 
    /**
     * Build the chained project scope from three tier sub-scopes. The
-    * single scope walk happens once in {@link makeScopeContext}; the
-    * sub-scope hooks classify the materialised array via {@link bucketFor}
-    * (cheap in-memory filtering, no extra scope/index walk). Chained
+    * default classifier shares a project index across contexts. Custom
+    * classifiers walk the global scope in {@link makeScopeContext}. The
+    * sub-scope hooks consume the classified arrays. Chained
     * inner-first so a more specific tier shadows a less specific one of
     * the same name: own-project → dependency-projects → universal.
     */
@@ -513,18 +523,33 @@ export class DefaultHydraniumScopeProvider extends DefaultScopeProvider implemen
    }
 
    /**
-    * Build the per-query {@link ScopeContext}. Walks `globalScope` exactly
-    * once (the one scope walk per cache miss) and partitions it into
-    * per-tier buckets via a single pass over {@link bucketFor}, so the
-    * untagged URI-lookup fallback runs at most once per description.
+    * Build the per-query buckets from the visible projects' indexed positions.
+    * A custom {@link bucketFor} sees every description, since its policy may
+    * expose symbols the default project partition would exclude.
     */
    protected makeScopeContext(sourceProjectId: string, globalScope: Scope): ScopeContext {
       const visibleProjectIds = new Set(this.services.shared.workspace.ProjectManager.getVisibleProjects(sourceProjectId));
-      const descriptions = globalScope.getAllElements().toArray();
+      const indexed =
+         this.bucketFor === DefaultHydraniumScopeProvider.prototype.bucketFor
+            ? this.projectScopeIndex.get(globalScope, () => this.indexProjectDescriptions(globalScope))
+            : undefined;
+      const descriptions = indexed?.descriptions ?? globalScope.getAllElements().toArray();
+      let candidates: Iterable<AstNodeDescription> = descriptions;
+      if (indexed) {
+         const positions = [...(indexed.own.get(sourceProjectId) ?? []), ...indexed.universal];
+         for (const projectId of visibleProjectIds) {
+            if (projectId !== sourceProjectId) {
+               for (const position of indexed.dependencies.get(projectId) ?? []) positions.push(position);
+            }
+         }
+         // Preserve global order, including duplicate names from different dependency projects.
+         positions.sort((a, b) => a - b);
+         candidates = positions.map(position => descriptions[position]);
+      }
       const ownProjectEntries: AstNodeDescription[] = [];
       const dependencyEntries: AstNodeDescription[] = [];
       const universalEntries: AstNodeDescription[] = [];
-      for (const description of descriptions) {
+      for (const description of candidates) {
          switch (this.bucketFor(description, sourceProjectId, visibleProjectIds)) {
             case 'project':
                ownProjectEntries.push(description);
@@ -540,6 +565,42 @@ export class DefaultHydraniumScopeProvider extends DefaultScopeProvider implemen
          }
       }
       return { sourceProjectId, visibleProjectIds, descriptions, ownProjectEntries, dependencyEntries, universalEntries };
+   }
+
+   /** Partition one global scope without losing the complete list sub-scope overrides can read. */
+   protected indexProjectDescriptions(globalScope: Scope): ProjectScopeIndex {
+      const descriptions = globalScope.getAllElements().toArray();
+      const own = new Map<string, number[]>();
+      const dependencies = new Map<string, number[]>();
+      const universal: number[] = [];
+      const append = (map: Map<string, number[]>, id: string, position: number): void => {
+         const entries = map.get(id);
+         if (entries) entries.push(position);
+         else map.set(id, [position]);
+      };
+      for (const [position, description] of descriptions.entries()) {
+         if (isTieredDescription(description)) {
+            if (description.tier === 'local') continue;
+            if (description.tier === 'universal') {
+               universal.push(position);
+               continue;
+            }
+            if (description.tier === 'project' || description.tier === 'public') {
+               if (description.projectId !== undefined) {
+                  append(own, description.projectId, position);
+                  if (description.tier === 'public') append(dependencies, description.projectId, position);
+               }
+               continue;
+            }
+         }
+         const projectId = this.getProjectIdForDescription(description);
+         if (projectId === undefined) universal.push(position);
+         else {
+            append(own, projectId, position);
+            append(dependencies, projectId, position);
+         }
+      }
+      return { descriptions, own, dependencies, universal };
    }
 
    /**
@@ -584,6 +645,8 @@ export class DefaultHydraniumScopeProvider extends DefaultScopeProvider implemen
    /**
     * Classify a description into one of three sub-scope buckets, or
     * `'hidden'` when it should not appear in the project-scope chain.
+    * An override bypasses the shared project index and classifies every global
+    * description on each cold scope query, including overrides calling `super`.
     *
     * Typed path (description carries `tier`):
     * - `'local'` → hidden (defensive — locals belong to per-document map)

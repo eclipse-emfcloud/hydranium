@@ -75,6 +75,7 @@
   "scripts": {
     "audit:mutation": "stryker run",
     "audit:mutation:quick": "stryker run --mutate src/langium/model-service/model-service.ts",
+    "bench:scaling": "vitest bench --run scaling.bench.ts",
     "build": "tsc -b tsconfig.browser.json",
     "clean": "rimraf lib tsconfig.tsbuildinfo tsconfig.browser.tsbuildinfo",
     "lint": "oxlint --format stylish --config ../../oxlint.config.cjs src test --max-warnings 0",

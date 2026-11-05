@@ -27,6 +27,16 @@ builder. Deterministic integrity unit tests assert the reference-read growth
 across repair batches. Record the edit series separately from the build
 and heap baseline, with their command and corpus shape.
 
+Project and scope service scaling use a separate operation-count benchmark:
+
+```bash
+npm run bench:scaling -w @hydranium/core
+```
+
+It measures warm scope lookups, cold project scopes and affected-project
+traversal at increasing input sizes. Record this series separately from the
+build and heap baseline.
+
 For the memory dimension over the full-size corpus, generate it first:
 
 ```bash

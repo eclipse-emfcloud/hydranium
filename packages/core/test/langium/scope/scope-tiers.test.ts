@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Project } from '@hydranium/protocol';
-import { type AstNode, type AstNodeDescription, MapScope, MultiMapScope, type Scope, URI } from '@hydranium/langium';
+import { type AstNode, type AstNodeDescription, MapScope, MultiMapScope, type Scope, type Stream, URI } from '@hydranium/langium';
 import { type HydraniumLanguageServices } from '../../../src/langium/language-module.js';
 import {
    DefaultHydraniumScopeProvider,
@@ -92,6 +92,84 @@ function names(scope: Scope): string[] {
 // ============================================================
 
 const REF_TYPE = 'FakeRoot';
+
+describe('DefaultHydraniumScopeProvider project scope scaling', () => {
+   it('preserves a custom classification that exposes symbols outside the default visibility closure', () => {
+      const bundle = makeTestServices({
+         seedProjects: [
+            { id: 'A', referenceName: 'A' },
+            { id: 'B', referenceName: 'B' }
+         ]
+      });
+      bundle.projectManager.ownUri('file:///a.x', 'A');
+      class CustomProvider extends DefaultHydraniumScopeProvider {
+         protected override bucketFor(): 'universal' {
+            return 'universal';
+         }
+         protected override getProjectIdForDescription(): string {
+            throw new Error('custom classification needs no ownership');
+         }
+      }
+      const provider = new CustomProvider(makeLanguageServices(bundle.services));
+      const global = makeGlobalScope([makeFakeDescription('plain'), tieredDescription('local', { name: 'local' })]);
+      expect(names(provider.getProjectScope(URI.parse('file:///a.x'), global, REF_TYPE))).toEqual(['local', 'plain']);
+   });
+
+   it('keeps dependency descriptions in global order even when the dependency list is reversed', () => {
+      const bundle = makeTestServices({
+         seedProjects: [
+            { id: 'A', referenceName: 'A', dependencies: ['C', 'B'] },
+            { id: 'B', referenceName: 'B' },
+            { id: 'C', referenceName: 'C' }
+         ]
+      });
+      bundle.projectManager.ownUri('file:///a.x', 'A');
+      const first = tieredDescription('public', { name: 'same', projectId: 'B' });
+      const second = tieredDescription('public', { name: 'same', projectId: 'C' });
+      const global = new MultiMapScope([first, second, first]);
+      const provider = makeTestScopeProvider(bundle.services);
+      const scope = provider.getProjectScope(URI.parse('file:///a.x'), global, REF_TYPE);
+      expect(scope.getElement('same')).toBe(first);
+      expect(scope.getElements('same').toArray()).toEqual([first, second, first]);
+   });
+
+   it.each([64, 128, 256])('partitions the global descriptions once for %i unrelated projects', size => {
+      const projects = Array.from({ length: size }, (_, i) => ({ id: `p${i}`, referenceName: `p${i}` }));
+      const bundle = makeTestServices({ seedProjects: projects });
+      let reads = 0;
+      const descriptions = projects.map(project => {
+         const uri = `file:///${project.id}/model.x`;
+         bundle.projectManager.ownUri(uri, project.id);
+         const description = tieredDescription('project', { name: project.id, projectId: project.id, uri });
+         Object.defineProperty(description, 'tier', {
+            get: () => {
+               reads++;
+               return 'project';
+            }
+         });
+         return description;
+      });
+      let visits = 0;
+      class CountedScope extends MapScope {
+         override getAllElements(): Stream<AstNodeDescription> {
+            return super.getAllElements().map(description => {
+               visits++;
+               return description;
+            });
+         }
+      }
+      const global = new CountedScope(descriptions);
+      const provider = makeTestScopeProvider(bundle.services);
+      for (const project of projects) {
+         expect(names(provider.getProjectScope(URI.parse(`file:///${project.id}/model.x`), global, REF_TYPE))).toEqual([project.id]);
+      }
+      expect(visits).toBeLessThanOrEqual(size);
+      expect(reads).toBeLessThanOrEqual(size * 8);
+      provider.clearScopeCaches();
+      global.elements.set('new', tieredDescription('project', { name: 'new', projectId: 'p0' }));
+      expect(names(provider.getProjectScope(URI.parse('file:///p0/model.x'), global, REF_TYPE))).toEqual(['new', 'p0']);
+   });
+});
 
 /*
  * Both early-exit guards return the input scope WITHOUT running the tier
