@@ -213,6 +213,27 @@ describe('order-flow data head', () => {
       expect(clean.model?.diagnostics).toEqual([]);
    });
 
+   it('answers an open with watch and diagnostics on a freshly initialized workspace validated, and watches from it', async () => {
+      const head = await driveDataHead();
+      const { proxy, events } = head.harness;
+      const leaked = head.uri(WORKSPACE_FILES.auditLeak);
+      const clean = head.uri(WORKSPACE_FILES.ordersDomain);
+      const opened = await proxy.openModelDocument({ uri: leaked, clientId: CLIENT_ID, watch: true, includeDiagnostics: true });
+      const cleanOpened = await proxy.openModelDocument({ uri: clean, clientId: CLIENT_ID, watch: true, includeDiagnostics: true });
+      const before = events.length;
+      await proxy.updateModelDocument({
+         uri: clean,
+         clientId: CLIENT_ID,
+         model: `${head.diskText(WORKSPACE_FILES.ordersDomain)}\n`,
+         baseVersion: 'any'
+      });
+
+      expect(opened.model?.diagnostics).toHaveLength(1);
+      // Validated and clean, so an array, not absent.
+      expect(cleanOpened.model?.diagnostics).toEqual([]);
+      expect(events.slice(before).some(event => event.document.uri === clean)).toBe(true);
+   });
+
    it.each([false, true])(
       'answers a read of a URI with no document with an envelope that has no model (includeDiagnostics %s)',
       async includeDiagnostics => {

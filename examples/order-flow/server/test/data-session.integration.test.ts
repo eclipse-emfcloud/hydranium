@@ -137,6 +137,14 @@ class RestoreProbeServer extends DataServer<DomainModel> {
       await this.afterWatch?.();
       return answer;
    }
+
+   protected override async watchedSnapshot(
+      ...params: Parameters<DataServer<DomainModel>['watchedSnapshot']>
+   ): Promise<TransferDocument<DomainModel>> {
+      const answer = await super.watchedSnapshot(...params);
+      await this.afterWatch?.();
+      return answer;
+   }
 }
 
 type ProbeHarness = DataServerHarness<RestoreProbeServer, DomainModel>;
@@ -157,15 +165,17 @@ class SnapshotFailingServer extends DataServer<DomainModel> {
 class WriteBeforeAnswerServer extends DataServer<DomainModel> {
    writeBeforeAnswer?: { uri: string; clientId: string; model: string };
 
-   protected override async openedSnapshot(uri: string, rollback?: () => Promise<void>): Promise<TransferDocument<DomainModel>> {
+   protected override async openedSnapshot(
+      ...[args, ended]: Parameters<DataServer<DomainModel>['openedSnapshot']>
+   ): Promise<TransferDocument<DomainModel>> {
       const write = this.writeBeforeAnswer;
-      if (write?.uri === uri) {
+      if (write?.uri === args.uri) {
          // Cleared first: the other session's open answers through here too.
          this.writeBeforeAnswer = undefined;
-         await this.openModelDocument({ uri, clientId: write.clientId });
-         await this.updateModelDocument({ uri, clientId: write.clientId, model: write.model, baseVersion: 'any' });
+         await this.openModelDocument({ uri: args.uri, clientId: write.clientId });
+         await this.updateModelDocument({ uri: args.uri, clientId: write.clientId, model: write.model, baseVersion: 'any' });
       }
-      return super.openedSnapshot(uri, rollback);
+      return super.openedSnapshot(args, ended);
    }
 }
 

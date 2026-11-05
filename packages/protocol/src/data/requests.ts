@@ -7,6 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
+import type { OpenModelArgs } from '../model-server';
 import type { BaseVersionGate } from '../model-service/base-version';
 
 /** Get the current state of a single document. The server returns the latest built version. */
@@ -15,7 +16,8 @@ export interface GetModelDocumentArgs {
    uri: string;
    /**
     * When `true`, the response is settled at the validation phase so its
-    * `diagnostics` are populated. When `false`/absent, the response returns at
+    * `diagnostics` are populated, or at the last phase builds reach on a
+    * server that does not validate. When `false`/absent, the response returns at
     * the (faster) integrity-settled phase and `diagnostics` may be absent —
     * they are computed asynchronously and delivered via the subscription
     * channel (and, for an LSP head, `publishDiagnostics`).
@@ -27,6 +29,17 @@ export interface GetModelDocumentArgs {
     * whether the read forces/awaits validation.
     */
    includeDiagnostics?: boolean;
+}
+
+/** Open a document for the session `clientId`. */
+export interface OpenModelDocumentArgs
+   extends Pick<OpenModelArgs, 'uri' | 'clientId' | 'options'>, Pick<GetModelDocumentArgs, 'includeDiagnostics'> {
+   /**
+    * Watch the document as `watchModelDocument` does, in the same request. The
+    * watch is in place from the state the answer carries, so no event falls
+    * between the two. Unset, the open does not watch.
+    */
+   watch?: boolean;
 }
 
 /**
@@ -139,6 +152,10 @@ export interface CreateModelDocumentArgs {
    clientId: string;
    /** The document's initial content; it reaches disk with the first save. */
    text: string;
+   /** As for an open, see {@link OpenModelDocumentArgs.watch}. */
+   watch?: boolean;
+   /** As for an open, see {@link GetModelDocumentArgs.includeDiagnostics}. */
+   includeDiagnostics?: boolean;
 }
 
 /**

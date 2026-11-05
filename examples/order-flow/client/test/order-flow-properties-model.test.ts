@@ -1088,7 +1088,7 @@ describe('order-flow properties model', () => {
          });
          const written = documents.setField('name', 'BeforeSwitch');
          documents.show(uriOf(RETURNS_PROCESS));
-         // Loaded, not only read: it draws once the open's second read answers.
+         // Loaded, not only shown: it draws once the copy's open has answered.
          await waitFor(() => loads.at(-1) === false);
          drawn.length = 0;
          dirty.length = 0;

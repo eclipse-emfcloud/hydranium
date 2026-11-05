@@ -69,9 +69,13 @@ export function makeStubAstDocumentManager<TAst extends AstNode, TDiagnostic ext
    };
    const close = async (args: CloseModelArgs): Promise<void> => {
       const clients = openClients.get(args.uri);
-      clients?.delete(args.clientId);
+      const held = clients?.delete(args.clientId) ?? false;
       if (clients && clients.size === 0) {
          openClients.delete(args.uri);
+      }
+      // As the real manager closes through the store, which fires `onDidClose`.
+      if (held) {
+         textDocuments.fireClose(args.uri, args.clientId);
       }
    };
    return {

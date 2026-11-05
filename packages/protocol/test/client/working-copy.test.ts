@@ -16,6 +16,7 @@
 import { compare } from 'fast-json-patch';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MessageConnection } from 'vscode-jsonrpc';
+import { ErrorCodes, ResponseError } from 'vscode-jsonrpc';
 import { DataConnection } from '../../src/client/data-connection';
 import { DataEvents } from '../../src/client/data-events';
 import { DataSession, type DataSessionHost } from '../../src/client/data-session';
@@ -79,10 +80,20 @@ class ProbeServer {
    failAt?: number;
    /** The diagnostics a validated read carries. */
    problems: TransferDiagnostic[] = [];
+   /** The document is validated, so a read carries its diagnostics also unasked, as the server's does. */
+   validated = true;
    /** Reads answer that the document does not exist. */
    missing = false;
    /** Added to the text version for the model's, as a server that numbers the two apart. */
    modelOffset = 0;
+   /** Run in the task after a watched open answered, as a change landing once the server answered. */
+   afterWatchedOpen?: () => Promise<void>;
+   /** Run once a watched open has read its answer and before it answers, as a change landing then, whose events reach the client first. */
+   beforeWatchedAnswer?: () => Promise<void>;
+   /** Answers a watched open as a plain one, without `sequence`, as a server that ignores `watch`. */
+   ignoresWatch = false;
+   /** Run when a watch request arrives, before it is placed. */
+   beforeWatch?: () => void;
    protected sequence = 0;
    /** Each numbered write that landed, at the version its text took. */
    protected readonly writes: { readonly clientId: string; readonly write: number; readonly version: number }[] = [];
@@ -122,13 +133,37 @@ class ProbeServer {
       this.sessionsClosed++;
    }
 
-   async openModelDocument(args: { clientId: string }): Promise<unknown> {
+   /** With `watch`, the open reads as {@link getModelDocument} does, in the same request, and is undone when that fails. */
+   async openModelDocument(args: { clientId: string; watch?: boolean; includeDiagnostics?: boolean }): Promise<unknown> {
       await this.openGate;
+      const sequence = this.sequence;
+      const wasOpen = this.opens.has(args.clientId);
       this.opens.add(args.clientId);
-      return this.document();
+      if (!args.watch || this.ignoresWatch) {
+         return this.document();
+      }
+      try {
+         // With the position of the last event sent when the request began, as a server that watches answers.
+         const answer = { ...((await this.getModelDocument(args)) as object), sequence };
+         const before = this.beforeWatchedAnswer;
+         this.beforeWatchedAnswer = undefined;
+         await before?.();
+         const after = this.afterWatchedOpen;
+         this.afterWatchedOpen = undefined;
+         if (after) {
+            setImmediate(() => void after());
+         }
+         return answer;
+      } catch (error: unknown) {
+         if (!wasOpen) {
+            this.opens.delete(args.clientId);
+         }
+         throw error;
+      }
    }
 
    async watchModelDocument(): Promise<unknown> {
+      this.beforeWatch?.();
       return { uri: URI_A, epoch: this.epoch, exists: true, sequence: this.sequence, text: this.document().text };
    }
 
@@ -137,9 +172,10 @@ class ProbeServer {
       // Each gate holds the requests received after a test set it.
       const readGate = this.readGate;
       await this.buildGate;
-      const answer = this.missing ? { uri: URI_A, epoch: this.epoch } : this.document(args.includeDiagnostics ?? false);
+      const answer = this.missing ? { uri: URI_A, epoch: this.epoch } : this.document((args.includeDiagnostics ?? false) || this.validated);
       await readGate;
-      return answer;
+      // As the server's, the text is read when the answer is sent.
+      return 'text' in answer ? { ...answer, text: this.document().text } : answer;
    }
 
    async closeModelDocument(args: { clientId: string }): Promise<void> {
@@ -416,8 +452,13 @@ class ClosingSession extends DataSession<ProbeElement> {
    }
 }
 
+/** A session whose restore waits for the diagnostics. */
+class DiagnosticsRestoreSession extends DataSession<ProbeElement> {
+   protected override readonly restoreWithDiagnostics = true;
+}
+
 /** `settleBeforeCloseMs`, when given, bounds the session's wait before a close. */
-function makeCopyHarness(settleBeforeCloseMs?: number): CopyHarness {
+function makeCopyHarness(settleBeforeCloseMs?: number, restoreWithDiagnostics = false): CopyHarness {
    let pair = makeDuplexConnectionPair();
    const pairs = [pair];
    let server = new ProbeServer(pair.left);
@@ -436,9 +477,11 @@ function makeCopyHarness(settleBeforeCloseMs?: number): CopyHarness {
    const connection = new DataConnection<ProbeElement>(
       port,
       events,
-      settleBeforeCloseMs === undefined
-         ? {}
-         : { sessionFactory: (clientId, host, label) => new ClosingSession(clientId, host, label, settleBeforeCloseMs) }
+      settleBeforeCloseMs !== undefined
+         ? { sessionFactory: (clientId, host, label) => new ClosingSession(clientId, host, label, settleBeforeCloseMs) }
+         : restoreWithDiagnostics
+           ? { sessionFactory: (clientId, host, label) => new DiagnosticsRestoreSession(clientId, host, label) }
+           : {}
    );
    let disposed = false;
    /** Drop the connection and serve the next one from what `make` builds on it. */
@@ -499,6 +542,16 @@ function makeCopyHarness(settleBeforeCloseMs?: number): CopyHarness {
  */
 function typeWhileDown(copy: WorkingCopy<ProbeElement>): Promise<WorkingCopyEditOutcome> {
    return copy.edit(root => ({ ...root, name: 'typed' }));
+}
+
+/** Resolves once the session has restored a document. */
+function nextRestore(session: DataSession<ProbeElement>): Promise<void> {
+   const restored = new Deferred<void>();
+   const listening = session.onDidRestoreDocument(() => {
+      listening.dispose();
+      restored.resolve();
+   });
+   return restored.promise;
 }
 
 /**
@@ -596,6 +649,93 @@ describe('WorkingCopy under a fault at each await of a write', () => {
    });
 });
 
+/** Where a fault strikes the open of a copy: at each await of it that another request can pass. */
+const OPEN_FAULT_POINTS = [
+   'while the open reads',
+   'while the read after a change heard during the open reads',
+   'while the read of a server that ignores watch reads'
+] as const;
+
+/** What strikes the open, resolving to the server serving once it struck. */
+const OPEN_FAULTS = {
+   nothing: async (_harness: CopyHarness, server: ProbeServer): Promise<ProbeServer> => server,
+   ...FAULTS,
+   // Closed rather than disposed, as a dispose leaves the document open for the edits still unanswered.
+   'the copy closes': async (_harness: CopyHarness, server: ProbeServer, copy: WorkingCopy<ProbeElement>): Promise<ProbeServer> => {
+      void copy.close();
+      return server;
+   },
+   'the file is deleted': async (_harness: CopyHarness, server: ProbeServer): Promise<ProbeServer> => {
+      await server.deleteFile();
+      return server;
+   },
+   'the session ends': async (harness: CopyHarness, server: ProbeServer): Promise<ProbeServer> => {
+      harness.session.dispose();
+      return server;
+   }
+} as const;
+
+describe('WorkingCopy under a fault at each await of its open', () => {
+   afterEach(() => {
+      copies.splice(0).forEach(copy => copy.dispose());
+      harnesses.splice(0).forEach(harness => harness.dispose());
+   });
+
+   const cases = OPEN_FAULT_POINTS.flatMap(point =>
+      Object.keys(OPEN_FAULTS)
+         .filter(fault => fault !== 'the next write is refused')
+         .map(fault => [point, fault as keyof typeof OPEN_FAULTS] as const)
+   );
+
+   it.each(cases)('follows the server once open, and leaves nothing open otherwise, %s and %s', async (point, fault) => {
+      const rejections = await captureUnhandledRejections(async caught => {
+         const harness = makeCopyHarness();
+         const server = harness.server;
+         const held = new Deferred<void>();
+         if (point === 'while the open reads') {
+            server.readGate = held.promise;
+         } else if (point === 'while the read of a server that ignores watch reads') {
+            server.ignoresWatch = true;
+            server.readGate = held.promise;
+         } else {
+            server.beforeWatchedAnswer = async () => {
+               await server.foreignWrite({ note: 'heard' });
+               server.readGate = held.promise;
+            };
+         }
+         const copy = new HeldCopy(harness.session, harness.events, URI_A);
+         const opened = copy.open().then(
+            () => true,
+            () => false
+         );
+         await waitFor(() => server.reads === (point === 'while the read after a change heard during the open reads' ? 2 : 1));
+
+         const serving = await OPEN_FAULTS[fault](harness, server, copy);
+         held.resolve();
+         const open = await opened;
+         await tick();
+
+         if (fault === 'the session ends') {
+            expect({ open, snapshot: copy.snapshot, sessionsClosed: serving.sessionsClosed }).toEqual({
+               open: false,
+               snapshot: undefined,
+               sessionsClosed: 1
+            });
+         } else if (open && fault !== 'the copy closes') {
+            await waitFor(() => compare(copy.root ?? {}, serving.root).length === 0 && serving.opens.size === 1, {
+               message: 'the copy does not follow the document the server holds open'
+            });
+         } else {
+            await waitFor(() => serving.opens.size === 0, { message: 'the server holds an open no copy follows' });
+            expect(copy.snapshot).toBeUndefined();
+         }
+         return caught;
+      });
+
+      expect(rejections).toEqual([]);
+   });
+});
+
 describe('WorkingCopy', () => {
    afterEach(() => {
       copies.splice(0).forEach(copy => copy.dispose());
@@ -632,20 +772,80 @@ describe('WorkingCopy', () => {
       expect(copy.snapshot).toBeUndefined();
    });
 
-   it('saves the text the server holds dirty while the second read of its open is out', async () => {
+   it('takes a change whose events arrive before its open answers', async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.beforeWatchedAnswer = () => server.foreignWrite({ note: 'theirs' });
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+
+      await waitFor(() => copy.root?.note === 'theirs', { message: 'the copy kept the state its open answered' });
+      expect({ version: copy.snapshot?.model?.version, dirty: copy.dirty }).toEqual({ version: server.modelVersion, dirty: true });
+   });
+
+   it('fails an open whose read after a change heard before its answer failed, and opens it again', async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.beforeWatchedAnswer = async () => {
+         await server.foreignWrite({ note: 'theirs' });
+         const failed = Promise.reject(new Error('read failed'));
+         failed.catch(() => undefined);
+         server.readGate = failed;
+      };
+      const copy = new HeldCopy(session, events, URI_A);
+
+      await expect(copy.open()).rejects.toThrow('read failed');
+      expect(copy.snapshot).toBeUndefined();
+      await waitFor(() => server.opens.size === 0);
+
+      server.readGate = undefined;
+      await copy.open();
+      expect(copy.root?.note).toBe('theirs');
+   });
+
+   it.each([
+      ['its server restarts', { note: 'external' }],
+      ['its connection drops and the text is unchanged', undefined]
+   ] as const)(
+      'resolves the open its restore took over when %s during the read after a change heard before its answer',
+      async (_how, root) => {
+         const harness = makeCopyHarness();
+         harness.server.beforeWatchedAnswer = async () => {
+            await harness.server.foreignWrite({ note: 'theirs' });
+            harness.server.readGate = new Deferred<void>().promise;
+         };
+         const copy = new HeldCopy(harness.session, harness.events, URI_A);
+         const opened = copy.open();
+         await waitFor(() => harness.server.reads === 2);
+         const restarted = harness.restart(root);
+
+         await opened;
+         await waitFor(() => copy.snapshot?.model?.root.note === (root?.note ?? 'theirs'), {
+            message: 'the copy never took the restored document'
+         });
+         // The restore's read, whose validated answer the copy takes without its own.
+         await waitFor(() => restarted.reads >= 1);
+         await tick(20);
+         expect(restarted.opens.size).toBe(1);
+      }
+   );
+
+   it('takes a save whose event arrives before its open answers', async () => {
       const { server, session, events } = makeCopyHarness();
       await server.foreignWrite({ note: 'theirs' });
-      const read = new Deferred<void>();
-      server.readGate = read.promise;
+      server.beforeWatchedAnswer = () => server.foreignSave();
       const copy = new HeldCopy(session, events, URI_A);
-      const opening = copy.open();
-      await waitFor(() => server.reads === 1);
+      await copy.open();
+
+      await waitFor(() => !copy.dirty, { message: 'the copy kept the dirty flag its open answered' });
+   });
+
+   it('saves the text the server holds dirty when it opens', async () => {
+      const { server, session, events } = makeCopyHarness();
+      await server.foreignWrite({ note: 'theirs' });
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
 
       const dirty = copy.dirty;
-      const saved = copy.save();
-      read.resolve();
-      await opening;
-      await saved;
+      await copy.save();
 
       expect({ dirty, saved: server.saved }).toEqual({ dirty: true, saved: server.version });
    });
@@ -667,23 +867,6 @@ describe('WorkingCopy', () => {
       expect(copy.snapshot).toBeUndefined();
    });
 
-   it('closes once the bound passes while the second read of its open is not answered, and follows nothing after', async () => {
-      const { server, session, events } = makeCopyHarness(10);
-      const read = new Deferred<void>();
-      server.readGate = read.promise;
-      const copy = new HeldCopy(session, events, URI_A);
-      const opening = copy.open();
-      await waitFor(() => server.reads === 1);
-      const closing = copy.close();
-      await waitFor(() => copy.clock.pendingTimers() > 0);
-      copy.clock.advance(1_000);
-      await closing;
-
-      read.resolve();
-      await expect(opening).rejects.toThrow();
-      expect({ opens: server.opens.size, snapshot: copy.snapshot }).toEqual({ opens: 0, snapshot: undefined });
-   });
-
    it('shows a write of the copy before it that lands after its open', async () => {
       const { server, session, events } = makeCopyHarness(10);
       const first = new HeldCopy(session, events, URI_A);
@@ -701,33 +884,6 @@ describe('WorkingCopy', () => {
 
       landed.resolve();
       await waitFor(() => server.root.note === 'late');
-
-      await waitFor(() => second.root?.note === 'late', { message: 'the second copy never showed the late write' });
-   });
-
-   it("shows a write of the copy before it that lands during its open's second read", async () => {
-      const { server, session, events } = makeCopyHarness(10);
-      const first = new HeldCopy(session, events, URI_A);
-      await first.open();
-      const landed = new Deferred<void>();
-      server.updateGate = landed.promise;
-      void first.edit(root => ({ ...root, note: 'late' })).catch(() => undefined);
-      await waitFor(() => server.updates === 1);
-      const closed = first.close();
-      await waitFor(() => first.clock.pendingTimers() > 0);
-      first.clock.advance(1_000);
-      await closed;
-      const read = new Deferred<void>();
-      server.readGate = read.promise;
-      const second = new HeldCopy(session, events, URI_A);
-      const opened = second.open();
-      await waitFor(() => server.reads === 2);
-
-      // Its read was built before the write landed, so only the echo holds it.
-      landed.resolve();
-      await waitFor(() => server.root.note === 'late');
-      read.resolve();
-      await opened;
 
       await waitFor(() => second.root?.note === 'late', { message: 'the second copy never showed the late write' });
    });
@@ -1582,24 +1738,6 @@ describe('WorkingCopy', () => {
       expect(copy.root?.note).toBe('theirs');
    });
 
-   it("keeps another client's update that arrived before its open's second read answered", async () => {
-      const { server, session, events } = makeCopyHarness();
-      const copy = new HeldCopy(session, events, URI_A);
-      const read = new Deferred<void>();
-      server.readGate = read.promise;
-      const opened = copy.open();
-      await waitFor(() => server.reads === 1);
-      const heard = nextUpdate(events);
-      await server.foreignWrite({ note: 'theirs' });
-      await heard;
-
-      read.resolve();
-      await opened;
-
-      expect(copy.version).toBe(2);
-      expect(copy.root?.note).toBe('theirs');
-   });
-
    it.each([
       ['a same-field conflict', HeldCopy, { name: 'theirs' }, 'conflict'],
       ['running out of writes', OneWriteCopy, { note: 'theirs' }, 'ran-out'],
@@ -1637,65 +1775,6 @@ describe('WorkingCopy', () => {
       await written;
 
       expect(copy.snapshot).toBeUndefined();
-   });
-
-   it('fails its open and stays without a document when its second read answers after its file was deleted', async () => {
-      const { server, session, events } = makeCopyHarness();
-      const copy = new HeldCopy(session, events, URI_A);
-      const read = new Deferred<void>();
-      server.readGate = read.promise;
-      const opened = copy.open();
-      await waitFor(() => server.reads === 1);
-      await server.deleteFile();
-      await waitFor(() => copy.snapshot === undefined);
-
-      read.resolve();
-
-      await expect(opened).rejects.toBeInstanceOf(DocumentNotOpenError);
-      expect(copy.snapshot).toBeUndefined();
-   });
-
-   it('keeps the document opened again when the open before it fails its second read after the file was deleted', async () => {
-      const { server, session, events } = makeCopyHarness();
-      const copy = new HeldCopy(session, events, URI_A);
-      const read = new Deferred<void>();
-      server.readGate = read.promise;
-      const first = copy.open();
-      await waitFor(() => server.reads === 1);
-      await server.deleteFile();
-      await waitFor(() => copy.snapshot === undefined);
-      server.readGate = undefined;
-      await copy.open();
-
-      read.reject(new Error('read failed'));
-      await expect(first).rejects.toThrow('read failed');
-      await copy.open();
-
-      expect(server.reads).toBe(2);
-      expect(server.opens.has(session.clientId)).toBe(true);
-      await server.foreignWrite({ note: 'theirs' });
-      await waitFor(() => copy.root?.note === 'theirs');
-   });
-
-   it('keeps the document opened again when the open before it finds the file gone after the deletion', async () => {
-      const { server, session, events } = makeCopyHarness();
-      const copy = new HeldCopy(session, events, URI_A);
-      const read = new Deferred<void>();
-      server.readGate = read.promise;
-      server.missing = true;
-      const first = copy.open();
-      await waitFor(() => server.reads === 1);
-      await server.deleteFile();
-      await waitFor(() => copy.snapshot === undefined);
-      server.readGate = undefined;
-      server.missing = false;
-      await copy.open();
-
-      read.resolve();
-      await expect(first).rejects.toBeInstanceOf(DocumentNotOpenError);
-
-      expect(copy.snapshot).toBeDefined();
-      expect(server.opens.has(session.clientId)).toBe(true);
    });
 
    it('conflicts on an edit of the document opened again when a write from before the deletion fails', async () => {
@@ -1851,7 +1930,7 @@ describe('WorkingCopy', () => {
       expect(copy.root).toEqual(server.root);
    });
 
-   it("drops the document when its open's second read failed, and opens it again", async () => {
+   it('fails an open whose read failed, and opens it again', async () => {
       const { server, session, events } = makeCopyHarness();
       const copy = new HeldCopy(session, events, URI_A);
       const failed = Promise.reject(new Error('read failed'));
@@ -2176,28 +2255,6 @@ describe('WorkingCopy', () => {
       expect(await first).toEqual({ status: 'applied' });
       await second;
       expect(server.root).toEqual({ $type: 'TypeOne', name: 'mine', note: 'initial!' });
-   });
-
-   it("shows an edit that is not idempotent once when its open's second read answers with it while its write is out", async () => {
-      const { server, session, events } = makeCopyHarness();
-      const copy = new HeldCopy(session, events, URI_A);
-      const read = new Deferred<void>();
-      server.buildGate = read.promise;
-      const opened = copy.open();
-      await waitFor(() => server.reads === 1);
-      const answered = new Deferred<void>();
-      server.answerGate = answered.promise;
-      const first = copy.edit(root => ({ ...root, note: `${root.note}!` }));
-      await waitFor(() => server.version === 2);
-
-      read.resolve();
-      await opened;
-      expect(copy.root?.note).toBe('initial!');
-      const second = copy.edit(root => ({ ...root, name: 'second' }));
-      answered.resolve();
-
-      expect([await first, await second]).toEqual([{ status: 'applied' }, { status: 'applied' }]);
-      expect(server.root).toEqual({ $type: 'TypeOne', name: 'second', note: 'initial!' });
    });
 
    it('shows an edit that is not idempotent once when a save answers with it while its write is out', async () => {
@@ -2646,7 +2703,7 @@ describe('WorkingCopy', () => {
       await tick(0);
    });
 
-   it('fails an open whose second read finds the file gone, and opens it again', async () => {
+   it('fails an open that finds the file gone, and opens it again', async () => {
       const { server, session, events } = makeCopyHarness();
       const copy = new HeldCopy(session, events, URI_A);
       server.missing = true;
@@ -2758,22 +2815,6 @@ describe('WorkingCopy', () => {
       expect(restarted.root).toMatchObject({ name: 'ours', note: 'external' });
    });
 
-   it('is clean once its open failed after the server marked the document unsaved', async () => {
-      const { server, session, events } = makeCopyHarness();
-      const copy = new HeldCopy(session, events, URI_A);
-      const read = new Deferred<void>();
-      server.readGate = read.promise;
-      const opened = copy.open();
-      await waitFor(() => server.reads === 1);
-      await server.foreignWrite({ note: 'theirs' });
-      await waitFor(() => copy.dirty);
-
-      read.reject(new Error('read failed'));
-      await expect(opened).rejects.toThrow('read failed');
-
-      expect(copy.dirty).toBe(false);
-   });
-
    it('is clean once its server restarted clean while a write was out that then failed', async () => {
       const harness = makeCopyHarness();
       const copy = new HeldCopy(harness.session, harness.events, URI_A);
@@ -2783,11 +2824,12 @@ describe('WorkingCopy', () => {
          await written;
       }
 
+      const restored = nextRestore(harness.session);
       const restarted = harness.restart();
       restarted.failNext = new Error('refused');
       const written = copy.edit(root => ({ ...root, note: 'refused' }));
       await expect(written).rejects.toThrow('refused');
-      await waitFor(() => restarted.reads > 1);
+      await restored;
 
       expect(copy.dirty).toBe(false);
    });
@@ -2798,8 +2840,9 @@ describe('WorkingCopy', () => {
       await copy.open();
       const written = copy.edit(root => ({ ...root, name: 'ours' }));
 
+      const restored = nextRestore(harness.session);
       const restarted = harness.restart({ note: 'external' });
-      await waitFor(() => restarted.reads > 1);
+      await restored;
       await written;
 
       expect(restarted.root).toMatchObject({ name: 'ours', note: 'external' });
@@ -2862,13 +2905,14 @@ describe('WorkingCopy', () => {
       await copy.open();
       expect(copy.dirty).toBe(true);
 
+      const restored = nextRestore(harness.session);
       const restarted = harness.restart({ note: 'external' });
       restarted.saved = 0;
       const saved = copy.save();
 
       await expect(saved).rejects.toThrow(ConflictError);
       expect(restarted.saved).toBe(0);
-      await waitFor(() => restarted.reads > 1);
+      await restored;
    });
 
    it('keeps a change made while its server was down under a split batch whose read after the conflict answers before the restart', async () => {
@@ -2966,35 +3010,142 @@ describe('WorkingCopy', () => {
       expect(restarted.root).toMatchObject({ name: 'typed', note: 'external' });
    });
 
-   it('resolves the open its restore took over when its server restarts during the second read', async () => {
+   it('opens in one read with the diagnostics', async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.problems = [PROBLEM];
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+
+      expect({ reads: server.reads, diagnostics: copy.diagnostics }).toEqual({ reads: 1, diagnostics: [PROBLEM] });
+   });
+
+   it('takes a change and a save another client made right after its open answered', async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.afterWatchedOpen = async () => {
+         await server.foreignWrite({ note: 'theirs' });
+         await server.foreignSave();
+      };
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+
+      await waitFor(() => copy.root?.note === 'theirs' && !copy.dirty, { message: 'the copy missed the change after its open' });
+      expect(server.reads).toBe(1);
+   });
+
+   it('reads again after its open on a server that ignores watch, taking a change made before the watch was placed', async () => {
+      const { server, session, events } = makeCopyHarness();
+      server.ignoresWatch = true;
+      // Not watched yet, so the client hears nothing of it.
+      server.beforeWatch = () => {
+         server.root = { ...server.root, note: 'unheard' };
+         server.version++;
+      };
+      const copy = new HeldCopy(session, events, URI_A);
+      await copy.open();
+
+      await waitFor(() => copy.root?.note === 'unheard', { message: 'the copy kept the answer from before the watch' });
+   });
+
+   it.each([
+      ['restores with diagnostics', true],
+      ['restores without them, as the restarted server validated it already', false]
+   ])('takes the diagnostics of the restored document without reading it again when its session %s', async (_how, withDiagnostics) => {
+      const harness = makeCopyHarness(undefined, withDiagnostics);
+      const copy = new HeldCopy(harness.session, harness.events, URI_A);
+      await copy.open();
+      const restored = nextRestore(harness.session);
+      const restarted = harness.restart({ note: 'external' });
+      restarted.problems = [PROBLEM];
+
+      await restored;
+      await tick(20);
+      expect({ note: copy.root?.note, diagnostics: copy.diagnostics, reads: restarted.reads }).toEqual({
+         note: 'external',
+         diagnostics: [PROBLEM],
+         reads: 1
+      });
+   });
+
+   it('keeps a change heard while the restore read the document over the older document the read answers', async () => {
+      const harness = makeCopyHarness(undefined, true);
+      const copy = new HeldCopy(harness.session, harness.events, URI_A);
+      await copy.open();
+      const restored = nextRestore(harness.session);
+      const restarted = harness.restart({ note: 'external' });
+      restarted.problems = [PROBLEM];
+      const reopening = new Deferred<void>();
+      restarted.readGate = reopening.promise;
+      await waitFor(() => restarted.reads === 1, { message: 'the restore never re-opened the document' });
+      // Changed while the re-open is out, so the restore reads it again, and
+      // that read answers only after a later change was sent.
+      await restarted.foreignWrite({ note: 'during' });
+      const reading = new Deferred<void>();
+      restarted.readGate = reading.promise;
+      reopening.resolve();
+      await waitFor(() => restarted.reads === 2, { message: 'the restore never read the document again' });
+      await restarted.foreignWrite({ note: 'newer' });
+      await waitFor(() => copy.root?.note === 'newer', { message: 'the copy never took the later change' });
+      reading.resolve();
+
+      await restored;
+      await waitFor(() => restarted.reads === 3, { message: 'the copy never read the document again' });
+      await tick(20);
+      expect(copy.root?.note).toBe('newer');
+   });
+
+   it('keeps its diagnostics until it read them again after a restore without them', async () => {
+      const harness = makeCopyHarness();
+      harness.server.problems = [PROBLEM];
+      const copy = new HeldCopy(harness.session, harness.events, URI_A);
+      await copy.open();
+      const restored = nextRestore(harness.session);
+      const restarted = harness.restart({ note: 'external' });
+      // Not validated yet, so the restore's read answers no diagnostics.
+      restarted.validated = false;
+
+      // Heard after the copy took the restored document.
+      await restored;
+      expect({ note: copy.root?.note, diagnostics: copy.diagnostics }).toEqual({ note: 'external', diagnostics: [PROBLEM] });
+      await waitFor(() => copy.diagnostics.length === 0, { message: 'the copy never took the diagnostics of its reread' });
+      expect(restarted.reads).toBe(2);
+   });
+
+   it('fails an open whose server restarts while it is out, and opens it again', async () => {
       const harness = makeCopyHarness();
       const copy = new HeldCopy(harness.session, harness.events, URI_A);
-      harness.server.readGate = new Deferred<void>().promise;
+      harness.server.openGate = new Deferred<void>().promise;
       const opened = copy.open();
-      await waitFor(() => harness.server.reads === 1);
+      await tick(20);
+      const restarted = harness.restart({ note: 'external' });
+
+      await expect(opened).rejects.toBeInstanceOf(ResponseError);
+      expect(copy.snapshot).toBeUndefined();
+      await copy.open();
+      expect({ note: copy.root?.note, opens: restarted.opens.size }).toEqual({ note: 'external', opens: 1 });
+   });
+
+   it('lets a session that re-sends an open its connection dropped open the copy on the restarted server', async () => {
+      const harness = makeCopyHarness();
+      const send = harness.session.openDocument.bind(harness.session);
+      harness.session.openDocument = async args => {
+         try {
+            return await send(args);
+         } catch (error: unknown) {
+            if (!(error instanceof ResponseError && error.code === ErrorCodes.PendingResponseRejected)) {
+               throw error;
+            }
+            await harness.session.connected();
+            return send(args);
+         }
+      };
+      const copy = new HeldCopy(harness.session, harness.events, URI_A);
+      harness.server.openGate = new Deferred<void>().promise;
+      const opened = copy.open();
+      await tick(20);
       const restarted = harness.restart({ note: 'external' });
 
       await opened;
-      await waitFor(() => copy.snapshot?.model?.root.note === 'external', { message: 'the copy never took the restored document' });
-      // The restore's read and the copy's own, so the test ends after both answered.
-      await waitFor(() => restarted.reads >= 2);
-      await tick(20);
-      expect(restarted.opens.size).toBe(1);
-   });
-
-   it('resolves the open its restore took over when its connection drops during the second read and the text is unchanged', async () => {
-      const harness = makeCopyHarness();
-      const copy = new HeldCopy(harness.session, harness.events, URI_A);
-      harness.server.readGate = new Deferred<void>().promise;
-      const opened = copy.open();
-      await waitFor(() => harness.server.reads === 1);
-      const restarted = harness.restart();
-
-      await opened;
-      expect(copy.snapshot).toBeDefined();
-      await waitFor(() => restarted.reads >= 2);
-      await tick(20);
-      expect(restarted.opens.size).toBe(1);
+      expect({ note: copy.root?.note, opens: restarted.opens.size }).toEqual({ note: 'external', opens: 1 });
    });
 
    it('reports a conflict for an edit that restates a value its write before lost to another client', async () => {
@@ -3127,54 +3278,6 @@ describe('WorkingCopy', () => {
       expect(await queued).toEqual({ status: 'conflict' });
       expect(server.root).toMatchObject({ name: 'x', note: 'theirs' });
       expect(copy.hasWritesInFlight).toBe(false);
-   });
-
-   it('refuses to save text it never showed after a restore whose reads failed', async () => {
-      const harness = makeCopyHarness();
-      const copy = new HeldCopy(harness.session, harness.events, URI_A);
-      await copy.open();
-      await harness.server.foreignWrite({ name: 'seen' });
-      await waitFor(() => copy.snapshot?.model?.version === 2 && copy.dirty);
-      const restarted = harness.restart({ note: 'unseen' });
-      // The restarted server holds unsaved text at the version the copy holds, by chance.
-      restarted.version = 2;
-      restarted.saved = 1;
-      const failed = Promise.reject(new Error('read failed'));
-      failed.catch(() => undefined);
-      restarted.buildGate = failed;
-      let restored = 0;
-      harness.session.onDidRestoreDocument(() => restored++);
-      void harness.session.connected().catch(() => undefined);
-      await waitFor(() => restored === 1 && restarted.reads >= 2);
-      await tick(20);
-      expect(copy.snapshot?.model?.root.note).toBe('initial');
-
-      await expect(copy.save()).rejects.toBeInstanceOf(ConflictError);
-      expect(restarted.saved).toBe(1);
-   });
-
-   it("shows the restarted server's update at a version below the snapshot's after a restore whose reads failed", async () => {
-      const harness = makeCopyHarness();
-      const copy = new HeldCopy(harness.session, harness.events, URI_A);
-      await copy.open();
-      await harness.server.foreignWrite({ name: 'seen' });
-      await harness.server.foreignWrite({ name: 'seen again' });
-      await waitFor(() => copy.snapshot?.model?.version === 3);
-      const restarted = harness.restart({ note: 'unseen' });
-      const failed = Promise.reject(new Error('read failed'));
-      failed.catch(() => undefined);
-      restarted.buildGate = failed;
-      let restored = 0;
-      harness.session.onDidRestoreDocument(() => restored++);
-      void harness.session.connected().catch(() => undefined);
-      await waitFor(() => restored === 1 && restarted.reads >= 2);
-      await tick(20);
-      restarted.buildGate = undefined;
-
-      await restarted.foreignWrite({ name: 'after' });
-
-      await waitFor(() => copy.root?.name === 'after');
-      expect(copy.snapshot?.model?.version).toBeLessThan(3);
    });
 
    it('applies an edit made on the restored document as the restore fires, with nothing changed meanwhile', async () => {
@@ -3399,29 +3502,40 @@ describe('WorkingCopy', () => {
       await copy.open();
       const written = copy.edit(root => ({ ...root, name: 'ours' }));
 
+      const restored = nextRestore(harness.session);
       const restarted = harness.restart({ name: 'theirs' });
-      await waitFor(() => restarted.reads > 1);
+      await restored;
 
       expect(await written).toEqual({ status: 'conflict' });
       expect(restarted.root.name).toBe('theirs');
       expect(copy.root?.name).toBe('theirs');
    });
 
-   it('keeps a change made while its server was down under an edit made after the restore failed to read', async () => {
-      const harness = makeCopyHarness();
+   it("keeps a save heard while the restore's last read was out", async () => {
+      const harness = makeCopyHarness(undefined, true);
       const copy = new HeldCopy(harness.session, harness.events, URI_A);
-      await copy.open();
-
-      const restarted = harness.restart({ note: 'external' });
-      const failing = Promise.reject(new Error('read failed'));
-      failing.catch(() => undefined);
-      restarted.buildGate = failing;
-      // The restore's read and the copy's reread after it.
-      await waitFor(() => restarted.reads > 1);
-      restarted.buildGate = undefined;
-      const written = copy.edit(root => ({ ...root, name: 'ours' }));
-      await written;
-
-      expect(restarted.root).toMatchObject({ name: 'ours', note: 'external' });
+      try {
+         await copy.open();
+         const restored = nextRestore(harness.session);
+         const restarted = harness.restart({ note: 'external' });
+         const reopening = new Deferred<void>();
+         restarted.readGate = reopening.promise;
+         await waitFor(() => restarted.reads === 1);
+         await restarted.foreignWrite({ note: 'during' });
+         await waitFor(() => copy.dirty);
+         const reading = new Deferred<void>();
+         restarted.readGate = reading.promise;
+         reopening.resolve();
+         await waitFor(() => restarted.reads === 2);
+         await restarted.foreignSave();
+         await waitFor(() => !copy.dirty);
+         reading.resolve();
+         await restored;
+         await tick(20);
+         expect(copy.dirty).toBe(false);
+      } finally {
+         copy.dispose();
+         harness.dispose();
+      }
    });
 });

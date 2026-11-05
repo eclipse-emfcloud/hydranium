@@ -56,7 +56,6 @@ import { ResponseError } from 'vscode-jsonrpc';
 import type {
    BaseVersionGate,
    CloseModelArgs,
-   OpenModelArgs,
    Project,
    ReferenceCandidate,
    ReferenceContext,
@@ -74,6 +73,7 @@ import type {
    CreateSessionArgs,
    GetModelDocumentArgs,
    GetProjectForUriArgs,
+   OpenModelDocumentArgs,
    TransferDeleteDocumentArgs,
    TransferDocumentDeletedEvent,
    TransferDocumentsBuiltEvent,
@@ -168,6 +168,14 @@ export interface CanaryDefects {
    readonly ignoreEdits?: boolean;
    /** `watchModelDocument` registers nothing, so no event is ever delivered. */
    readonly silentSubscriptions?: boolean;
+   /** `openModelDocument` with `watch` registers nothing. */
+   readonly openIgnoresWatch?: boolean;
+   /** `createModelDocument` with `watch` registers nothing. */
+   readonly createIgnoresWatch?: boolean;
+   /** An open or create with `includeDiagnostics` answers without diagnostics. */
+   readonly diagnosticsIgnored?: boolean;
+   /** An open or create with `watch` sends an event for the state it answered. */
+   readonly watchRepeatsAnswer?: boolean;
    /** `watchModelDocument` answers that a document exists whatever the URI holds. */
    readonly watchClaimsDocument?: boolean;
    /** `watchModelDocument` answers a position no event sent later passes. */
@@ -322,6 +330,8 @@ export class CanaryDataServer {
    /** What each save wrote, by URI: the file a last close goes back to. */
    private readonly disk = new Map<string, string>();
    private readonly watched = new Set<string>();
+   /** The session whose write or create made each document's current text. */
+   private readonly writers = new Map<string, string>();
    /** The position of the last event sent, which each event and watch answer carries. */
    private sequence = 0;
    /** Live session ids, and the URIs each has open. */
@@ -487,10 +497,14 @@ export class CanaryDataServer {
       }
       const version = (this.documents.get(args.uri)?.version ?? 0) + 1;
       this.documents.set(args.uri, { text: args.text, version });
+      this.writers.set(args.uri, args.clientId);
       if (!this.defects.createLeavesClosed) {
          opens.add(args.uri);
       }
-      const envelope = this.envelope(args.uri);
+      if (args.watch && !this.defects.createIgnoresWatch) {
+         this.watched.add(args.uri);
+      }
+      const envelope = this.answered(args.uri, args.watch, args.includeDiagnostics);
       if (this.defects.createdVersionOmitted) {
          // The defect is the missing field, which the declared type cannot hold.
          return envelope as TransferCreatedDocument<CanaryRoot, TransferDiagnostic>;
@@ -580,6 +594,7 @@ export class CanaryDataServer {
       const isEdit = existing !== undefined;
       if (!(isEdit && this.defects.ignoreEdits)) {
          this.documents.set(args.uri, { text, version: (existing?.version ?? 0) + 1 });
+         this.writers.set(args.uri, args.clientId);
       }
       if (args.write !== undefined) {
          const version = this.documents.get(args.uri)?.version ?? 0;
@@ -652,13 +667,38 @@ export class CanaryDataServer {
       this.watched.delete(args.uri);
    }
 
-   async openModelDocument(args: OpenModelArgs): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>> {
+   async openModelDocument(args: OpenModelDocumentArgs): Promise<TransferDocument<CanaryRoot, TransferDiagnostic>> {
       const opens = this.sessions.get(args.clientId);
       if (!opens) {
          this.assertPlainClientAllowed(args.clientId);
       }
       opens?.add(args.uri);
-      return this.envelope(args.uri);
+      if (args.watch && !this.defects.openIgnoresWatch) {
+         this.watched.add(args.uri);
+      }
+      return this.answered(args.uri, args.watch, args.includeDiagnostics);
+   }
+
+   /**
+    * The envelope an open or create of `uri` answers, without diagnostics where
+    * asked for them under {@link CanaryDefects.diagnosticsIgnored}, and sent
+    * again as an event under {@link CanaryDefects.watchRepeatsAnswer}.
+    */
+   private answered(
+      uri: string,
+      watch: boolean | undefined,
+      includeDiagnostics: boolean | undefined
+   ): TransferDocument<CanaryRoot, TransferDiagnostic> {
+      const envelope = this.envelope(uri);
+      if (watch && this.defects.watchRepeatsAnswer && envelope.model) {
+         const sourceClientId = this.writers.get(uri) ?? UNKNOWN_CLIENT_ID;
+         this.events.push({ document: envelope, sourceClientId, reason: 'changed', sequence: ++this.sequence });
+      }
+      if (!includeDiagnostics || !this.defects.diagnosticsIgnored || !envelope.model) {
+         return envelope;
+      }
+      const { diagnostics: _ignored, ...model } = envelope.model;
+      return { ...envelope, model };
    }
 
    async closeModelDocument(args: CloseModelArgs): Promise<void> {

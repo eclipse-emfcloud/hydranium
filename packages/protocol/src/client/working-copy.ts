@@ -10,7 +10,7 @@
 import { compare } from 'fast-json-patch';
 import { type Disposable, Emitter, type Event } from 'vscode-jsonrpc';
 import { type Clock, SystemClock, TIMED_OUT } from '../clock';
-import { ConflictError, DocumentNotOpenError, SaveFailedError, STALE_BASE_VERSION_UPDATE } from '../errors';
+import { ConflictError, DocumentNotOpenError, SaveFailedError, SessionClosedError, STALE_BASE_VERSION_UPDATE } from '../errors';
 import { type BaseVersion, isModelVersion, type ModelVersion, UNRECORDED_VERSION } from '../model-service/base-version';
 import { type ConflictResolver, type ReconcileOutcome, ReconcilingConflictResolver } from '../patch-merge';
 import { PendingWorkTracker } from '../pending-work-tracker';
@@ -51,7 +51,7 @@ export type WorkingCopyEditOutcome =
    | { readonly status: 'unavailable' };
 
 /**
- * One open of a {@link WorkingCopy}, from the answer to its first read until a
+ * One open of a {@link WorkingCopy}, from the answer to its open until a
  * close, a deletion or a failure ends it. A request records its answer only
  * while the open it was sent under is still the copy's, so nothing of an
  * ended open reaches the next.
@@ -285,6 +285,11 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    protected registeredEpoch?: string;
    /** Set once {@link close} stopped waiting for the open, which then ends when it answers. */
    protected openAbandoned = false;
+   /**
+    * While {@link load} waits for the open, the server URIs of the updates and
+    * dirty flips heard, which the open's answer may be older than.
+    */
+   protected heardWhileLoading?: Set<string>;
 
    constructor(
       protected readonly session: DataSession<TTransfer>,
@@ -299,7 +304,9 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          events.onDidDeleteDocument(event => this.handleDocumentDeleted(event)),
          events.onDidChangeDocumentDirty(event => {
             const open = this.current;
-            if (open && event.uri === open.snapshot.uri) {
+            if (!open) {
+               this.heardWhileLoading?.add(event.uri);
+            } else if (event.uri === open.snapshot.uri) {
                this.takeDirty(open, event.text ?? { dirty: false }, true);
             }
          }),
@@ -328,8 +335,9 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    /**
     * Diagnostics as of the last snapshot. A write answers once its document is
     * validated, so they hold for the copy's own edits without an update push.
-    * After a reconnect the ones from before stay until the copy's reread
-    * answers, or the next update when it fails.
+    * After a reconnect the restored document's, or when the session restores
+    * without them, the ones from before until the copy's reread answers, or
+    * the next update when that fails.
     */
    get diagnostics(): readonly TransferDiagnostic[] {
       return this.current?.snapshot.model?.diagnostics ?? [];
@@ -347,16 +355,18 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    }
 
    /**
-    * Open and watch the document, then read it again with diagnostics. The
-    * open settles before validation, so without the second read a document
-    * that was never edited reports no problems. Fires a change once both reads
-    * have answered and the open stands, and before that only for a document a
-    * restore hands over meanwhile. Repeated calls share the first one, and a
-    * failed open may be retried. Rejects once {@link close} was called, and
-    * with a `DocumentNotOpenError` when the file is gone by the second read. A
-    * failed second read rejects once the session is connected, so after a
-    * dropped connection it waits for the reconnect, and resolves when the
-    * restore took the document over.
+    * Open and watch the document, in one request that answers once it is
+    * validated, so a document that was never edited reports its problems.
+    * While others keep editing it, the answer may come before that, and the
+    * problems with a later change. A change that reached the client before
+    * the answer, or a server that ignores `watch`, costs a second read. Fires
+    * a change once the open answered. Repeated calls share the first one, and
+    * a failed open may be retried. Rejects once {@link close} was called,
+    * with the server's error, as when the second read fails, or a
+    * `DocumentNotOpenError` when the file is missing or deleted while the
+    * open is out, a `SessionClosedError` when the session ends meanwhile, and
+    * as the session's open does, also when the connection drops while it is
+    * out.
     */
    async open(): Promise<void> {
       this.assertLive();
@@ -532,11 +542,23 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       }
    }
 
-   /** Both reads of {@link open}. */
+   /** The request of {@link open}. */
    protected async load(): Promise<void> {
-      const document = await this.session.openDocument({ uri: this.uri });
+      const heard = new Set<string>();
+      this.heardWhileLoading = heard;
+      let document: TransferDocument<TTransfer>;
+      try {
+         document = await this.session.openDocument({ uri: this.uri, includeDiagnostics: true });
+      } finally {
+         this.heardWhileLoading = undefined;
+      }
       if (this.openAbandoned) {
          throw new Error('WorkingCopy is closed');
+      }
+      // The file is gone, and a deletion event need not follow, so the session's open is closed too.
+      if (!TransferDocument.isLoaded(document)) {
+         await this.session.closeDocument({ uri: this.uri }).catch(() => undefined);
+         throw new DocumentNotOpenError(this.uri, this.session.clientId);
       }
       const open: WorkingCopyOpen<TTransfer> = {
          snapshot: document,
@@ -544,18 +566,38 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          sending: [],
          writing: false,
          serverDirty: false,
-         snapshotRequests: 1,
+         snapshotRequests: 0,
          dirtyFromEvent: false
       };
       this.current = open;
-      // Taken now, so a save while the second read is out sees the text dirty.
       this.takeDirty(open, document.text);
+      // The server watches from the state it answered, but a change made
+      // before the answer went out reaches the client first. An answer without
+      // `sequence` was watched in a second request, missing what came between.
+      if (heard.has(document.uri) || document.sequence === undefined) {
+         await this.loadAgain(open);
+      }
+      // Its open answered as the session ended, which closed the document again.
+      if (this.session.isDisposed) {
+         this.unload().forEach(edit => edit.outcome.resolve({ status: 'unavailable' }));
+         throw new SessionClosedError(this.session.clientId);
+      }
+      this.changeEmitter.fire(undefined);
+   }
+
+   /**
+    * Read the document of `open` again within {@link load}. A failed read
+    * rejects the open, as the answer it has may be older than a change heard,
+    * unless a restore took the document over meanwhile.
+    */
+   protected async loadAgain(open: WorkingCopyOpen<TTransfer>): Promise<void> {
       // Whether a restore took the document over while the read was out.
       let restored = false;
       const listening = this.session.onDidRestoreDocument(event => {
          restored ||= event.uri === this.uri && event.reopened;
       });
       let answer: TransferDocument<TTransfer>;
+      open.snapshotRequests++;
       try {
          answer = await (await this.session.connected()).getModelDocument({ uri: this.uri, includeDiagnostics: true });
       } catch (error: unknown) {
@@ -570,8 +612,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          if (restored) {
             return;
          }
-         // Following nothing, the copy would take edits it cannot show. Undone,
-         // so the open can be tried again.
+         // Undone, so the open can be tried again.
          this.unload().forEach(edit => edit.outcome.resolve({ status: 'unavailable' }));
          await this.session.closeDocument({ uri: this.uri }).catch(() => undefined);
          throw error;
@@ -583,7 +624,6 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       if (open !== this.current) {
          throw new DocumentNotOpenError(this.uri, this.session.clientId);
       }
-      this.changeEmitter.fire(undefined);
    }
 
    /** Write the batches of `open` until none is left, one at a time, so each can be based on the answer to the last. */
@@ -948,23 +988,27 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       this.unhold(open);
       open.dirtyVersion = undefined;
       open.dirtyFromEvent = false;
-      // The restore reads without diagnostics, so the ones held stay until
-      // the reread answers.
+      // A session that restores without diagnostics leaves the ones held
+      // until the reread answers.
       const kept = open.snapshot.model?.diagnostics;
       const restored =
          event.document?.model && event.document.model.diagnostics === undefined && kept
             ? { ...event.document, model: { ...event.document.model, diagnostics: kept } }
             : event.document;
-      if (restored && TransferDocument.isLoaded(restored)) {
+      // Taken with its diagnostics, it is what a reread would answer. One
+      // older than a change heard meanwhile is not taken, and read again.
+      let complete = false;
+      if (restored && TransferDocument.isLoaded(restored) && !this.builtBefore(open, restored)) {
          this.takeDirty(open, restored.text);
          if (open.sending.length > 0 && !reportsWrites(restored)) {
             this.hold(open, restored);
          } else {
             this.adopt(open, restored);
+            complete = event.document?.model?.diagnostics !== undefined;
          }
       }
       // A listener of the adoption may have ended the open.
-      if (open === this.current) {
+      if (open === this.current && !complete) {
          void this.reread(open);
       }
    }
@@ -1005,7 +1049,11 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    /** Follow a server push for the document. */
    protected handleDocumentUpdated(event: { document: TransferDocument<TTransfer>; sourceClientId: string }): void {
       const open = this.current;
-      if (!open || event.document.uri !== open.snapshot.uri) {
+      if (!open) {
+         this.heardWhileLoading?.add(event.document.uri);
+         return;
+      }
+      if (event.document.uri !== open.snapshot.uri) {
          return;
       }
       // An echo of the copy's own write is taken too: it holds the write, so
@@ -1023,13 +1071,10 @@ export class WorkingCopy<TTransfer extends TransferElement> {
     * older than the snapshot is skipped.
     */
    protected offer(open: WorkingCopyOpen<TTransfer>, document: TransferDocument<TTransfer>, announce: boolean): void {
-      // Versions rise per server life, so an older one of the same epoch was
-      // built before the snapshot.
-      const offered = document.model?.version;
-      const current = open.snapshot.model?.version;
-      if (offered !== undefined && current !== undefined && offered < current && document.epoch === open.snapshot.epoch) {
+      if (this.builtBefore(open, document)) {
          return;
       }
+      const offered = document.model?.version;
       this.takeDirty(open, document.text);
       // Without `heldWrites`, it may hold a write out, which `root` would apply again.
       if (open.snapshotRequests > 0 && !reportsWrites(document)) {
@@ -1040,6 +1085,16 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          return;
       }
       this.adopt(open, document, announce);
+   }
+
+   /**
+    * Whether `document` was built before the snapshot of `open`. Versions rise
+    * per server life, so only an older one of the same epoch was.
+    */
+   protected builtBefore(open: WorkingCopyOpen<TTransfer>, document: TransferDocument<TTransfer>): boolean {
+      const offered = document.model?.version;
+      const current = open.snapshot.model?.version;
+      return offered !== undefined && current !== undefined && offered < current && document.epoch === open.snapshot.epoch;
    }
 
    /**
