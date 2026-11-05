@@ -181,6 +181,12 @@ export interface BuildEndedEvent {
  * ones its build-phase listeners get.
  */
 export interface RunningBuild {
+   /**
+    * `build` when an explicit {@link HydraniumDocumentBuilder.build} started
+    * it, such as workspace initialization, else `update`. A build-phase
+    * listener reads it through {@link HydraniumDocumentBuilder.buildForBatch}.
+    */
+   readonly kind: 'build' | 'update';
    readonly documents: LangiumDocument[];
    /** The {@link documents}, for lookups in a batch as large as the workspace. */
    readonly documentSet: Set<LangiumDocument>;
@@ -267,7 +273,7 @@ export interface HydraniumDocumentBuilder extends DocumentBuilder {
    /**
     * Whether an explicit build is synchronously invoking onUpdate listeners.
     * Read before the listener’s first await to distinguish that path from
-    * update.
+    * update. A build-phase listener reads {@link RunningBuild.kind} instead.
     */
    isInsideBuildUpdate(): boolean;
    /**
@@ -309,7 +315,8 @@ export interface HydraniumDocumentBuilder extends DocumentBuilder {
    scheduleUpdate(changed: URI[], deleted: URI[], reason?: string): Promise<void>;
    /**
     * Return the owning build while its phase batch is being delivered,
-    * including across listener awaits; otherwise undefined.
+    * including across listener awaits; otherwise undefined. Its
+    * {@link RunningBuild.kind} tells an explicit build from an update.
     */
    buildForBatch(documents: readonly LangiumDocument[]): RunningBuild | undefined;
    /**
@@ -415,6 +422,8 @@ export class DefaultHydraniumDocumentBuilder extends DefaultDocumentBuilder impl
    protected activeSession?: BuildSession;
    /** Set while an explicit {@link build} calls the `onUpdate` listeners, see {@link isInsideBuildUpdate}. */
    protected insideBuildUpdate = false;
+   /** The arrays an explicit {@link build} hands to {@link buildDocuments}, which marks their builds `build`. */
+   protected readonly explicitBuildBatches = new WeakSet<readonly LangiumDocument[]>();
    /** How many builds have started and not ended. */
    protected runningBuilds = 0;
    /** Resolved once {@link runningBuilds} drops back to zero. Set while it is above. */
@@ -536,8 +545,9 @@ export class DefaultHydraniumDocumentBuilder extends DefaultDocumentBuilder impl
     * the `onUpdate` listeners. Langium calls them from both. A listener reads
     * this before its first await, since it is set only while `build` runs
     * synchronously, which reaches the listeners. That makes it exact while
-    * builds overlap, where no record of the running builds could tell which
-    * one is calling.
+    * builds overlap. Langium calls these listeners before the calling build's
+    * {@link RunningBuild} exists, so its {@link RunningBuild.kind} cannot
+    * answer here. A build-phase listener reads that instead.
     */
    isInsideBuildUpdate(): boolean {
       return this.insideBuildUpdate;
@@ -1128,6 +1138,10 @@ export class DefaultHydraniumDocumentBuilder extends DefaultDocumentBuilder impl
     * A build that throws, whether cancelled or failed, tells none of them
     * here: `currentState` is then below `Validated`, so {@link isOrphaned}
     * could hold for no wait. {@link checkWaitsOnceDrained} tells them instead.
+    *
+    * The build's {@link RunningBuild.kind} is `build` only for the array an
+    * explicit {@link build} hands down. An override that copies or filters
+    * `documents` before calling `super` turns an explicit build into `update`.
     */
    protected override async buildDocuments(
       documents: LangiumDocument[],
@@ -1150,7 +1164,8 @@ export class DefaultHydraniumDocumentBuilder extends DefaultDocumentBuilder impl
       if (cancelToken.isCancellationRequested) {
          source?.cancel();
       }
-      const running: RunningBuild = { documents, documentSet: new Set(documents), options, cancelToken: token };
+      const kind = this.explicitBuildBatches.has(documents) ? 'build' : 'update';
+      const running: RunningBuild = { kind, documents, documentSet: new Set(documents), options, cancelToken: token };
       // One already linking under the same `None` can no longer be told from this one, so a build after both relinks for it.
       this.runningBuildDocuments.forEach(other => {
          if (other.cancelToken === token) {
@@ -1316,7 +1331,7 @@ export class DefaultHydraniumDocumentBuilder extends DefaultDocumentBuilder impl
       this.prepareBuild([document], options);
       // Re-read now when lowered, so its exports stay indexed until the build `rehydrateShedDocuments` requested.
       // Its build-phase listeners run too, as in a build, so its `Parsed` rules repair the new nodes.
-      await this.advanceToComputedScopes(document, true, CancellationToken.None);
+      await this.advanceToComputedScopes(document, CancellationToken.None, build);
       if (!this.shouldLink(document)) {
          // Validated lazily, as its own builds do, which run no `Linked` work on it.
          if (!build.documentSet.has(document)) {
@@ -1365,24 +1380,21 @@ export class DefaultHydraniumDocumentBuilder extends DefaultDocumentBuilder impl
     * Bring `document` up to `ComputedScopes` from where a reset left it:
     * re-read and index it when below `IndexedContent`, then compute its local
     * scopes when below `ComputedScopes`. Fires each phase's document-phase
-    * listeners, and its build-phase listeners with `notifyBuildPhase`.
+    * listeners and, given the `build` that carries `document`, its build-phase
+    * listeners, which can look that build up.
     */
-   protected async advanceToComputedScopes(
-      document: LangiumDocument,
-      notifyBuildPhase: boolean,
-      cancelToken: CancellationToken
-   ): Promise<void> {
+   protected async advanceToComputedScopes(document: LangiumDocument, cancelToken: CancellationToken, build?: RunningBuild): Promise<void> {
       if (document.state < DocumentState.IndexedContent) {
          await this.reparse(document, cancelToken);
          await this.notifyDocumentPhase(document, DocumentState.Parsed, cancelToken);
-         if (notifyBuildPhase) {
-            await this.notifyBuildPhase([document], DocumentState.Parsed, cancelToken);
+         if (build !== undefined) {
+            await this.notifyBuildPhase([document], DocumentState.Parsed, cancelToken, build);
          }
          await this.indexManager.updateContent(document, cancelToken);
          document.state = DocumentState.IndexedContent;
          await this.notifyDocumentPhase(document, DocumentState.IndexedContent, cancelToken);
-         if (notifyBuildPhase) {
-            await this.notifyBuildPhase([document], DocumentState.IndexedContent, cancelToken);
+         if (build !== undefined) {
+            await this.notifyBuildPhase([document], DocumentState.IndexedContent, cancelToken, build);
          }
       }
       if (document.state < DocumentState.ComputedScopes) {
@@ -1390,8 +1402,8 @@ export class DefaultHydraniumDocumentBuilder extends DefaultDocumentBuilder impl
          document.localSymbols = await services.references.ScopeComputation.collectLocalSymbols(document, cancelToken);
          document.state = DocumentState.ComputedScopes;
          await this.notifyDocumentPhase(document, DocumentState.ComputedScopes, cancelToken);
-         if (notifyBuildPhase) {
-            await this.notifyBuildPhase([document], DocumentState.ComputedScopes, cancelToken);
+         if (build !== undefined) {
+            await this.notifyBuildPhase([document], DocumentState.ComputedScopes, cancelToken, build);
          }
       }
    }
@@ -1590,14 +1602,16 @@ export class DefaultHydraniumDocumentBuilder extends DefaultDocumentBuilder impl
       cancelToken?: CancellationToken
    ): Promise<void> {
       const uris = documents.map(document => document.uri);
+      // A copy, so a document `relinkInRunningBuild` adds stays out of the caller's array.
+      const batch = [...documents];
+      this.explicitBuildBatches.add(batch);
       const outer = this.insideBuildUpdate;
       this.insideBuildUpdate = true;
       try {
          return this.runInSession(
             { kind: 'build', trigger: `${documents.length} docs`, triggerCountsDocs: true, changed: uris, deleted: [] },
             `Build documents (${documents.length} docs)`,
-            // A copy, so a document `relinkInRunningBuild` adds stays out of the caller's array.
-            () => super.build([...documents], options, cancelToken)
+            () => super.build(batch, options, cancelToken)
          );
       } finally {
          this.insideBuildUpdate = outer;
@@ -1681,7 +1695,7 @@ export class DefaultHydraniumDocumentBuilder extends DefaultDocumentBuilder impl
    async reparseAndRelink(document: LangiumDocument, cancelToken: CancellationToken = CancellationToken.None): Promise<void> {
       // From `Changed`, so phases 0–2 all run again. The factory sets `Parsed` itself.
       document.state = DocumentState.Changed;
-      await this.advanceToComputedScopes(document, false, cancelToken);
+      await this.advanceToComputedScopes(document, cancelToken);
       // Phase 3 — Linking.
       await this.serviceRegistry.getServices(document.uri).references.Linker.link(document, cancelToken);
       document.state = DocumentState.Linked;
