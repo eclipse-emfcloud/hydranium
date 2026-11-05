@@ -13,6 +13,20 @@ fixtures into temp dirs from the committed generator, at a fixed seed.
 npm run bench                    # → examples/order-flow/server, vitest bench
 ```
 
+This command selects `perf.bench.ts` and `scope-extension.bench.ts` explicitly.
+Edit and repair scaling use a separate command so they do not change this
+baseline's workloads:
+
+```bash
+npm run bench:edits -w @hydranium/example-order-flow-server
+```
+
+`bench:edits` generates 3- and 12-project workspaces and measures ordinary
+edits, single integrity repairs and repair batches through the real document
+builder. Deterministic integrity unit tests assert the reference-read growth
+across repair batches. Record the edit series separately from the build
+and heap baseline, with their command and corpus shape.
+
 For the memory dimension over the full-size corpus, generate it first:
 
 ```bash

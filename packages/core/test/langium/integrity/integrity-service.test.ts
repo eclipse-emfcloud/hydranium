@@ -416,12 +416,150 @@ function makeProbeService(): ProbeService {
 }
 
 class RelinkedByProbe extends DefaultIntegrityService<FakeNode> {
-   relinkedBy(document: LangiumDocument, changed: LangiumDocument): boolean {
-      return this.isRelinkedBy(document, changed);
+   relinkedBy(document: LangiumDocument, changed: LangiumDocument, run?: IntegrityRun): boolean {
+      if (run === undefined) {
+         // This two-argument super call guards source compatibility for existing subclasses.
+         return super.isRelinkedBy(document, changed);
+      }
+      return this.isRelinkedBy(document, changed, run);
+   }
+   relinkNow(document: LangiumDocument, dependent: LangiumDocument, run: IntegrityRun): Promise<void> {
+      return this.relinkEach(document, [dependent], run);
    }
 }
 
 describe('IntegrityService dependents of a changed document', () => {
+   it.each([
+      ['an unresolved single reference before the match', 'single', true],
+      ['an unresolved single reference after the match', 'single', false],
+      ['an unresolved multi-reference before the match', 'multi', true],
+      ['an unresolved multi-reference after the match', 'multi', false]
+   ] as const)('stops a run query with %s', (_name, kind, unresolvedFirst) => {
+      const changed = makeFakeDocument('file:///changed.fake', makeFakeAstNode({ $type: 'Foo' }));
+      const match = { $refText: 'match', $nodeDescription: { documentUri: changed.uri } };
+      const unresolved =
+         kind === 'single'
+            ? { $refText: 'pending' }
+            : {
+                 $refText: 'pending',
+                 _items: undefined,
+                 get items() {
+                    throw new Error('An unresolved multi-reference must not be resolved');
+                 }
+              };
+      const later = {
+         $refText: 'later',
+         get $nodeDescription() {
+            throw new Error('The answer is already known and cannot be cached');
+         }
+      };
+      const dependent = makeFakeDocument('file:///dependent.fake', makeFakeAstNode({ $type: 'Foo' }), {
+         references: [...(unresolvedFirst ? [unresolved, match] : [match, unresolved]), later]
+      });
+      const probe = new RelinkedByProbe(makeIntegrityServices());
+      const run = IntegrityRun.create([dependent]);
+      expect(probe.relinkedBy(dependent, changed, run)).toBe(true);
+      expect(probe.relinkedBy(dependent, changed, run)).toBe(true);
+   });
+
+   it('reads current targets without a run and stops at the first match', () => {
+      const first = makeFakeDocument('file:///first.fake', makeFakeAstNode({ $type: 'Foo' }));
+      const second = makeFakeDocument('file:///second.fake', makeFakeAstNode({ $type: 'Foo' }));
+      const reference = { $refText: 'target', $nodeDescription: { documentUri: first.uri } };
+      let laterReads = 0;
+      const dependent = makeFakeDocument('file:///dependent.fake', makeFakeAstNode({ $type: 'Foo' }), {
+         references: [
+            reference,
+            {
+               $refText: 'later',
+               get $nodeDescription() {
+                  laterReads++;
+                  return { documentUri: second.uri };
+               }
+            }
+         ]
+      });
+      const probe = new RelinkedByProbe(makeIntegrityServices());
+      const run = IntegrityRun.create([dependent]);
+      expect(probe.relinkedBy(dependent, first, run)).toBe(true);
+      laterReads = 0;
+      expect(probe.relinkedBy(dependent, first)).toBe(true);
+      expect(laterReads).toBe(0);
+      reference.$nodeDescription = { documentUri: second.uri };
+      expect(probe.relinkedBy(dependent, second)).toBe(true);
+      expect(laterReads).toBe(0);
+      expect(probe.relinkedBy(dependent, first)).toBe(false);
+   });
+
+   it('forgets cached targets after a custom linker changes descriptions in the same reference array', async () => {
+      const first = makeFakeDocument('file:///first.fake', makeFakeAstNode({ $type: 'Foo' }));
+      const second = makeFakeDocument('file:///second.fake', makeFakeAstNode({ $type: 'Foo' }));
+      const reference = { $refText: 'target', $nodeDescription: { documentUri: first.uri } };
+      const dependent = makeFakeDocument('file:///dependent.fake', makeFakeAstNode({ $type: 'Foo' }), { references: [reference] });
+      const probe = new RelinkedByProbe(
+         makeIntegrityServices({
+            shared: {
+               workspace: {
+                  DocumentBuilder: {
+                     relinkInRunningBuild: async () => {
+                        reference.$nodeDescription = { documentUri: second.uri };
+                        return false;
+                     }
+                  }
+               }
+            }
+         })
+      );
+      const run = IntegrityRun.create([dependent]);
+      expect(probe.relinkedBy(dependent, first, run)).toBe(true);
+      await probe.relinkNow(first, dependent, run);
+      expect(probe.relinkedBy(dependent, second, run)).toBe(true);
+      expect(probe.relinkedBy(dependent, first, run)).toBe(false);
+   });
+
+   it.each([
+      ['no initial error', false],
+      ['an initial error', true]
+   ] as const)('keeps unresolved references live with %s', (_name, startsWithError) => {
+      const target = makeFakeDocument('file:///target.fake', makeFakeAstNode({ $type: 'Foo' }));
+      const other = makeFakeDocument('file:///other.fake', makeFakeAstNode({ $type: 'Foo' }));
+      const reference: { $refText: string; error?: object; $nodeDescription?: { documentUri: URI } } = {
+         $refText: 'target',
+         error: startsWithError ? {} : undefined
+      };
+      const dependent = makeFakeDocument('file:///dependent.fake', makeFakeAstNode({ $type: 'Foo' }), { references: [reference] });
+      const probe = new RelinkedByProbe(makeIntegrityServices());
+      const run = IntegrityRun.create([dependent]);
+      expect(probe.relinkedBy(dependent, target, run)).toBe(startsWithError);
+      reference.error = undefined;
+      reference.$nodeDescription = { documentUri: target.uri };
+      expect(probe.relinkedBy(dependent, target, run)).toBe(true);
+      expect(probe.relinkedBy(dependent, other, run)).toBe(false);
+   });
+
+   it('observes a multi-reference resolved after an earlier dependency query', () => {
+      const target = makeFakeDocument('file:///target.fake', makeFakeAstNode({ $type: 'Foo' }));
+      const resolution: { items?: Array<{ $nodeDescription: { documentUri: URI } }> } = {};
+      let reads = 0;
+      const reference = {
+         $refText: 'target',
+         get _items() {
+            return resolution.items;
+         },
+         get items() {
+            reads++;
+            return resolution.items ?? [];
+         }
+      };
+      const dependent = makeFakeDocument('file:///dependent.fake', makeFakeAstNode({ $type: 'Foo' }), { references: [reference] });
+      const probe = new RelinkedByProbe(makeIntegrityServices());
+      const run = IntegrityRun.create([dependent]);
+      expect(probe.relinkedBy(dependent, target, run)).toBe(false);
+      expect(reads).toBe(0);
+      resolution.items = [{ $nodeDescription: { documentUri: target.uri } }];
+      expect(probe.relinkedBy(dependent, target, run)).toBe(true);
+   });
+
    /** A multi-reference whose `items` read counts in `reads`, as a read resolves it. */
    const multiReference = (items: unknown, reads: string[]): object => ({
       $refText: 'x',
@@ -439,7 +577,7 @@ describe('IntegrityService dependents of a changed document', () => {
       const reads: string[] = [];
       asMutable(dependent).references = [multiReference(undefined, reads) as LangiumDocument['references'][number]];
 
-      expect(probe.relinkedBy(dependent, changed)).toBe(false);
+      expect(probe.relinkedBy(dependent, changed, IntegrityRun.create([dependent, changed]))).toBe(false);
       expect(reads).toEqual([]);
    });
 
@@ -450,7 +588,7 @@ describe('IntegrityService dependents of a changed document', () => {
       const items = [{ $nodeDescription: { documentUri: changed.uri } }];
       asMutable(dependent).references = [multiReference(items, []) as LangiumDocument['references'][number]];
 
-      expect(probe.relinkedBy(dependent, changed)).toBe(true);
+      expect(probe.relinkedBy(dependent, changed, IntegrityRun.create([dependent, changed]))).toBe(true);
    });
 });
 
@@ -1520,6 +1658,39 @@ class RelinkProbe extends DefaultIntegrityService<FakeNode> {
       return true;
    }
 }
+
+describe('IntegrityService repair dependency scaling', () => {
+   it.each([64, 128, 256])('reads stable reference targets linearly across %i independent repairs', async size => {
+      let reads = 0;
+      let repairs = 0;
+      const target = makeFakeDocument('file:///external.fake', makeFakeAstNode({ $type: 'Foo' }));
+      const documents = Array.from({ length: size }, (_, i) =>
+         makeFakeDocument(`file:///element${i}.fake`, makeFakeAstNode<FakeNode>({ $type: 'Foo' }), {
+            state: DocumentState.Linked,
+            references: [
+               {
+                  $refText: 'external',
+                  get $nodeDescription() {
+                     reads++;
+                     return { documentUri: target.uri };
+                  }
+               }
+            ]
+         })
+      );
+      class Probe extends DefaultIntegrityService<FakeNode> {
+         protected override async resyncDocument(document: LangiumDocument, _token: CancellationToken, run: IntegrityRun): Promise<void> {
+            repairs++;
+            await this.relinkDependents(document, run);
+         }
+      }
+      const probe = new Probe(makeIntegrityServices({ shared: { workspace: { LangiumDocuments: { all: stream(documents) } } } }));
+      registerRule(probe, { nodeType: 'Foo', phase: DocumentState.Linked, onEnforce: () => true });
+      await probe.enforceBatch(documents, DocumentState.Linked, CancellationToken.None);
+      expect(repairs).toBe(size);
+      expect(reads).toBeLessThanOrEqual(size * 3);
+   });
+});
 
 interface RelinkHarness {
    probe: RelinkProbe;
