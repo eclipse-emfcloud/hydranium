@@ -22,7 +22,7 @@ import {
    stream,
    URI
 } from '@hydranium/langium';
-import { CancellationToken, CancellationTokenSource, Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-protocol';
+import { CancellationToken, CancellationTokenSource, Diagnostic, DiagnosticSeverity } from 'vscode-languageserver-protocol/node';
 import { DefaultMessageRenderer, type MessageRenderer } from '../../../src/messages/renderer.js';
 import { DefaultVersionSyncService } from '../../../src/documents/version-sync-service.js';
 import type { ServerSharedServices } from '../../../src/langium/module.js';
@@ -857,6 +857,33 @@ describe('DefaultHydraniumDocumentBuilder', () => {
 
          expect(tokens).toHaveLength(1);
          expect(tokens[0]).not.toBe(source.token);
+         expect(tokens[0].isCancellationRequested).toBe(true);
+      });
+
+      it("hands the phases a cancelled token, and throws nothing later, when the caller's token is cancelled before the build", async () => {
+         const builder = rehydrateBuilder();
+         const tokens: CancellationToken[] = [];
+         const phases = vi
+            .spyOn(DefaultHydraniumDocumentBuilder.prototype as unknown as LangiumPhases, 'buildPhases')
+            .mockImplementation(async build => void tokens.push(build.cancelToken));
+         const uncaught: unknown[] = [];
+         const capture = (err: unknown): number => uncaught.push(err);
+         process.on('uncaughtException', capture);
+         const source = new CancellationTokenSource();
+         // Read before the cancel: a token read after it is the static one, which never tells a listener.
+         const token = source.token;
+         source.cancel();
+         try {
+            await builder.build([], {}, token);
+            // A cancelled token tells a new listener on a later tick.
+            await new Promise(resolve => setTimeout(resolve, 10));
+         } finally {
+            phases.mockRestore();
+            process.off('uncaughtException', capture);
+         }
+
+         expect(uncaught).toEqual([]);
+         expect(tokens).toHaveLength(1);
          expect(tokens[0].isCancellationRequested).toBe(true);
       });
 
