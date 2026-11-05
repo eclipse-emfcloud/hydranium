@@ -289,6 +289,253 @@ describe('reconcileByPatchReplay', () => {
       expect(result.status).toBe('conflict');
    });
 
+   test('reports conflict rather than edit the element that slid into the index when the refetch inserted before it', async () => {
+      // `test /items/1/type` passes on `a`, which the insert moved to index 1.
+      const [first, second] = [
+         { id: 'a', type: 'string' },
+         { id: 'b', type: 'string' }
+      ];
+      const theirs = { items: [{ id: 'z', type: 'string' }, first, second] };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [first, { ...second, type: 'int' }] },
+         async () => theirs
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('reports conflict rather than edit the next element when the refetch removed the one the user edits', async () => {
+      const [first, second, third] = [
+         { id: 'a', type: 'string' },
+         { id: 'b', type: 'string' },
+         { id: 'c', type: 'string' }
+      ];
+      const theirs = { items: [first, third] };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second, third] },
+         { items: [first, { ...second, type: 'int' }, third] },
+         async () => theirs
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('reports conflict when the refetch inserted into an inner array before the element the user edits', async () => {
+      const [first, second] = [
+         { id: 'a', type: 'string' },
+         { id: 'b', type: 'string' }
+      ];
+      const theirs = { nodes: [{ ports: [{ id: 'z', type: 'string' }, first, second] }] };
+
+      const result = await reconcileByPatchReplay(
+         { nodes: [{ ports: [first, second] }] },
+         { nodes: [{ ports: [first, { ...second, type: 'int' }] }] },
+         async () => theirs
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('merges an edit to an element before the one the refetch inserted', async () => {
+      const base = {
+         items: [
+            { id: 'a', type: 'string' },
+            { id: 'b', type: 'string' }
+         ]
+      };
+      const theirs = { items: [base.items[0], { id: 'z', type: 'string' }, base.items[1]] };
+
+      const result = await reconcileByPatchReplay(base, { items: [{ id: 'a', type: 'int' }, base.items[1]] }, async () => theirs);
+
+      expect(result).toEqual({ status: 'merged', merged: { items: [{ id: 'a', type: 'int' }, ...theirs.items.slice(1)] } });
+   });
+
+   test('merges an edit to an element the refetch kept in place, beside a foreign edit before it and an append', async () => {
+      const base = {
+         items: [
+            { id: 'a', type: 'string' },
+            { id: 'b', type: 'string' }
+         ]
+      };
+      const theirs = { items: [{ id: 'a', type: 'bool' }, base.items[1], { id: 'z', type: 'string' }] };
+
+      const result = await reconcileByPatchReplay(base, { items: [base.items[0], { id: 'b', type: 'int' }] }, async () => theirs);
+
+      expect(result).toEqual({ status: 'merged', merged: { items: [theirs.items[0], { id: 'b', type: 'int' }, theirs.items[2]] } });
+   });
+
+   test('reports conflict when the refetch holds an object with index keys where the user edits inside an array element', async () => {
+      const theirs = { items: { 0: { id: 'z', type: 'string' } } };
+
+      const result = await reconcileByPatchReplay(
+         { items: [{ id: 'a', type: 'string' }] },
+         { items: [{ id: 'a', type: 'int' }] },
+         async () => theirs
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('reports conflict when the refetch removed one element and inserted another, keeping the length', async () => {
+      const [first, second, third] = [
+         { id: 'a', type: 'string' },
+         { id: 'b', type: 'string' },
+         { id: 'c', type: 'string' }
+      ];
+      const theirs = { items: [second, third, { id: 'd', type: 'string' }] };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second, third] },
+         { items: [first, { ...second, type: 'int' }, third] },
+         async () => theirs
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('reports conflict when the refetch inserted a new element directly before the one the user edits', async () => {
+      const [first, second] = [
+         { id: 'a', type: 'string' },
+         { id: 'b', type: 'string' }
+      ];
+      const theirs = { items: [first, { id: 'z', type: 'string' }, second] };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [first, { ...second, type: 'int' }] },
+         async () => theirs
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('reports conflict when the refetch reordered the array the user edits an element of', async () => {
+      const [first, second] = [
+         { id: 'a', type: 'string' },
+         { id: 'b', type: 'string' }
+      ];
+      const theirs = { items: [second, first] };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [first, { ...second, type: 'int' }] },
+         async () => theirs
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('merges an edit beside a foreign edit of another field of the same element and an append', async () => {
+      const element = { id: 'a', type: 'string', name: 'x' };
+      const theirs = {
+         items: [
+            { ...element, name: 'renamed' },
+            { id: 'z', type: 'string', name: 'z' }
+         ]
+      };
+
+      const result = await reconcileByPatchReplay({ items: [element] }, { items: [{ ...element, type: 'int' }] }, async () => theirs);
+
+      expect(result).toEqual({ status: 'merged', merged: { items: [{ ...element, type: 'int', name: 'renamed' }, theirs.items[1]] } });
+   });
+
+   test('merges an edit beside a foreign edit of another field of the same element and a removal after it', async () => {
+      const [first, second] = [
+         { id: 'a', type: 'string', name: 'x' },
+         { id: 'b', type: 'string', name: 'y' }
+      ];
+
+      const result = await reconcileByPatchReplay({ items: [first, second] }, { items: [{ ...first, type: 'int' }, second] }, async () => ({
+         items: [{ ...first, name: 'renamed' }]
+      }));
+
+      expect(result).toEqual({ status: 'merged', merged: { items: [{ ...first, type: 'int', name: 'renamed' }] } });
+   });
+
+   test('merges an edit beside a foreign edit of another field of one of two equal elements', async () => {
+      // The other copy keeps the edited value in theirs, which a move would also show.
+      const element = { name: '', type: 'string' };
+
+      const result = await reconcileByPatchReplay(
+         { items: [element, element] },
+         { items: [{ ...element, name: 'id' }, element] },
+         async () => ({
+            items: [{ ...element, type: 'int' }, element]
+         })
+      );
+
+      expect(result).toEqual({ status: 'merged', merged: { items: [{ name: 'id', type: 'int' }, element] } });
+   });
+
+   test('reports conflict when the refetch edited an element into a copy of another one it also edited', async () => {
+      // A known cost: this reads as a move, where an index replay would merge correctly.
+      const [first, second] = [
+         { name: 'p', kind: 1 },
+         { name: 'q', kind: 2 }
+      ];
+      const theirs = { items: [second, { name: 'q', kind: 3 }] };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [{ ...first, extra: 1 }, second] },
+         async () => theirs
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('merges into the element that slid into the index when the refetch also edited both elements', async () => {
+      // A known limit: without element keys, two changed elements carry no evidence of the move.
+      const [first, second] = [
+         { id: 'a', type: 'string', name: 'x' },
+         { id: 'b', type: 'string', name: 'y' }
+      ];
+      const theirs = {
+         items: [
+            { id: 'z', type: 'string', name: 'z' },
+            { ...first, name: 'x2' },
+            { ...second, name: 'y2' }
+         ]
+      };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [first, { ...second, type: 'int' }] },
+         async () => theirs
+      );
+
+      expect(result).toEqual({
+         status: 'merged',
+         merged: { items: [theirs.items[0], { ...theirs.items[1], type: 'int' }, theirs.items[2]] }
+      });
+   });
+
+   test('merges an edit to one element beside a foreign edit to another element of the same array', async () => {
+      const base = {
+         items: [
+            { id: 'a', type: 'string' },
+            { id: 'b', type: 'string' }
+         ]
+      };
+
+      const result = await reconcileByPatchReplay(base, { items: [base.items[0], { id: 'b', type: 'int' }] }, async () => ({
+         items: [{ id: 'a', type: 'bool' }, base.items[1]]
+      }));
+
+      expect(result).toEqual({
+         status: 'merged',
+         merged: {
+            items: [
+               { id: 'a', type: 'bool' },
+               { id: 'b', type: 'int' }
+            ]
+         }
+      });
+   });
+
    test('reports conflict when the refetch lacks the object the user removes a key from', async () => {
       // A foreign writer deleted `a`; the user kept `a.c`.
       const result = await reconcileByPatchReplay({ a: { b: 1, c: 1 } }, { a: { c: 1 } }, async () => ({}));

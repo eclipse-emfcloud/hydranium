@@ -114,10 +114,11 @@ reverts the steps it ran and writes nothing. None of these says a foreign edit
 changed what the entry restores, so the command stack keeps the history and its
 place, and the refusal is told as a warning naming its reason. A retry reads
 the model again: an edit of another field merges, one of the same field skips
-the entry. While the text stays unreadable, every retry is refused the same
-way, and the place is still kept, since a refusal changes nothing. These cases
-rely on the state's write applying none of its documents when it throws, as
-`updateAll` does.
+the entry, and so does one inside an array element a foreign edit moved,
+once the elements show the move. While the text stays unreadable, every retry
+is refused the same way, and the place is still kept, since a refusal changes
+nothing. These cases rely on the state's write applying none of its documents
+when it throws, as `updateAll` does.
 
 An undo or redo whose own write is refused with `DocumentSyntaxError`, because
 a document it reads or writes does not parse, is refused as a conflict is. The

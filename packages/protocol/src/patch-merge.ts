@@ -33,6 +33,8 @@ import {
  * `add` ops get no `test` op: the path is new, so there is no base value
  * to test. {@link reconcileByPatchReplay} checks them against theirs
  * instead; a caller applying this patch itself does not get that check.
+ * Nor does it get the check for an array element another client moved. A
+ * `test` checks the value at an index, not which element holds it.
  *
  * Used behind the framework's `ConflictError` contract by every reconcile
  * path — the GLSP recording command's undo/redo and forward-write, via
@@ -94,9 +96,9 @@ export type ReconcileOutcome<T> =
         /**
          * User and foreign writer changed one path to different values, or
          * both changed one inside an array the refetch holds otherwise than
-         * the user, even to the same value; both inserted the same array
-         * element; or the foreign writer removed or replaced what the user
-         * edited inside.
+         * the user, even to the same value. Both inserted the same array
+         * element. Or the foreign writer removed or replaced what the user
+         * edited inside, or moved it as {@link reconcileByPatchReplay} says.
          */
         status: 'conflict';
         /**
@@ -131,9 +133,12 @@ export type ReconcileOutcome<T> =
  *   root carries both intents.
  * - `conflict` — a same-path divergence tripped a `test` op, including the
  *   user's own value inside an array the refetch holds otherwise than the
- *   user; or an `add` collides with one the foreign writer made; or the
- *   foreign writer removed or replaced what the user edited inside. The
- *   caller drops the write and surfaces `theirs`.
+ *   user. Or an `add` collides with one the foreign writer made. Or the
+ *   foreign writer removed or replaced what the user edited inside, or moved
+ *   it. A move counts only on evidence: the element now at the index stood
+ *   elsewhere, or every copy of the edited one is still there. A fresh
+ *   element in the edited one's place takes the edit. The caller drops the
+ *   write and surfaces `theirs`.
  *
  * I/O is the caller's: `refetch` supplies the current root, and applying the
  * `merged` result (update vs save, new base, UI refresh) stays at the call
@@ -157,7 +162,7 @@ export async function reconcileByPatchReplay<T extends object>(
    if (pending.length === 0) {
       return { status: 'already-applied', theirs };
    }
-   if (addsCollide(base, comparable, pending)) {
+   if (addsCollide(base, comparable, pending) || editsMovedElement(base, comparable, pending)) {
       return { status: 'conflict', theirs };
    }
    try {
@@ -255,7 +260,7 @@ function toJson<T>(value: T): T {
  */
 function addsCollide(base: object, theirs: object, userPatch: readonly JsonPatchOperation[]): boolean {
    // Each array's elements are counted once, however many ops insert into it, so a bulk insert stays linear.
-   const tallies = new Map<string, { readonly before: ReadonlyMap<string, number>; readonly now: ReadonlyMap<string, number> }>();
+   const tallies = new Map<string, ArrayTally>();
    return userPatch.some(op => {
       if (op.op !== 'add') {
          return false;
@@ -278,6 +283,78 @@ function addsCollide(base: object, theirs: object, userPatch: readonly JsonPatch
       }
       return typeof now === 'object' && now !== null && Object.hasOwn(now, unescapePathComponent(op.path.slice(cut + 1)));
    });
+}
+
+/**
+ * Whether an op of `userPatch` edits inside an array element another client
+ * moved. Theirs holds another element at its index, and either that element
+ * stood elsewhere in `base`, with theirs holding no more copies of it, or
+ * theirs still holds every copy of the edited one. Theirs holding no array
+ * there counts too. Its `test` ops check a value, not which element holds it,
+ * so the replay would edit the element that slid into the index.
+ *
+ * A changed element without that evidence is taken as edited in place, so an
+ * edit beside another client's edit of the same element, or of an equal one,
+ * still merges. Not caught: a move where the other client also edited both
+ * the slid-in and the edited element, a fresh element in the edited one's
+ * place, and a move between equal elements. An element another client edited
+ * into a copy of another one, which it also edited or removed, reads as moved,
+ * so the edit conflicts.
+ *
+ * `compare` addresses elements by their `base` index, as it appends inserts
+ * and removes from the end. Each array is counted once, however many ops run
+ * through it. `theirs` is the refetch through {@link toJson}.
+ */
+function editsMovedElement(base: object, theirs: object, userPatch: readonly JsonPatchOperation[]): boolean {
+   const tallies = new Map<string, ArrayTally>();
+   const moved = new Map<string, boolean>();
+   return userPatch.some(op => {
+      const steps = op.path.split('/');
+      // The last step names the op's target: an insert, or an element its own `test` checks whole.
+      for (let i = 1; i < steps.length - 1; i++) {
+         const element = steps.slice(0, i + 1).join('/');
+         let found = moved.get(element);
+         if (found === undefined) {
+            found = elementMoved(base, theirs, steps.slice(0, i).join('/'), Number(steps[i]), tallies);
+            moved.set(element, found);
+         }
+         if (found) {
+            return true;
+         }
+      }
+      return false;
+   });
+}
+
+/** Whether the element at `index` of the `base` array at `pointer` moved in `theirs`, or `theirs` holds no array there, as {@link editsMovedElement} decides it. */
+function elementMoved(base: object, theirs: object, pointer: string, index: number, tallies: Map<string, ArrayTally>): boolean {
+   const before = valueAt(base, pointer);
+   if (!Array.isArray(before)) {
+      return false;
+   }
+   const now = valueAt(theirs, pointer);
+   if (!Array.isArray(now)) {
+      return true;
+   }
+   const was = canonicalJson(before[index]);
+   const is = canonicalJson(now[index]);
+   if (was === is) {
+      return false;
+   }
+   let tally = tallies.get(pointer);
+   if (!tally) {
+      tally = { before: tallyElements(before), now: tallyElements(now) };
+      tallies.set(pointer, tally);
+   }
+   const movedIn = (tally.before.get(is) ?? 0) >= Math.max(tally.now.get(is) ?? 0, 1);
+   const movedOut = (tally.now.get(was) ?? 0) >= (tally.before.get(was) ?? 0);
+   return movedIn || movedOut;
+}
+
+/** The elements of one array in `base` and in theirs, each through {@link tallyElements}. */
+interface ArrayTally {
+   readonly before: ReadonlyMap<string, number>;
+   readonly now: ReadonlyMap<string, number>;
 }
 
 /** How many elements of `array` there are of each value, keyed by {@link canonicalJson}. */
