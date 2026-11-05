@@ -11,7 +11,7 @@ import { type GModelElement, GModelIndex } from '@eclipse-glsp/server';
 import { inject, injectable } from 'inversify';
 import { type AstNode, AstUtils } from '@hydranium/langium';
 import { type ElementKeyProvider, type ServerLanguageServices, type ServerSharedServices } from '@hydranium/core';
-import { randomUuid } from '@hydranium/protocol';
+import { Logger, randomUuid } from '@hydranium/protocol';
 import { operationUriOfCopy } from '../command/hydranium-glsp-operation-command.js';
 import { HydraniumTypes } from './hydranium-shared-core-services.js';
 
@@ -109,7 +109,9 @@ export class HydraniumGlspIndex extends GModelIndex {
     * Hook for the adopter id-assignment strategy. Framework default reads
     * {@link ElementKeyProvider.getElementKey} from the language owning `node`,
     * which under the bound default is name-based and falls back to positional
-    * segments for unnamed nodes.
+    * segments for unnamed nodes. The GModel ids are built from these keys, so
+    * an override that falls back after `super.doFindId()` changes ids whenever
+    * the default starts keying a node it did not key before.
     *
     * `keyProvider` is an optional hint: the provider for THIS node, already
     * resolved by the caller. {@link indexSourceRoot} passes it because every
@@ -346,6 +348,29 @@ export class HydraniumGlspIndex extends GModelIndex {
    override indexRoot(root: GModelElement): void {
       this.pruneDuplicateIds(root);
       super.indexRoot(root);
+      this.logDanglingEdges();
+   }
+
+   /**
+    * Log at debug each edge end whose id names no indexed element. The client
+    * draws such an edge as a bare `?` and logs nothing, so an id change would
+    * otherwise show only on the canvas. The scan exists only to build these
+    * lines, so it is skipped below debug.
+    */
+   protected logDanglingEdges(): void {
+      if (!Logger.isLevelEnabled('debug')) {
+         return;
+      }
+      for (const edge of this.getAllEdges()) {
+         for (const [end, id] of [
+            ['source', edge.sourceId],
+            ['target', edge.targetId]
+         ] as const) {
+            if (!this.idToElement.has(id)) {
+               this.sharedServices.Logger.for('Index').debug(`Edge ${edge.id} names no element as its ${end}: ${id}`);
+            }
+         }
+      }
    }
 
    /**
