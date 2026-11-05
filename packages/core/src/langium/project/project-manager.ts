@@ -208,9 +208,9 @@ export interface ProjectManager<TProject extends Project = Project> {
     * Default implementations:
     * - `SingleProjectManager`: returns `true` unconditionally (its
     *   synthetic workspace project owns everything).
-    * - `AbstractProjectManager`: returns `getProjects().length <= 1`
-    *   (conservative — once a second project is registered, returns
-    *   false even if all documents are still owned by the original).
+    * - `AbstractProjectManager`: checks the registry size independently
+    *   of `getProjects`. Adopters customizing the project boundary override
+    *   this predicate as well as any custom project listing.
     *
     * Adopters with custom `ProjectManager` implementations override to
     * match their workspace shape.

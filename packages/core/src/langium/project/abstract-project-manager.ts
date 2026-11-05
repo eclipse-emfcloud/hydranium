@@ -288,14 +288,11 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
    }
 
    /**
-    * Default implementation: returns `true` while the registry holds at
-    * most one project. Conservative — flips to `false` as soon as a
-    * second project is registered, even if all documents still belong
-    * to the first. Subclasses with a richer notion of "meaningful
-    * project boundary" override.
+    * Whether at most one project is registered, independently of {@link getProjects}.
+    * Override this predicate to customize what constitutes a project boundary.
     */
    isSingleProject(): boolean {
-      return this.getProjects().length <= 1;
+      return this.projects.size <= 1;
    }
 
    /**
@@ -374,17 +371,21 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     */
    protected getAffectedProjects(directlyChanged: readonly string[]): readonly string[] {
       const result = new Set(directlyChanged);
-      let grew = true;
-      while (grew) {
-         grew = false;
-         for (const project of this.projects.values()) {
-            if (result.has(project.id)) {
-               continue;
+      const dependents = new Map<string, string[]>();
+      for (const project of this.projects.values()) {
+         for (const dependency of project.dependencies ?? []) {
+            const entries = dependents.get(dependency);
+            if (entries) {
+               entries.push(project.id);
+            } else {
+               dependents.set(dependency, [project.id]);
             }
-            if (project.dependencies?.some(dep => result.has(dep))) {
-               result.add(project.id);
-               grew = true;
-            }
+         }
+      }
+      // Set iteration visits newly added ids. Each project is added once, including cycles.
+      for (const id of result) {
+         for (const dependent of dependents.get(id) ?? []) {
+            result.add(dependent);
          }
       }
       return [...result];
