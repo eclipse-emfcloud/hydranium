@@ -8,7 +8,16 @@
  ********************************************************************************/
 
 import { type MaybePromise, type Tracer, type TransferElement } from '@hydranium/protocol';
-import { type AstNode, type AstReflection, type GenericAstNode, isAstNode } from '@hydranium/langium';
+import {
+   type AstNode,
+   type AstReflection,
+   AstUtils,
+   type GenericAstNode,
+   GrammarAST,
+   GrammarUtils,
+   isAstNode,
+   stream
+} from '@hydranium/langium';
 import { type LogNameOptions } from '../diagnostics/logger.js';
 import { type HydraniumLanguageServices } from '../language-module.js';
 import { type Serializer } from './serializer.js';
@@ -105,6 +114,8 @@ export interface AbstractSerializerOptions extends LogNameOptions {
  *   terminal or value converter differs from Langium's default.
  * - {@link formatReferenceValue} — format a cross-reference value for emission;
  *   defaults to {@link formatString}.
+ * - {@link formatId} — write a bare id, escaping a keyword of the grammar. A
+ *   hand-written emitter calls it for names and references.
  * - {@link serializeCustomValue} — type-specific serialization for values
  *   that don't fit the generic paths. Runs after all reference detection, so
  *   references never reach this hook. Returns `undefined` to fall through to
@@ -431,8 +442,8 @@ export abstract class AbstractSerializer<
    /**
     * Format a cross-reference value for emission. Defaults to
     * {@link formatString}. Override to apply language-specific reference
-    * quoting — e.g. an id-reference formatter that mirrors the grammar's id
-    * convention.
+    * quoting, such as {@link formatId} for a reference the grammar reads with
+    * its `ID` terminal.
     *
     * Returns {@link MaybePromise} so adopters with async formatting needs
     * (remote schema lookup, external canonical-id resolution) can return a
@@ -465,6 +476,38 @@ export abstract class AbstractSerializer<
    protected formatString(value: string): string {
       const escapes = (this.constructor as typeof AbstractSerializer).STRING_ESCAPES;
       return `"${Array.from(value, char => escapes.get(char) ?? char).join('')}"`;
+   }
+
+   /**
+    * Write an id the grammar reads with its `ID` terminal. A hand-written
+    * emitter calls this for a name or a reference. A keyword of this grammar
+    * gets a `^` in front, since the lexer reads it bare as the keyword.
+    * Langium's value converter strips the `^` only for a terminal named `ID`,
+    * and that terminal must accept the `^`. The generic walk quotes ids
+    * instead, so it does not call this by default. A qualified name is
+    * escaped per segment by its caller. A grammar with another escape or
+    * terminal overrides this.
+    */
+   protected formatId(value: string): string {
+      const caseInsensitive = this.services.LanguageMetaData.caseInsensitive;
+      return this.grammarKeywords().has(caseInsensitive ? value.toLowerCase() : value) ? `^${value}` : value;
+   }
+
+   /** Memo of {@link grammarKeywords}. */
+   protected grammarKeywordSet?: ReadonlySet<string>;
+
+   /**
+    * The keywords of this grammar, collected as Langium's `TokenBuilder`
+    * collects its keyword tokens, lower-cased for a case-insensitive grammar.
+    */
+   protected grammarKeywords(): ReadonlySet<string> {
+      this.grammarKeywordSet ??= new Set(
+         stream(GrammarUtils.getAllReachableRules(this.services.Grammar, false))
+            .filter(GrammarAST.isAbstractParserRule)
+            .flatMap(rule => AstUtils.streamAllContents(rule).filter(GrammarAST.isKeyword))
+            .map(keyword => (this.services.LanguageMetaData.caseInsensitive ? keyword.value.toLowerCase() : keyword.value))
+      );
+      return this.grammarKeywordSet;
    }
 
    /**

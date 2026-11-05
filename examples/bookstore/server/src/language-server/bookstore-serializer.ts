@@ -54,9 +54,11 @@ export class BookstoreSerializer extends AbstractSerializer<BookstoreModel> {
     * `serializeTransfer` carries `target` as a plain string rather than a
     * `Reference`, and a serializer that reaches for `$refText` directly emits
     * the AST correctly and drops every reference on the transfer path.
+    * `formatId` escapes a name or reference that is a keyword of this grammar.
     */
    private emitNode(node: BookstoreNode): string {
       const target = this.serializeReferenceText(node.target);
-      return target === undefined ? `node ${node.name}` : `node ${node.name} -> ${target}`;
+      const header = `node ${this.formatId(node.name ?? '')}`;
+      return target === undefined ? header : `${header} -> ${this.formatId(target)}`;
    }
 }

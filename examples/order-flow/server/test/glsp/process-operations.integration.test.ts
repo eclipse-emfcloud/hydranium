@@ -271,7 +271,7 @@ describe('order-flow .process operations', () => {
             .candidates.target?.map(candidate => candidate.value)
             .sort()
       ).toEqual(flowNodeNames(diagram.root()).sort());
-      for (const label of ['', 'two words', 'task', 'yes']) {
+      for (const label of ['', 'two words', '^task', 'yes']) {
          await diagram.expectEditRejected(EditProcessOperation.create(gatewayId, { label, target: 'Ship' }, diagram.harness.state.version));
       }
       await diagram.expectEditRejected(
@@ -283,6 +283,13 @@ describe('order-flow .process operations', () => {
       expect(code(diagram.text())).not.toContain('later -> Ship');
       await diagram.apply(RedoAction.create());
       expect(code(diagram.text())).toContain('later -> Ship');
+   });
+
+   it('accepts a branch label that is a keyword and writes it escaped', async () => {
+      const diagram = await openDiagram();
+      const gatewayId = idOf(diagram, 'PaymentOk');
+      await diagram.apply(EditProcessOperation.create(gatewayId, { label: 'task', target: 'Ship' }, diagram.harness.state.version));
+      expect(code(diagram.text())).toContain('^task -> Ship');
    });
 
    it('creates a task with a name unique across both flow-node kinds', async () => {

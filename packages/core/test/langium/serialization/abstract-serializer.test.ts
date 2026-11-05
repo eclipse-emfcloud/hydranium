@@ -8,10 +8,10 @@
  ********************************************************************************/
 
 import { describe, expect, it } from 'vitest';
-import type { AstReflection } from '@hydranium/langium';
+import { type AstReflection, loadGrammarFromJson } from '@hydranium/langium';
 import type { HydraniumLanguageServices } from '../../../src/langium/language-module.js';
 import { JsonSerializer, type JsonSerializerOptions } from '../../../src/langium/serialization/json-serializer.js';
-import { makeFakeReflection, makeNoopTracer } from '../../../src/testing/index.js';
+import { makeFakeReflection, makeNoopLanguageServices, makeNoopTracer } from '../../../src/testing/index.js';
 
 /**
  * Tests for the shared, format-agnostic `AbstractSerializer` base dispatch
@@ -246,6 +246,63 @@ describe('AbstractSerializer base dispatch', () => {
          });
          const node = { $type: 'Outer', link: { $type: 'RefWrap', value: 42 } };
          expect(await serializer.serializeAst(node as never)).toBe('{\n  "link": {\n    "value": 42\n  }\n}');
+      });
+   });
+
+   describe('formatId', () => {
+      /** Exposes the protected {@link JsonSerializer.formatId}. */
+      class IdProbe extends JsonSerializer {
+         probe(value: string): string {
+            return this.formatId(value);
+         }
+      }
+
+      const keyword = (value: string): object => ({ $type: 'Keyword', value });
+      const parserRule = (name: string, elements: object[], entry = false): object => ({
+         $type: 'ParserRule',
+         name,
+         entry,
+         fragment: false,
+         parameters: [],
+         definition: { $type: 'Group', elements }
+      });
+
+      /** `Model: 'element' name=ID;` and `Unused: 'other' name=ID;`, which no rule reaches. */
+      function probeFor(caseInsensitive: boolean): IdProbe {
+         const name = {
+            $type: 'Assignment',
+            feature: 'name',
+            operator: '=',
+            terminal: { $type: 'RuleCall', rule: { $ref: '#/rules@2' }, arguments: [] }
+         };
+         const rules = [
+            parserRule('Model', [keyword('element'), name], true),
+            parserRule('Unused', [keyword('other'), name]),
+            {
+               $type: 'TerminalRule',
+               name: 'ID',
+               hidden: false,
+               fragment: false,
+               definition: { $type: 'RegexToken', regex: '/\\^?[_a-zA-Z][\\w_]*/' }
+            }
+         ];
+         const grammar = loadGrammarFromJson(
+            JSON.stringify({ $type: 'Grammar', isDeclared: true, name: 'Probe', rules, imports: [], interfaces: [], types: [] })
+         );
+         return new IdProbe(makeNoopLanguageServices({ Grammar: grammar, LanguageMetaData: { caseInsensitive } }));
+      }
+
+      it('escapes a keyword of the grammar and writes any other id as it is', () => {
+         const probe = probeFor(false);
+         expect([probe.probe('element'), probe.probe('Element'), probe.probe('elements')]).toEqual(['^element', 'Element', 'elements']);
+      });
+
+      it('leaves a keyword alone that only an unreachable rule declares, as the lexer does', () => {
+         expect(probeFor(false).probe('other')).toBe('other');
+      });
+
+      it('escapes a keyword in any case for a case-insensitive grammar', () => {
+         expect(probeFor(true).probe('Element')).toBe('^Element');
       });
    });
 });

@@ -97,13 +97,14 @@ export class DomainSerializer extends AbstractSerializer<DomainModel> {
    }
 
    private emitManifest(manifest: ProjectManifest): string {
-      const requires = manifest.dependencies.length > 0 ? ` requires ${manifest.dependencies.join(', ')}` : '';
-      return `project ${manifest.name ?? ''}${requires}`;
+      const dependencies = manifest.dependencies.map(dependency => this.formatProjectName(dependency));
+      const requires = dependencies.length > 0 ? ` requires ${dependencies.join(', ')}` : '';
+      return `project ${this.formatProjectName(manifest.name ?? '')}${requires}`;
    }
 
    private emitStructure(keyword: 'entity' | 'valuetype', declaration: Extract<Declaration, { fields: Field[] }>, level: number): string {
       const indent = this.indent(level);
-      const header = `${indent}${this.visibilityPrefix(declaration)}${keyword} ${declaration.name ?? ''}`;
+      const header = `${indent}${this.visibilityPrefix(declaration)}${keyword} ${this.formatId(declaration.name ?? '')}`;
       if (declaration.fields.length === 0) {
          return `${header} {}`;
       }
@@ -113,11 +114,11 @@ export class DomainSerializer extends AbstractSerializer<DomainModel> {
 
    private emitEnumeration(enumeration: Enumeration, level: number): string {
       const indent = this.indent(level);
-      const header = `${indent}${this.visibilityPrefix(enumeration)}enum ${enumeration.name ?? ''}`;
+      const header = `${indent}${this.visibilityPrefix(enumeration)}enum ${this.formatId(enumeration.name ?? '')}`;
       if (enumeration.literals.length === 0) {
          return `${header} {}`;
       }
-      return `${header} { ${enumeration.literals.map(literal => literal.name).join(', ')} }`;
+      return `${header} { ${enumeration.literals.map(literal => this.formatId(literal.name ?? '')).join(', ')} }`;
    }
 
    private emitField(field: Field, level: number): string {
@@ -125,8 +126,16 @@ export class DomainSerializer extends AbstractSerializer<DomainModel> {
       // `valuetype` declarations rather than a keyword alternative — so there is
       // no non-reference branch. `serializeReferenceText` accepts both shapes: an
       // AST-mode Langium `Reference` and a transfer-mode plain string id.
-      const type = this.serializeReferenceText(field.type?.declared) ?? '';
-      return `${this.indent(level)}${field.name}: ${type}${field.many ? '[]' : ''}`;
+      const type = this.formatId(this.serializeReferenceText(field.type?.declared) ?? '');
+      return `${this.indent(level)}${this.formatId(field.name ?? '')}: ${type}${field.many ? '[]' : ''}`;
+   }
+
+   /** `ProjectName` is `ID ('-' ID)*`, so each segment is an id of its own. */
+   private formatProjectName(name: string): string {
+      return name
+         .split('-')
+         .map(segment => this.formatId(segment))
+         .join('-');
    }
 
    private visibilityPrefix(declaration: Declaration): string {

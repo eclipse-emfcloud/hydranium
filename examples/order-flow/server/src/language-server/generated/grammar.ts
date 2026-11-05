@@ -545,7 +545,7 @@ export const DomainGrammar = (): Grammar => loadedDomainGrammar ?? (loadedDomain
       "name": "ID",
       "definition": {
         "$type": "RegexToken",
-        "regex": "/[_a-zA-Z][\\\\w_]*/",
+        "regex": "/\\\\^?[_a-zA-Z][\\\\w_]*/",
         "parenthesized": false
       },
       "fragment": false,
@@ -762,7 +762,7 @@ export const LayoutGrammar = (): Grammar => loadedLayoutGrammar ?? (loadedLayout
       "name": "ID",
       "definition": {
         "$type": "RegexToken",
-        "regex": "/[_a-zA-Z][\\\\w_]*/",
+        "regex": "/\\\\^?[_a-zA-Z][\\\\w_]*/",
         "parenthesized": false
       },
       "fragment": false,
@@ -2286,7 +2286,7 @@ export const ProcessGrammar = (): Grammar => loadedProcessGrammar ?? (loadedProc
       "name": "ID",
       "definition": {
         "$type": "RegexToken",
-        "regex": "/[_a-zA-Z][\\\\w_]*/",
+        "regex": "/\\\\^?[_a-zA-Z][\\\\w_]*/",
         "parenthesized": false
       },
       "fragment": false,

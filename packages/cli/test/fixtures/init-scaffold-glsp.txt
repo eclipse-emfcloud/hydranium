@@ -632,7 +632,7 @@ BookstoreNode:
     'node' name=ID ('->' target=[BookstoreNode:ID])?;
 
 hidden terminal WS: /\s+/;
-terminal ID: /[_a-zA-Z][\w_]*/;
+terminal ID: /\^?[_a-zA-Z][\w_]*/;
 hidden terminal SL_COMMENT: /\/\/[^\n\r]*/;
 hidden terminal ML_COMMENT: /\/\*[\s\S]*?\*\//;
 
@@ -819,10 +819,12 @@ export class BookstoreSerializer extends AbstractSerializer<BookstoreModel> {
     * `serializeTransfer` carries `target` as a plain string rather than a
     * `Reference`, and a serializer that reaches for `$refText` directly emits
     * the AST correctly and drops every reference on the transfer path.
+    * `formatId` escapes a name or reference that is a keyword of this grammar.
     */
    private emitNode(node: BookstoreNode): string {
       const target = this.serializeReferenceText(node.target);
-      return target === undefined ? `node ${node.name}` : `node ${node.name} -> ${target}`;
+      const header = `node ${this.formatId(node.name ?? '')}`;
+      return target === undefined ? header : `${header} -> ${this.formatId(target)}`;
    }
 }
 
@@ -2261,6 +2263,17 @@ describe('Bookstore serialization', () => {
       });
 
       expect(await Bookstore.serializer.Serializer.serializeTransfer(model)).toBe(source);
+   });
+
+   it('reads back a name and a reference that are keywords', async () => {
+      const { Bookstore } = createServices();
+      const model = transferNode(TransferBookstoreModel, { nodes: [transferNode(BookstoreNode, { name: 'node', target: 'node' })] });
+
+      const text = await Bookstore.serializer.Serializer.serializeTransfer(model);
+      const { parseResult } = await parseHelper<BookstoreModel>(Bookstore)(text, { documentUri: 'file:///keywords.bookstore' });
+
+      expect([...parseResult.lexerErrors, ...parseResult.parserErrors]).toHaveLength(0);
+      expect(parseResult.value.nodes[0]).toMatchObject({ name: 'node', target: { $refText: 'node' } });
    });
 });
 

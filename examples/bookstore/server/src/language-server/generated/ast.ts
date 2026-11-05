@@ -8,7 +8,7 @@ import * as langium from 'langium';
 
 export const BookstoreTerminals = {
     WS: /\s+/,
-    ID: /[_a-zA-Z][\w_]*/,
+    ID: /\^?[_a-zA-Z][\w_]*/,
     SL_COMMENT: /\/\/[^\n\r]*/,
     ML_COMMENT: /\/\*[\s\S]*?\*\//,
 };

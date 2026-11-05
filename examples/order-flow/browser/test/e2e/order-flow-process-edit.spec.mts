@@ -79,7 +79,7 @@ test.describe('order-flow structured diagram edits', () => {
       await diagram.getByRole('button', { name: 'Edit selected effect or gateway' }).click();
       const dialog = page.locator('dialog.order-flow-process-edit');
       await dialog.getByLabel('Target').selectOption('Ship');
-      for (const label of ['yes', 'task', 'two words']) {
+      for (const label of ['yes', '^task', 'two words']) {
          await dialog.getByLabel('Label').fill(label);
          await dialog.getByRole('button', { name: 'Apply', exact: true }).click();
          await expect(dialog.getByRole('status')).toContainText(label === 'yes' ? 'already exists' : 'identifier');

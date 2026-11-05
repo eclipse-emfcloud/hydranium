@@ -7,6 +7,6 @@
 // language's TYPES — separate reasons that are worth keeping separate.
 
 hidden terminal WS: /\s+/;
-terminal ID: /[_a-zA-Z][\w_]*/;
+terminal ID: /\^?[_a-zA-Z][\w_]*/;
 hidden terminal SL_COMMENT: /\/\/[^\n\r]*/;
 hidden terminal ML_COMMENT: /\/\*[\s\S]*?\*\//;

@@ -24,7 +24,7 @@ export const BookstoreKeywordNamesValues = ['->', 'node'] as const;
 // --- Terminal Patterns (anchored for validation) ---
 export const BookstoreTerminals = {
    WS: /^(?:\s+)$/,
-   ID: /^(?:[_a-zA-Z][\w_]*)$/,
+   ID: /^(?:\^?[_a-zA-Z][\w_]*)$/,
    SL_COMMENT: /^(?:\/\/[^\n\r]*)$/,
    ML_COMMENT: /^(?:\/\*[\s\S]*?\*\/)$/,
 };

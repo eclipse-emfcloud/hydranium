@@ -44,4 +44,15 @@ describe('Bookstore serialization', () => {
 
       expect(await Bookstore.serializer.Serializer.serializeTransfer(model)).toBe(source);
    });
+
+   it('reads back a name and a reference that are keywords', async () => {
+      const { Bookstore } = createServices();
+      const model = transferNode(TransferBookstoreModel, { nodes: [transferNode(BookstoreNode, { name: 'node', target: 'node' })] });
+
+      const text = await Bookstore.serializer.Serializer.serializeTransfer(model);
+      const { parseResult } = await parseHelper<BookstoreModel>(Bookstore)(text, { documentUri: 'file:///keywords.bookstore' });
+
+      expect([...parseResult.lexerErrors, ...parseResult.parserErrors]).toHaveLength(0);
+      expect(parseResult.value.nodes[0]).toMatchObject({ name: 'node', target: { $refText: 'node' } });
+   });
 });
