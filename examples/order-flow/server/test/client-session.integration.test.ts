@@ -48,6 +48,7 @@ import {
    asModelVersion,
    type BaseVersion,
    ConflictError,
+   Deferred,
    isConflictError,
    STALE_BASE_VERSION_SAVE,
    type STALE_BASE_VERSION_UPDATE,
@@ -56,7 +57,7 @@ import {
    UNKNOWN_CLIENT_ID
 } from '@hydranium/protocol';
 import { type CancellationToken, FileChangeType, type FileEvent } from 'vscode-languageserver';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { isDomainModel, isEntity } from '../src/language-server/ast.js';
 import type { OrderFlowSharedServices } from '../src/language-server/order-flow-module.js';
@@ -596,6 +597,184 @@ describe('ClientSession open and close', () => {
       await session.withOpen(uri, () => undefined);
 
       expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(true);
+   });
+
+   class DirectOpenSession extends DefaultClientSession<AstNode> {
+      openDirectly(uri: string): Promise<void> {
+         return this.openDocument(uri, undefined);
+      }
+   }
+
+   async function bootDirectOpen(): Promise<{ harness: OrderFlowHarness; uri: string; path: string; session: DirectOpenSession }> {
+      scratch = await makeScratchWorkspaceHarness(workspace => workspace.write(FILE, CLEAN), {
+         extraSharedModules: [
+            {
+               model: {
+                  ClientSessionFactory: (services: ServerSharedServices) => ({
+                     create: (clientId: string, label: string) => new DirectOpenSession(services, { clientId, label })
+                  })
+               }
+            }
+         ]
+      });
+      const harness = scratch.harness;
+      const session = harness.shared.model.ModelService.createSession('form') as DirectOpenSession;
+      return { harness, uri: scratch.workspace.uri(FILE), path: scratch.workspace.resolve(FILE), session };
+   }
+
+   it('withOpen leaves open a document a subclass opened through openDocument rather than open', async () => {
+      const { harness, uri, session } = await bootDirectOpen();
+      await session.openDirectly(uri);
+
+      await session.withOpen(uri, () => undefined);
+
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(true);
+   });
+
+   it('withOpen leaves open a document a subclass was still opening through openDocument', async () => {
+      const { harness, uri, session } = await bootDirectOpen();
+      const opening = session.openDirectly(uri);
+
+      await session.withOpen(uri, () => undefined);
+      await opening;
+
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(true);
+   });
+
+   it('withOpen closes what it opened after joining a subclass open that failed', async () => {
+      const { harness, uri, path: filePath, session } = await bootDirectOpen();
+      rmSync(filePath);
+      const failing = expect(session.openDirectly(uri)).rejects.toThrow();
+      await expect(session.withOpen(uri, () => undefined)).rejects.toThrow();
+      await failing;
+      writeFileSync(filePath, CLEAN);
+
+      await session.withOpen(uri, () => undefined);
+
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
+   });
+
+   it('withOpen closes what it opened after a subclass closed the open it joined', async () => {
+      const { harness, uri, session } = await bootDirectOpen();
+      // The subclass awaits the open first, so it closes before withOpen's own open resumes.
+      const closed = session.openDirectly(uri).then(() => session.close(uri));
+      await session.withOpen(uri, () => undefined);
+      await closed;
+
+      await session.withOpen(uri, () => undefined);
+
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
+   });
+
+   it('withOpen leaves open a document a create of the session made while withOpen was opening it', async () => {
+      const { harness, newUri } = await boot();
+      const manager = harness.shared.workspace.AstDocumentManager;
+      const open = manager.open.bind(manager);
+      const created = new Deferred<void>();
+      // withOpen's open waits until create's has opened the document, so it attaches to it.
+      manager.open = async args => {
+         if (args.text === undefined) {
+            await created.promise;
+            return open(args);
+         }
+         const opened = await open(args);
+         created.resolve();
+         return opened;
+      };
+      const session = harness.shared.model.ModelService.createSession('form');
+
+      const using = session.withOpen(newUri, () => undefined);
+      await session.create(newUri, CLEAN);
+      await using;
+
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(newUri, session.clientId)).toBe(true);
+   });
+
+   it('withOpen leaves open a document a plain open of the session opened during the callback', async () => {
+      const { harness, uri } = await boot();
+      const session = harness.shared.model.ModelService.createSession('form');
+
+      await session.withOpen(uri, () => session.open(uri));
+
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(true);
+   });
+
+   it('withOpen leaves open a document a plain open of the session joined while withOpen was opening it', async () => {
+      const { harness, uri } = await boot();
+      const session = harness.shared.model.ModelService.createSession('form');
+
+      const run = session.withOpen(uri, () => undefined);
+      const opening = session.open(uri);
+      await Promise.all([run, opening]);
+
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(true);
+   });
+
+   it('withOpen keeps a document open for a withOpen of the session that started during its callback, and the last one closes it', async () => {
+      const { harness, uri } = await boot();
+      const textDocuments = harness.shared.workspace.TextDocuments;
+      const session = harness.shared.model.ModelService.createSession('form');
+      const release = new Deferred<void>();
+      let inner: Promise<boolean> | undefined;
+
+      await session.withOpen(uri, () => {
+         inner = session.withOpen(uri, async () => {
+            await release.promise;
+            return textDocuments.isOpenInClient(uri, session.clientId);
+         });
+      });
+      release.resolve();
+
+      await expect(inner).resolves.toBe(true);
+      expect(textDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
+   });
+
+   it('a close during the callback ends a plain open, so withOpen still closes what it opened later', async () => {
+      const { harness, uri } = await boot();
+      const session = harness.shared.model.ModelService.createSession('form');
+
+      await session.withOpen(uri, async () => {
+         await session.open(uri);
+         await session.close(uri);
+         await session.withOpen(uri, () => undefined);
+      });
+
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
+   });
+
+   it('withOpen closes what it opened after a plain open failed during the callback', async () => {
+      const { harness, uri, path } = await boot();
+      const session = harness.shared.model.ModelService.createSession('form');
+
+      await session.withOpen(uri, async () => {
+         await session.close(uri);
+         rmSync(path(FILE));
+         await expect(session.open(uri)).rejects.toThrow();
+         writeFileSync(path(FILE), CLEAN);
+         await session.withOpen(uri, () => undefined);
+      });
+
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
+   });
+
+   it('withOpen closes what it opened after a plain open of the same document failed', async () => {
+      const { harness, newUri, path } = await boot();
+      const session = harness.shared.model.ModelService.createSession('form');
+      await expect(session.open(newUri)).rejects.toThrow();
+      writeFileSync(path(NEW_FILE), CLEAN);
+
+      await session.withOpen(newUri, () => undefined);
+
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(newUri, session.clientId)).toBe(false);
+   });
+
+   it('withOpen settles when the callback ends the session', async () => {
+      const { harness, uri } = await boot();
+      const session = harness.shared.model.ModelService.createSession('form');
+
+      await session.withOpen(uri, () => session.dispose());
+
+      expect(harness.shared.workspace.TextDocuments.isOpenInClient(uri, session.clientId)).toBe(false);
    });
 
    it('withOpen opens for the callback and closes afterwards, also when it throws', async () => {
