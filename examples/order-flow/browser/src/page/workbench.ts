@@ -583,30 +583,22 @@ function setDataReport(document: TransferDocument<OrderFlowTransferRoot>): void 
  * rebuild whose phase event lands while the promise is still in flight.
  */
 async function watchThroughDataHead({ session, connection }: DataHead): Promise<void> {
+   // An event that arrives before the open answers holds a later state than the answer.
+   let heard = false;
    connection.events.onDidUpdateDocument(event => {
       if (event.document.uri === DATA_HEAD_DOCUMENT) {
+         heard = true;
          setDataReport(event.document);
       }
    });
-   await session.openDocument({ uri: DATA_HEAD_DOCUMENT });
-   // `openDocument` settles at the integrity landmark, so the diagnostics on
-   // its snapshot are NOT GUARANTEED — and a client cannot tell which case it
-   // got. A document the settle had to build arrives pre-validation with no
-   // diagnostics; one that something else already carried to `Validated` comes
-   // back carrying them, which is what this page produces, since the worker
-   // validates the whole workspace before anything here opens a document. So
-   // adopting the snapshot and never asking again reports whatever happened to
-   // be there — and reports a clean document forever when that was nothing.
-   // Asking explicitly is the documented way to get a validated one, and the
-   // VS Code panel had this exact defect.
-   //
-   // Still needed with the watch in place, and not redundant with it: the
-   // workspace build that validated this document may already have finished, in
-   // which case no phase event is owed to a watcher registered afterwards and
-   // the line would sit on the open snapshot's missing diagnostics until someone edited
-   // the file.
-   const server = await session.connected();
-   setDataReport(await server.getModelDocument({ uri: DATA_HEAD_DOCUMENT, includeDiagnostics: true }));
+   // Without `includeDiagnostics`, the snapshot carries diagnostics only when
+   // the document was validated already, and a client cannot tell which case
+   // it got. A build that validated it before the open sends no later event,
+   // so the line would report a clean document until someone edited the file.
+   const document = await session.openDocument({ uri: DATA_HEAD_DOCUMENT, includeDiagnostics: true });
+   if (!heard) {
+      setDataReport(document);
+   }
 }
 
 /**
@@ -632,19 +624,21 @@ function setLayoutReport(root: LayoutModel): void {
  * Watch the layout secondary through the data head and keep its report current.
  *
  * The listener is registered BEFORE the open, not after. `openDocument` watches
- * as its second step, so a rebuild triggered by the open itself can deliver a
- * phase event while the returned promise is still in flight — and a listener
- * attached afterwards would miss it, leaving the report showing the open
- * snapshot with no later event guaranteed to correct it.
+ * from the state it answers, and an event sent after that state can arrive
+ * before the answer, so a listener attached afterwards would miss it, leaving
+ * the report showing the open snapshot with no later event to correct it.
  */
 async function watchLayoutThroughDataHead({ session, connection }: DataHead): Promise<void> {
+   // An event that arrives before the open answers holds a later state than the answer.
+   let heard = false;
    connection.events.onDidUpdateDocument(event => {
       if (event.document.uri === LAYOUT_DOCUMENT && isLayoutModel(event.document.model?.root)) {
+         heard = true;
          setLayoutReport(event.document.model.root);
       }
    });
    const document = await session.openDocument({ uri: LAYOUT_DOCUMENT });
-   if (isLayoutModel(document.model?.root)) {
+   if (!heard && isLayoutModel(document.model?.root)) {
       setLayoutReport(document.model.root);
    }
 }

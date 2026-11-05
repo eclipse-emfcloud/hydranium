@@ -36,6 +36,8 @@ const EDIT_REFLECTED = 'updateModelDocument applies an edit';
 const WRITES_RACED = 'updateModelDocument answers racing writes';
 const HELD_WRITES = 'a document names the highest numbered write of each session it holds';
 const SUBSCRIPTION = 'subscribe + update delivers an onDocumentUpdated event';
+const OPEN_WATCH = 'an open with watch and diagnostics answers them and delivers the next update';
+const CREATE_WATCH = 'a create with watch and diagnostics answers them and delivers the next update';
 const FOLDER_CANDIDATES = 'findReferenceCandidates answers for a synthetic source at a folder URI';
 const CASCADE = 'editing a document reports its unwatched dependent as built';
 const DEPENDENT_CREDIT = "an edit that changes a watched dependent credits the dependent's event to no client";
@@ -140,12 +142,12 @@ describe('the /data battery discriminates', () => {
       }
    });
 
-   it('plans exactly the thirty-eight checks the must-fail cases below name', () => {
+   it('plans exactly the forty checks the must-fail cases below name', () => {
       // Guards the table against the battery growing: a new check with no canary
       // is the state this whole file exists to prevent, so it fails here rather
       // than going unnoticed.
       const titles = batteryOver().map(check => check.title);
-      expect(titles).toHaveLength(38);
+      expect(titles).toHaveLength(40);
       const covered = [
          PROJECT_SHAPE,
          PROJECT_NON_EMPTY,
@@ -157,6 +159,8 @@ describe('the /data battery discriminates', () => {
          EDIT_REFLECTED,
          CONFLICT_GATE,
          SUBSCRIPTION,
+         OPEN_WATCH,
+         CREATE_WATCH,
          CASCADE,
          DEPENDENT_CREDIT,
          FOLDER_CANDIDATES,
@@ -186,7 +190,7 @@ describe('the /data battery discriminates', () => {
          EPOCH_GATE,
          HELD_WRITES
       ];
-      expect(matching(titles, covered)).toHaveLength(38);
+      expect(matching(titles, covered)).toHaveLength(40);
    });
 
    // Each case breaks exactly ONE property and declares the complete set of
@@ -225,10 +229,25 @@ describe('the /data battery discriminates', () => {
          // advances a version, so nothing a caller holds can go stale, and
          // racing writes answer one version. And the set check, whose current
          // set carries an edit, and the dirty, text-hash, last-close, persist
-         // and delete-gate checks, whose second text is an edit.
+         // and delete-gate checks, whose second text is an edit. And the
+         // watched open and create checks: the unstored edit's event repeats
+         // the version they answered.
          label: 'an edit acknowledged but not stored',
          defects: { ignoreEdits: true },
-         expected: [EDIT_REFLECTED, WRITES_RACED, CONFLICT_GATE, SET, DIRTY, PERSIST, TEXT_HASH, LAST_CLOSE, DELETE_GATE, SYNTAX_ERROR]
+         expected: [
+            EDIT_REFLECTED,
+            WRITES_RACED,
+            CONFLICT_GATE,
+            SET,
+            DIRTY,
+            PERSIST,
+            TEXT_HASH,
+            LAST_CLOSE,
+            DELETE_GATE,
+            SYNTAX_ERROR,
+            OPEN_WATCH,
+            CREATE_WATCH
+         ]
       },
       { label: 'a model written over text with a syntax error', defects: { syntaxErrorsWritten: true }, expected: [SYNTAX_ERROR] },
       {
@@ -271,7 +290,15 @@ describe('the /data battery discriminates', () => {
          defects: { silentSubscriptions: true },
          expected: [SUBSCRIPTION, DEPENDENT_CREDIT]
       },
-      { label: 'updates fanned out before any subscription', defects: { notifiesBeforeSubscribe: true }, expected: [SUBSCRIPTION] },
+      { label: 'an open that ignores its watch', defects: { openIgnoresWatch: true }, expected: [OPEN_WATCH] },
+      { label: 'a create that ignores its watch', defects: { createIgnoresWatch: true }, expected: [CREATE_WATCH] },
+      { label: 'diagnostics left out where asked for', defects: { diagnosticsIgnored: true }, expected: [OPEN_WATCH, CREATE_WATCH] },
+      { label: 'a watch that repeats the state it answered', defects: { watchRepeatsAnswer: true }, expected: [OPEN_WATCH, CREATE_WATCH] },
+      {
+         label: 'updates fanned out before any subscription',
+         defects: { notifiesBeforeSubscribe: true },
+         expected: [SUBSCRIPTION, OPEN_WATCH]
+      },
       {
          // Also the dependent's credit, which holds the writer's own event to
          // the same rule.

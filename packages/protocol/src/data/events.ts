@@ -62,8 +62,8 @@ export interface TransferDocumentUpdatedEvent<
    /** See {@link TransferDocumentUpdateReason} for which reasons the framework sends. */
    reason: TransferDocumentUpdateReason;
    /**
-    * The position of this event among the update and deletion events the
-    * server sent on this connection, which a watch's answer carries as of
+    * The position of this event among the update, deletion and dirty events
+    * the server sent on this connection, which a watch's answer carries as of
     * the moment it was taken: a greater one was sent later.
     */
    sequence: number;
@@ -122,6 +122,12 @@ export interface TransferDocumentDirtyChangedEvent {
     * no longer exists, or when the build that follows its release failed.
     */
    readonly text?: TextState;
+   /**
+    * The position of this event among the update, deletion and dirty events
+    * the server sent on this connection, as on an update. Absent from a
+    * server that does not number dirty flips.
+    */
+   readonly sequence?: number;
 }
 
 /** Callback shape for `DataClientProtocol.onDocumentDirtyChanged`. */
@@ -164,9 +170,10 @@ export interface TransferDocumentDeletedEvent {
     */
    readonly sourceClientId: string;
    /**
-    * The position of this event among the update and deletion events the
-    * server sent on this connection, as on an update; absent on a deletion a
-    * `DataConnection` found after a reconnect, which the server never sent.
+    * The position of this event among the update, deletion and dirty events
+    * the server sent on this connection, as on an update; absent on a
+    * deletion a `DataConnection` found after a reconnect, which the server
+    * never sent.
     */
    readonly sequence?: number;
 }

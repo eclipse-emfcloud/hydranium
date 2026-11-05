@@ -89,6 +89,13 @@ export interface TransferDocument<TTransfer extends TransferElement, TDiagnostic
    model?: TransferModelSnapshot<TTransfer, TDiagnostic>;
    /** Absent when the server holds no text for the document. */
    text?: TextState;
+   /**
+    * On the answer of an open or create with `watch`: the position of the
+    * last update, deletion or dirty event sent on this connection before the
+    * server began the request. An event at or below it, a deletion included,
+    * ended nothing the request opened. A server before it sends none.
+    */
+   sequence?: number;
 }
 
 /**
@@ -153,7 +160,7 @@ export interface TransferWatchedDocument {
    readonly epoch: string;
    /** Whether a document exists there; one the server fails to load counts, only a missing one does not. */
    readonly exists: boolean;
-   /** The position of the last update or deletion event sent before `exists` was taken; an event past it was sent after. */
+   /** The position of the last update, deletion or dirty event sent before `exists` was taken; an event past it was sent after. */
    readonly sequence: number;
    /** The text the server held when `exists` was taken, as a read answers it; absent when it held none. */
    readonly text?: TextState;

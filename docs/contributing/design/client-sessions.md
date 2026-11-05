@@ -88,10 +88,11 @@ client's write or an integrity repair can land between a create and the read
 its answer carries, so a client that writes what it created bases the write
 on `created.version`, and the write conflicts instead of carrying that text
 as its own. The session counts a created document as its own unsaved text
-only while the create's answer, the watch's answer and a reconnect's re-open
-hold the text it last saw; an answer without text leaves that count as it
-was. The data head's persist request waits for the build after the write, so
-it can fail with the text already on disk.
+only while the create's answer and a reconnect's re-open hold the text it last
+saw, and not once an event turned the document clean, or another client
+changed it, while the create was out. An answer without text leaves that
+count as it was. The data head's persist request waits for the build after
+the write, so it can fail with the text already on disk.
 
 The data head's updates, saves and persists, and a diagram's save, answer only
 once `ModelService.settleLanguageClient` has seen the language client answer
@@ -138,9 +139,18 @@ first; a client without it that closes without awaiting its save gets the
 `DocumentNotOpenError` code. An open or create of a URI called while a close or
 delete of it is under way is sent once that has answered, so the server takes
 them in the order they were called; sent at once, an open called after a close
-could reach the server first, and the document would end closed.
-A participant that only follows a document uses `connection.watchDocument`,
-since an open would hold the document for as long as it follows.
+could reach the server first, and the document would end closed. An open
+watches the document in the same request, so no event falls between the two.
+A close called while the open is out may reach the server first, so the
+session closes again once the open answered. A deletion event arriving while
+the open is out is decided once it answers. One the server sent before it
+began the open, by the answer's `sequence`, ended nothing the open made. A
+later one may be of the file the open found, so the open is sent again, as
+often as the protected `sendsAgain` allows. A create is not sent again: it
+fails with `DocumentNotOpenError`, since sent again it would bring back the
+document the other client deleted. A participant that only follows a
+document uses `connection.watchDocument`, since an open would hold the
+document for as long as it follows.
 
 A deletion of a document's file closes every session's open of it, and the
 session forgets the document at once, its unsaved writes with it, and unwatches
@@ -168,8 +178,9 @@ A watch of `watchDocument` learns whether its document exists from the answer
 to `watchModelDocument`: the key the server's events name the document by, and
 whether one exists, taken once the watch is in place and the document loaded.
 An event can still go out between the server taking the answer and sending
-it, so every update and deletion event carries its position among them, and
-the answer the position of the last one sent as of the moment it was taken.
+it, so every update, deletion and dirty event carries its position among
+them, and the answer the position of the last one sent as of the moment it
+was taken.
 An event heard while the watch was in flight wins over the answer where its
 position is past the answer's; otherwise the answer wins, as it must over a
 deletion that was sent before the watch was placed and whose document was then
@@ -212,14 +223,15 @@ document is open again by then: a check that the document is open would take
 an edit made before a deletion as unsaved text of the re-created file.
 
 After a reconnect the connection registers each session again under its id and
-resume token, and the session re-opens each document under the options the
-server had opened it under, re-watches, and puts back what it wrote since each
-document's last save. It decides by text, not version: a revert moves the
-version on and a restarted server numbers versions afresh, so a version never
-tells whether the server still holds a write. Every document the data head
-sends that it holds carries a `text.hash` of the text alone. For each document
-written since its last save, the session keeps the hash its first unsaved write
-was based on, and its last write with that write's answer. After the re-open:
+resume token, and the session re-opens and watches each document in one
+request, under the options the server had opened it under, and puts back what
+it wrote since each document's last save. It decides by text, not version: a
+revert moves the version on and a restarted server numbers versions afresh, so
+a version never tells whether the server still holds a write. Every document
+the data head sends that it holds carries a `text.hash` of the text alone. For
+each document written since its last save, the session keeps the hash its
+first unsaved write was based on, and its last write with that write's answer.
+After the re-open:
 
 - A document that holds the last write needs nothing.
 - A document back at the text the first unsaved write was based on, reverted
@@ -324,8 +336,9 @@ field whose writes ran out, since no other value won there.
 numbers versions afresh in another epoch, so it refuses a write based on a
 version from before, which the copy then reconciles against the restarted
 server's document. A field changed while the connection was down then reports
-a conflict. Until the copy reads the restored document again, it keeps the
-problems from before.
+a conflict. The restored document carries its problems. A session that
+restores without them leaves the copy the problems from before until it reads
+the document again.
 
 **A write that raced nobody reports `applied`.** A write refused and then
 written again, by the server or by the copy itself on an unconfirmed base,
@@ -337,10 +350,10 @@ copy refused unsent does not count against its write limit, up to as many as
 the limit.
 
 **An ended open stays ended.** A close, a deletion, a restore that could not
-open the document again, a failed second read of the open or a read that finds
-the file gone ends it. Edits not yet written settle as `unavailable`, and a
-late answer neither brings the document back nor undoes an open made later. A
-close is final.
+open the document again, a failed second read of the open, a read that finds
+the file gone or the end of the session ends it. Edits not yet written settle
+as `unavailable`, and a late answer neither brings the document back nor undoes
+an open made later. A close is final.
 
 ## Over the GLSP head
 
@@ -443,12 +456,14 @@ Over the data head, a flip for an edit is sent to watchers when the text
 changes, before the build that follows, so its `text.version` can be ahead of
 the `model.version` a client holds; see
 [Comparing the two versions](../../concepts/document-layers.md#comparing-the-two-versions).
-After a reconnect, a `DataSession` reads each restored document once its watch
-is in place and any write is sent again, so a flip while the connection was
-down reaches its client and a document written again does not flash clean
-first. A diagram's dirty state is the same answer over every document its
-session has open. An editor keeps a dirty flag of its own, since LSP has none
-to send it.
+After a reconnect, a `DataSession` takes each restored document from its
+re-open, which holds a flip made while the connection was down. It reads the
+document again once a write is sent again, so a document written again does
+not flash clean first, and when the re-open is not the latest it knows of: a
+flip or update arrived while the restore ran, the answer carries no text, or
+the host passes on no flips or no updates. A diagram's dirty state is the same
+answer over every document its session has open. An editor keeps a dirty flag
+of its own, since LSP has none to send it.
 
 `EditorDiskSync` exists because a server save breaks Theia's incremental save.
 A server save of a document an editor shows unsaved writes the editor's text,

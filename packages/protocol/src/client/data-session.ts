@@ -17,7 +17,7 @@ import type {
    TransferDocumentDirtyChangedEvent,
    TransferDocumentUpdatedEvent
 } from '../data';
-import { isConflictError, SessionClosedError } from '../errors';
+import { DocumentNotOpenError, isConflictError, SessionClosedError } from '../errors';
 import type { Logger } from '../logger';
 import {
    type BaseVersionGate,
@@ -96,7 +96,10 @@ type OmitEach<TUnion, TKey extends PropertyKey> = TUnion extends unknown ? Omit<
 export type DataSessionOpenArgs<
    TTransfer extends TransferElement,
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
-> = Pick<Parameters<TServer['openModelDocument']>[0], 'uri' | ('options' & keyof Parameters<TServer['openModelDocument']>[0])>;
+> = Pick<
+   Parameters<TServer['openModelDocument']>[0],
+   'uri' | (('options' | 'includeDiagnostics') & keyof Parameters<TServer['openModelDocument']>[0])
+>;
 
 /**
  * The options an open through a session passes to `TServer`, `undefined` when
@@ -111,7 +114,7 @@ export type DataSessionOpenOptions<
 export type DataSessionCreateArgs<
    TTransfer extends TransferElement,
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
-> = DataSessionArgs<TServer['createModelDocument']>;
+> = OmitEach<Parameters<TServer['createModelDocument']>[0], 'clientId' | 'watch'>;
 
 /** Close a document through a session; the session supplies `clientId`. */
 export type DataSessionCloseArgs<
@@ -230,15 +233,18 @@ export interface DataSessionOpen<
    TTransfer extends TransferElement,
    TServer extends DataServerProtocol<TTransfer, DiagnosticOf<TServer>> = DataServerProtocol<TTransfer>
 > {
-   /** The URI the open's answer named, which the server keys its notifications by. */
-   readonly serverUri: string;
+   /**
+    * The URI the open's answer named, which the server keys its notifications
+    * by. The URI the open was sent with until it answers.
+    */
+   serverUri: string;
    /**
     * The options the server opened under, which a re-open after a reconnect
     * passes again: those of the earliest open of the URI under way when the
     * first answered, since the server keeps the open that arrives first.
     */
-   readonly options: DataSessionOpenOptions<TTransfer, TServer>;
-   /** Whether a deletion ended the open, which an open still watching sends again; a close does not. */
+   options: DataSessionOpenOptions<TTransfer, TServer>;
+   /** Whether a deletion ended the open, which an open still under way sends again; a close does not. */
    deleted: boolean;
 }
 
@@ -258,6 +264,33 @@ export interface DataSessionOpening<
    readonly options: DataSessionOpenOptions<TTransfer, TServer>;
 }
 
+/**
+ * The events that arrive while one open request is out, by the server URI
+ * they name. The session learns the URI the server names the document by only
+ * from the answer, so it looks them up once the answer is in.
+ */
+export interface DataSessionOpeningEvents {
+   /** The deletions, one of which may have ended the open. */
+   readonly deletions: Map<string, TransferDocumentDeletedEvent>;
+   /**
+    * The documents that turned clean, by the position of the last such flip.
+    * One sent after the server began a create holds no unsaved text of it.
+    */
+   readonly cleaned: Map<string, number | undefined>;
+   /**
+    * The documents another client wrote, by the position of the last such
+    * update. Written after the server began a create, the unsaved text is no
+    * longer the create's.
+    */
+   readonly superseded: Map<string, number | undefined>;
+}
+
+/** The documents changed while one restore runs, which a re-open's answer can be older than. */
+export interface DataSessionRestoreChanges {
+   /** The server URIs of the updates and dirty flips that arrived since the restore began. */
+   readonly uris: Set<string>;
+}
+
 /** Where `write` stands in the `updateDocuments` call it was last written by; `0` for a single update. */
 function indexOf(write: DataSessionUnsavedWrite<TransferElement, DataServerProtocol<TransferElement>>): number {
    return 'index' in write.call ? write.call.index : 0;
@@ -266,6 +299,11 @@ function indexOf(write: DataSessionUnsavedWrite<TransferElement, DataServerProto
 /** The call `write` was last written by, which a restore writes again as one set. */
 function setOf(write: DataSessionUnsavedWrite<TransferElement, DataServerProtocol<TransferElement>>): object {
    return 'update' in write.call ? write.call.update : write.call.updates;
+}
+
+/** Whether the server sent `deletion` before it began the open `answer` answers. Unnumbered, it counts as sent after. */
+function sentBefore(event: { readonly sequence?: number }, answer: { readonly sequence?: number }): boolean {
+   return event.sequence !== undefined && answer.sequence !== undefined && event.sequence <= answer.sequence;
 }
 
 /**
@@ -293,9 +331,10 @@ export interface DataSessionHost<TTransfer extends TransferElement, TServer exte
    restoreDeletion?(event: TransferDocumentDeletedEvent): void;
    /**
     * Forget what the client was told of `uri`'s dirty state: an open just
-    * made answered its caller afresh, and the client heard none of it, or a
-    * close leaves nothing to restore. Forgetting a URI another session still
-    * has open costs at most one repeat of a state the client already has.
+    * made answered its caller afresh, or a close leaves nothing to restore.
+    * Forgetting a flip the client did hear, one that arrived before the open
+    * answered or of a URI another session still has open, costs at most one
+    * repeat of a state the client already has.
     */
    forgetDirty?(uri: string): void;
    /**
@@ -394,6 +433,14 @@ export class DataSession<
     * taken as lost.
     */
    protected readonly settleWritesMs: number = 30_000;
+   /**
+    * Whether a restore re-opens each document only once it is validated, so
+    * {@link onDidRestoreDocument} hands on its diagnostics. Off, the default,
+    * the restore and the calls waiting on it wait for no validation: a document
+    * validated already carries them anyway, and the others get them with the
+    * update their validation sends.
+    */
+   protected readonly restoreWithDiagnostics: boolean = false;
    /**
     * The clock {@link settleBeforeCloseMs} runs on. {@link DataSessionHost}
     * carries no {@link Clock}, so a subclass replaces this field as it
@@ -516,6 +563,10 @@ export class DataSession<
    protected readonly updateSubscription?: Disposable;
    /** The subscription to the host's `onDidDeleteDocument`, disposed with the session. */
    protected readonly deletionSubscription?: Disposable;
+   /** The events of each open request out. */
+   protected readonly openingEvents = new Set<DataSessionOpeningEvents>();
+   /** The changes of each restore running. */
+   protected readonly restoreChanges = new Set<DataSessionRestoreChanges>();
    /** The host's logger, or one that logs nothing. */
    protected readonly logger: Logger;
 
@@ -525,8 +576,14 @@ export class DataSession<
       readonly label: string
    ) {
       this.logger = host.logger ?? new NoopLogger();
-      this.dirtySubscription = host.onDidChangeDirty?.(event => this.forgetSavedWrite(event));
-      this.updateSubscription = host.onDidUpdateDocument?.(event => this.forgetSupersededWrite(event));
+      this.dirtySubscription = host.onDidChangeDirty?.(event => {
+         this.restoreChanges.forEach(changes => changes.uris.add(event.uri));
+         this.forgetSavedWrite(event);
+      });
+      this.updateSubscription = host.onDidUpdateDocument?.(event => {
+         this.restoreChanges.forEach(changes => changes.uris.add(event.document.uri));
+         this.forgetSupersededWrite(event);
+      });
       this.deletionSubscription = host.onDidDeleteDocument?.(event => this.forgetDeletedDocument(event));
    }
 
@@ -558,21 +615,16 @@ export class DataSession<
    }
 
    /**
-    * Open `args.uri` for editing and start watching it, in that order,
-    * returning the opened snapshot.
+    * Open `args.uri` for editing and watch it, in one request, returning the
+    * opened snapshot. The watch is in place from the state the snapshot holds,
+    * so every later change arrives on `onDocumentUpdated`, possibly before
+    * the snapshot itself.
     *
-    * **The order is the whole reason this method exists.**
-    * `watchModelDocument` baselines its dedup fingerprint from the *current*
-    * document, but only if one exists. Watching first therefore leaves no
-    * baseline, and the first phase event after the open arrives as a spurious
-    * `'changed'` — which a widget that resets its in-memory root to the server
-    * view misreads as a concurrent third-party write, losing whatever the user
-    * had typed.
-    *
-    * Note that the returned snapshot's model usually has no `diagnostics`:
-    * `open` settles at the integrity landmark, not at validation.
-    * Validity arrives asynchronously on `onDocumentUpdated`, or synchronously
-    * from `getModelDocument({ includeDiagnostics: true })`.
+    * With `args.includeDiagnostics`, the open answers once the document is
+    * validated, with its diagnostics. While later builds keep overtaking its
+    * read, it may answer before that, and the diagnostics come with a later
+    * event. Without it, the snapshot's model carries them only when the
+    * document was validated already.
     */
    openDocument(args: DataSessionOpenArgs<TTransfer, TServer>): Promise<DataSessionDocument<TTransfer, TServer>> {
       return this.trackOpen(args.uri, args.options, opening =>
@@ -580,7 +632,8 @@ export class DataSession<
             args.uri,
             opening,
             () => undefined,
-            server => server.openModelDocument({ ...args, clientId: this.clientId })
+            server => server.openModelDocument({ ...args, clientId: this.clientId, watch: true }),
+            true
          )
       );
    }
@@ -592,6 +645,10 @@ export class DataSession<
     * names the version the create made in `created`, which a write of what
     * this session created is based on: the answered model can already be
     * another client's write or an integrity repair.
+    *
+    * A deletion sent after the server began the create fails it with
+    * {@link DocumentNotOpenError}. Sent again, the create would bring back the
+    * document the other client deleted.
     */
    createDocument(args: DataSessionCreateArgs<TTransfer, TServer>): Promise<TransferCreatedDocument<TTransfer, DiagnosticOf<TServer>>> {
       return this.trackOpen(args.uri, undefined, opening =>
@@ -599,98 +656,179 @@ export class DataSession<
             args.uri,
             opening,
             document => document.created.version,
-            server => server.createModelDocument({ ...args, clientId: this.clientId })
+            server => server.createModelDocument({ ...args, clientId: this.clientId, watch: true }),
+            false
          )
       );
    }
 
    /**
-    * Send `open` and watch what it answered, again for as long as a deletion
-    * heard while the watch is under way closes that open: sent after the
-    * deletion, the open fails as an open of a gone file does, or opens the
-    * file that is back. `created` reads the version the create made off the
-    * answered document, or none for an open; see {@link watchOpened} for the
+    * Send `open`, which opens and watches in one request. When `resends` is
+    * set, send it again for as long as a deletion event of the document
+    * arrives while it is out and {@link sendsAgain} agrees: the deletion may
+    * have ended the open, and sent after it, the open fails as an open of a
+    * gone file does, or opens the file that is back. Without `resends`, such
+    * a deletion fails it. `created` reads the version the create made off the
+    * answered document, or none for an open. See {@link recordOpened} for the
     * mark it puts in {@link createdUris}.
     *
-    * An `opening` a close marked answers with the document, recording nothing
-    * and sending nothing again; one it marked before the open answered is
-    * undone, since the server may have taken the close first. A failed watch
-    * is undone too: the caller sees a failed open, and so would never close it.
+    * An `opening` a close marked answers with the document, recording
+    * nothing. One it marked before the open answered is undone, since the
+    * server may have taken the close first. A failed first send is left to
+    * the server, which undoes an open it fails. A failed later send may meet
+    * an open the deletion did not end, so the session closes it. A deletion
+    * the server sent before it began the open ends nothing, and is ignored.
     */
    protected async openAndWatch<TDocument extends DataSessionDocument<TTransfer, TServer>>(
       uri: string,
       opening: DataSessionOpening<TTransfer, TServer>,
       created: (document: TDocument) => ModelVersion | undefined,
-      open: (server: RpcProxy<TServer>) => Promise<TDocument>
+      open: (server: RpcProxy<TServer>) => Promise<TDocument>,
+      resends: boolean
    ): Promise<TDocument> {
-      for (;;) {
+      // The URI a send answered with, whose open and watch the server may still hold.
+      let answered: string | undefined;
+      for (let sends = 1; ; sends++) {
          const server = await this.connected();
-         const document = await open(server);
+         // Recorded before it is sent, so a write the server takes after the
+         // open and answers while it is out is recorded under it, and a
+         // deletion arriving meanwhile finds it.
+         const record = this.recordOpening(uri);
+         let document: TDocument;
+         const events: DataSessionOpeningEvents = { deletions: new Map(), cleaned: new Map(), superseded: new Map() };
+         this.openingEvents.add(events);
+         try {
+            document = await open(server);
+            // A server that ignores `watch` answers no `sequence`, and is
+            // watched in a second request, with the gap between the two.
+            if (document.sequence === undefined) {
+               answered = document.uri;
+               await server.watchModelDocument({ uri, clientId: this.clientId });
+            }
+         } catch (error: unknown) {
+            // The server undid the open it failed, unless this send's open
+            // answered and its watch failed, or an earlier send's open was
+            // still held, which the deletion need not have ended. Nor the
+            // watch of that send, whose unwatch may have named another
+            // spelling or come first.
+            if (this.dropOpening(uri, opening) && answered !== undefined) {
+               await this.closeSent(server, uri, answered);
+            }
+            throw error;
+         } finally {
+            this.openingEvents.delete(events);
+         }
          if (opening.closed) {
             await this.undoOpen(server, uri, opening);
             return document;
          }
-         let watched: TDocument | undefined;
-         try {
-            watched = await this.watchOpened(server, uri, document, created(document));
-         } catch (error: unknown) {
-            await this.undoOpen(server, uri, opening);
-            throw error;
+         if (this.opens.get(uri) !== record) {
+            // Sent again, it ends as an open sent after the deletion would. A
+            // close is the caller's later call, and stands.
+            if (record.deleted) {
+               answered = document.uri;
+               await this.assertSendsAgain(server, uri, opening, document.uri, resends && this.sendsAgain(uri, sends));
+               continue;
+            }
+            return document;
          }
-         if (watched || opening.closed) {
-            return watched ?? document;
+         // The answer comes in a task of its own, so a deletion sent after it
+         // arrives once the open is recorded and finds it. One sent before the
+         // server began the open ended nothing of it.
+         const deletion = events.deletions.get(document.uri);
+         if (deletion === undefined || sentBefore(deletion, document)) {
+            // Turned clean or written over after the server began the create, a
+            // created document holds no unsaved text of this session's.
+            const replaced = [events.cleaned, events.superseded].some(
+               heard => heard.has(document.uri) && !sentBefore({ sequence: heard.get(document.uri) }, document)
+            );
+            const createdVersion = replaced ? undefined : created(document);
+            return this.recordOpened(uri, record, document, createdVersion);
          }
+         // A first open's record waited for the answer, see `forgetDeletedDocument`.
+         if (!this.openUris.has(uri)) {
+            this.forgetDeletedOpen(uri, deletion);
+         }
+         answered = document.uri;
+         await this.assertSendsAgain(server, uri, opening, document.uri, resends && this.sendsAgain(uri, sends));
       }
    }
 
    /**
-    * Watch a document this session just opened, and record it as open.
-    * Answers `undefined`, recording nothing, when a deletion heard while the
-    * watch is under way has ended the open already, and the document,
-    * recording nothing, when a close has. A failed watch rejects with the open
-    * still recorded, for its caller to undo, see {@link undoOpen}.
+    * Whether an open of `uri` that a deletion overtook `sends` times is sent
+    * again, or fails as an open of a gone file does. Always again by default.
+    */
+   protected sendsAgain(_uri: string, _sends: number): boolean {
+      return true;
+   }
+
+   /**
+    * Fail the open of `uri`, closing and unwatching what it answered as
+    * `answered`, unless it is sent `again`.
+    */
+   protected async assertSendsAgain(
+      server: RpcProxy<TServer>,
+      uri: string,
+      opening: DataSessionOpening<TTransfer, TServer>,
+      answered: string,
+      again: boolean
+   ): Promise<void> {
+      if (again) {
+         return;
+      }
+      // The deletion may have come before the open reached the server, which then holds it.
+      if (this.dropOpening(uri, opening)) {
+         await this.closeSent(server, uri, answered);
+      }
+      throw new DocumentNotOpenError(uri, this.clientId);
+   }
+
+   /** Close and unwatch what a failed open of `uri` may have left on the server, which answered it as `answered`. */
+   protected async closeSent(server: RpcProxy<TServer>, uri: string, answered: string): Promise<void> {
+      await server.closeModelDocument({ uri, clientId: this.clientId }).catch(() => undefined);
+      await server.unwatchModelDocument({ uri: answered, clientId: this.clientId }).catch(() => undefined);
+   }
+
+   /** The record of an open of `uri` about to be sent: the one the session holds, or a new one. */
+   protected recordOpening(uri: string): DataSessionOpen<TTransfer, TServer> {
+      const open = this.opens.get(uri) ?? { serverUri: uri, deleted: false, options: undefined };
+      this.opens.set(uri, open);
+      return open;
+   }
+
+   /**
+    * Record a document this session just opened and watched as open, under
+    * `open`, the record its open was sent under. Opened first, it takes the
+    * options of the earliest open still under way, which the server took
+    * first. One that failed is gone from `openings` by now, as the connection
+    * handles each answer in a task of its own.
     *
     * A document created at `createdVersion` is marked in {@link createdUris}
     * while its text is still at that version: a version past it is another's,
-    * a write or a repair, as a changed event would have said. Marked before the
-    * watch, so an event heard while it is under way clears the mark for good,
-    * and checked again against the text the watch answered, which an event
-    * sent before the watch was in place moved on unheard. The restore's
+    * a write or a repair, as a changed event would have said. The restore's
     * re-open is the one other point the session learns of the text without
-    * hearing the events between, and checks the mark the same way. An answer
-    * without text leaves the mark as it is, at every one of the three.
+    * hearing the events before, and checks the mark the same way. An answer
+    * without text leaves the mark as it is.
     */
-   protected async watchOpened<TDocument extends DataSessionDocument<TTransfer, TServer>>(
-      server: RpcProxy<TServer>,
+   protected recordOpened<TDocument extends DataSessionDocument<TTransfer, TServer>>(
       uri: string,
+      open: DataSessionOpen<TTransfer, TServer>,
       document: TDocument,
       createdVersion?: ModelVersion
-   ): Promise<TDocument | undefined> {
-      // Recorded before the watch, so a deletion heard while it is under way
-      // finds this open, which the server made before the deletion.
-      // Under the options of the earliest open still under way, which the
-      // server took first; one that failed is gone from `openings` by now,
-      // as the connection handles each answer in a task of its own.
-      const open = this.opens.get(uri) ?? {
-         serverUri: document.uri,
-         deleted: false,
-         options: [...(this.openings.get(uri) ?? [])].find(opening => !opening.closed)?.options
-      };
-      this.opens.set(uri, open);
+   ): TDocument {
+      open.serverUri = document.uri;
+      if (!this.openUris.has(uri)) {
+         open.options = [...(this.openings.get(uri) ?? [])].find(opening => !opening.closed)?.options;
+      }
       if (createdVersion !== undefined && (document.text === undefined || document.text.version === createdVersion)) {
          this.createdUris.add(uri);
       }
-      const watched = await server.watchModelDocument({ uri, clientId: this.clientId });
-      if (createdVersion !== undefined && watched.text !== undefined && watched.text.version !== createdVersion) {
-         this.createdUris.delete(uri);
-      }
-      if (this.opens.get(uri) !== open) {
-         // Sent again, it ends as an open sent after the deletion would; a
-         // close is the caller's later call, and stands.
-         return open.deleted ? undefined : document;
-      }
       this.openUris.add(uri);
-      this.recordText(uri, document);
+      // An update heard while the open was out can hold a later text than the answer.
+      const known = this.lastAnswers.get(uri);
+      if (!(known && document.text && known.version > document.text.version)) {
+         this.recordText(uri, document);
+      }
       // Keyed as the server keys its notifications, which may not be how the
       // caller spelled the URI.
       this.host.forgetDirty?.(document.uri);
@@ -728,12 +866,26 @@ export class DataSession<
     * the close would end that one too.
     */
    protected async undoOpen(server: RpcProxy<TServer>, uri: string, opening: DataSessionOpening<TTransfer, TServer>): Promise<void> {
+      if (this.dropOpening(uri, opening)) {
+         await server.closeModelDocument({ uri, clientId: this.clientId }).catch(() => undefined);
+      }
+   }
+
+   /**
+    * Drop what `opening` recorded of `uri`, unless the session still relies on
+    * the open, see {@link hasOpen}. Answers whether it dropped it. A write
+    * answered while the open was out was recorded under it, so it goes too.
+    */
+   protected dropOpening(uri: string, opening: DataSessionOpening<TTransfer, TServer>): boolean {
       if (this.hasOpen(uri, opening)) {
-         return;
+         return false;
       }
       this.opens.delete(uri);
       this.createdUris.delete(uri);
-      await server.closeModelDocument({ uri, clientId: this.clientId }).catch(() => undefined);
+      this.unsavedWrites.delete(uri);
+      this.lastAnswers.delete(uri);
+      this.savedVersions.delete(uri);
+      return true;
    }
 
    /** Drop everything this session keeps of `uri`, which it no longer has open. */
@@ -1080,6 +1232,7 @@ export class DataSession<
       if (event.text?.dirty) {
          return;
       }
+      this.openingEvents.forEach(events => events.cleaned.set(event.uri, event.sequence));
       // The flip names the server's key, which is not always the caller's
       // spelling that the records are kept under.
       for (const [uri, open] of this.opens) {
@@ -1114,6 +1267,7 @@ export class DataSession<
       if (event.reason !== 'changed' || this.isOwnEcho(event.sourceClientId)) {
          return;
       }
+      this.openingEvents.forEach(events => events.superseded.set(event.document.uri, event.sequence));
       for (const [uri, open] of this.opens) {
          if (open.serverUri !== event.document.uri) {
             continue;
@@ -1146,32 +1300,47 @@ export class DataSession<
     * drop the text.
     */
    protected forgetDeletedDocument(event: TransferDocumentDeletedEvent): void {
+      this.openingEvents.forEach(events => events.deletions.set(event.uri, event));
+      this.forgetDeletedOpens(event);
+   }
+
+   /** Forget each open the session holds under the server URI `event` names, under any spelling of the caller's. */
+   protected forgetDeletedOpens(event: TransferDocumentDeletedEvent): void {
       for (const [uri, open] of this.opens) {
-         if (open.serverUri !== event.uri) {
-            continue;
+         // A first open still out decides once it answers, since the server
+         // may have sent the deletion before it took the open.
+         if (open.serverUri === event.uri && this.openUris.has(uri)) {
+            this.forgetDeletedOpen(uri, event);
          }
-         open.deleted = true;
-         if (this.isOwnEcho(event.sourceClientId)) {
-            this.logger.withUri(uri).debug('Forgot the document: this session deleted it');
-            this.forgetDocument(uri);
-            continue;
-         }
-         const write = this.unsavedWrites.get(uri);
-         if (write) {
-            this.brokenSets.add(setOf(write));
-         }
-         // Never saved, so no file a watcher could see removed: a deletion
-         // naming no session is the release of the text a drop left behind.
-         const released = this.createdUris.has(uri) && event.sourceClientId === UNKNOWN_CLIENT_ID;
-         this.forgetGoneDocument(uri);
-         if (released) {
-            const reported = resolve(DATA_SESSION_UNSAVED_LOST, { uris: uri });
-            this.host.reportError?.(new Error(reported.text), reported);
-         }
-         this.connected()
-            .then(server => server.unwatchModelDocument({ uri, clientId: this.clientId }))
-            .catch(() => undefined);
       }
+   }
+
+   /** Forget the open of `uri` that `event` ended, as {@link forgetDeletedDocument} describes. */
+   protected forgetDeletedOpen(uri: string, event: TransferDocumentDeletedEvent): void {
+      const open = this.opens.get(uri);
+      if (open) {
+         open.deleted = true;
+      }
+      if (this.isOwnEcho(event.sourceClientId)) {
+         this.logger.withUri(uri).debug('Forgot the document: this session deleted it');
+         this.forgetDocument(uri);
+         return;
+      }
+      const write = this.unsavedWrites.get(uri);
+      if (write) {
+         this.brokenSets.add(setOf(write));
+      }
+      // Never saved, so no file a watcher could see removed: a deletion
+      // naming no session is the release of the text a drop left behind.
+      const released = this.createdUris.has(uri) && event.sourceClientId === UNKNOWN_CLIENT_ID;
+      this.forgetGoneDocument(uri);
+      if (released) {
+         const reported = resolve(DATA_SESSION_UNSAVED_LOST, { uris: uri });
+         this.host.reportError?.(new Error(reported.text), reported);
+      }
+      this.connected()
+         .then(server => server.unwatchModelDocument({ uri, clientId: this.clientId }))
+         .catch(() => undefined);
    }
 
    /**
@@ -1249,14 +1418,30 @@ export class DataSession<
     * is disposed, its caller has ended it, and the restore returns at its
     * next await: nothing more goes to the server or the host.
     *
-    * Each document's dirty state goes to the host too, read once the watch is
-    * in place and any write is sent: a flip while the connection was down, or
-    * between the re-open and the watch, reached no one, and the re-open's own
-    * answer misses the second. Read before the write, it would tell the client
-    * a document is clean that the write is about to make dirty again.
+    * Each document's dirty state goes to the host too, since a flip while the
+    * connection was down reached no one. It is the re-open's, which watches
+    * from the state it answers with, unless the document may have moved on
+    * since: then it is read again once any write is sent. Read before the
+    * write, it would tell the client a document is clean that the write is
+    * about to make dirty again.
     */
    protected async restore(server: RpcProxy<TServer>): Promise<void> {
       const writes = [...this.unsavedWrites];
+      const changes: DataSessionRestoreChanges = { uris: new Set() };
+      this.restoreChanges.add(changes);
+      try {
+         await this.restoreOpens(server, writes, changes);
+      } finally {
+         this.restoreChanges.delete(changes);
+      }
+   }
+
+   /** The body of {@link restore}, with the `changes` made while it runs. */
+   protected async restoreOpens(
+      server: RpcProxy<TServer>,
+      writes: [string, DataSessionUnsavedWrite<TTransfer, TServer>][],
+      changes: DataSessionRestoreChanges
+   ): Promise<void> {
       // No write sent before the drop answers any more, and a restarted
       // server numbers afresh, below the versions saved before it.
       this.savedVersions.clear();
@@ -1269,7 +1454,28 @@ export class DataSession<
          }
          try {
             const options = this.opens.get(uri)?.options;
-            const document = await server.openModelDocument({ uri, clientId: this.clientId, options });
+            const events: DataSessionOpeningEvents = { deletions: new Map(), cleaned: new Map(), superseded: new Map() };
+            this.openingEvents.add(events);
+            let document: DataSessionDocument<TTransfer, TServer>;
+            try {
+               document = await server.openModelDocument({
+                  uri,
+                  clientId: this.clientId,
+                  options,
+                  watch: true,
+                  includeDiagnostics: this.restoreWithDiagnostics
+               });
+               // A server that ignores `watch` is watched in a second request, as `openAndWatch` does.
+               if (document.sequence === undefined) {
+                  await server.watchModelDocument({ uri, clientId: this.clientId }).catch(async (error: unknown) => {
+                     // Closed, or the server holds the re-open until the session ends.
+                     await server.closeModelDocument({ uri, clientId: this.clientId }).catch(() => undefined);
+                     throw error;
+                  });
+               }
+            } finally {
+               this.openingEvents.delete(events);
+            }
             if (this.disposed) {
                return;
             }
@@ -1279,28 +1485,28 @@ export class DataSession<
                await server.closeModelDocument({ uri, clientId: this.clientId }).catch(() => undefined);
                continue;
             }
-            // Recorded before the watch, so a deletion heard while it is under
-            // way finds the re-open under the URI it answered with, which a
-            // restarted server may key differently.
+            // Under the URI it answered with, which a restarted server may key
+            // differently, so a later deletion finds it, and one that arrived
+            // while the re-open was out is taken now.
             this.opens.set(uri, { serverUri: document.uri, deleted: false, options });
-            await server.watchModelDocument({ uri, clientId: this.clientId }).catch(async (error: unknown) => {
-               // Closed, or the server holds the re-open until the session
-               // ends; no other call relies on it while the restore runs.
+            const deletion = events.deletions.get(document.uri);
+            // One sent before the server began the re-open ended nothing of it.
+            if (deletion && !sentBefore(deletion, document)) {
+               this.forgetDeletedOpens(deletion);
+               // Closed as one forgotten while it re-opened is: no re-open of it is still out.
                await server.closeModelDocument({ uri, clientId: this.clientId }).catch(() => undefined);
-               throw error;
-            });
-            if (this.disposed) {
-               return;
-            }
-            if (this.openUris.has(uri)) {
-               // Text other than this session last saw was written while the
-               // connection was down, by an event it never heard.
-               const known = this.lastAnswers.get(uri);
-               if (this.createdUris.has(uri) && document.text !== undefined && known !== undefined && document.text.hash !== known.hash) {
-                  this.createdUris.delete(uri);
+               if (this.disposed) {
+                  return;
                }
-               this.recordText(uri, document);
+               continue;
             }
+            // Text other than this session last saw was written while the
+            // connection was down, by an event it never heard.
+            const known = this.lastAnswers.get(uri);
+            if (this.createdUris.has(uri) && document.text !== undefined && known !== undefined && document.text.hash !== known.hash) {
+               this.createdUris.delete(uri);
+            }
+            this.recordText(uri, document);
             reopened.set(uri, document);
          } catch (error: unknown) {
             // Gone while the connection was down, which no deletion told the
@@ -1365,13 +1571,24 @@ export class DataSession<
             return;
          }
       }
-      for (const uri of reopened.keys()) {
+      const written = new Set(writes.map(([uri]) => uri));
+      // Without both events, nothing tells the session that a document moved on.
+      const followsChanges = this.host.onDidChangeDirty !== undefined && this.host.onDidUpdateDocument !== undefined;
+      for (const [uri, document] of reopened) {
          if (!this.openUris.has(uri)) {
             continue;
          }
          // A failed read, or one without text, leaves the client's dirty
-         // state as it was; the document is restored all the same.
-         const current = await server.getModelDocument({ uri }).catch(() => undefined);
+         // state as it was; the document is restored all the same. An answer
+         // without `sequence` was watched in a second request, so is read again.
+         const current =
+            followsChanges &&
+            !written.has(uri) &&
+            !changes.uris.has(document.uri) &&
+            document.text !== undefined &&
+            document.sequence !== undefined
+               ? document
+               : await server.getModelDocument({ uri, includeDiagnostics: this.restoreWithDiagnostics }).catch(() => undefined);
          if (this.disposed) {
             return;
          }
@@ -1588,6 +1805,9 @@ export class DataSession<
       if (!open || this.opens.get(uri) !== open) {
          return;
       }
+      // Answered before its open, the record learns the server's key here, so
+      // a flip or change arriving before the open's answer finds it.
+      open.serverUri = document.uri;
       const answer = this.answerOf(uri, document);
       const kept = this.unsavedWrites.get(uri);
       if (kept && answer.version < kept.answer.version) {

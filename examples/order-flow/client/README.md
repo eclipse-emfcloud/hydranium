@@ -34,7 +34,7 @@ extension host's connection — so the port abstracts the transport hop, not
 merely the protocol.
 
 This split is a requirement, not an implementation detail. `glsp-client-theia`
-is not a diagram — it is the Theia *mounting* of one. Folding the diagram
+is not a diagram — it is the Theia _mounting_ of one. Folding the diagram
 definition into a Theia extension is the cheap path and it would leave the
 framework's client tier with no adopter coverage, as well as making diagrams
 look Theia-only.
@@ -140,7 +140,7 @@ invalidates.
 **Fields are derived, not declared**: every own property of the root whose value
 is a string, minus `$`- and `_`-prefixed ones. So no grammar and no property
 name appears in the source. The cost is that a cross-reference is presented like
-any other string, because its transfer form *is* its reference text.
+any other string, because its transfer form _is_ its reference text.
 
 `setField` sends the **whole root**, because `TransferUpdateDocumentArgs.model`
 is the document root and there is no path-scoped variant — the encoder is
@@ -150,14 +150,14 @@ read-modify-write, and what keeps it from clobbering a concurrent writer is
 through. A host renders each outcome differently, which is why `setField`
 returns a status rather than `void`:
 
-| Outcome | Meaning |
-| --- | --- |
-| `applied` | Landed against an unchanged document. |
-| `merged` | Raced foreign edits to *different* fields; both intents survive. |
-| `conflict` | Raced a foreign edit of the *same* field to a different value, and was dropped while the other edits of its write still landed. Or set a field an earlier edit lost that way, a revert to the value before it included. The panel then shows the server's value. When reading it fails, the edit fails instead. |
-| `ran-out` | Each write conflicted with a foreign edit until its writes ran out, and the whole write was dropped. The panel then shows the server's values. When reading them fails, the edit fails instead. |
-| `unchanged` | Nothing was written: the panel's value already matched, or the server turned out to hold it. |
-| `unavailable` | Nothing was written: the document was closed or deleted, a restore could not open it again, or its open's second read failed, before a write carried the edit. |
+| Outcome       | Meaning                                                                                                                                                                                                                                                                                                         |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `applied`     | Landed against an unchanged document.                                                                                                                                                                                                                                                                           |
+| `merged`      | Raced foreign edits to _different_ fields; both intents survive.                                                                                                                                                                                                                                                |
+| `conflict`    | Raced a foreign edit of the _same_ field to a different value, and was dropped while the other edits of its write still landed. Or set a field an earlier edit lost that way, a revert to the value before it included. The panel then shows the server's value. When reading it fails, the edit fails instead. |
+| `ran-out`     | Each write conflicted with a foreign edit until its writes ran out, and the whole write was dropped. The panel then shows the server's values. When reading them fails, the edit fails instead.                                                                                                                 |
+| `unchanged`   | Nothing was written: the panel's value already matched, or the server turned out to hold it.                                                                                                                                                                                                                    |
+| `unavailable` | Nothing was written: the document was closed or deleted, a restore could not open it again, or its open's second read failed, before a write carried the edit.                                                                                                                                                  |
 
 The panel reports a `conflict`, a `ran-out` or an `unavailable` of a document it
 no longer shows through its error sink, naming the field and the document,

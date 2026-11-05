@@ -82,8 +82,8 @@ describe('dirty state over the data head', () => {
       await waitFor(() => dirtyChanges.length === 2);
       expect([opened.text?.dirty, updated.text?.dirty, saved.text?.dirty]).toEqual([false, true, false]);
       expect(dirtyChanges).toEqual([
-         { uri, text: updated.text },
-         { uri, text: saved.text }
+         { uri, text: updated.text, sequence: expect.any(Number) },
+         { uri, text: saved.text, sequence: expect.any(Number) }
       ]);
       expect(readFileSync(path, 'utf8')).toBe(EDITED);
    });
@@ -236,7 +236,7 @@ describe('dirty state over the data head', () => {
       await proxy.closeModelDocument({ uri: newUri, clientId: 'form' });
 
       await waitFor(() => dirtyChanges.length === 1);
-      expect(dirtyChanges).toEqual([{ uri: newUri }]);
+      expect(dirtyChanges).toEqual([{ uri: newUri, sequence: expect.any(Number) }]);
    });
 
    it('answers a created document dirty until its first save', async () => {

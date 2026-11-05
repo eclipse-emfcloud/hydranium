@@ -98,6 +98,14 @@ type FakeDiagnostic = TransferDiagnostic;
  */
 type FakeAstDiagnostic = AstDiagnostic;
 
+/** One diagnostic a build left, for tests that need a document validated with findings. */
+const UNRESOLVED_DIAGNOSTIC: FakeAstDiagnostic = {
+   range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+   message: 'broken',
+   code: 'unresolved-ref',
+   element: 'FakeRoot'
+};
+
 // ============================================================
 // Stub bundle — the framework testing subpath composes the
 // Langium-layer stubs. The local helper just selects the
@@ -220,7 +228,7 @@ describe('DataServer', () => {
    describe('getModelDocument', () => {
       it('returns the current document state at the integrity-settled landmark by default', async () => {
          const bundle = buildBundle();
-         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'current' });
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'current' }, { state: IntegrityService.SettledState, diagnostics: [] });
          const { proxy, pair } = makeHarness(bundle.services);
          try {
             const result = await proxy.getModelDocument({ uri: URI_A });
@@ -239,6 +247,18 @@ describe('DataServer', () => {
          }
       });
 
+      it('answers the diagnostics of a document validated already without includeDiagnostics', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'current' }, { diagnostics: [UNRESOLVED_DIAGNOSTIC] });
+         const { proxy, pair } = makeHarness(bundle.services);
+         try {
+            const result = await proxy.getModelDocument({ uri: URI_A });
+            expect(result.model?.diagnostics).toHaveLength(1);
+         } finally {
+            pair.dispose();
+         }
+      });
+
       it('settles at Validated when includeDiagnostics is requested', async () => {
          const bundle = buildBundle();
          bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'current' });
@@ -247,6 +267,24 @@ describe('DataServer', () => {
             await proxy.getModelDocument({ uri: URI_A, includeDiagnostics: true });
             expect(bundle.documentBuilder.waitUntilCalls).toHaveLength(1);
             expect(bundle.documentBuilder.waitUntilCalls[0].args[0]).toBe(DocumentState.Validated);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('settles at the last state builds reach when includeDiagnostics is requested of a server that does not validate', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'current' });
+         vi.spyOn(bundle.services.workspace.DocumentBuilder, 'finalBuildState').mockReturnValue(IntegrityService.SettledState);
+         const { proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'sub-1' });
+            await proxy.getModelDocument({ uri: URI_A, includeDiagnostics: true });
+            await proxy.openModelDocument({ uri: URI_A, clientId: 'sub-1', watch: true, includeDiagnostics: true });
+            expect(bundle.documentBuilder.waitUntilCalls.map(call => call.args[0])).toEqual([
+               IntegrityService.SettledState,
+               IntegrityService.SettledState
+            ]);
          } finally {
             pair.dispose();
          }
@@ -853,6 +891,30 @@ describe('DataServer', () => {
             pair.dispose();
          }
       });
+
+      it('names a missing document a watched open answers by the URI its events name', async () => {
+         /** Keys watches case-folded, as a head on a case-insensitive file system may. */
+         class FoldedKeyServer extends TestDataServer {
+            protected override canonicalKey(uri: string): string {
+               return uri.toLowerCase();
+            }
+            protected override isMissingDocument(): boolean {
+               return true;
+            }
+         }
+         const bundle = buildBundle();
+         vi.spyOn(bundle.services.model.ModelService, 'ensureDocumentState').mockRejectedValueOnce(new Error('no such file'));
+         const { proxy, pair } = makeDataServerHarness<FoldedKeyServer, FakeRoot, FakeDiagnostic>({
+            server: channel => new FoldedKeyServer(channel, bundle.services)
+         });
+         try {
+            await proxy.createSession({ clientId: 'sub-1' });
+            const opened = await proxy.openModelDocument({ uri: URI_A, clientId: 'sub-1', watch: true });
+            expect({ uri: opened.uri, model: opened.model }).toEqual({ uri: URI_A.toLowerCase(), model: undefined });
+         } finally {
+            pair.dispose();
+         }
+      });
    });
 
    describe('watchModelDocument', () => {
@@ -1274,6 +1336,588 @@ describe('DataServer', () => {
       });
    });
 
+   describe('openModelDocument with watch', () => {
+      it('watches from the state it answered, sending nothing for that state and the next change', async () => {
+         const bundle = buildBundle();
+         const document = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         const { proxy, events, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'sub-1' });
+            const opened = await proxy.openModelDocument({ uri: URI_A, clientId: 'sub-1', watch: true, includeDiagnostics: true });
+            fireRebuild(bundle, document);
+            await tick();
+            expect({ name: opened.model?.root.name, events: events.length }).toEqual({ name: 'initial', events: 0 });
+
+            fireRebuild(bundle, bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'changed' }));
+            await waitFor(() => events.length === 1);
+            expect(events[0]?.document.model?.root.name).toBe('changed');
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('answers the diagnostics of a document validated already without includeDiagnostics, and sends no event for them', async () => {
+         const bundle = buildBundle();
+         const document = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' }, { diagnostics: [UNRESOLVED_DIAGNOSTIC] });
+         const { proxy, events, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'sub-1' });
+            const opened = await proxy.openModelDocument({ uri: URI_A, clientId: 'sub-1', watch: true });
+            fireRebuild(bundle, document);
+            await tick();
+            expect({ diagnostics: opened.model?.diagnostics?.length, events: events.length }).toEqual({ diagnostics: 1, events: 0 });
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('baselines on the state it answered, not on a later build still short of the event phase', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         const modelService = bundle.services.model.ModelService;
+         const ensure = modelService.ensureDocumentState.bind(modelService);
+         let later: LangiumDocument | undefined;
+         vi.spyOn(modelService, 'ensureDocumentState').mockImplementationOnce(async (uri, state) => {
+            const built = await ensure(uri, state);
+            // Parsed only, so its event is still to come and the answer stands.
+            later = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'later' }, { state: DocumentState.Parsed, diagnostics: [] });
+            return built;
+         });
+         const { proxy, events, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'sub-1' });
+            const opened = await proxy.openModelDocument({ uri: URI_A, clientId: 'sub-1', watch: true, includeDiagnostics: true });
+            if (!later) {
+               throw new Error('the open never read');
+            }
+            later.state = DocumentState.Validated;
+            fireRebuild(bundle, later);
+
+            await waitFor(() => events.length === 1, { message: 'the later build never reached the watch' });
+            expect({ answered: opened.model?.root.name, event: events[0]?.document.model?.root.name }).toEqual({
+               answered: 'initial',
+               event: 'later'
+            });
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('answers the diagnostics of a rebuild that kept the root and reached the event phase while it read', async () => {
+         const bundle = buildBundle();
+         const document = bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' }, { diagnostics: [] });
+         const modelService = bundle.services.model.ModelService;
+         const ensure = modelService.ensureDocumentState.bind(modelService);
+         vi.spyOn(modelService, 'ensureDocumentState').mockImplementationOnce(async (uri, state) => {
+            const built = await ensure(uri, state);
+            // A dependency's change relinked and validated it again, and its event went out before this open's watch.
+            document.diagnostics = [UNRESOLVED_DIAGNOSTIC];
+            return built;
+         });
+         const { proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'sub-1' });
+            const opened = await proxy.openModelDocument({ uri: URI_A, clientId: 'sub-1', watch: true, includeDiagnostics: true });
+
+            expect(opened.model?.diagnostics).toHaveLength(1);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('reads again when a later build reached the event phase while it read, so it answers what that event carried', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         const modelService = bundle.services.model.ModelService;
+         const ensure = modelService.ensureDocumentState.bind(modelService);
+         const ensured = vi.spyOn(modelService, 'ensureDocumentState').mockImplementationOnce(async (uri, state) => {
+            const built = await ensure(uri, state);
+            // Built and sent to the watchers there were before this open's watch.
+            bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'later' });
+            return built;
+         });
+         const { proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'sub-1' });
+            const opened = await proxy.openModelDocument({ uri: URI_A, clientId: 'sub-1', watch: true });
+
+            expect({ name: opened.model?.root.name, reads: ensured.mock.calls.length }).toEqual({ name: 'later', reads: 2 });
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('answers the later build as it stands when an override reads no more', async () => {
+         /** Reads once, as an adopter bounding the reads would. */
+         class OneReadServer extends TestDataServer {
+            protected override readsAgain(): boolean {
+               return false;
+            }
+         }
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         const modelService = bundle.services.model.ModelService;
+         const ensure = modelService.ensureDocumentState.bind(modelService);
+         const ensured = vi.spyOn(modelService, 'ensureDocumentState').mockImplementationOnce(async (uri, state) => {
+            const built = await ensure(uri, state);
+            bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'later' });
+            return built;
+         });
+         const { proxy, events, pair } = makeDataServerHarness<OneReadServer, FakeRoot, FakeDiagnostic>({
+            server: channel => new OneReadServer(channel, bundle.services, { diagnostics: nodeDataServerDiagnostics() })
+         });
+         try {
+            await proxy.createSession({ clientId: 'sub-1' });
+            const opened = await proxy.openModelDocument({ uri: URI_A, clientId: 'sub-1', watch: true });
+            fireRebuild(bundle, bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'changed' }));
+            await waitFor(() => events.length === 1);
+
+            expect({
+               name: opened.model?.root.name,
+               reads: ensured.mock.calls.length,
+               event: events[0]?.document.model?.root.name
+            }).toEqual({
+               name: 'later',
+               reads: 1,
+               event: 'changed'
+            });
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('answers after three reads when a later build overtakes every read, so sustained edits cannot starve the open', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'initial' });
+         const modelService = bundle.services.model.ModelService;
+         const ensure = modelService.ensureDocumentState.bind(modelService);
+         const ensured = vi.spyOn(modelService, 'ensureDocumentState').mockImplementation(async (uri, state) => {
+            const built = await ensure(uri, state);
+            bundle.documents.set(URI_A, { $type: 'FakeRoot', name: `later ${ensured.mock.calls.length}` });
+            return built;
+         });
+         const { proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'sub-1' });
+            const opened = await proxy.openModelDocument({ uri: URI_A, clientId: 'sub-1', watch: true });
+
+            expect({ name: opened.model?.root.name, reads: ensured.mock.calls.length }).toEqual({ name: 'later 3', reads: 3 });
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('places no watch for a session that ended while it read', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         const modelService = bundle.services.model.ModelService;
+         const ensure = modelService.ensureDocumentState.bind(modelService);
+         const reading = new Deferred<void>();
+         const read = new Deferred<void>();
+         vi.spyOn(modelService, 'ensureDocumentState').mockImplementationOnce(async (uri, state) => {
+            reading.resolve();
+            await read.promise;
+            return ensure(uri, state);
+         });
+         const { server, proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'ending' });
+            const opened = proxy.openModelDocument({ uri: URI_A, clientId: 'ending', watch: true });
+            await reading.promise;
+            await proxy.closeSession({ clientId: 'ending' });
+            read.resolve();
+
+            const failure = await opened.then(
+               () => undefined,
+               (error: unknown) => error
+            );
+            // The release the close made can leave a record with no watcher.
+            const internal = server as unknown as { uriWatchRecords: Map<string, { watchers: Set<string> }> };
+            const watchers = [...internal.uriWatchRecords.values()].flatMap(record => [...record.watchers]);
+            expect({ closed: isSessionClosedError(failure), watchers }).toEqual({ closed: true, watchers: [] });
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('keeps the open of an overlapping open that answered when the first open of it fails', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         const modelService = bundle.services.model.ModelService;
+         const reading = new Deferred<void>();
+         const refused = new Deferred<void>();
+         vi.spyOn(modelService, 'ensureDocumentState').mockImplementationOnce(async () => {
+            reading.resolve();
+            await refused.promise;
+            throw new Error('snapshot refused');
+         });
+         const { server, proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'twice' });
+            const first = proxy.openModelDocument({ uri: URI_A, clientId: 'twice', watch: true });
+            await reading.promise;
+            await proxy.openModelDocument({ uri: URI_A, clientId: 'twice', watch: true });
+            refused.resolve();
+            await expect(first).rejects.toThrow(/snapshot refused/);
+
+            const internal = server as unknown as { uriWatchRecords: Map<string, { watchers: Set<string> }> };
+            expect({
+               opens: [...(bundle.astDocumentManager.openClients.get(URI_A) ?? [])],
+               watchers: [...internal.uriWatchRecords.values()].flatMap(record => [...record.watchers])
+            }).toEqual({ opens: ['twice'], watchers: ['twice'] });
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('keeps the open of an overlapping open that answered when the create of it fails', async () => {
+         const bundle = buildBundle();
+         const reading = new Deferred<void>();
+         const refused = new Deferred<void>();
+         vi.spyOn(bundle.services.model.ModelService, 'ensureDocumentState').mockImplementationOnce(async () => {
+            reading.resolve();
+            await refused.promise;
+            throw new Error('snapshot refused');
+         });
+         const { server, proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'twice' });
+            const internal = server as unknown as {
+               clientSessions: Map<string, { create(uri: string, text: string): Promise<number>; open(uri: string): Promise<void> }>;
+            };
+            const session = internal.clientSessions.get('twice');
+            if (!session) {
+               throw new Error('no session registered');
+            }
+            // The stub store cannot create, so the create opens what it made as one does.
+            vi.spyOn(session, 'create').mockImplementationOnce(async uri => {
+               bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+               await session.open(uri);
+               return 1;
+            });
+            const created = proxy.createModelDocument({ uri: URI_A, clientId: 'twice', text: 'A', watch: true });
+            await reading.promise;
+            await proxy.openModelDocument({ uri: URI_A, clientId: 'twice', watch: true });
+            refused.resolve();
+            await expect(created).rejects.toThrow(/snapshot refused/);
+
+            expect([...(bundle.astDocumentManager.openClients.get(URI_A) ?? [])]).toEqual(['twice']);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('closes nothing for a create refused before it opened', async () => {
+         const bundle = buildBundle();
+         const { server, proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'refused' });
+            const internal = server as unknown as { clientSessions: Map<string, { create(uri: string, text: string): Promise<number> }> };
+            const session = internal.clientSessions.get('refused');
+            if (!session) {
+               throw new Error('no session registered');
+            }
+            vi.spyOn(session, 'create').mockRejectedValueOnce(new Error('the file exists'));
+            const closed = vi.spyOn(bundle.astDocumentManager, 'close');
+
+            await expect(proxy.createModelDocument({ uri: URI_A, clientId: 'refused', text: 'A', watch: true })).rejects.toThrow(
+               /file exists/
+            );
+            expect(closed).not.toHaveBeenCalled();
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('releases an open sent after a close when it fails, though an open from before the close answered', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         const modelService = bundle.services.model.ModelService;
+         const ensure = modelService.ensureDocumentState.bind(modelService);
+         const firstReading = new Deferred<void>();
+         const firstReleased = new Deferred<void>();
+         const secondReading = new Deferred<void>();
+         const secondRefused = new Deferred<void>();
+         vi.spyOn(modelService, 'ensureDocumentState')
+            .mockImplementationOnce(async (uri, state) => {
+               firstReading.resolve();
+               await firstReleased.promise;
+               return ensure(uri, state);
+            })
+            .mockImplementationOnce(async () => {
+               secondReading.resolve();
+               await secondRefused.promise;
+               throw new Error('snapshot refused');
+            });
+         const { server, proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'twice' });
+            const first = proxy.openModelDocument({ uri: URI_A, clientId: 'twice', watch: true });
+            await firstReading.promise;
+            await proxy.closeModelDocument({ uri: URI_A, clientId: 'twice' });
+            const second = proxy.openModelDocument({ uri: URI_A, clientId: 'twice', watch: true });
+            await secondReading.promise;
+            firstReleased.resolve();
+            await first;
+            secondRefused.resolve();
+            await expect(second).rejects.toThrow(/snapshot refused/);
+
+            const internal = server as unknown as { uriWatchRecords: Map<string, { watchers: Set<string> }> };
+            expect({
+               opens: [...(bundle.astDocumentManager.openClients.get(URI_A) ?? [])],
+               watchers: [...internal.uriWatchRecords.values()].flatMap(record => [...record.watchers])
+            }).toEqual({ opens: [], watchers: [] });
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('keeps the watch a session placed before an open of the document that fails', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         const { server, proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'watching' });
+            await proxy.watchModelDocument({ uri: URI_A, clientId: 'watching' });
+            vi.spyOn(bundle.services.model.ModelService, 'ensureDocumentState').mockRejectedValueOnce(new Error('snapshot refused'));
+            await expect(proxy.openModelDocument({ uri: URI_A, clientId: 'watching', watch: true })).rejects.toThrow(/snapshot refused/);
+
+            const internal = server as unknown as { uriWatchRecords: Map<string, { watchers: Set<string> }> };
+            expect({
+               opens: [...(bundle.astDocumentManager.openClients.get(URI_A) ?? [])],
+               watchers: [...internal.uriWatchRecords.values()].flatMap(record => [...record.watchers])
+            }).toEqual({ opens: [], watchers: ['watching'] });
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('answers unwatched when the caller closed the document before its open registered', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         const manager = bundle.astDocumentManager;
+         const open = manager.open.bind(manager);
+         const opening = new Deferred<void>();
+         const release = new Deferred<void>();
+         // As the real store, which reads the file before the session holds the document.
+         vi.spyOn(manager, 'open').mockImplementationOnce(async args => {
+            opening.resolve();
+            await release.promise;
+            return open(args);
+         });
+         const { server, proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'closing' });
+            const opened = proxy.openModelDocument({ uri: URI_A, clientId: 'closing', watch: true });
+            await opening.promise;
+            await proxy.closeModelDocument({ uri: URI_A, clientId: 'closing' });
+            release.resolve();
+            await opened;
+
+            const internal = server as unknown as { uriWatchRecords: Map<string, { watchers: Set<string> }> };
+            expect([...internal.uriWatchRecords.values()].flatMap(record => [...record.watchers])).toEqual([]);
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('answers unwatched when the caller closed the document and opened it again unwatched before its open registered', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         const manager = bundle.astDocumentManager;
+         const open = manager.open.bind(manager);
+         const opening = new Deferred<void>();
+         const release = new Deferred<void>();
+         vi.spyOn(manager, 'open').mockImplementationOnce(async args => {
+            opening.resolve();
+            await release.promise;
+            return open(args);
+         });
+         const { server, proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'reopening' });
+            const first = proxy.openModelDocument({ uri: URI_A, clientId: 'reopening', watch: true });
+            await opening.promise;
+            await proxy.closeModelDocument({ uri: URI_A, clientId: 'reopening' });
+            // Joins the first open's registration, which the session keeps one per URI.
+            const second = proxy.openModelDocument({ uri: URI_A, clientId: 'reopening' });
+            // Answered after the second open began, as the connection keeps order.
+            await proxy.createSession({ clientId: 'later' });
+            release.resolve();
+            await Promise.all([first, second]);
+
+            const internal = server as unknown as { uriWatchRecords: Map<string, { watchers: Set<string> }> };
+            expect({
+               opens: [...(bundle.astDocumentManager.openClients.get(URI_A) ?? [])],
+               watchers: [...internal.uriWatchRecords.values()].flatMap(record => [...record.watchers])
+            }).toEqual({ opens: ['reopening'], watchers: [] });
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it.each([
+         ['an existing', true],
+         ['a missing', false]
+      ])('answers %s document unwatched when the caller closed it while the open read it', async (_shape, exists) => {
+         const bundle = buildBundle();
+         if (exists) {
+            bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         }
+         const modelService = bundle.services.model.ModelService;
+         const ensure = modelService.ensureDocumentState.bind(modelService);
+         const reading = new Deferred<void>();
+         const release = new Deferred<void>();
+         vi.spyOn(modelService, 'ensureDocumentState').mockImplementationOnce(async (uri, state) => {
+            reading.resolve();
+            await release.promise;
+            if (!exists) {
+               throw new Error('no such file');
+            }
+            return ensure(uri, state);
+         });
+         /** Reads every failed read as a missing file. */
+         class MissingServer extends TestDataServer {
+            protected override isMissingDocument(): boolean {
+               return true;
+            }
+         }
+         const { server, proxy, pair } = makeDataServerHarness<MissingServer, FakeRoot, FakeDiagnostic>({
+            server: channel => new MissingServer(channel, bundle.services)
+         });
+         try {
+            await proxy.createSession({ clientId: 'closing' });
+            const opened = proxy.openModelDocument({ uri: URI_A, clientId: 'closing', watch: true });
+            await reading.promise;
+            await proxy.closeModelDocument({ uri: URI_A, clientId: 'closing' });
+            release.resolve();
+            const answer = await opened;
+
+            const internal = server as unknown as { uriWatchRecords: Map<string, { watchers: Set<string> }> };
+            expect({
+               model: answer.model !== undefined,
+               watchers: [...internal.uriWatchRecords.values()].flatMap(record => [...record.watchers])
+            }).toEqual({ model: exists, watchers: [] });
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('answers unwatched when the caller closed the document and opened it again unwatched while the open read it', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         const modelService = bundle.services.model.ModelService;
+         const ensure = modelService.ensureDocumentState.bind(modelService);
+         const firstReading = new Deferred<void>();
+         const firstReleased = new Deferred<void>();
+         const secondReading = new Deferred<void>();
+         const secondReleased = new Deferred<void>();
+         vi.spyOn(modelService, 'ensureDocumentState')
+            .mockImplementationOnce(async (uri, state) => {
+               firstReading.resolve();
+               await firstReleased.promise;
+               return ensure(uri, state);
+            })
+            .mockImplementationOnce(async (uri, state) => {
+               secondReading.resolve();
+               await secondReleased.promise;
+               return ensure(uri, state);
+            });
+         const { server, proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'reopening' });
+            const first = proxy.openModelDocument({ uri: URI_A, clientId: 'reopening', watch: true });
+            await firstReading.promise;
+            await proxy.closeModelDocument({ uri: URI_A, clientId: 'reopening' });
+            const second = proxy.openModelDocument({ uri: URI_A, clientId: 'reopening' });
+            await secondReading.promise;
+            firstReleased.resolve();
+            await first;
+            secondReleased.resolve();
+            await second;
+
+            const internal = server as unknown as { uriWatchRecords: Map<string, { watchers: Set<string> }> };
+            expect({
+               opens: [...(bundle.astDocumentManager.openClients.get(URI_A) ?? [])],
+               watchers: [...internal.uriWatchRecords.values()].flatMap(record => [...record.watchers])
+            }).toEqual({ opens: ['reopening'], watchers: [] });
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('releases the open when every overlapping open of it fails', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         const reading = new Deferred<void>();
+         const refused = new Deferred<void>();
+         vi.spyOn(bundle.services.model.ModelService, 'ensureDocumentState')
+            .mockImplementationOnce(async () => {
+               reading.resolve();
+               await refused.promise;
+               throw new Error('snapshot refused');
+            })
+            .mockRejectedValueOnce(new Error('snapshot refused'));
+         const { proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'twice' });
+            const first = proxy.openModelDocument({ uri: URI_A, clientId: 'twice', watch: true });
+            await reading.promise;
+            await expect(proxy.openModelDocument({ uri: URI_A, clientId: 'twice', watch: true })).rejects.toThrow(/snapshot refused/);
+            const held = [...(bundle.astDocumentManager.openClients.get(URI_A) ?? [])];
+            refused.resolve();
+            await expect(first).rejects.toThrow(/snapshot refused/);
+
+            expect({ held, after: [...(bundle.astDocumentManager.openClients.get(URI_A) ?? [])] }).toEqual({ held: ['twice'], after: [] });
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('answers a watched open with the position of the last event sent before it began, and a plain open without', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         const { proxy, events, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'early' });
+            await proxy.openModelDocument({ uri: URI_A, clientId: 'early', watch: true });
+            fireRebuild(bundle, bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'changed' }));
+            await waitFor(() => events.length === 1);
+            await proxy.createSession({ clientId: 'late' });
+
+            const watched = await proxy.openModelDocument({ uri: URI_A, clientId: 'late', watch: true });
+            const plain = await proxy.openModelDocument({ uri: URI_A, clientId: 'early' });
+
+            expect({ watched: watched.sequence, plain: plain.sequence }).toEqual({ watched: events[0]?.sequence, plain: undefined });
+         } finally {
+            pair.dispose();
+         }
+      });
+
+      it('releases the open it took and places no watch when its read fails', async () => {
+         const bundle = buildBundle();
+         bundle.documents.set(URI_A, { $type: 'FakeRoot', name: 'A' });
+         vi.spyOn(bundle.services.model.ModelService, 'ensureDocumentState').mockRejectedValueOnce(new Error('snapshot refused'));
+         const { server, proxy, pair } = makeHarness(bundle.services);
+         try {
+            await proxy.createSession({ clientId: 'doomed' });
+            await expect(proxy.openModelDocument({ uri: URI_A, clientId: 'doomed', watch: true })).rejects.toThrow(/snapshot refused/);
+
+            // The close leaves a release mark, which is not a watch.
+            const internal = server as unknown as { uriWatchRecords: Map<string, { watchers: Set<string> }> };
+            expect({
+               opens: [...(bundle.astDocumentManager.openClients.get(URI_A) ?? [])],
+               watches: [...internal.uriWatchRecords.values()].reduce((count, record) => count + record.watchers.size, 0)
+            }).toEqual({
+               opens: [],
+               watches: 0
+            });
+         } finally {
+            pair.dispose();
+         }
+      });
+   });
+
    /**
     * An open that fails after it has already opened the document.
     *
@@ -1323,9 +1967,11 @@ describe('DataServer', () => {
 
             await waitFor(() => dirtyChanges.length === 2);
             expect(dirtyChanges).toEqual([
-               { uri: URI_A, text: { version: edited, hash: textHash('name:edited'), dirty: true } },
-               { uri: URI_A, text: { version: edited, hash: textHash('name:edited'), dirty: false } }
+               { uri: URI_A, text: { version: edited, hash: textHash('name:edited'), dirty: true }, sequence: expect.any(Number) },
+               { uri: URI_A, text: { version: edited, hash: textHash('name:edited'), dirty: false }, sequence: expect.any(Number) }
             ]);
+            // Numbered with the update and deletion events, so the later flip has the greater position.
+            expect((dirtyChanges[1]?.sequence ?? 0) > (dirtyChanges[0]?.sequence ?? 0)).toBe(true);
          } finally {
             pair.dispose();
          }

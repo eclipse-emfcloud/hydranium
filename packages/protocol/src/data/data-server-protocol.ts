@@ -17,7 +17,7 @@ import type {
    TransferWatchedDocument,
    TransferWrittenDocument
 } from '../transfer-document';
-import type { CloseModelArgs, FindNextNameArgs, OpenModelArgs, ReferenceContext, ReferenceRequest } from '../model-server';
+import type { CloseModelArgs, FindNextNameArgs, ReferenceContext, ReferenceRequest } from '../model-server';
 import type { ReferenceCandidate, ReferenceTarget } from '../model-service/reference-candidate';
 import type {
    ProjectsChangedEvent,
@@ -34,6 +34,7 @@ import type {
    CreateSessionArgs,
    GetModelDocumentArgs,
    GetProjectForUriArgs,
+   OpenModelDocumentArgs,
    TransferDeleteDocumentArgs,
    TransferPersistDocumentArgs,
    TransferSaveDocumentArgs,
@@ -124,11 +125,20 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
     * the server's configured target phase, as {@link getModelDocument} does.
     * A repeat open changes nothing.
     *
-    * Pair with {@link watchModelDocument} to receive subsequent build-phase
-    * events (open returns a one-shot snapshot; later validation diagnostics
-    * arrive on the watch channel).
+    * With `watch`, the open also watches the document as
+    * {@link watchModelDocument} does, from the state it answers with. Events
+    * sent after that state can arrive before the answer. Its `sequence`
+    * tells a deletion sent before the open began, which ended nothing of it.
+    * A close of the session's that reaches the server while the open is out
+    * leaves its answer unwatched. One that arrives before the open holds the
+    * document leaves it held, so the caller closes again once the open
+    * answered. Without `watch`, the open answers a one-shot snapshot. With
+    * `includeDiagnostics`, it answers once the document is validated, as
+    * {@link getModelDocument} does. A watched open that later builds keep
+    * overtaking may answer one not yet validated. Its diagnostics then come
+    * with a later event.
     */
-   openModelDocument(args: Pick<OpenModelArgs, 'uri' | 'clientId' | 'options'>): Promise<TransferDocument<TTransfer, TDiagnostic>>;
+   openModelDocument(args: OpenModelDocumentArgs): Promise<TransferDocument<TTransfer, TDiagnostic>>;
 
    /**
     * Close the session's open of `uri`. Counterpart to
@@ -213,14 +223,14 @@ export interface DocumentServerProtocol<TTransfer extends TransferElement, TDiag
     * Answers with the key the watch's events name the document by, whether
     * a document exists, taken once the watch is in place and the document
     * is loaded as a read loads it, the text held at that moment, and the
-    * position of the last update or deletion event sent as of it, so an event
-    * the client heard while the watch was in flight tells by its own position
-    * whether it is newer than the answer. No handle: the event channel is the
-    * client interface. Callers fan out a single inbound `onDocumentUpdated` to
-    * multiple local listeners with their own `Emitter<T>` (matching Theia's
-    * pattern). Pair every `watchModelDocument` with
-    * {@link unwatchModelDocument} when no longer needed; the server holds the
-    * watch record until the matching unwatch lands.
+    * position of the last update, deletion or dirty event sent as of it, so
+    * an event the client heard while the watch was in flight tells by its own
+    * position whether it is newer than the answer. No handle: the event
+    * channel is the client interface. Callers fan out a single inbound
+    * `onDocumentUpdated` to multiple local listeners with their own
+    * `Emitter<T>` (matching Theia's pattern). Pair every `watchModelDocument`
+    * with {@link unwatchModelDocument} when no longer needed; the server holds
+    * the watch record until the matching unwatch lands.
     */
    watchModelDocument(args: WatchModelDocumentArgs): Promise<TransferWatchedDocument>;
 

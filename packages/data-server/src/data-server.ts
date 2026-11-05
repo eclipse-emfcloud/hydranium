@@ -35,7 +35,7 @@ import {
    type FindNextNameArgs,
    type LatencyCollector,
    type LatencyReport,
-   type OpenModelArgs,
+   type OpenModelDocumentArgs,
    type Project,
    type ReferenceCandidate,
    type ReferenceContext,
@@ -472,11 +472,24 @@ export class DataServer<
     */
    protected readonly watchKeys = new Map<string, Map<string, string>>();
    /**
-    * The position of the last update or deletion event sent, which each
-    * such event carries, and a watch's answer carries as of the moment it
+    * The position of the last update, deletion or dirty event sent, which
+    * each such event carries, and a watch's answer carries as of the moment it
     * took whether its document exists: an event past it was sent after.
     */
    protected eventSequence = 0;
+   /**
+    * Per client id and canonical key, the opens and creates of the document
+    * that session has under way since it last closed it. A failed one undoes
+    * the session's open only as the last of them, and only when none answered
+    * and the session did not hold it before. A close, the caller's or a
+    * deletion's, removes the entry, so later opens start their own, and a
+    * watched open still under way places no watch. The caller's removes it
+    * also before the open holds the document, which the open then still does.
+    */
+   protected readonly openings = new Map<
+      string,
+      { readonly wasOpen: boolean; readonly wasWatched: boolean; pending: number; answered: boolean }
+   >();
    /**
     * The live client sessions this connection registered, by client id. A
     * document request carrying one of these ids acts as that session; one
@@ -549,6 +562,12 @@ export class DataServer<
          renderErrorMessage: error => this.services.MessageRenderer.renderError(error)
       });
       this.disposables.push(this.modelService.onModelDeleted(event => this.dispatchDeleteEvent(event)));
+      // A close, the caller's or a deletion's, ends the opens under way before it. See `trackOpen`.
+      this.disposables.push(
+         this.services.workspace.TextDocuments.onDidClose(event =>
+            this.openings.delete(`${event.clientId}\n${this.canonicalKey(event.document.uri)}`)
+         )
+      );
       this.subscribeToModelUpdates();
       this.subscribeToTextDocumentSaves();
       this.subscribeToDirtyChanges();
@@ -690,9 +709,12 @@ export class DataServer<
 
    async createModelDocument(args: CreateModelDocumentArgs): Promise<TransferCreatedDocument<TTransfer, TDiagnostic>> {
       const session = this.requireSession(args.clientId);
-      const version = await session.create(args.uri, args.text);
-      const snapshot = await this.openedSnapshot(args.uri, () => session.close(args.uri));
-      return { ...snapshot, created: { version: asModelVersion(version) } };
+      const sequence = this.eventSequence;
+      return this.trackOpen(args, session, async ended => {
+         const version = await session.create(args.uri, args.text);
+         const snapshot = await this.openedSnapshot(args, ended);
+         return { ...this.sequenced(args, snapshot, sequence), created: { version: asModelVersion(version) } };
+      });
    }
 
    async updateModelDocuments(args: TransferUpdateDocumentsArgs<TTransfer>): Promise<TransferWrittenDocument<TTransfer, TDiagnostic>[]> {
@@ -731,39 +753,188 @@ export class DataServer<
       return session;
    }
 
-   async openModelDocument(args: Pick<OpenModelArgs, 'uri' | 'clientId' | 'options'>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
+   async openModelDocument(args: OpenModelDocumentArgs): Promise<TransferDocument<TTransfer, TDiagnostic>> {
       const session = this.requireSession(args.clientId);
-      const wasOpen = this.services.workspace.TextDocuments.isOpenInClient(args.uri, args.clientId);
-      await session.open(args.uri, args.options);
-      // A repeat open keeps the earlier one, which is still in use.
-      return this.openedSnapshot(args.uri, wasOpen ? undefined : () => session.close(args.uri));
+      const sequence = this.eventSequence;
+      return this.trackOpen(args, session, async ended => {
+         await session.open(args.uri, args.options);
+         return this.sequenced(args, await this.openedSnapshot(args, ended), sequence);
+      });
    }
 
    /**
-    * The snapshot a session's open or create answers with. When the read
-    * fails, `rollback` undoes the open this call made before the failure is
-    * rethrown: the caller sees no open, so nothing on its side would ever close
-    * it.
+    * Run `call`, an open or create of `args.uri` by the session, kept in
+    * {@link openings} until it settles. When it fails as the last of those
+    * under way, the session's open is closed unless one of them answered or
+    * the session held it before. A create refused before it opened closes
+    * nothing. `call` is handed whether a close ended these opens since.
     */
-   protected async openedSnapshot(uri: string, rollback?: () => Promise<void>): Promise<TransferDocument<TTransfer, TDiagnostic>> {
+   protected async trackOpen<T>(
+      args: Pick<OpenModelDocumentArgs, 'uri' | 'clientId'>,
+      session: ClientSession<AstNode, AstDiagnostic, TTransfer>,
+      call: (ended: () => boolean) => Promise<T>
+   ): Promise<T> {
+      const key = `${args.clientId}\n${this.canonicalKey(args.uri)}`;
+      const opening = this.openings.get(key) ?? {
+         wasOpen: this.services.workspace.TextDocuments.isOpenInClient(args.uri, args.clientId),
+         wasWatched: this.uriWatchRecords.get(this.canonicalKey(args.uri))?.watchers.has(args.clientId) ?? false,
+         pending: 0,
+         answered: false
+      };
+      this.openings.set(key, opening);
+      opening.pending++;
+      let answered = false;
       try {
-         return await this.getModelDocument({ uri });
-      } catch (error: unknown) {
-         // The open's failure is the one the caller needs, not the cleanup's.
-         await rollback?.().catch(() => undefined);
-         throw error;
+         const result = await call(() => this.openings.get(key) !== opening);
+         answered = true;
+         return result;
+      } finally {
+         opening.answered ||= answered;
+         // A close made meanwhile ended these opens, so what holds the document now is a later open's.
+         if (--opening.pending === 0 && this.openings.get(key) === opening) {
+            this.openings.delete(key);
+            // The open stays while any open under way answered, or one before it held it.
+            // Only an open the session holds now is closed, so a refused create sends no close.
+            const opened = this.services.workspace.TextDocuments.isOpenInClient(args.uri, args.clientId);
+            if (!opening.answered && !opening.wasOpen && opened) {
+               await session.close(args.uri).catch(() => undefined);
+               // An open of these that answered after a close placed a watch no one holds.
+               // A watch the session placed before them stays.
+               if (!opening.wasWatched) {
+                  await this.unwatchModelDocument({ uri: args.uri, clientId: args.clientId }).catch(() => undefined);
+               }
+            }
+         }
       }
+   }
+
+   /**
+    * `snapshot` with the position of the last event sent before the request
+    * began, when it watches: a deletion sent until then ended nothing it opened.
+    */
+   protected sequenced<TDocument extends TransferDocument<TTransfer, TDiagnostic>>(
+      args: Pick<OpenModelDocumentArgs, 'watch'>,
+      snapshot: TDocument,
+      sequence: number
+   ): TDocument {
+      return args.watch ? { ...snapshot, sequence } : snapshot;
+   }
+
+   /**
+    * The snapshot a session's open or create answers with, watched from on
+    * when `args.watch` is set and no close `ended` the open.
+    */
+   protected openedSnapshot(
+      args: Pick<OpenModelDocumentArgs, 'uri' | 'clientId' | 'watch' | 'includeDiagnostics'>,
+      ended?: () => boolean
+   ): Promise<TransferDocument<TTransfer, TDiagnostic>> {
+      return args.watch ? this.watchedSnapshot(args, ended) : this.getModelDocument(args);
+   }
+
+   /**
+    * Read `args.uri` as {@link getModelDocument} does and watch it, the watch
+    * placed and the answer encoded in one synchronous run: every event after
+    * the state answered reaches the watch, and its fingerprint is baselined to
+    * that state, so the first event repeats nothing the answer holds.
+    *
+    * Leaves the answer unwatched once `ended` tells a close ended the open,
+    * as the caller closed it, also before this began.
+    */
+   protected async watchedSnapshot(
+      args: Pick<OpenModelDocumentArgs, 'uri' | 'clientId' | 'includeDiagnostics'>,
+      ended: () => boolean = () => false
+   ): Promise<TransferDocument<TTransfer, TDiagnostic>> {
+      const state = this.diagnosticsState(args);
+      const session = this.requireSession(args.clientId);
+      // A session that ended while the read was out dropped its watches, so
+      // a watch placed now would outlive it.
+      const assertLive = (): void => {
+         if (this.clientSessions.get(args.clientId) !== session) {
+            throw new SessionClosedError(args.clientId, 'The client session ended while its open was under way.');
+         }
+      };
+      const watch = (fingerprint?: string, version?: ModelVersion): void => {
+         assertLive();
+         if (!ended()) {
+            this.addWatch(args, fingerprint, version);
+         }
+      };
+      for (let reads = 1; ; reads++) {
+         let built: AstDocument<AstNode, AstDiagnostic>;
+         try {
+            built = await this.modelService.ensureDocumentState(args.uri, state);
+         } catch (error: unknown) {
+            if (!this.isMissingDocument(error, args.uri)) {
+               throw error;
+            }
+            watch();
+            // Named as its events will be, so the client finds them however it spelled the URI.
+            return this.envelope(UriUtils.toUri(this.canonicalKey(args.uri)));
+         }
+         // A later build that reached the event phase before this run was sent
+         // before the watch was in place, so the answer has to hold it.
+         const live = this.modelService.getDocument(args.uri);
+         if (live && live.parseResult.value !== built.root && live.state >= this.options.subscriptionPhase) {
+            const current = this.readsAgain(args, reads) ? undefined : this.modelService.snapshot(args.uri);
+            if (!current) {
+               continue;
+            }
+            built = current;
+         } else if (live?.parseResult.value === built.root && live.state >= this.options.subscriptionPhase) {
+            // A rebuild that kept the root, as a dependency's relink does, may have sent other diagnostics.
+            built = this.modelService.snapshot(args.uri) ?? built;
+         }
+         const answer = this.encodeDocument(this.withKnownDiagnostics(args.uri, built));
+         watch(answer.model?.hash, this.services.workspace.ModelLedger.versionOf(built.root));
+         return answer;
+      }
+   }
+
+   /**
+    * Whether a watched open whose `reads` reads a later build overtook reads
+    * again, or answers that build as it stands, which may be short of the
+    * state asked for. Up to three reads by default, so sustained edits cannot
+    * hold the open unanswered. A later build with no snapshot to answer is
+    * read again whatever this returns.
+    */
+   protected readsAgain(_args: Pick<OpenModelDocumentArgs, 'uri' | 'clientId'>, reads: number): boolean {
+      return reads < 3;
    }
 
    async closeModelDocument(args: CloseModelArgs): Promise<void> {
       // Through the handle, so a close under an ended session fails as that
       // session's calls do, and a session class's own close is honoured.
       const session = this.requireSession(args.clientId);
+      // Ends the opens under way, as the store's close event does, also for
+      // one that has not registered yet, so none places its watch after this.
+      this.openings.delete(`${args.clientId}\n${this.canonicalKey(args.uri)}`);
       // Closing also releases the watch for (uri, clientId) — a forgotten
       // unwatch would otherwise leak phase-event dispatch until the connection
       // closes. Idempotent: a close without a prior watch is a no-op.
       await this.unwatchModelDocument({ uri: args.uri, clientId: args.clientId });
       await session.close(args.uri);
+   }
+
+   /**
+    * `built` with the diagnostics its root already has. A read without
+    * `includeDiagnostics` waits for none but drops none either, so a watch
+    * baselined on it does not miss the validation event already sent.
+    */
+   protected withKnownDiagnostics(uri: string, built: AstDocument<AstNode, AstDiagnostic>): AstDocument<AstNode, AstDiagnostic> {
+      const live = this.modelService.getDocument(uri);
+      if (built.diagnostics || live?.parseResult.value !== built.root || live.state < DocumentState.Validated) {
+         return built;
+      }
+      return this.modelService.snapshot(uri) ?? built;
+   }
+
+   /**
+    * The state a read waits for: the last one builds reach when it asks for
+    * diagnostics, since a wait for `Validated` on a server whose builds do not
+    * validate would never end.
+    */
+   protected diagnosticsState(args: Pick<GetModelDocumentArgs, 'includeDiagnostics'>): DocumentState | undefined {
+      return args.includeDiagnostics ? this.services.workspace.DocumentBuilder.finalBuildState() : undefined;
    }
 
    async getModelDocument(args: GetModelDocumentArgs): Promise<TransferDocument<TTransfer, TDiagnostic>> {
@@ -776,10 +947,11 @@ export class DataServer<
       // Defaults to the integrity-settled landmark (diagnostics may be absent,
       // delivered asynchronously via the subscription channel). A one-shot /
       // unsubscribed caller that needs diagnostics inline passes
-      // `includeDiagnostics: true` to settle at `Validated` instead.
-      const state = args.includeDiagnostics ? DocumentState.Validated : undefined;
+      // `includeDiagnostics: true` to settle at the last state builds reach instead.
+      const state = this.diagnosticsState(args);
       try {
-         return this.encodeDocument(await this.modelService.ensureDocumentState(args.uri, state));
+         const built = await this.modelService.ensureDocumentState(args.uri, state);
+         return this.encodeDocument(this.withKnownDiagnostics(args.uri, built));
       } catch (error: unknown) {
          // The protocol answers a read of a URI with no document with an
          // envelope that has no model.
@@ -851,19 +1023,7 @@ export class DataServer<
     * is in place and the load, so an event sent while it loads is older.
     */
    async watchModelDocument(args: WatchModelDocumentArgs): Promise<TransferWatchedDocument> {
-      const uri = this.canonicalKey(args.uri);
-      const keys = this.watchKeys.get(args.clientId) ?? new Map<string, string>();
-      this.watchKeys.set(args.clientId, keys.set(args.uri, uri));
-      const record = this.uriWatchRecords.get(uri) ?? { watchers: new Set<string>() };
-      this.uriWatchRecords.set(uri, record);
-      record.watchers.add(args.clientId);
-      if (record.fingerprint === undefined) {
-         const document = this.modelService.getDocument(args.uri);
-         if (document && !this.services.workspace.ModelLedger.isPlaceholder(document.parseResult.value)) {
-            record.fingerprint = this.computeDocumentFingerprint(document.parseResult.value, this.encoder.toTransferDocument(document));
-            record.fingerprintVersion = this.services.workspace.ModelLedger.versionOf(document.parseResult.value);
-         }
-      }
+      const uri = this.addWatch(args);
       // As for a read, only a missing document counts as none. A file briefly
       // unreadable leaves the builder's placeholder, and is there all the same.
       // Whether it exists, the text held and the position of the last event
@@ -877,6 +1037,35 @@ export class DataServer<
          () => answer(this.modelService.getDocument(args.uri) !== undefined),
          (error: unknown) => answer(!this.isMissingDocument(error, args.uri))
       );
+   }
+
+   /**
+    * Record the watch of `(args.uri, args.clientId)` and answer the key events
+    * name the document by. The first watcher of a URI baselines its
+    * fingerprint: to `fingerprint` at `version` when the caller encoded the
+    * document already, else to the current document.
+    */
+   protected addWatch(args: WatchModelDocumentArgs, fingerprint?: string, version?: ModelVersion): string {
+      const uri = this.canonicalKey(args.uri);
+      const keys = this.watchKeys.get(args.clientId) ?? new Map<string, string>();
+      this.watchKeys.set(args.clientId, keys.set(args.uri, uri));
+      const record = this.uriWatchRecords.get(uri) ?? { watchers: new Set<string>() };
+      this.uriWatchRecords.set(uri, record);
+      record.watchers.add(args.clientId);
+      if (record.fingerprint !== undefined) {
+         return uri;
+      }
+      if (fingerprint !== undefined) {
+         record.fingerprint = fingerprint;
+         record.fingerprintVersion = version;
+         return uri;
+      }
+      const document = this.modelService.getDocument(args.uri);
+      if (document && !this.services.workspace.ModelLedger.isPlaceholder(document.parseResult.value)) {
+         record.fingerprint = this.computeDocumentFingerprint(document.parseResult.value, this.encoder.toTransferDocument(document));
+         record.fingerprintVersion = this.services.workspace.ModelLedger.versionOf(document.parseResult.value);
+      }
+      return uri;
    }
 
    /**
@@ -1373,7 +1562,7 @@ export class DataServer<
    protected dispatchDirtyEvent(event: ModelDirtyChangedEvent): void {
       const uri = this.canonicalKey(event.uri);
       if (this.uriWatchRecords.get(uri)?.watchers.size) {
-         this.clientProxy.onDocumentDirtyChanged({ uri, text: event.text });
+         this.clientProxy.onDocumentDirtyChanged({ uri, text: event.text, sequence: ++this.eventSequence });
       }
    }
 

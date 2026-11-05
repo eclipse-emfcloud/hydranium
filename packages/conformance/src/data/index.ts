@@ -1647,6 +1647,80 @@ export function buildDataChecks<TTransfer extends TransferElement, TDiagnostic e
               }
             : undefined
       });
+
+      for (const request of ['open', 'create'] as const) {
+         checks.push({
+            title: `${request === 'open' ? 'an open' : 'a create'} with watch and diagnostics answers them and delivers the next update but no earlier one ${tag}`,
+            skipReason: edit ? undefined : editSkipReason,
+            body: edit
+               ? async () => {
+                    const driver = await connect();
+                    try {
+                       const model = resolveModel(valid);
+                       // Events an earlier check's writes of the same URI caused are not this check's.
+                       const from = driver.events.length;
+                       const watcher = await startSession(driver, 'conformance-watcher');
+                       let uri = model.uri;
+                       let answered: TransferDocument<TTransfer, TDiagnostic>;
+                       let author: string;
+                       // The text the next update writes, which differs from the answered one.
+                       let next: TTransfer | string;
+                       if (request === 'open') {
+                          await seed(driver, model);
+                          author = await openAs(driver, uri);
+                          // Sent right before the open, so on a head whose builds take a
+                          // while its build overlaps the open's read, and a watch not
+                          // baselined on the answered state repeats that state.
+                          const writing = driver.proxy.updateModelDocument({
+                             uri,
+                             clientId: author,
+                             model: resolveDeferred(edit.to),
+                             baseVersion: 'any'
+                          });
+                          answered = await driver.proxy.openModelDocument({
+                             uri,
+                             clientId: watcher,
+                             watch: true,
+                             includeDiagnostics: true
+                          });
+                          await writing;
+                          next = model.text;
+                       } else {
+                          uri = siblingOf(model.uri, `conformance-created-watch-${randomUuid()}-`);
+                          answered = await driver.proxy.createModelDocument({
+                             uri,
+                             clientId: watcher,
+                             text: model.text,
+                             watch: true,
+                             includeDiagnostics: true
+                          });
+                          author = await openAs(driver, uri);
+                          next = resolveDeferred(edit.to);
+                       }
+                       assert.ok(Array.isArray(answered.model?.diagnostics), `the ${request} of ${uri} answered no diagnostics`);
+                       const answeredVersion = answered.model?.version ?? 0;
+                       const written = await driver.proxy.updateModelDocument({ uri, clientId: author, model: next, baseVersion: 'any' });
+                       const events = (): TransferDocumentUpdatedEvent<TTransfer, TDiagnostic>[] =>
+                          driver.events.slice(from).filter(event => event.document.uri === uri);
+                       // By the model the write answers, so a write that omits its version fails only its own check.
+                       const writtenVersion = written.model?.version ?? 0;
+                       await waitFor(() => events().some(event => (event.document.model?.version ?? 0) >= writtenVersion), {
+                          message: `no onDocumentUpdated event for ${uri} after the ${request} that watches it`
+                       });
+                       // The notifications share one ordered connection, so an event
+                       // for the answered state or an older one would have arrived by now.
+                       const repeated = events().filter(event => (event.document.model?.version ?? 0) <= answeredVersion);
+                       assert.ok(
+                          repeated.length === 0,
+                          `an onDocumentUpdated event repeated the state the ${request} of ${uri} answered at version ${answeredVersion}`
+                       );
+                    } finally {
+                       driver.dispose();
+                    }
+                 }
+               : undefined
+         });
+      }
    }
 
    return checks;
