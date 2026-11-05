@@ -88,11 +88,65 @@ class TestIndexManager extends DefaultHydraniumIndexManager {
    }
 
    get index(): Map<string, AstNodeDescription[]> {
-      return this.elementsByName;
+      return new Map([...this.elementsByName.keys()].map(name => [name, [...this.getElementsByName(name)]]));
    }
 }
 
 describe('DefaultHydraniumIndexManager', () => {
+   it('honours an overridden name query when resolving the first match', () => {
+      const expected = desc('Element', 'TypeOne', URI_A);
+      class CustomIndex extends TestIndexManager {
+         override getElementsByName(): readonly AstNodeDescription[] {
+            return [expected];
+         }
+      }
+      const manager = new CustomIndex(makeServices(makeAstReflection()));
+      expect(manager.getElementByName('Element')).toBe(expected);
+   });
+   it('preserves duplicate descriptions and refreshes cached matches after a document is reindexed', () => {
+      const manager = new TestIndexManager(makeServices(makeAstReflection((actual, expected) => actual === expected)));
+      const first = desc('Element', 'TypeOne', URI_A);
+      const second = desc('Element', 'TypeOne', URI_B);
+      manager.seedSymbols(URI_A, [first, first]);
+      manager.triggerAdd(URI_A);
+      manager.seedSymbols(URI_B, [second]);
+      manager.triggerAdd(URI_B);
+      expect(manager.getElementsByName('Element')).toEqual([first, first, second]);
+      manager.removeContent(URI_A);
+      expect(manager.getElementsByName('Element')).toEqual([second]);
+      const replacement = desc('Element', 'TypeTwo', URI_A);
+      manager.seedSymbols(URI_A, [replacement]);
+      manager.triggerAdd(URI_A);
+      expect(manager.getElementsByName('Element')).toEqual([second, replacement]);
+      expect(manager.getElementByName('Element')).toBe(second);
+      expect(manager.getElementByName('Element', 'TypeTwo')).toBe(replacement);
+   });
+   it.each([64, 128, 256])('removes shared names from %i documents without rescanning surviving descriptions', size => {
+      const manager = new TestIndexManager(makeServices(makeAstReflection()));
+      let reads = 0;
+      const uris = Array.from({ length: size }, (_, i) => URI.parse(`memory:///element${i}.a`));
+      const descriptions = uris.map(uri => {
+         const description = desc('Element', 'TypeOne', uri);
+         Object.defineProperty(description, 'documentUri', {
+            get: () => {
+               reads++;
+               return uri;
+            }
+         });
+         manager.seedSymbols(uri, [description]);
+         manager.triggerAdd(uri);
+         return description;
+      });
+      expect(manager.getElementsByName('Element')).toEqual(descriptions);
+      reads = 0;
+      for (const uri of uris.slice(0, -1)) {
+         manager.removeContent(uri);
+      }
+      const removalReads = reads;
+      expect(manager.getElementsByName('Element')).toEqual(descriptions.slice(-1));
+      expect(removalReads).toBeLessThanOrEqual(size * 2);
+   });
+
    describe('elementsByName maintenance', () => {
       it('addToElementsByName collects names from symbolIndex', () => {
          const manager = new TestIndexManager(makeServices(makeAstReflection()));
