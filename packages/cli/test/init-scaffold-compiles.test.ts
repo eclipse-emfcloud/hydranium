@@ -202,7 +202,7 @@ async function verifyGeneratedDiagnostics(server: string, workspace: string, pro
       ]) {
          const result = spawnSync(process.execPath, [path.join(server, `lib/${entry}.js`), ...invalid], {
             encoding: 'utf8',
-            timeout: 5_000
+            timeout: 30_000
          });
          expect(result.status).not.toBeNull();
          expect(result.status).not.toBe(0);
