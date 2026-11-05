@@ -163,6 +163,20 @@ const deferredRelinks = new WeakMap<
    { depth: number; dependents: Map<LangiumDocument, { cause: LangiumDocument; service: DefaultIntegrityService }> }
 >();
 
+/** Stable linked targets within one batch. Unresolved and erroneous references remain live queries. */
+const dependencyTargets = new WeakMap<
+   IntegrityRun,
+   WeakMap<
+      LangiumDocument,
+      {
+         root: AstNode;
+         references: LangiumDocument['references'];
+         length: number;
+         targets: ReadonlySet<string>;
+      }
+   >
+>();
+
 export namespace IntegrityRun {
    /** A run over `documents` in which no rule has run yet. */
    export function create(
@@ -335,6 +349,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
       deferred.depth++;
       try {
          for (const document of documents) {
+            dependencyTargets.get(run)?.delete(document);
             const again = run.enforced.has(document);
             const selected = again ? undefined : deferred.dependents.get(document);
             if (selected !== undefined) {
@@ -386,6 +401,7 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
          deferred.depth--;
          if (deferred.depth === 0) {
             deferredRelinks.delete(run);
+            dependencyTargets.delete(run);
          }
       }
       const totalMs = Math.round(sincePhaseStart.elapsedMs);
@@ -712,8 +728,9 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
     * changed after this one relinks them.
     */
    protected async relinkDependents(document: LangiumDocument, run: IntegrityRun): Promise<void> {
+      dependencyTargets.get(run)?.delete(document);
       const dependents = this.services.shared.workspace.LangiumDocuments.all
-         .filter(other => other !== document && other.state >= DocumentState.ComputedScopes && this.isRelinkedBy(other, document))
+         .filter(other => other !== document && other.state >= DocumentState.ComputedScopes && this.isRelinkedBy(other, document, run))
          .toArray();
       const deferred = deferredRelinks.get(run)?.dependents;
       if (deferred === undefined) {
@@ -759,7 +776,13 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
             // Relinked now, it resolves its linking errors against every repair so far.
             deferredRelinks.get(run)?.dependents.delete(dependent);
             const root = dependent.parseResult.value;
-            const relinked = await this.documentBuilder.relinkInRunningBuild(dependent, document, run.cancelToken);
+            let relinked: boolean;
+            try {
+               relinked = await this.documentBuilder.relinkInRunningBuild(dependent, document, run.cancelToken);
+            } finally {
+               // A custom linker can replace descriptions in place while preserving the reference array and root.
+               dependencyTargets.get(run)?.delete(dependent);
+            }
             // Re-read from its text, also when left to resolve lazily, so its nodes are new and its own dependents hold the old ones.
             const reread = dependent.parseResult.value !== root;
             if (relinked && (run.enforced.has(dependent) || !run.documents.has(dependent))) {
@@ -809,25 +832,52 @@ export class DefaultIntegrityService<TRoot extends AstNode = AstNode> implements
    }
 
    /**
-    * Whether a build where `changed` counts as changed relinks `document`, as
-    * Langium's `shouldRelink` decides. Read from the document's links, because
-    * its build has dropped its indexed references until it indexes again.
+    * Whether treating `changed` as changed relinks `document`, as Langium's
+    * `shouldRelink` decides. Read live links because indexed references are dropped.
+    * A run caches stable targets between rules and relinks.
     */
-   protected isRelinkedBy(document: LangiumDocument, changed: LangiumDocument): boolean {
+   protected isRelinkedBy(document: LangiumDocument, changed: LangiumDocument, run?: IntegrityRun): boolean {
       const target = changed.uri.toString();
-      return document.references.some(reference => {
+      let cache = run === undefined ? undefined : dependencyTargets.get(run);
+      if (run !== undefined && cache === undefined) {
+         cache = new WeakMap();
+         dependencyTargets.set(run, cache);
+      }
+      const references = document.references;
+      const root = document.parseResult.value;
+      const cached = cache?.get(document);
+      if (cached?.root === root && cached.references === references && cached.length === references.length) {
+         return cached.targets.has(target);
+      }
+      const targets = new Set<string>();
+      let stable = true;
+      for (const reference of references) {
          if (reference.error !== undefined) {
             return true;
          }
          // Read through the field, as `items` would resolve an unresolved one, which links nothing.
          if (isMultiReference(reference) && '_items' in reference && !Array.isArray(reference._items)) {
-            return false;
+            stable = false;
+         } else {
+            const descriptions = isMultiReference(reference)
+               ? reference.items.map(item => item.$nodeDescription)
+               : [reference.$nodeDescription];
+            for (const description of descriptions) {
+               if (description !== undefined) {
+                  targets.add(description.documentUri.toString());
+               } else {
+                  stable = false;
+               }
+            }
          }
-         const descriptions = isMultiReference(reference)
-            ? reference.items.map(item => item.$nodeDescription)
-            : [reference.$nodeDescription];
-         return descriptions.some(description => description?.documentUri.toString() === target);
-      });
+         if ((cache === undefined || !stable) && targets.has(target)) {
+            return true;
+         }
+      }
+      if (stable) {
+         cache?.set(document, { root, references, length: references.length, targets });
+      }
+      return targets.has(target);
    }
 
    /**

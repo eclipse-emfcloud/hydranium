@@ -18,7 +18,8 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
-    "bench": "vitest bench --run",
+    "bench": "vitest bench --run test/perf.bench.ts test/scope-extension.bench.ts",
+    "bench:edits": "vitest bench --run test/framework-edit-scaling.bench.ts",
     "build": "npm run generate && tsc -b",
     "clean": "rimraf lib syntaxes src/language-server/generated src/language-server/generated-hydranium test/generated-hydranium tsconfig.tsbuildinfo",
     "generate": "npm run langium:generate && npm run generate:transfer-model",
