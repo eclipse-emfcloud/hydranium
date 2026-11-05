@@ -9,12 +9,24 @@
 
 import { describe, expect, test } from 'vitest';
 import { applyPatch, compare } from 'fast-json-patch';
-import { augmentWithTestOps, ForceConflictResolver, ReconcilingConflictResolver, reconcileByPatchReplay } from '../src/patch-merge';
+import {
+   augmentWithTestOps,
+   editRoot,
+   ForceConflictResolver,
+   ReconcilingConflictResolver,
+   reconcileByPatchReplay
+} from '../src/patch-merge';
 
 /** Clone so applyPatch (mutateDocument default) does not touch the shared fixture. */
 function clone<T>(value: T): T {
    return JSON.parse(JSON.stringify(value)) as T;
 }
+
+/** A key function as an adopter writes one: it meets every item of every array, primitives and `null` included. */
+const byId = {
+   itemKey: (item: unknown): string | undefined =>
+      typeof item === 'object' && item !== null && 'id' in item && typeof item.id === 'string' ? item.id : undefined
+};
 
 describe('augmentWithTestOps', () => {
    test('merges cleanly when the foreign writer touched a different path', () => {
@@ -573,7 +585,386 @@ describe('reconcileByPatchReplay', () => {
    });
 });
 
+describe('reconcileByPatchReplay with item keys', () => {
+   const [first, second] = [
+      { id: 'a', type: 'string', name: 'x' },
+      { id: 'b', type: 'string', name: 'y' }
+   ];
+
+   test('merges an edit into its row when the refetch inserted a row before it', async () => {
+      const inserted = { id: 'z', type: 'string', name: 'z' };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [first, { ...second, type: 'int' }] },
+         async () => ({ items: [inserted, first, second] }),
+         byId
+      );
+
+      expect(result).toEqual({ status: 'merged', merged: { items: [inserted, first, { ...second, type: 'int' }] } });
+   });
+
+   test('merges into the edited row when the refetch also edited both rows after an insert', async () => {
+      const theirs = {
+         items: [
+            { id: 'z', type: 'string', name: 'z' },
+            { ...first, name: 'x2' },
+            { ...second, name: 'y2' }
+         ]
+      };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [first, { ...second, type: 'int' }] },
+         async () => theirs,
+         byId
+      );
+
+      expect(result).toEqual({
+         status: 'merged',
+         merged: { items: [theirs.items[0], theirs.items[1], { ...theirs.items[2], type: 'int' }] }
+      });
+   });
+
+   test('reports conflict when both edited one field of the same row to different values', async () => {
+      const theirs = { items: [{ ...second, name: 'foreign' }, first] };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [first, { ...second, name: 'ours' }] },
+         async () => theirs,
+         byId
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('reports conflict when the refetch removed the row the user edited', async () => {
+      const theirs = { items: [first] };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [first, { ...second, type: 'int' }] },
+         async () => theirs,
+         byId
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('reports conflict when both added a row under one key with different content', async () => {
+      const theirs = { items: [first, { id: 'n', name: 'foreign' }] };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first] },
+         { items: [first, { id: 'n', name: 'ours' }] },
+         async () => theirs,
+         byId
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('reports already-applied when both added a row under one key with equal content', async () => {
+      // One key names one row, so the second insert is the first one, not a copy as by index.
+      const theirs = { items: [first, { id: 'n', name: 'same' }] };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first] },
+         { items: [first, { id: 'n', name: 'same' }] },
+         async () => theirs,
+         byId
+      );
+
+      expect(result).toEqual({ status: 'already-applied', theirs });
+   });
+
+   test('places a row the refetch appended after the row it followed there when the user moved the last row', async () => {
+      const appended = { id: 'c' };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [second, first] },
+         async () => ({ items: [first, second, appended] }),
+         byId
+      );
+
+      expect(result).toEqual({ status: 'merged', merged: { items: [second, appended, first] } });
+   });
+
+   test('places a row the user inserted after its predecessor, beside a row the refetch appended', async () => {
+      const added = { id: 'n', name: 'ours' };
+      const appended = { id: 'm', name: 'foreign' };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [first, added, second] },
+         async () => ({ items: [first, second, appended] }),
+         byId
+      );
+
+      expect(result).toEqual({ status: 'merged', merged: { items: [first, added, second, appended] } });
+   });
+
+   test('merges a removal beside a foreign edit of another row', async () => {
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [second] },
+         async () => ({ items: [first, { ...second, type: 'int' }] }),
+         byId
+      );
+
+      expect(result).toEqual({ status: 'merged', merged: { items: [{ ...second, type: 'int' }] } });
+   });
+
+   test('keeps the order the user gave rows the refetch edited but did not move', async () => {
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [second, first] },
+         async () => ({ items: [{ ...first, type: 'int' }, second] }),
+         byId
+      );
+
+      expect(result).toEqual({ status: 'merged', merged: { items: [second, { ...first, type: 'int' }] } });
+   });
+
+   test('reports already-applied when the refetch holds the order the user gave', async () => {
+      const theirs = { items: [second, first] };
+
+      const result = await reconcileByPatchReplay({ items: [first, second] }, { items: [second, first] }, async () => theirs, byId);
+
+      expect(result).toEqual({ status: 'already-applied', theirs });
+   });
+
+   test('reports conflict when both reordered the rows differently', async () => {
+      const third = { id: 'c' };
+      const theirs = { items: [third, first, second] };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second, third] },
+         { items: [second, first, third] },
+         async () => theirs,
+         byId
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('reports conflict when the refetch removed the rows the user reordered', async () => {
+      const theirs: { title: string; items?: unknown[] } = { title: 't' };
+
+      const result = await reconcileByPatchReplay(
+         { title: 't', items: [first, second] },
+         { title: 't', items: [second, first] },
+         async () => theirs,
+         byId
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('reports conflict when the user removed the rows the refetch reordered', async () => {
+      const theirs = { title: 't', items: [second, first] };
+
+      const result = await reconcileByPatchReplay({ title: 't', items: [first, second] }, { title: 't' }, async () => theirs, byId);
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('merges the removal of the rows beside a foreign edit elsewhere', async () => {
+      const result = await reconcileByPatchReplay(
+         { title: 't', items: [first, second] },
+         { title: 't' },
+         async () => ({ title: 'u', items: [first, second] }),
+         byId
+      );
+
+      expect(result).toEqual({ status: 'merged', merged: { title: 'u' } });
+   });
+
+   test('matches the rows of a root that is itself an array', async () => {
+      const inserted = { id: 'z', type: 'string', name: 'z' };
+
+      const result = await reconcileByPatchReplay(
+         [first, second],
+         [first, { ...second, type: 'int' }],
+         async () => [inserted, first, second],
+         byId
+      );
+
+      expect(result).toEqual({ status: 'merged', merged: [inserted, first, { ...second, type: 'int' }] });
+   });
+
+   test('matches nested arrays by key within a keyed row', async () => {
+      const row = { id: 'r', columns: [{ id: 'c1', width: 1 }] };
+      const inserted = { id: 'c0', width: 0 };
+
+      const result = await reconcileByPatchReplay(
+         { rows: [row] },
+         { rows: [{ ...row, columns: [{ id: 'c1', width: 2 }] }] },
+         async () => ({ rows: [{ id: 'q' }, { ...row, columns: [inserted, ...row.columns] }] }),
+         byId
+      );
+
+      expect(result).toEqual({
+         status: 'merged',
+         merged: { rows: [{ id: 'q' }, { ...row, columns: [inserted, { id: 'c1', width: 2 }] }] }
+      });
+   });
+
+   test('matches by index when the refetch holds a row without a key', async () => {
+      // The index replay meets the moved-element conflict, as without keys.
+      const theirs = { items: [{ name: 'keyless' }, first, second] };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [first, { ...second, type: 'int' }] },
+         async () => theirs,
+         byId
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('matches by index when a key repeats within the array', async () => {
+      const twin = { ...first, name: 'twin' };
+      const theirs = { items: [{ id: 'z' }, first, twin] };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, twin] },
+         { items: [first, { ...twin, type: 'int' }] },
+         async () => theirs,
+         byId
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('keeps the property order of the refetch', async () => {
+      const result = await reconcileByPatchReplay(
+         { x: 1, y: 1, items: [first] },
+         { x: 1, y: 1, items: [{ ...first, name: 'edited' }] },
+         async () => ({ y: 2, x: 1, items: [{ name: 'x', type: 'string', id: 'a' }] }),
+         byId
+      );
+
+      expect(result.status === 'merged' && JSON.stringify(result.merged)).toBe(
+         JSON.stringify({ y: 2, x: 1, items: [{ name: 'edited', type: 'string', id: 'a' }] })
+      );
+   });
+
+   test('merges a change of a row key as the removal of one row and the insert of another', async () => {
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [{ ...first, id: 'z' }, second] },
+         async () => ({ items: [first, { ...second, type: 'int' }] }),
+         byId
+      );
+
+      expect(result).toEqual({
+         status: 'merged',
+         merged: {
+            items: [
+               { ...first, id: 'z' },
+               { ...second, type: 'int' }
+            ]
+         }
+      });
+   });
+
+   test('reports conflict when the user changed the key of a row the refetch edited', async () => {
+      const theirs = { items: [{ ...first, type: 'int' }, second] };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [{ ...first, id: 'z' }, second] },
+         async () => theirs,
+         byId
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('reports conflict when the refetch changed the key of a row the user edited', async () => {
+      const theirs = { items: [{ ...first, id: 'z' }, second] };
+
+      const result = await reconcileByPatchReplay(
+         { items: [first, second] },
+         { items: [{ ...first, type: 'int' }, second] },
+         async () => theirs,
+         byId
+      );
+
+      expect(result).toEqual({ status: 'conflict', theirs });
+   });
+
+   test('matches keys that name Object.prototype members', async () => {
+      const proto = { id: '__proto__', name: 'p' };
+      const ctor = { id: 'constructor', name: 'c' };
+
+      const result = await reconcileByPatchReplay(
+         { items: [proto, ctor] },
+         { items: [proto, { ...ctor, name: 'edited' }] },
+         async () => ({ items: [{ id: 'z' }, proto, ctor] }),
+         byId
+      );
+
+      expect(result).toEqual({ status: 'merged', merged: { items: [{ id: 'z' }, proto, { ...ctor, name: 'edited' }] } });
+   });
+});
+
+describe('editRoot', () => {
+   const [first, second] = [
+      { id: 'a', name: 'x' },
+      { id: 'b', name: 'y' }
+   ];
+
+   test('gives the edited root on the root it was made from', () => {
+      const before = { title: 't', items: [first, second] };
+      const after = { title: 'u', items: [second, { id: 'n' }] };
+
+      expect(editRoot(before, after, byId)(clone(before))).toEqual(after);
+   });
+
+   test('keeps an update on a newer root that the form had not seen', () => {
+      const change = editRoot(
+         { title: 't', note: 'n', items: [first, second] },
+         { title: 'u', note: 'n', items: [first, { ...second, name: 'edited' }] },
+         byId
+      );
+
+      expect(change({ title: 't', note: 'foreign', items: [{ id: 'z', name: 'z' }, first, second] })).toEqual({
+         title: 'u',
+         note: 'foreign',
+         items: [{ id: 'z', name: 'z' }, first, { ...second, name: 'edited' }]
+      });
+   });
+
+   test('gives the newer root unchanged when the server changed a field the edit changed', () => {
+      const root = { title: 'foreign', note: 'n' };
+
+      expect(editRoot({ title: 't', note: 'n' }, { title: 'u', note: 'm' })(root)).toBe(root);
+   });
+
+   test('gives the root unchanged when the edit changed nothing', () => {
+      const root = { title: 'foreign' };
+
+      expect(editRoot({ title: 't' }, { title: 't' })(root)).toBe(root);
+   });
+});
+
 describe('ReconcilingConflictResolver', () => {
+   test('matches array items by the key it was made with', async () => {
+      const resolver = new ReconcilingConflictResolver(byId);
+      const [first, second] = [{ id: 'a' }, { id: 'b' }];
+
+      const result = await resolver.resolve({ items: [first, second] }, { items: [first, { id: 'b', v: 1 }] }, async () => ({
+         items: [{ id: 'z' }, first, second]
+      }));
+
+      expect(result).toEqual({ status: 'merged', merged: { items: [{ id: 'z' }, first, { id: 'b', v: 1 }] } });
+   });
+
    test('delegates to reconcileByPatchReplay and merges a disjoint foreign edit', async () => {
       const resolver = new ReconcilingConflictResolver();
       const base = { entity: { name: 'X', description: 'D' } };

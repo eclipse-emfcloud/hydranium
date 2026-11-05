@@ -66,6 +66,17 @@ await form.withOpenDocument({ uri }, opened =>
    `examples/order-flow/client/src/properties/properties-documents.ts`
    switches documents this way.
 
+   An edit runs again on every newer root until its write answers, so it must
+   be pure. If your form hands you a whole new root per edit, as one built on
+   a reducer does, pass `edit` the result of `editRoot(before, after)`, where
+   `before` is the root the form edited and `after` the one it handed back.
+   It replays the form's edit on each newer root and keeps another client's
+   update. To match array items by key rather than index, pass
+   `editRoot(before, after, { itemKey })`, and give your copy's subclass a
+   `conflictResolver` of `new ReconcilingConflictResolver({ itemKey })` so
+   its reconcile matches them the same way. `itemKey` may see any item of
+   any array, so return `undefined` for one without a key rather than throw.
+
    Without it, call `openDocument` once, then `updateDocument` for each edit
    and `saveDocument` when the user saves, and `closeDocument` when you are
    done. Every write names the version it is based on, and fails with a
