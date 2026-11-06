@@ -357,6 +357,27 @@ comment, counts as none, as does a change undone before the read. A write the
 copy refused unsent does not count against its write limit, up to as many as
 the limit.
 
+**A change is the copy's own only when the copy can prove it.** `onDidChange`
+reports `written` for the answer to a batch's write only when all of these hold:
+
+- The write was gated on the version of the snapshot its first edit was made
+  on, or of the answer to the copy's write before.
+- It went through on its first attempt.
+- The answer's model is at its `written` version.
+- The copy then shows that answer.
+
+An answer skipped as older, or one a held document follows, is `changed`, as is
+every other answer, push and read, since an answer can be the only event that
+carries another client's write. The copy's own echo of the write out is taken
+unannounced, since only the answer can tell it `written`, and announcing it
+would show a value the server computes as `changed` first. It waits for the
+answer however long that takes, since a `settleWritesMs` bound would announce it
+as `changed` after all. A batch that writes nothing fires only when the root or
+the diagnostics changed, so a form that renders on `changed` keeps input it has
+not committed yet. A form that mirrors the root then takes a `written` root as
+its own edit. Comparing the root with the edit instead fails where the server
+computes values.
+
 **An ended open stays ended.** A close, a deletion, a restore that could not
 open the document again, a failed second read of the open, a read that finds
 the file gone or the end of the session ends it. Edits not yet written settle

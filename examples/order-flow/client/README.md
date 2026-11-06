@@ -163,6 +163,15 @@ The panel reports a `conflict`, a `ran-out` or an `unavailable` of a document it
 no longer shows through its error sink, naming the field and the document,
 since its status line belongs to the next one.
 
+The panel also warns when a field that holds a draft changes underneath it.
+When the copy announces a change as `changed` and it moves such a field, the
+status line says so, since applying the draft then replaces that value. It
+names no author, since a write of the panel's that answers after a switch back
+to the document arrives as `changed` too. A change the copy calls `edited` or
+`written` is its own. A field with a write of the panel's still out does not
+warn either, since the copy announces that write merged, failed or lost as
+`changed` and its outcome reports it.
+
 ## The contract with the server
 
 The diagram type and the element type ids come from

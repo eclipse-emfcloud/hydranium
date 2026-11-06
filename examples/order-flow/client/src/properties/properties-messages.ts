@@ -100,6 +100,16 @@ export const PROPERTIES_WRITE_UNAVAILABLE = defineMessage(
    'Not saved — the document was no longer open when the change was to be written.'
 );
 
+/**
+ * Names no author, since a write of this panel's that answers after a switch
+ * back lands here too. Says that applying the draft replaces the value, since
+ * it lands without a conflict.
+ */
+export const PROPERTIES_CHANGED_ELSEWHERE = defineMessage(
+   'order-flow/properties/changed-elsewhere',
+   "'{field}' changed while you were editing it. Applying your draft replaces that value."
+);
+
 /** An edit of the previous document that lost, reported through the error sink, since the panel shows the next one. */
 export const PROPERTIES_PREVIOUS_WRITE_CONFLICT = defineMessage(
    'order-flow/properties/previous-write-conflict',

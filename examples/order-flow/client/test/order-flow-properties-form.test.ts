@@ -12,11 +12,14 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { SetFieldOutcome } from '../src/data/order-flow-properties-model';
 import { PropertiesForm } from '../src/properties/properties-form';
 import {
+   PROPERTIES_CHANGED_ELSEWHERE,
    PROPERTIES_PREVIOUS_WRITE_CONFLICT,
    PROPERTIES_PREVIOUS_WRITE_RAN_OUT,
    PROPERTIES_PREVIOUS_WRITE_UNAVAILABLE,
    PROPERTIES_UNSAVED,
+   PROPERTIES_WRITE_CONFLICT,
    PROPERTIES_WRITE_FAILED,
+   PROPERTIES_WRITE_MERGED,
    PROPERTIES_WRITE_RAN_OUT
 } from '../src/properties/properties-messages';
 
@@ -506,6 +509,113 @@ describe('PropertiesForm pending marker', () => {
 
       expect(input.value).toBe('Ada');
       expect(form.fieldOf('customerName').attributes['data-pending']).toBeUndefined();
+   });
+});
+
+describe('PropertiesForm warning on a foreign change', () => {
+   const applied = (): Promise<SetFieldOutcome> => Promise.resolve({ status: 'applied' } as SetFieldOutcome);
+
+   beforeEach(() => {
+      documentStub.activeElement = null;
+   });
+
+   function withDraft(setField = applied): { form: TestableForm; input: StubElement } {
+      const { form } = makeForm(setField);
+      form.setFields([{ name: 'customerName', value: 'Ada' }], 'changed');
+      const input = form.inputOf('customerName');
+      input.value = 'Grace';
+      input.emit('input');
+      return { form, input };
+   }
+
+   it('warns at once when another client changes a field that holds a draft, and keeps the draft', () => {
+      const { form, input } = withDraft();
+
+      form.setFields([{ name: 'customerName', value: 'Linus' }], 'changed');
+
+      expect(form.statusLine()).toBe(PROPERTIES_CHANGED_ELSEWHERE.text.replace('{field}', 'customerName'));
+      expect(form.statusKind()).toBe('conflict');
+      expect(input.value).toBe('Grace');
+   });
+
+   it.each(['edited', 'written'] as const)('does not warn for a change the copy calls %s', reason => {
+      const { form } = withDraft();
+
+      form.setFields([{ name: 'customerName', value: 'Linus' }], reason);
+
+      expect(form.statusLine()).toBe('');
+   });
+
+   it('does not warn when a changed field holds no draft, or a field with a draft keeps its value', () => {
+      const { form } = makeForm(applied);
+      form.setFields(
+         [
+            { name: 'customerName', value: 'Ada' },
+            { name: 'city', value: 'Graz' }
+         ],
+         'changed'
+      );
+      const input = form.inputOf('customerName');
+      input.value = 'Grace';
+      input.emit('input');
+
+      form.setFields(
+         [
+            { name: 'customerName', value: 'Ada' },
+            { name: 'city', value: 'Wien' }
+         ],
+         'changed'
+      );
+
+      expect(form.statusLine()).toBe('');
+   });
+
+   it.each([
+      ['merged with a value the server computes', 'GRACE', { status: 'merged' }, PROPERTIES_WRITE_MERGED.text],
+      ['lost to a conflict', 'Linus', { status: 'conflict' }, PROPERTIES_WRITE_CONFLICT.text]
+   ] as const)('leaves its own write %s to the outcome, though announced as changed', async (_, shown, outcome, status) => {
+      const answered = new Deferred<SetFieldOutcome>();
+      const { form } = withDraft(() => {
+         // As the copy does: the edit shows at once, its answer before the outcome.
+         form.setFields([{ name: 'customerName', value: 'Grace' }], 'edited');
+         form.setFields([{ name: 'customerName', value: shown }], 'changed');
+         return answered.promise;
+      });
+      form.inputOf('customerName').emit('change');
+      expect(form.statusLine()).toBe('');
+
+      answered.resolve(outcome);
+      await answered.promise;
+      await Promise.resolve();
+      expect(form.statusLine()).toBe(status);
+   });
+
+   it('warns again once its own write of the field has answered', async () => {
+      const answered = new Deferred<SetFieldOutcome>();
+      const { form, input } = withDraft(() => answered.promise);
+      input.emit('change');
+      answered.resolve({ status: 'conflict' });
+      await answered.promise;
+      await Promise.resolve();
+
+      form.setFields([{ name: 'customerName', value: 'Linus' }], 'changed');
+
+      expect(form.statusLine()).toBe(PROPERTIES_CHANGED_ELSEWHERE.text.replace('{field}', 'customerName'));
+   });
+
+   it('does not warn when the change also adds a field, since the redraw replaces the draft', () => {
+      const { form } = withDraft();
+
+      form.setFields(
+         [
+            { name: 'customerName', value: 'Linus' },
+            { name: 'city', value: 'Graz' }
+         ],
+         'changed'
+      );
+
+      expect(form.statusLine()).toBe('');
+      expect(form.inputOf('customerName').value).toBe('Linus');
    });
 });
 

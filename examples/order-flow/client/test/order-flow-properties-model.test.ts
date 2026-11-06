@@ -56,7 +56,8 @@ import {
    NoopLogger,
    TransferDocument,
    type DataPort,
-   type TransferDocumentUpdatedEvent
+   type TransferDocumentUpdatedEvent,
+   type WorkingCopyChangeReason
 } from '@hydranium/protocol';
 import { makeFakeClock, tick, waitFor } from '@hydranium/protocol/testing';
 import { type DuplexConnectionPair, makeDuplexConnectionPair } from '@hydranium/protocol/testing/node';
@@ -846,7 +847,10 @@ describe('order-flow properties model', () => {
       function showing(
          setLoading: (loading: boolean) => void = () => undefined,
          reportError: (error: unknown) => void = () => undefined,
-         form: { setFields?(fields: readonly PropertyField[]): void; setDirty?(dirty: boolean): void } = {},
+         form: {
+            setFields?(fields: readonly PropertyField[], reason?: WorkingCopyChangeReason): void;
+            setDirty?(dirty: boolean): void;
+         } = {},
          retryFailedOpen = false,
          logger: Logger = new NoopLogger()
       ): PropertiesDocuments<OrderFlowTransferRoot> {
@@ -859,7 +863,7 @@ describe('order-flow properties model', () => {
                switchDocument: () => undefined,
                setLoading,
                report: () => undefined,
-               setFields: fields => form.setFields?.(fields),
+               setFields: (fields, reason) => form.setFields?.(fields, reason),
                setDiagnostics: () => undefined,
                setDirty: dirty => form.setDirty?.(dirty)
             },
@@ -1056,6 +1060,22 @@ describe('order-flow properties model', () => {
          await waitFor(() => documents.current?.snapshot !== undefined);
 
          expect(opened).not.toHaveBeenCalled();
+      });
+
+      it("hands the form why it redraws, so its own write is told from another client's", async () => {
+         const reasons: (WorkingCopyChangeReason | undefined)[] = [];
+         const documents = showing(undefined, undefined, { setFields: (_, reason) => reasons.push(reason) });
+         const uri = uriOf(FULFILLMENT_PROCESS);
+         documents.show(uri);
+         await waitFor(() => documents.current?.snapshot !== undefined);
+         reasons.length = 0;
+
+         expect(await documents.setField('name', 'Mine')).toEqual({ status: 'applied' });
+         const foreign = (await currentRoot(uri)) as ProcessModel;
+         await thirdPartyWrite(uri, { ...foreign, name: 'RenamedByOther' });
+         await waitFor(() => reasons.includes('changed'));
+
+         expect(reasons).toEqual(['edited', 'written', 'changed']);
       });
 
       it('draws no fields when it shows no document', async () => {
