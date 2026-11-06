@@ -351,6 +351,7 @@ export interface ModelService<
    /**
     * Fires for every document a build removes, with the session whose
     * `delete` removed it, as `AstDocumentManager.attributeDeletion` names it.
+    * A listener that throws is logged, as for {@link onModelUpdated}.
     */
    onModelDeleted(listener: (event: ModelDeletedEvent) => void, filter?: ModelEventFilter): Disposable;
    /** Fires when a document's text starts or stops differing from its file. */
@@ -1359,7 +1360,12 @@ export class DefaultModelService<
          for (const deletedUri of deleted) {
             const uri = this.uriPolicy.canonicalUri(deletedUri.toString());
             if (this.matches(target, uri)) {
-               listener(Object.freeze({ uri, sourceClientId: this.services.workspace.AstDocumentManager.attributeDeletion(uri) }));
+               const sourceClientId = this.services.workspace.AstDocumentManager.attributeDeletion(uri);
+               try {
+                  listener(Object.freeze({ uri, sourceClientId }));
+               } catch (err: unknown) {
+                  this.tracer.with(uri).error(`onModelDeleted listener threw: ${describeErrorWithStack(err)}`);
+               }
             }
          }
       });
