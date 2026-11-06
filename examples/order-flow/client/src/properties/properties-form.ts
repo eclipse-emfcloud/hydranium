@@ -26,10 +26,12 @@ import {
    resolve,
    type ResolvedMessage,
    resolvedFromResponseError,
-   type TransferDiagnostic
+   type TransferDiagnostic,
+   type WorkingCopyChangeReason
 } from '@hydranium/protocol';
 import {
    PROPERTIES_APPLY_HINT,
+   PROPERTIES_CHANGED_ELSEWHERE,
    PROPERTIES_DISCONNECTED,
    PROPERTIES_NO_DOCUMENT,
    PROPERTIES_NO_FIELDS,
@@ -156,6 +158,8 @@ export class PropertiesForm {
    protected rendered = new Map<string, string>();
    /** Latest model values, including updates hidden by a pending draft. */
    protected modelValues = new Map<string, string>();
+   /** The fields of the writes not answered yet, once per write. */
+   protected writing: string[] = [];
    /** Whether {@link rebuild} has ever run — see {@link sameNames}. */
    protected built = false;
    /** Whether a document load is in flight — see {@link setLoading}. */
@@ -287,6 +291,7 @@ export class PropertiesForm {
       this.inputs = new Map();
       this.rendered = new Map();
       this.modelValues = new Map();
+      this.writing = [];
       this.fieldsHost.replaceChildren();
       this.diagnosticsHost.replaceChildren();
       // The load of the one before, if any, is abandoned. The next sets its own.
@@ -313,17 +318,25 @@ export class PropertiesForm {
     * A successful submission reconciles the retained model value even while
     * focused, provided the same input still holds the submitted text. Text
     * typed since submission and inputs replaced by a rebuild stay untouched.
+    *
+    * A `changed` redraw that moves a field holding a draft warns at once, since
+    * applying the draft then replaces that value.
     */
-   setFields(fields: readonly PropertyField[]): void {
+   setFields(fields: readonly PropertyField[], reason?: WorkingCopyChangeReason): void {
       if (this.loading && fields.length === 0) {
          // A model still opening. See setLoading.
          return;
       }
+      const before = this.modelValues;
       this.modelValues = new Map(fields.map(field => [field.name, field.value]));
       const names = fields.map(field => field.name);
       if (!this.sameNames(names)) {
          this.rebuild(fields);
          return;
+      }
+      // A rebuild drops the drafts, so only a redraw in place warns.
+      if (reason === 'changed') {
+         this.warnOfForeignChanges(fields, before);
       }
       for (const field of fields) {
          const input = this.inputs.get(field.name);
@@ -332,6 +345,21 @@ export class PropertiesForm {
             this.rendered.set(field.name, field.value);
             this.markPending(field.name);
          }
+      }
+   }
+
+   protected warnOfForeignChanges(fields: readonly PropertyField[], before: ReadonlyMap<string, string>): void {
+      const moved = fields.find(
+         field =>
+            this.isPending(field.name) &&
+            before.has(field.name) &&
+            before.get(field.name) !== field.value &&
+            // Its own write out announces a merge, a failure or a loss as
+            // `changed`, and the write's outcome reports those.
+            !this.writing.includes(field.name)
+      );
+      if (moved) {
+         this.report(this.renderMessage(resolve(PROPERTIES_CHANGED_ELSEWHERE, { field: moved.name })), 'conflict');
       }
    }
 
@@ -490,6 +518,8 @@ export class PropertiesForm {
       const uri = this.documentUri;
       const modelValues = this.modelValues;
       const input = this.inputs.get(name);
+      const writing = this.writing;
+      writing.push(name);
       try {
          const outcome = await this.handlers.setField(name, value);
          if (shown !== this.shown) {
@@ -527,6 +557,8 @@ export class PropertiesForm {
          if (shown === this.shown) {
             this.report(detail, 'error');
          }
+      } finally {
+         writing.splice(writing.indexOf(name), 1);
       }
       return false;
    }

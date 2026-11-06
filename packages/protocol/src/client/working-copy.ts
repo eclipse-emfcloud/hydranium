@@ -65,6 +65,20 @@ export type WorkingCopyEditOutcome =
    | { readonly status: 'unavailable' };
 
 /**
+ * Why {@link WorkingCopy.onDidChange} fired. `edited`: an
+ * {@link WorkingCopy.edit} shows, on the root as the copy holds it.
+ * `written`: the answer to the copy's own write, holding nothing else. It may
+ * differ from the edit where the server computes values. `changed`:
+ * everything else, which may hold another client's write.
+ */
+export type WorkingCopyChangeReason = 'edited' | 'written' | 'changed';
+
+/** What {@link WorkingCopy.onDidChange} carries. */
+export interface WorkingCopyChangeEvent {
+   readonly reason: WorkingCopyChangeReason;
+}
+
+/**
  * One open of a {@link WorkingCopy}, from the answer to its open until a
  * close, a deletion or a failure ends it. A request records its answer only
  * while the open it was sent under is still the copy's, so nothing of an
@@ -226,7 +240,9 @@ export type WorkingCopyOptions = ReplayOptions;
  * snapshot of it, plus the edits the server has not confirmed yet.
  *
  * - **Follows the server.** Every document the server sends replaces the
- *   snapshot at once, unless it is older, and fires {@link onDidChange}.
+ *   snapshot at once, unless it is older, and fires {@link onDidChange}. The
+ *   copy's own echo of its write out fires with the write's answer instead,
+ *   however long that takes.
  *   {@link root} applies the edits of the write out on top only while the
  *   snapshot does not hold that write, as its `heldWrites` tells. From a
  *   server that reports no writes, a document sent while a request is out
@@ -265,9 +281,13 @@ export type WorkingCopyOptions = ReplayOptions;
  * write answers.
  */
 export class WorkingCopy<TTransfer extends TransferElement> {
-   protected readonly changeEmitter = new Emitter<void>();
-   /** Fires whenever {@link root} or {@link diagnostics} may have changed. */
-   readonly onDidChange: Event<void> = this.changeEmitter.event;
+   protected readonly changeEmitter = new Emitter<WorkingCopyChangeEvent>();
+   /**
+    * Fires when {@link root} or {@link diagnostics} may have changed, with why.
+    * The copy's own echo of its write out changes them before its write's
+    * answer fires, and a batch that writes nothing fires only for a change.
+    */
+   readonly onDidChange: Event<WorkingCopyChangeEvent> = this.changeEmitter.event;
    protected readonly dirtyEmitter = new Emitter<void>();
    /** Fires whenever {@link dirty} changes. Apart from {@link onDidChange}, since a save changes no content. */
    readonly onDidChangeDirty: Event<void> = this.dirtyEmitter.event;
@@ -456,7 +476,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       open.queued.push(edit);
       this.editsInFlight.track(edit.outcome.promise).catch(() => undefined);
       this.announceDirty();
-      this.changeEmitter.fire(undefined);
+      this.changeEmitter.fire({ reason: 'edited' });
       if (!open.writing) {
          void this.writeQueued(open);
       }
@@ -601,7 +621,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       // closed document.
       this.unload().forEach(edit => edit.outcome.resolve({ status: 'unavailable' }));
       await this.session.closeDocument({ uri: this.uri });
-      this.changeEmitter.fire(undefined);
+      this.changeEmitter.fire({ reason: 'changed' });
    }
 
    /**
@@ -670,7 +690,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          this.unload().forEach(edit => edit.outcome.resolve({ status: 'unavailable' }));
          throw new SessionClosedError(this.session.clientId);
       }
-      this.changeEmitter.fire(undefined);
+      this.changeEmitter.fire({ reason: 'changed' });
    }
 
    /**
@@ -750,7 +770,8 @@ export class WorkingCopy<TTransfer extends TransferElement> {
     * Write one batch, made on `base`, and settle its edits. The batch leaves
     * {@link root} before the server's answer is taken and the one change is
     * fired for it, since a reader would otherwise apply it again over an
-    * answer that holds or refused it.
+    * answer that holds or refused it. A batch that wrote nothing fires only
+    * when {@link root} or {@link diagnostics} changed.
     */
    protected async writeBatch(
       open: WorkingCopyOpen<TTransfer>,
@@ -761,6 +782,8 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       let settle: (edit: WorkingCopyOpen<TTransfer>['queued'][number], index: number) => void = edit =>
          edit.outcome.resolve({ status: 'unavailable' });
       let failed = true;
+      let own = false;
+      let sent = false;
       let outcomes: (WorkingCopyEditOutcome | Promise<never>)[] = [];
       open.snapshotRequests++;
       if (base) {
@@ -773,8 +796,10 @@ export class WorkingCopy<TTransfer extends TransferElement> {
             let writtenOutcomes: (WorkingCopyEditOutcome | Promise<never>)[] = written.map(() => ({ status: 'unchanged' }));
             // Written anyway, a batch that changes nothing would make the text dirty.
             if (compare(base.model, roots[written.length]).length > 0) {
+               sent = true;
                const reconciled = await this.reconcile(open, base, roots[written.length], true);
                answer = reconciled.answer;
+               own = reconciled.own === true;
                writtenOutcomes = writtenOutcomes.map(() => this.toEditOutcome(reconciled.outcome));
                if (reconciled.outcome.status === 'conflict' && written.length > 1 && answer && TransferDocument.isLoaded(answer)) {
                   ({ answer, outcomes: writtenOutcomes } = await this.splitConflict(open, roots, answer));
@@ -788,6 +813,9 @@ export class WorkingCopy<TTransfer extends TransferElement> {
             settle = edit => edit.outcome.reject(error);
          }
       }
+      // A batch that wrote nothing announces only a change, so a form that
+      // renders on `changed` keeps input it has not committed yet.
+      const unsent = sent || failed ? undefined : { root: rootOrUndefined(() => this.root), diagnostics: [...this.diagnostics] };
       open.sending = [];
       open.sendingWrite = undefined;
       if (open.base) {
@@ -816,7 +844,12 @@ export class WorkingCopy<TTransfer extends TransferElement> {
          }
       }
       this.settleRequest(open, answer);
-      this.changeEmitter.fire(undefined);
+      const shown = unsent && { root: rootOrUndefined(() => this.root), diagnostics: [...this.diagnostics] };
+      const unchanged = unsent?.root !== undefined && shown?.root !== undefined && compare(unsent, shown).length === 0;
+      if (!unchanged) {
+         // Skipped as older, or followed by a held document, the answer is not what shows.
+         this.changeEmitter.fire({ reason: own && open.snapshot === answer ? 'written' : 'changed' });
+      }
       batch.forEach(settle);
    }
 
@@ -886,6 +919,11 @@ export class WorkingCopy<TTransfer extends TransferElement> {
     * A merged write comes back as `persisted` when it was gated on a reread
     * that equals the root the edit was made on, since it raced no foreign
     * edit. It then carries no `conflict` or `writes`.
+    *
+    * `own` is true when the first write, gated on `base`'s version, went
+    * through and its answer is built from its text alone, so it holds no
+    * other write. A merged write that comes back as `persisted` is not own,
+    * since its gate came from a reread.
     */
    protected async reconcile(
       open: WorkingCopyOpen<TTransfer>,
@@ -895,8 +933,11 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    ): Promise<{
       readonly outcome: ReconcileWriteOutcome;
       readonly answer?: TransferDocument<TTransfer>;
+      readonly own?: boolean;
    }> {
       let written: TransferDocument<TTransfer> | undefined;
+      // Whether the answer that landed was built from its write's text alone.
+      let alone = false;
       let theirs: TransferDocument<TTransfer> | undefined;
       // Whether theirs was read after the last write's conflict.
       let readAfterWrite = false;
@@ -935,6 +976,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
             const answer = await this.session.updateDocument({ uri: this.uri, model, ...gate, onWrite });
             written = answer;
             landedOn = baseVersion;
+            alone = TransferDocument.isLoaded(answer) && answer.model.version === answer.written.version;
             // The queued edits were made on the answer when it was built from
             // the write's own text, normalized or not, or holds its model
             // unchanged. Otherwise it holds another write they must reconcile.
@@ -1000,7 +1042,8 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       ) {
          return { outcome: { status: 'persisted' }, answer: written };
       }
-      return { outcome, answer: written };
+      // `reconcileWrite` reports `persisted` only when its first write went through.
+      return { outcome, answer: written, own: outcome.status === 'persisted' && alone };
    }
 
    /** The outcome an edit reports for what {@link reconcile} did. */
@@ -1035,7 +1078,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       const unwritten = this.unload();
       // So `open` loads the document again.
       this.opening = undefined;
-      this.changeEmitter.fire(undefined);
+      this.changeEmitter.fire({ reason: 'changed' });
       unwritten.forEach(edit => edit.outcome.resolve({ status: 'unavailable' }));
    }
 
@@ -1117,7 +1160,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       open.sendingWrite = undefined;
       const after = rootOrUndefined(() => this.root);
       if (before !== after && (before === undefined || after === undefined || compare(before, after).length > 0)) {
-         this.changeEmitter.fire(undefined);
+         this.changeEmitter.fire({ reason: 'changed' });
       }
    }
 
@@ -1150,7 +1193,11 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       if (!reportsWrites(event.document) && open.sending.length > 0 && this.session.isOwnEcho(event.sourceClientId)) {
          return;
       }
-      this.offer(open, event.document, true);
+      // An echo that holds the write out is announced with the write's answer,
+      // which alone can tell it `written`. Announced now, a value the server
+      // computes would show as `changed` first.
+      const echo = this.session.isOwnEcho(event.sourceClientId) && this.holdsSending(open, event.document);
+      this.offer(open, event.document, !echo);
    }
 
    /**
@@ -1221,9 +1268,10 @@ export class WorkingCopy<TTransfer extends TransferElement> {
    /**
     * Take `document` as the new snapshot. Fires a change unless the model's
     * hash is the one held, which also means equally validated, or `announce`
-    * is false, as for a write's answers, which {@link writeBatch} announces
-    * once the write's edits are off {@link root}. While a write is out, it
-    * fires when {@link root} or {@link diagnostics} changed instead.
+    * is false, as for a write's answers and its own echo, which
+    * {@link writeBatch} announces once the write's edits are off {@link root}.
+    * While a write is out, it fires when {@link root} or {@link diagnostics}
+    * changed instead.
     */
    protected adopt(open: WorkingCopyOpen<TTransfer>, document: TransferDocument<TTransfer>, announce = true): void {
       const held = open.snapshot.model?.hash;
@@ -1237,7 +1285,7 @@ export class WorkingCopy<TTransfer extends TransferElement> {
       const after = before && { root: rootOrUndefined(() => this.root), diagnostics: [...this.diagnostics] };
       const comparable = before?.root !== undefined && after?.root !== undefined;
       if (comparable ? compare(before, after).length > 0 : changed) {
-         this.changeEmitter.fire(undefined);
+         this.changeEmitter.fire({ reason: 'changed' });
       }
    }
 

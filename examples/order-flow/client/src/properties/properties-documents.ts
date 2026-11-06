@@ -14,7 +14,8 @@ import {
    type Logger,
    resolve,
    type ResolvedMessage,
-   type TransferElement
+   type TransferElement,
+   type WorkingCopyChangeReason
 } from '@hydranium/protocol';
 import { OrderFlowPropertiesModel, type SetFieldOutcome } from '../data/order-flow-properties-model';
 import { describeFailure, type PropertiesForm } from './properties-form';
@@ -126,7 +127,7 @@ export class PropertiesDocuments<TTransfer extends TransferElement> {
       const model = new OrderFlowPropertiesModel<TTransfer>(this.session, this.events, uri);
       this.model = model;
       // A copy shown before is disposed, so it announces nothing more.
-      model.onDidChange(() => this.render());
+      model.onDidChange(event => this.render(event.reason));
       model.onDidChangeDirty(() => this.form.setDirty(model.dirty));
       this.load(model);
    }
@@ -213,8 +214,8 @@ export class PropertiesDocuments<TTransfer extends TransferElement> {
       });
    }
 
-   protected render(): void {
-      this.form.setFields(this.model?.fields ?? []);
+   protected render(reason?: WorkingCopyChangeReason): void {
+      this.form.setFields(this.model?.fields ?? [], reason);
       this.form.setDiagnostics(this.model?.diagnostics ?? []);
    }
 }
