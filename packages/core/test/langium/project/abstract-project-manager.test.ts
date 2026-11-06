@@ -7,7 +7,7 @@
  * SPDX-License-Identifier: MIT
  ********************************************************************************/
 
-import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
    DefaultWorkspaceLock,
    type DocumentBuilder,
@@ -23,7 +23,7 @@ import {
    type WorkspaceLock
 } from '@hydranium/langium';
 import { CancellationToken, Disposable } from 'vscode-languageserver';
-import { Deferred, type Logger, type Project, UNQUALIFIED_PROJECT_REFERENCE } from '@hydranium/protocol';
+import { Deferred, Logger, type Project, UNQUALIFIED_PROJECT_REFERENCE } from '@hydranium/protocol';
 import { makeFakeClock } from '@hydranium/protocol/testing';
 import { AbstractProjectManager, type ProjectManagerOptions } from '../../../src/langium/project/abstract-project-manager.js';
 import type { ProjectChangeEvent } from '../../../src/langium/project/project-change-event.js';
@@ -94,6 +94,8 @@ interface Stubs {
    states: Map<string, DocumentState>;
    /** Deliver `uri`'s `Validated` phase without linking it, as a build that only validates does. */
    validateOnly: (uri: URI) => void;
+   /** Run `uri`'s `Linked` listeners without delivering it, as a build that has not delivered it yet. */
+   linkOnly: (uri: URI) => void;
    /** What the stub builder reports as `shouldValidateDocument`. Without validation, `update` ends at `IndexedReferences`. */
    validates: boolean;
    /** Without it, `update` runs no `Linked` listener, as under Langium's `eagerLinking: false`. */
@@ -238,6 +240,7 @@ function makeStubs(knownDocuments: URI[] = []): Stubs {
       updateErrors: [],
       states: new Map(),
       validateOnly: uri => deliveredListeners.forEach(listener => listener(fakeDocument(uri))),
+      linkOnly: uri => linkedListeners.forEach(listener => listener(fakeDocument(uri))),
       validates: true,
       eagerLinking: true,
       phaseListeners: () => linkedListeners.length + indexedListeners.length + deliveredListeners.length,
@@ -862,7 +865,7 @@ describe('AbstractProjectManager.projectsAffectedBy', () => {
       ]);
    });
 
-   it('still announces the descriptor change of an update whose ask throws, and names no project', async () => {
+   it('still announces the descriptor change of an update whose ask throws, and names every project', async () => {
       const { stubs, mgr } = await setup();
       mgr.affectedByError = new Error('broken hook');
 
@@ -870,7 +873,10 @@ describe('AbstractProjectManager.projectsAffectedBy', () => {
       await stubs.triggerBuildUpdate([URI_DESCRIPTOR_B, URI_TYPE], []);
       stubs.endBuild();
 
-      expect(mgr.events.map(event => event.updated)).toEqual([['B@1']]);
+      expect(mgr.events.map(event => [event.updated, event.affectedDocuments])).toEqual([
+         [['B@1'], [URI_DESCRIPTOR_A, URI_MEMBER_A1, URI_MEMBER_B1]],
+         [['A@1', 'B@1'], []]
+      ]);
    });
 
    it('does not ask on an update that changes and deletes nothing', async () => {
@@ -1947,5 +1953,460 @@ describe('AbstractProjectManager with direct visibility', () => {
       const mgr = await setup({});
       expect(mgr.getVisibleProjects('C@1')).toEqual(['C@1', 'B@1', 'A@1']);
       expect([...mgr.affectedProjects(['A@1'])].sort()).toEqual(['A@1', 'B@1', 'C@1']);
+   });
+});
+
+describe('AbstractProjectManager with a hook that throws', () => {
+   type Hook =
+      | 'logProjectChange'
+      | 'isProjectDescriptor'
+      | 'requiresMemberRebuild'
+      | 'getAffectedProjects'
+      | 'collectAffectedDocuments'
+      | 'shouldDeferMemberRelink'
+      | 'lastPhaseOf'
+      | 'parseProjectDescriptor';
+   const URI_DESCRIPTOR_C = URI.parse('file:///workspace/projC/project.a');
+
+   class FailingProjectManager extends TestProjectManager {
+      failing: Hook | undefined;
+      /** Throws from conceptName too, which the failure messages read. */
+      conceptNameFails = false;
+      /** The descriptor whose load throws, synchronously as an override may. */
+      failingLoad: URI | undefined;
+
+      fail(hook: Hook): void {
+         if (this.failing === hook) {
+            throw new Error(`${hook} failed`);
+         }
+      }
+
+      override isProjectDescriptor(uri: URI | string): boolean {
+         this.fail('isProjectDescriptor');
+         return super.isProjectDescriptor(uri);
+      }
+
+      protected override logProjectChange(action: 'Add/Update' | 'Remove', id: string, uri: URI): void {
+         this.fail('logProjectChange');
+         super.logProjectChange(action, id, uri);
+      }
+
+      protected override requiresMemberRebuild(previous: Project, updated: Project): boolean {
+         this.fail('requiresMemberRebuild');
+         return super.requiresMemberRebuild(previous, updated);
+      }
+
+      protected override getAffectedProjects(directlyChanged: readonly string[]): readonly string[] {
+         this.fail('getAffectedProjects');
+         return super.getAffectedProjects(directlyChanged);
+      }
+
+      protected override collectAffectedDocuments(affectedProjectIds: ReadonlySet<string>, excludedUris: ReadonlySet<string>): URI[] {
+         this.fail('collectAffectedDocuments');
+         return super.collectAffectedDocuments(affectedProjectIds, excludedUris);
+      }
+
+      protected override shouldDeferMemberRelink(): boolean {
+         this.fail('shouldDeferMemberRelink');
+         return super.shouldDeferMemberRelink();
+      }
+
+      protected override lastPhaseOf(document: LangiumDocument): DocumentState {
+         this.fail('lastPhaseOf');
+         return super.lastPhaseOf(document);
+      }
+
+      protected override async parseProjectDescriptor(uri: URI): Promise<Project | undefined> {
+         this.fail('parseProjectDescriptor');
+         return super.parseProjectDescriptor(uri);
+      }
+
+      protected override loadDescriptor(uri: URI): Promise<Project | undefined> {
+         if (uri.toString() === this.failingLoad?.toString()) {
+            throw new Error('loadDescriptor failed');
+         }
+         return super.loadDescriptor(uri);
+      }
+
+      protected override conceptName(): string {
+         if (this.conceptNameFails) {
+            throw new Error('conceptName failed');
+         }
+         return super.conceptName();
+      }
+   }
+
+   async function setup(options: ProjectManagerOptions = {}): Promise<{ stubs: Stubs; mgr: FailingProjectManager }> {
+      const stubs = makeStubs([URI_DESCRIPTOR_A, URI_DESCRIPTOR_B, URI_MEMBER_A1, URI_MEMBER_B1]);
+      const mgr = new FailingProjectManager(stubs, options);
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1' });
+      mgr.descriptors.set(URI_DESCRIPTOR_B.toString(), { id: 'B@1', dependencies: ['A@1'] });
+      mgr.discoveryUris = [URI_DESCRIPTOR_A, URI_DESCRIPTOR_B];
+      await mgr.discoverProjects([]);
+      mgr.events.length = 0;
+      return { stubs, mgr };
+   }
+
+   afterEach(() => Logger.setLevel('info'));
+
+   const errors = (stubs: Stubs): string[] => stubs.logs.filter(line => line.level === 'error').map(line => line.message);
+   /** A hook's later throws log at debug until it answers. */
+   const failures = (stubs: Stubs): string[] =>
+      stubs.logs.filter(line => line.level === 'error' || line.level === 'debug').map(line => `${line.level} ${line.message}`);
+
+   it('reloads a registered descriptor whose predicate throws', async () => {
+      const { stubs, mgr } = await setup();
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', version: '2' });
+      mgr.failing = 'isProjectDescriptor';
+
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []);
+
+      expect(mgr.events.map(event => event.updated)).toEqual([['A@1']]);
+      expect(mgr.getProjectById('A@1')?.version).toBe('2');
+      expect(errors(stubs)).toEqual([expect.stringContaining('isProjectDescriptor failed')]);
+   });
+
+   it('takes no new descriptor whose predicate throws', async () => {
+      const { stubs, mgr } = await setup();
+      mgr.descriptors.set(URI_DESCRIPTOR_C.toString(), { id: 'C@1' });
+      mgr.failing = 'isProjectDescriptor';
+
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_C], []);
+
+      expect(mgr.events).toEqual([]);
+      expect(mgr.getProjectById('C@1')).toBeUndefined();
+      expect(errors(stubs)).toEqual([expect.stringContaining('isProjectDescriptor failed')]);
+   });
+
+   it('rebuilds the members and dependents of a project whose rebuild check throws', async () => {
+      const { stubs, mgr } = await setup();
+      // A version-only change rebuilds nothing when the check answers.
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', version: '2' });
+      mgr.failing = 'requiresMemberRebuild';
+
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []);
+
+      expect(mgr.events).toEqual([
+         { added: [], updated: ['A@1'], removed: [], affectedDocuments: [URI_DESCRIPTOR_B, URI_MEMBER_A1, URI_MEMBER_B1] }
+      ]);
+      expect(errors(stubs)).toEqual([expect.stringContaining('requiresMemberRebuild failed')]);
+   });
+
+   it('logs a hook that keeps throwing at error once, then at debug until it answers again', async () => {
+      Logger.setLevel('debug');
+      const { stubs, mgr } = await setup();
+      const change = async (version: string): Promise<void> => {
+         mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', version });
+         await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []);
+      };
+
+      mgr.failing = 'requiresMemberRebuild';
+      await change('2');
+      await change('3');
+      mgr.failing = undefined;
+      await change('4');
+      mgr.failing = 'requiresMemberRebuild';
+      await change('5');
+
+      expect(
+         failures(stubs)
+            .filter(line => line.includes('requiresMemberRebuild failed'))
+            .map(line => line.split(' ')[0])
+      ).toEqual(['error', 'debug', 'error']);
+   });
+
+   it('removes the project of a descriptor whose load throws, and still loads the next one', async () => {
+      const { stubs, mgr } = await setup();
+      mgr.descriptors.set(URI_DESCRIPTOR_B.toString(), { id: 'B@1', dependencies: ['A@1'], version: '2' });
+      mgr.failingLoad = URI_DESCRIPTOR_A;
+
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A, URI_DESCRIPTOR_B], []);
+
+      expect(mgr.events.map(event => [event.updated, event.removed.map(entry => entry.id)])).toEqual([[['B@1'], ['A@1']]]);
+      expect(mgr.getProjectById('B@1')?.version).toBe('2');
+      expect(errors(stubs)).toEqual([expect.stringContaining('loadDescriptor failed')]);
+   });
+
+   it('skips a descriptor whose load throws in discovery and announces the rest', async () => {
+      const stubs = makeStubs([URI_DESCRIPTOR_A, URI_DESCRIPTOR_B]);
+      const mgr = new FailingProjectManager(stubs);
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1' });
+      mgr.descriptors.set(URI_DESCRIPTOR_B.toString(), { id: 'B@1' });
+      mgr.discoveryUris = [URI_DESCRIPTOR_A, URI_DESCRIPTOR_B];
+      mgr.failingLoad = URI_DESCRIPTOR_A;
+
+      await mgr.discoverProjects([]);
+
+      expect(mgr.events.map(event => event.added)).toEqual([['B@1']]);
+      expect(errors(stubs)).toEqual([expect.stringContaining('loadDescriptor failed')]);
+   });
+
+   it('announces the change when a hook throws and so does the concept name its failure message reads', async () => {
+      const { stubs, mgr } = await setup();
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', version: '2' });
+      mgr.failing = 'requiresMemberRebuild';
+      mgr.conceptNameFails = true;
+
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []);
+
+      expect(mgr.events).toEqual([
+         { added: [], updated: ['A@1'], removed: [], affectedDocuments: [URI_DESCRIPTOR_B, URI_MEMBER_A1, URI_MEMBER_B1] }
+      ]);
+      expect(errors(stubs)).toEqual([
+         expect.stringMatching(/^Failed to log the Add\/Update of "A@1" .*: Error: conceptName failed/),
+         expect.stringMatching(/^Failed to describe a failed hook, .*: Error: conceptName failed/),
+         expect.stringMatching(/^A hook failed, .*: Error: requiresMemberRebuild failed/)
+      ]);
+   });
+
+   it('logs a descriptor that fails to parse when the concept name throws too', async () => {
+      const { stubs, mgr } = await setup();
+      mgr.failing = 'parseProjectDescriptor';
+      mgr.conceptNameFails = true;
+
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []);
+
+      expect(errors(stubs)).toEqual([
+         expect.stringMatching(/^Failed to find the concept name, so it is "project", .*: Error: conceptName failed/),
+         expect.stringContaining(
+            `Failed to parse project descriptor at ${URI_DESCRIPTOR_A.toString()}: Error: parseProjectDescriptor failed`
+         ),
+         expect.stringMatching(/^Failed to log the Remove of "A@1" .*: Error: conceptName failed/)
+      ]);
+   });
+
+   it('logs a failed follow-up relink when the concept name throws too', async () => {
+      const { stubs, mgr } = await setup({ deferMemberRelink: true });
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', referenceName: 'renamed' });
+      stubs.updateErrors = [new Error('link failed')];
+      mgr.onMemberRelinkStarted(() => {
+         mgr.conceptNameFails = true;
+      });
+
+      await mgr.lock.write(() => stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []));
+      await mgr.memberRelinkSettled();
+
+      expect(errors(stubs)).toEqual([
+         expect.stringMatching(/^Failed to find the concept name, so it is "project", .*: Error: conceptName failed/),
+         expect.stringContaining('Relinking project members failed: Error: link failed')
+      ]);
+   });
+
+   it('rebuilds every project when finding the dependents of a changed one throws', async () => {
+      const { stubs, mgr } = await setup();
+      // A does not depend on B, so only the fallback rebuilds it.
+      mgr.descriptors.set(URI_DESCRIPTOR_B.toString(), { id: 'B@1', dependencies: ['A@1'], referenceName: 'renamed' });
+      mgr.failing = 'getAffectedProjects';
+
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_B], []);
+
+      expect(mgr.events).toEqual([
+         { added: [], updated: ['B@1'], removed: [], affectedDocuments: [URI_DESCRIPTOR_A, URI_MEMBER_A1, URI_MEMBER_B1] }
+      ]);
+      expect(errors(stubs)).toEqual([expect.stringContaining('getAffectedProjects failed')]);
+   });
+
+   it('relinks every loaded document but the changed descriptor when collecting them throws', async () => {
+      const { stubs, mgr } = await setup();
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', referenceName: 'renamed' });
+      // In no project, so only a fallback that relinks every document takes it.
+      stubs.knownDocuments.push(URI_OUTSIDE);
+      mgr.failing = 'collectAffectedDocuments';
+
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []);
+
+      expect(mgr.events).toEqual([
+         { added: [], updated: ['A@1'], removed: [], affectedDocuments: [URI_DESCRIPTOR_B, URI_MEMBER_A1, URI_MEMBER_B1, URI_OUTSIDE] }
+      ]);
+      expect(errors(stubs)).toEqual([expect.stringContaining('collectAffectedDocuments failed')]);
+   });
+
+   it('relinks the members in the build of the change when the defer check throws', async () => {
+      const { stubs, mgr } = await setup({ deferMemberRelink: true });
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', referenceName: 'renamed' });
+      mgr.failing = 'shouldDeferMemberRelink';
+
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []);
+      await mgr.memberRelinkSettled();
+
+      expect(mgr.events).toEqual([
+         { added: [], updated: ['A@1'], removed: [], affectedDocuments: [URI_DESCRIPTOR_B, URI_MEMBER_A1, URI_MEMBER_B1] }
+      ]);
+      expect(stubs.updates, 'no follow-up build was queued').toBe(0);
+      expect(errors(stubs)).toEqual([expect.stringContaining('shouldDeferMemberRelink failed')]);
+   });
+
+   it('lets the build of the change carry a member whose last phase throws, as one validated', async () => {
+      const { stubs, mgr } = await setup({ deferMemberRelink: true });
+      Logger.setLevel('debug');
+      // Without validation its last phase is `IndexedReferences`, so it is deferred when that is known.
+      stubs.validates = false;
+      stubs.states.set(URI_MEMBER_B1.toString(), DocumentState.IndexedReferences);
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', referenceName: 'renamed' });
+      mgr.failing = 'lastPhaseOf';
+
+      // In a write, as the build of a change runs, so the follow-up waits until the hook answers again.
+      await mgr.lock.write(async () => {
+         await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []);
+         mgr.failing = undefined;
+      });
+      await mgr.memberRelinkSettled();
+
+      expect(mgr.events[0]).toEqual({ added: [], updated: ['A@1'], removed: [], affectedDocuments: [URI_MEMBER_B1] });
+      expect(failures(stubs).filter(line => line.includes('lastPhaseOf failed'))).toEqual([
+         expect.stringMatching(/^error .*next throws are logged at debug until it answers: Error: lastPhaseOf failed/),
+         expect.stringMatching(/^debug .*: Error: lastPhaseOf failed/),
+         expect.stringMatching(/^debug .*: Error: lastPhaseOf failed/)
+      ]);
+   });
+
+   it('keeps a linked member queued when its last phase throws as it is delivered', async () => {
+      const { stubs, mgr } = await setup({ deferMemberRelink: true });
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', referenceName: 'renamed' });
+
+      await mgr.lock.write(async () => {
+         await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []);
+         // Linked since it was queued, so a delivery at its last phase would take it as relinked.
+         stubs.linkOnly(URI_MEMBER_A1);
+         mgr.failing = 'lastPhaseOf';
+         expect(() => stubs.validateOnly(URI_MEMBER_A1)).not.toThrow();
+         mgr.failing = undefined;
+         expect(mgr.trackedMembers.unrelinked).toContain(URI_MEMBER_A1.toString());
+      });
+      await mgr.memberRelinkSettled();
+
+      expect(errors(stubs)).toEqual([expect.stringContaining('lastPhaseOf failed')]);
+   });
+
+   it('removes the project of a deleted registered descriptor whose predicate throws', async () => {
+      const { stubs, mgr } = await setup();
+      mgr.failing = 'isProjectDescriptor';
+
+      await stubs.triggerBuildUpdate([], [URI_DESCRIPTOR_A]);
+
+      expect(mgr.events.map(event => event.removed.map(entry => entry.id))).toEqual([['A@1']]);
+      expect(mgr.getProjectById('A@1')).toBeUndefined();
+      expect(errors(stubs)).toEqual([expect.stringContaining('isProjectDescriptor failed')]);
+   });
+
+   it('keeps and announces an updated project whose change log throws', async () => {
+      const { stubs, mgr } = await setup();
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', version: '2' });
+      mgr.failing = 'logProjectChange';
+
+      await stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []);
+
+      expect(mgr.events.map(event => [event.updated, event.removed.map(entry => entry.id)])).toEqual([[['A@1'], []]]);
+      expect(mgr.getProjectById('A@1')?.version).toBe('2');
+      expect(errors(stubs)).toEqual([expect.stringContaining('logProjectChange failed')]);
+   });
+
+   it('announces a removed project whose change log throws', async () => {
+      const { stubs, mgr } = await setup();
+      mgr.failing = 'logProjectChange';
+
+      await stubs.triggerBuildUpdate([], [URI_DESCRIPTOR_A]);
+
+      expect(mgr.events.map(event => event.removed.map(entry => entry.id))).toEqual([['A@1']]);
+      expect(errors(stubs)).toEqual([expect.stringContaining('logProjectChange failed')]);
+   });
+
+   it('resets and relinks a requeued member whose last phase throws in the follow-up build', async () => {
+      const { stubs, mgr } = await setup({ deferMemberRelink: true });
+      Logger.setLevel('debug');
+      // The workspace manager's cascade, which also resets the members a follow-up build emits.
+      mgr.onProjectsChanged(event =>
+         event.affectedDocuments.forEach(uri => stubs.documentBuilder.resetToState(fakeDocument(uri), DocumentState.Changed))
+      );
+      const log: string[] = [];
+      let eventsBeforeRetry = 0;
+      mgr.onMemberRelinkStarted(() => {
+         log.push('started');
+         if (log.length === 1) {
+            // A write cancels the first follow-up, which queues its members again without a reset.
+            void mgr.lock.write(() => undefined);
+         } else {
+            eventsBeforeRetry = mgr.events.length;
+            mgr.failing = 'lastPhaseOf';
+         }
+      });
+      mgr.onMemberRelinkFinished(({ completed }) => {
+         log.push(`finished completed=${completed}`);
+         mgr.failing = undefined;
+      });
+      mgr.descriptors.set(URI_DESCRIPTOR_A.toString(), { id: 'A@1', referenceName: 'renamed' });
+
+      await mgr.lock.write(() => stubs.triggerBuildUpdate([URI_DESCRIPTOR_A], []));
+      await mgr.memberRelinkSettled();
+
+      expect(log).toEqual(['started', 'finished completed=false', 'started', 'finished completed=true']);
+      const members = [URI_DESCRIPTOR_B, URI_MEMBER_A1, URI_MEMBER_B1];
+      expect(
+         mgr.events.slice(eventsBeforeRetry).map(event => event.affectedDocuments),
+         'the second follow-up resets the members'
+      ).toEqual([members]);
+      // The stub build delivers the phases too, which logs the delivery fallback.
+      expect(failures(stubs).filter(message => message.includes('so it is reset'))).toEqual(
+         members.map(uri => expect.stringContaining(`Failed to find the last phase of ${uri.toString()}, so it is reset`))
+      );
+   });
+
+   it('skips a file whose predicate throws in the discovery walk and finds the rest', async () => {
+      const root = 'file:///ws';
+      class FailingWalk extends WalkingProjectManager {
+         override isProjectDescriptor(uri: URI | string): boolean {
+            if (uri.toString() === `${root}/sub/project.a`) {
+               throw new Error('isProjectDescriptor failed');
+            }
+            return super.isProjectDescriptor(uri);
+         }
+      }
+      const stubs = makeFsStubs({ [root]: [{ name: 'project.a' }, { name: 'sub', dir: true }], [`${root}/sub`]: [{ name: 'project.a' }] });
+      const mgr = new FailingWalk(stubs);
+
+      await mgr.discoverProjects([{ uri: root, name: 'ws' }]);
+      await mgr.ready;
+
+      expect(mgr.getProjects().map(project => project.id)).toEqual([`${root}/project.a`]);
+      expect(errors(stubs)).toEqual([expect.stringContaining('isProjectDescriptor failed')]);
+   });
+
+   it('skips a directory whose entry check throws in the discovery walk and finds the rest', async () => {
+      const root = 'file:///ws';
+      class FailingWalk extends WalkingProjectManager {
+         protected override shouldEnterDirectory(uri: URI, name: string): boolean {
+            if (name === 'broken') {
+               throw new Error('shouldEnterDirectory failed');
+            }
+            return super.shouldEnterDirectory(uri, name);
+         }
+      }
+      const stubs = makeFsStubs({
+         [root]: [
+            { name: 'broken', dir: true },
+            { name: 'sub', dir: true }
+         ],
+         [`${root}/broken`]: [{ name: 'project.a' }],
+         [`${root}/sub`]: [{ name: 'project.a' }]
+      });
+      const mgr = new FailingWalk(stubs);
+
+      await mgr.discoverProjects([{ uri: root, name: 'ws' }]);
+      await mgr.ready;
+
+      expect(mgr.getProjects().map(project => project.id)).toEqual([`${root}/sub/project.a`]);
+      expect(errors(stubs)).toEqual([expect.stringContaining('shouldEnterDirectory failed')]);
+   });
+
+   it('settles ready when finding the descriptors throws, and rejects discovery', async () => {
+      class FailingDiscovery extends WalkingProjectManager {
+         protected override async findDescriptorUris(): Promise<URI[]> {
+            throw new Error('findDescriptorUris failed');
+         }
+      }
+      const mgr = new FailingDiscovery(makeFsStubs({}));
+
+      await expect(mgr.discoverProjects([])).rejects.toThrow('findDescriptorUris failed');
+      await expect(mgr.ready).resolves.toBeUndefined();
    });
 });

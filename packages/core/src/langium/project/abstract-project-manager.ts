@@ -124,6 +124,12 @@ export interface ProjectManagerOptions extends LogNameOptions {
  * - {@link computeProject} — default uses closest-ancestor-descriptor-folder
  *   membership. Override for a different membership model; overriding
  *   {@link getProject} instead loses the memoization it wraps.
+ *
+ * A hook that throws while an update, a follow-up relink or the discovery walk
+ * asks it is logged, mostly by {@link orFallback}, and the manager goes on
+ * with the answer the hook's doc names. A throw that reached the build would
+ * fail it after the registry changed, so the change would never be announced.
+ * Only {@link findDescriptorUris} fails discovery when it throws.
  */
 export abstract class AbstractProjectManager<TProject extends Project = Project> implements ProjectManager<TProject> {
    /** Project id → {@link Project}. */
@@ -208,7 +214,14 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
       this.documentBuilder.onDocumentPhase(DocumentState.Linked, document => this.onMemberLinked(document.uri));
       for (const phase of [DocumentState.IndexedReferences, DocumentState.Validated]) {
          this.documentBuilder.onDocumentPhaseDelivered(phase, document => {
-            if (this.lastPhaseOf(document) === phase) {
+            // Not counted as delivered, so a throw costs a relink rather than skipping one.
+            const lastPhase = this.orFallback(
+               'lastPhaseOf',
+               () => `Failed to find the last phase of ${document.uri.toString()}, so this delivery does not count as its last`,
+               undefined,
+               () => this.lastPhaseOf(document)
+            );
+            if (lastPhase === phase) {
                this.onMemberDelivered(document.uri);
             }
          });
@@ -234,6 +247,41 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
    // ============================================================
 
    /**
+    * The hooks whose last call threw, by the name {@link orFallback} got.
+    * Their next throws are logged at `debug` until a call succeeds.
+    */
+   protected readonly failingHooks = new Set<string>();
+
+   /**
+    * What `hook` returns, or `fallback` once its throw is logged with
+    * `failure`, which is built only then. The first throw of the hook named
+    * `hookName` is logged at `error`, and the next at `debug` until a call
+    * succeeds, since a per-document hook would otherwise log every document
+    * in every build. The manager asks its adopter hooks through here in an
+    * update, a follow-up relink or the discovery walk. Override to log
+    * differently or to rethrow, such as in a test.
+    */
+   protected orFallback<T>(hookName: string, failure: () => string, fallback: T, hook: () => T): T {
+      try {
+         const answer = hook();
+         if (this.failingHooks.size > 0) {
+            this.failingHooks.delete(hookName);
+         }
+         return answer;
+      } catch (error: unknown) {
+         // The message reads overridable hooks such as conceptName, so it is guarded too.
+         const message = this.orFallback('failure message', () => 'Failed to describe a failed hook', 'A hook failed', failure);
+         if (this.failingHooks.has(hookName)) {
+            this.tracer.debug(`${message}: ${describeErrorWithStack(error)}`);
+         } else {
+            this.failingHooks.add(hookName);
+            this.tracer.error(`${message}, and its next throws are logged at debug until it answers: ${describeErrorWithStack(error)}`);
+         }
+         return fallback;
+      }
+   }
+
+   /**
     * Predicate: is the given URI a project descriptor file? **Abstract** —
     * concrete subclasses must implement, paired with their
     * {@link parseProjectDescriptor} override. The predicate gates both
@@ -244,7 +292,9 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     *
     * Implementations are typically schema-driven — filename pattern,
     * extension, or location. Avoid registry lookups: new descriptors
-    * appearing at runtime would not yet be in the registry.
+    * appearing at runtime would not yet be in the registry. A throw is logged.
+    * Discovery then skips the file, and an update takes it as a descriptor
+    * only if one is registered there.
     */
    abstract isProjectDescriptor(uri: URI | string): boolean;
 
@@ -276,7 +326,8 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
    /**
     * Adopter-facing concept name used in the change-log lines this manager
     * emits ({@link logProjectChange}). Default `'project'`; adopters override
-    * to their own domain term.
+    * to their own domain term. A throw is logged, and the line that asked
+    * for it says `project` or is a generic one without its details.
     */
    protected conceptName(): string {
       return 'project';
@@ -286,7 +337,8 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     * Emit an `Add/Update` / `Remove` change-log line for a project. `uri` is the
     * descriptor file; its workspace-relative path is shown via the
     * `HydraniumWorkspaceManager` the framework binds. `info`-level, so it
-    * is suppressed when the log threshold is above `info`.
+    * is suppressed when the log threshold is above `info`. A throw is logged,
+    * and the change goes on.
     */
    protected logProjectChange(action: 'Add/Update' | 'Remove', id: string, uri: URI): void {
       const location = this.services.workspace.WorkspaceManager.wsRelativePath(uri);
@@ -310,6 +362,9 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     * sentinel ({@link UNQUALIFIED_PROJECT_REFERENCE}) for projects that
     * do not qualify their names, or a sanitised / version-stripped form
     * for adopters with a custom reference scheme.
+    *
+    * A throw is logged, and the descriptor describes no project, so one
+    * registered there is removed.
     */
    protected abstract parseProjectDescriptor(uri: URI, document: LangiumDocument): Promise<TProject | undefined>;
 
@@ -317,7 +372,8 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     * Locate descriptor URIs across the given workspace folders. Default
     * walks recursively via {@link fileSystemProvider}, respecting
     * {@link shouldEnterDirectory} for folder exclusions. Override to use
-    * a manifest index, glob, or explicit listing.
+    * a manifest index, glob, or explicit listing. A throw fails discovery,
+    * and {@link ready} still resolves.
     */
    protected async findDescriptorUris(folders: readonly WorkspaceFolder[]): Promise<URI[]> {
       const result: URI[] = [];
@@ -343,10 +399,25 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
       for (const entry of entries) {
          const name = UriUtils.basename(entry.uri);
          if (entry.isDirectory) {
-            if (this.shouldEnterDirectory(entry.uri, name)) {
+            if (
+               this.orFallback(
+                  'shouldEnterDirectory',
+                  () => `Failed to tell whether to enter ${entry.uri.toString()}, so discovery skips it`,
+                  false,
+                  () => this.shouldEnterDirectory(entry.uri, name)
+               )
+            ) {
                await this.walkForDescriptors(entry.uri, accumulator);
             }
-         } else if (entry.isFile && this.isDescriptorUri(entry.uri)) {
+         } else if (
+            entry.isFile &&
+            this.orFallback(
+               'isProjectDescriptor',
+               () => `Failed to tell whether ${entry.uri.toString()} is a ${this.conceptName()} descriptor, so discovery skips it`,
+               false,
+               () => this.isDescriptorUri(entry.uri)
+            )
+         ) {
             accumulator.push(entry.uri);
          }
       }
@@ -357,7 +428,8 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     * into a sub-directory. Default skips hidden directories
     * (`name.startsWith('.')`), `node_modules`, and `out` — the common
     * "ignore build outputs and tooling" rules. Override to tighten or
-    * loosen the set without re-implementing the recursion.
+    * loosen the set without re-implementing the recursion. A throw is logged,
+    * and discovery skips the directory.
     */
    protected shouldEnterDirectory(_uri: URI, name: string): boolean {
       if (name.startsWith('.')) {
@@ -374,6 +446,7 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     * {@link visibility} is (see {@link ProjectManagerOptions.visibility}).
     *
     * Override for a different rebuild policy (custom reachability, etc.).
+    * A throw is logged, and every registered project rebuilds.
     */
    protected getAffectedProjects(directlyChanged: readonly string[]): readonly string[] {
       const result = new Set(directlyChanged);
@@ -414,6 +487,7 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     *
     * Override to widen the comparison with adopter descriptor fields that a
     * member build observes, combining with `super.requiresMemberRebuild(...)`.
+    * A throw is logged and counts as `true`.
     */
    protected requiresMemberRebuild(previous: TProject, updated: TProject): boolean {
       return previous.referenceName !== updated.referenceName || !sameDependencies(previous, updated);
@@ -477,15 +551,25 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
          return;
       }
       this.discoveryRan = true;
-      const descriptorUris = await this.findDescriptorUris(folders);
       const added: string[] = [];
-      for (const uri of descriptorUris) {
-         const project = await this.loadDescriptor(uri);
-         if (project) {
-            added.push(project.id);
+      try {
+         for (const uri of await this.findDescriptorUris(folders)) {
+            let project: TProject | undefined;
+            try {
+               project = await this.loadDescriptor(uri);
+            } catch (error: unknown) {
+               this.tracer.error(
+                  `Failed to load the descriptor at ${uri.toString()}, so discovery skips it: ${describeErrorWithStack(error)}`
+               );
+            }
+            if (project) {
+               added.push(project.id);
+            }
          }
+      } finally {
+         // A discovery that fails still settles `ready`, or every wait for it would hang.
+         this.readyDeferred.resolve();
       }
-      this.readyDeferred.resolve();
       if (added.length > 0) {
          this.emit({ added, updated: [], removed: [], affectedDocuments: [] });
       }
@@ -495,7 +579,8 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     * Parse a single descriptor URI and register the resulting project.
     * Returns the parsed project, or `undefined` if parsing failed (errors
     * are logged, not thrown — the rest of discovery / update continues).
-    * A file gone meanwhile also returns `undefined`, logged at debug.
+    * A file gone meanwhile also returns `undefined`, logged at debug. An
+    * override that throws is logged, and the descriptor describes no project.
     */
    protected async loadDescriptor(uri: URI): Promise<TProject | undefined> {
       try {
@@ -513,16 +598,27 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
             this.projectByDescriptor.set(uri.toString(), project.id);
             this.descriptorDirectories.set(uri.toString(), UriUtils.dirname(uri));
             this.invalidateMembershipCache();
-            this.logProjectChange('Add/Update', project.id, uri);
+            this.orFallback(
+               'logProjectChange',
+               () => `Failed to log the Add/Update of "${project.id}" from ${uri.toString()}`,
+               undefined,
+               () => this.logProjectChange('Add/Update', project.id, uri)
+            );
          }
          return project;
       } catch (error: unknown) {
+         const concept = this.orFallback(
+            'conceptName',
+            () => 'Failed to find the concept name, so it is "project"',
+            'project',
+            () => this.conceptName()
+         );
          // A file deleted before the build that reloads it is a race, and the delete's own update follows.
          if (isFileNotFound(error, uri)) {
-            this.tracer.debug(`The ${this.conceptName()} descriptor at ${uri.toString()} is gone, so it describes no project`);
+            this.tracer.debug(`The ${concept} descriptor at ${uri.toString()} is gone, so it describes no project`);
             return undefined;
          }
-         this.tracer.error(`Failed to parse ${this.conceptName()} descriptor at ${uri.toString()}: ${describeErrorWithStack(error)}`);
+         this.tracer.error(`Failed to parse ${concept} descriptor at ${uri.toString()}: ${describeErrorWithStack(error)}`);
          return undefined;
       }
    }
@@ -557,11 +653,24 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
    protected async onBuildUpdate(changed: readonly URI[], deleted: readonly URI[]): Promise<void> {
       // Asked before the first await, while the builder still answers for
       // this call.
-      const deferRelink = this.shouldDeferMemberRelink();
+      const deferRelink = this.orFallback(
+         'shouldDeferMemberRelink',
+         () => `Failed to tell whether to defer the ${this.conceptName()} member relink, so the build of the change relinks the members`,
+         false,
+         () => this.shouldDeferMemberRelink()
+      );
       // An explicit build reports the documents it builds as changed, whether or not they changed.
       const explicitBuild = this.documentBuilder.isInsideBuildUpdate();
-      const changedDescriptors = changed.filter(uri => this.isDescriptorUri(uri));
-      const deletedDescriptors = deleted.filter(uri => this.isDescriptorUri(uri));
+      // A registered descriptor stays one, so its project is reloaded or removed rather than kept stale.
+      const isDescriptor = (uri: URI): boolean =>
+         this.orFallback(
+            'isProjectDescriptor',
+            () => `Failed to tell whether ${uri.toString()} is a ${this.conceptName()} descriptor, so it is one only if registered`,
+            this.projectByDescriptor.has(uri.toString()),
+            () => this.isDescriptorUri(uri)
+         );
+      const changedDescriptors = changed.filter(isDescriptor);
+      const deletedDescriptors = deleted.filter(isDescriptor);
       if (changedDescriptors.length > 0 || deletedDescriptors.length > 0) {
          // Descriptor removals below mutate the maps `computeProject` reads. Drop the
          // memoized results now (adds also re-clear via `loadDescriptor`), so the
@@ -588,7 +697,14 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
          const uriStr = uri.toString();
          const previousProjectId = this.projectByDescriptor.get(uriStr);
          const previousProject = previousProjectId ? this.projects.get(previousProjectId) : undefined;
-         const newProject = await this.loadDescriptor(uri);
+         let newProject: TProject | undefined;
+         try {
+            newProject = await this.loadDescriptor(uri);
+         } catch (error: unknown) {
+            this.tracer.error(
+               `Failed to load the descriptor at ${uri.toString()}, so it describes no project: ${describeErrorWithStack(error)}`
+            );
+         }
          if (newProject) {
             if (!previousProjectId) {
                added.push(newProject.id);
@@ -599,13 +715,27 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
                this.projects.delete(previousProjectId);
                if (previousProject) {
                   removed.push({ id: previousProjectId, snapshot: previousProject });
-                  this.logProjectChange('Remove', previousProjectId, uri);
+                  this.orFallback(
+                     'logProjectChange',
+                     () => `Failed to log the Remove of "${previousProjectId}" from ${uri.toString()}`,
+                     undefined,
+                     () => this.logProjectChange('Remove', previousProjectId, uri)
+                  );
                }
                added.push(newProject.id);
                rebuildIds.push(newProject.id);
             } else {
                updated.push(newProject.id);
-               if (!previousProject || this.requiresMemberRebuild(previousProject, newProject)) {
+               if (
+                  !previousProject ||
+                  this.orFallback(
+                     'requiresMemberRebuild',
+                     () =>
+                        `Failed to tell whether the change to ${this.conceptName()} "${newProject.id}" reaches its members, so they rebuild`,
+                     true,
+                     () => this.requiresMemberRebuild(previousProject, newProject)
+                  )
+               ) {
                   rebuildIds.push(newProject.id);
                }
             }
@@ -616,7 +746,12 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
             this.descriptorDirectories.delete(uriStr);
             if (previousProject) {
                removed.push({ id: previousProjectId, snapshot: previousProject });
-               this.logProjectChange('Remove', previousProjectId, uri);
+               this.orFallback(
+                  'logProjectChange',
+                  () => `Failed to log the Remove of "${previousProjectId}" from ${uri.toString()}`,
+                  undefined,
+                  () => this.logProjectChange('Remove', previousProjectId, uri)
+               );
             }
          }
       }
@@ -631,27 +766,40 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
             this.descriptorDirectories.delete(uriStr);
             if (snapshot) {
                removed.push({ id: projectId, snapshot });
-               this.logProjectChange('Remove', projectId, uri);
+               this.orFallback(
+                  'logProjectChange',
+                  () => `Failed to log the Remove of "${projectId}" from ${uri.toString()}`,
+                  undefined,
+                  () => this.logProjectChange('Remove', projectId, uri)
+               );
             }
          }
       }
 
-      let namedIds: string[] = [];
       const asked = !explicitBuild && changed.length + deleted.length > 0;
-      try {
-         namedIds = asked ? [...new Set(this.projectsAffectedBy(changed, deleted))].filter(id => this.projects.has(id)) : [];
-      } catch (error: unknown) {
-         // A throw would fail the update and drop the registry change above unannounced.
-         this.tracer.error(
-            `Failed to find which ${this.conceptName()} the changed documents affect, so none is named: ${describeErrorWithStack(error)}`
-         );
-      }
+      const namedIds = asked
+         ? (this.orFallback(
+              'projectsAffectedBy',
+              () => `Failed to find which ${this.conceptName()} the changed documents affect, so every one is named`,
+              undefined,
+              () => [...new Set(this.projectsAffectedBy(changed, deleted))].filter(id => this.projects.has(id))
+           ) ?? [...this.projects.keys()])
+         : [];
       if (added.length === 0 && updated.length === 0 && removed.length === 0 && namedIds.length === 0) {
          return;
       }
 
       const removedIds = removed.map(entry => entry.id);
-      const affectedProjectIds = new Set(this.getAffectedProjects([...rebuildIds, ...namedIds, ...removedIds]));
+      const directlyChanged = [...rebuildIds, ...namedIds, ...removedIds];
+      // Every project, built only on a throw, as for the documents below.
+      const affectedProjectIds = new Set(
+         this.orFallback(
+            'getAffectedProjects',
+            () => `Failed to find which ${this.conceptName()} depends on the changed ones, so every one rebuilds`,
+            undefined,
+            () => this.getAffectedProjects(directlyChanged)
+         ) ?? [...directlyChanged, ...this.projects.keys()]
+      );
       const excluded = new Set<string>();
       for (const uri of changedDescriptors) {
          excluded.add(uri.toString());
@@ -659,7 +807,15 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
       for (const uri of deletedDescriptors) {
          excluded.add(uri.toString());
       }
-      const affectedDocuments = this.collectAffectedDocuments(affectedProjectIds, excluded);
+      // Every document, built only on a throw: relinking too many costs time,
+      // too few leaves stale links.
+      const affectedDocuments =
+         this.orFallback(
+            'collectAffectedDocuments',
+            () => `Failed to collect the documents the ${this.conceptName()} change affects, so every document is relinked`,
+            undefined,
+            () => this.collectAffectedDocuments(affectedProjectIds, excluded)
+         ) ?? [...this.langiumDocuments.all].map(document => document.uri).filter(uri => !excluded.has(uri.toString()));
 
       if (deferRelink) {
          // The build of the change already builds what it was given.
@@ -672,7 +828,16 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
             }
             const document = this.langiumDocuments.getDocument(uri);
             // Below its last phase, the build of the change builds it anyway.
-            (document && document.state < this.lastPhaseOf(document) ? carried : deferred).push(uri);
+            const below =
+               document !== undefined &&
+               document.state <
+                  this.orFallback(
+                     'lastPhaseOf',
+                     () => `Failed to find the last phase of ${uri.toString()}, so it counts as Validated`,
+                     DocumentState.Validated,
+                     () => this.lastPhaseOf(document)
+                  );
+            (below ? carried : deferred).push(uri);
          }
          this.queueMemberRelink(deferred);
          this.emitUnlessEmpty({ added, updated, removed, affectedDocuments: carried });
@@ -693,7 +858,8 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     * that changes or deletes a document, once its descriptors are reloaded,
     * so keep it cheap. Not called for an explicit `DocumentBuilder.build`,
     * which reports the documents it builds as changed whether or not they
-    * changed. A throw is logged and names none. Default: none.
+    * changed. A throw is logged and names every registered project.
+    * Default: none.
     *
     * When it is asked, a changed document still holds its previous AST and
     * is out of the index, and the documents that refer to it are unlinked.
@@ -737,7 +903,8 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     * change affects to a follow-up build. Default: under
     * {@link deferMemberRelink}, unless an explicit `build` calls it. Called
     * before the first await of {@link onBuildUpdate}, where
-    * `isInsideBuildUpdate` still answers for that call.
+    * `isInsideBuildUpdate` still answers for that call. A throw is logged and
+    * counts as `false`.
     */
    protected shouldDeferMemberRelink(): boolean {
       return this.deferMemberRelink && !this.documentBuilder.isInsideBuildUpdate();
@@ -748,7 +915,8 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
     * the affected set. Override to add documents a change affects otherwise,
     * such as those reached through a project's type, calling `super` to keep
     * the members. What it returns is relinked as the members are, in the
-    * build of the change or in the follow-up build.
+    * build of the change or in the follow-up build. A throw is logged, and
+    * every loaded document but the descriptors that changed is relinked.
     */
    protected collectAffectedDocuments(affectedProjectIds: ReadonlySet<string>, excludedUris: ReadonlySet<string>): URI[] {
       const result: URI[] = [];
@@ -908,7 +1076,16 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
       try {
          const reset = loaded.filter(uri => {
             const document = this.langiumDocuments.getDocument(uri);
-            return document !== undefined && (resets.has(uri.toString()) || document.state >= this.lastPhaseOf(document));
+            return (
+               document !== undefined &&
+               (resets.has(uri.toString()) ||
+                  this.orFallback(
+                     'lastPhaseOf',
+                     () => `Failed to find the last phase of ${uri.toString()}, so it is reset`,
+                     true,
+                     () => document.state >= this.lastPhaseOf(document)
+                  ))
+            );
          });
          if (reset.length > 0) {
             reset.forEach(uri => this.linkedMembers.delete(uri.toString()));
@@ -939,7 +1116,13 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
             );
          } else {
             forgetTaken();
-            this.tracer.error(`Relinking ${this.conceptName()} members failed: ${describeErrorWithStack(error)}`);
+            const concept = this.orFallback(
+               'conceptName',
+               () => 'Failed to find the concept name, so it is "project"',
+               'project',
+               () => this.conceptName()
+            );
+            this.tracer.error(`Relinking ${concept} members failed: ${describeErrorWithStack(error)}`);
          }
       } finally {
          this.notifyMemberRelink<MemberRelinkFinishedEvent>(this.memberRelinkFinishedListeners, { completed });
@@ -954,7 +1137,12 @@ export abstract class AbstractProjectManager<TProject extends Project = Project>
       }
    }
 
-   /** The last phase the build that carries `document` takes it to. */
+   /**
+    * The last phase the build that carries `document` takes it to. A throw is
+    * logged. Sorting the members of a change, it counts as `Validated`. For a
+    * delivered member, the delivery does not count as its last phase. In a
+    * follow-up build, the member is reset.
+    */
    protected lastPhaseOf(document: LangiumDocument): DocumentState {
       return this.documentBuilder.shouldValidateDocument(document) ? DocumentState.Validated : DocumentState.IndexedReferences;
    }

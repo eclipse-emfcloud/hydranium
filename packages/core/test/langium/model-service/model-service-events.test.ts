@@ -177,6 +177,19 @@ describe('ModelService workspace events', () => {
       expect(all).toEqual([URI_A, URI_B]);
    });
 
+   it('onModelDeleted still reaches the other listeners when one throws', () => {
+      const { models, documentBuilder } = harness();
+      const deleted: string[] = [];
+      models.onModelDeleted(() => {
+         throw new Error('boom');
+      });
+      models.onModelDeleted(event => deleted.push(event.uri));
+
+      documentBuilder.fireOnUpdate([], [URI.parse(URI_A)]);
+
+      expect(deleted).toEqual([URI_A]);
+   });
+
    it('onDirtyChanged and onModelReleased filter by URI', () => {
       const { models, textDocuments } = harness();
       textDocuments.seedOpen(URI_A, 'a', 'c1');
