@@ -456,11 +456,26 @@ export class DataSession<
     */
    protected readonly opens = new Map<string, DataSessionOpen<TTransfer, TServer>>();
    /**
-    * Per URI, the opens of it this session has under way. Such a URI counts
-    * as open for {@link withOpenDocument}, which would otherwise close it
-    * under the open that is still being made.
+    * Per URI, the opens of it this session has under way. Such a URI is held
+    * against the close of a {@link withOpenDocument}, which would otherwise
+    * close it under the open that is still being made, see
+    * {@link isUnheldOpen}.
     */
    protected readonly openings = new Map<string, Set<DataSessionOpening<TTransfer, TServer>>>();
+   /** Per URI, how many {@link withOpenDocument} calls still run. */
+   protected readonly withOpenHolds = new Map<string, number>();
+   /**
+    * The URIs an {@link openDocument} or {@link createDocument} of this
+    * session recorded, which the last {@link withOpenDocument} ending leaves
+    * open. A URI goes when the session forgets the document.
+    */
+   protected readonly heldByOpen = new Set<string>();
+   /**
+    * The opens a {@link withOpenDocument} made, which hold no URI. Added by
+    * the call it hands {@link trackOpen}, so an override that passes the call
+    * on keeps them apart from explicit opens.
+    */
+   protected readonly withOpenOpenings = new WeakSet<DataSessionOpening<TTransfer, TServer>>();
    /**
     * Per URI, the closes and deletes of it this session has under way, which
     * an open or create called meanwhile waits for; see {@link trackEnding}.
@@ -893,6 +908,7 @@ export class DataSession<
       const serverUri = this.opens.get(uri)?.serverUri ?? uri;
       this.openUris.delete(uri);
       this.opens.delete(uri);
+      this.heldByOpen.delete(uri);
       this.unsavedWrites.delete(uri);
       this.lastAnswers.delete(uri);
       this.savedVersions.delete(uri);
@@ -910,27 +926,70 @@ export class DataSession<
    }
 
    /**
+    * Whether this live session has `uri` open with nothing left to keep it:
+    * no {@link withOpenDocument} running, no {@link heldByOpen} mark, and no
+    * open under way, which can only be an explicit one once no
+    * `withOpenDocument` runs.
+    */
+   protected isUnheldOpen(uri: string): boolean {
+      return (
+         !this.disposed &&
+         this.openUris.has(uri) &&
+         !this.withOpenHolds.has(uri) &&
+         !this.heldByOpen.has(uri) &&
+         ![...(this.openings.get(uri) ?? [])].some(opening => !opening.closed)
+      );
+   }
+
+   /**
     * Open `args.uri`, run `fn` with the opened snapshot, and close it once
-    * `fn` settles, whether it returned or threw. A URI this session already
-    * had open, or is still opening through another call, stays open: the close
-    * undoes only the open this call made.
+    * `fn` settles, whether it returned or threw. The close undoes only the
+    * open this call made: a URI an {@link openDocument} or
+    * {@link createDocument} of this session opened, before or while `fn`
+    * runs, stays open, and so does one another `withOpenDocument` still runs
+    * on. A URI the session no longer has open, as `fn` closed or deleted it,
+    * gets no close.
+    *
+    * Opens of one URI are not counted, so one close ends them all. The last
+    * `withOpenDocument` ending closes the URI unless an explicit open holds
+    * it, see {@link heldByOpen}. Counting every open instead would leak:
+    * callers open a URI again freely and close it once. An explicit open
+    * still under way holds it too, and closes it itself if it fails.
+    *
+    * The open goes through {@link trackOpen}, not {@link openDocument}, which
+    * would make it explicit, so an override of `openDocument` does not see it.
     */
    async withOpenDocument<T>(
       args: DataSessionOpenArgs<TTransfer, TServer>,
       fn: (document: DataSessionDocument<TTransfer, TServer>) => MaybePromise<T>
    ): Promise<T> {
-      // Asked once the closes and deletes of the URI under way have answered:
-      // before, the session still counts as open a document they are ending.
-      for (let ending = this.endings.get(args.uri); ending; ending = this.endings.get(args.uri)) {
-         await ending;
-      }
-      const alreadyOpen = this.hasOpen(args.uri);
-      const document = await this.openDocument(args);
+      const uri = args.uri;
+      this.withOpenHolds.set(uri, (this.withOpenHolds.get(uri) ?? 0) + 1);
       try {
+         const document = await this.trackOpen(uri, args.options, opening => {
+            this.withOpenOpenings.add(opening);
+            return this.openAndWatch(
+               uri,
+               opening,
+               () => undefined,
+               server => server.openModelDocument({ ...args, clientId: this.clientId, watch: true }),
+               true
+            );
+         });
          return await fn(document);
       } finally {
-         if (!alreadyOpen && !this.disposed) {
-            await this.closeDocument({ uri: args.uri } as DataSessionCloseArgs<TTransfer, TServer>);
+         const left = (this.withOpenHolds.get(uri) ?? 1) - 1;
+         if (left > 0) {
+            this.withOpenHolds.set(uri, left);
+         } else {
+            this.withOpenHolds.delete(uri);
+            // A close or delete `fn` left under way forgets the document first.
+            for (let ending = this.endings.get(uri); ending; ending = this.endings.get(uri)) {
+               await ending;
+            }
+            if (this.isUnheldOpen(uri)) {
+               await this.closeDocument({ uri } as DataSessionCloseArgs<TTransfer, TServer>);
+            }
          }
       }
    }
@@ -1179,6 +1238,7 @@ export class DataSession<
       this.detached = true;
       this.openUris.clear();
       this.opens.clear();
+      this.heldByOpen.clear();
       this.unsavedWrites.clear();
       this.lastAnswers.clear();
       this.savedVersions.clear();
@@ -1553,6 +1613,7 @@ export class DataSession<
             // Its record goes with its set's, in `reapply`, which it blocks.
             this.openUris.delete(uri);
             this.opens.delete(uri);
+            this.heldByOpen.delete(uri);
             this.lastAnswers.delete(uri);
             this.savedVersions.delete(uri);
             this.createdUris.delete(uri);
@@ -1870,7 +1931,10 @@ export class DataSession<
    /**
     * {@link track} an open of `uri`, kept in {@link openings} until it settles,
     * and sent once the closes and deletes of `uri` called before it have
-    * answered.
+    * answered. An open not in {@link withOpenOpenings} that recorded the URI
+    * marks it in {@link heldByOpen}. An open that failed after the last
+    * {@link withOpenDocument} of the URI ended closes the open that call left
+    * to it.
     */
    protected trackOpen<T>(
       uri: string,
@@ -1887,7 +1951,25 @@ export class DataSession<
          }
       };
       const ending = this.endings.get(uri);
-      return this.track([uri], () => (ending ? ending.then(() => call(opening)) : call(opening))).finally(done);
+      return this.track([uri], () => (ending ? ending.then(() => call(opening)) : call(opening)))
+         .then(result => {
+            // Marked before `done` drops the opening, so an ending
+            // `withOpenDocument` always finds the URI held or under way.
+            if (!this.withOpenOpenings.has(opening) && !opening.closed && this.openUris.has(uri)) {
+               this.heldByOpen.add(uri);
+            }
+            return result;
+         })
+         .finally(done)
+         .catch((error: unknown) => {
+            // Not awaited: the close first waits up to `settleBeforeCloseMs`
+            // for the session's other calls on the URI, which would hold back
+            // the failure. It is tracked at once, so a later open waits for it.
+            if (this.isUnheldOpen(uri)) {
+               void this.closeDocument({ uri } as DataSessionCloseArgs<TTransfer, TServer>).catch(() => undefined);
+            }
+            throw error;
+         });
    }
 
    /**
